@@ -1,0 +1,1246 @@
+A Distributed Polylogarithmic Time Algorithm for
+Self-Stabilizing Skip Graphs∗
+Riko Jacob
+Dept. Computer Science
+T echnische Universität
+München
+D-85748 Garching bei
+München, Germany
+jacob@in.tum.de
+Andrea Richa
+Department of Computer
+Science and Engineering
+Arizona State University
+T empe, Arizona
+AZ 85287-8809, USA
+aricha@asu.edu
+Christian Scheideler
+Department of
+Computer Science
+University of Paderborn
+D-33102 Paderborn
+Germany
+scheideler@upb.de
+Stefan Schmid
+Dept. Computer Science
+T echnische Universität
+München
+D-85748 Garching bei
+München, Germany
+schmiste@in.tum.de
+Hanjo Täubig
+Dept. Computer Science
+T echnische Universität
+München
+D-85748 Garching bei
+München, Germany
+taeubig@in.tum.de
+ABSTRACT
+Peer-to-peer systems rely on scalable overlay networks that enable
+efﬁcient routing between its members. Hypercubic topologies fa-
+cilitate such operations while each node only needs to connect to
+a small number of other nodes. In contrast to static communication
+networks, peer-to-peer networks allow nodes to adapt their neighbor
+set over time in order to react to join and leave events and failures.
+This paper shows how to maintain such networks in a robust manner.
+Concretely, we present a distributed and self-stabilizing algorithm
+that constructs a (variant of the) skip graph in polylogarithmic time
+from any initial state in which the overlay network is still weakly
+connected. This is an exponential improvement compared to pre-
+viously known self-stabilizing algorithms for overlay networks. In
+addition, individual joins and leaves are handled locally and require
+little work.
+Categories and Subject Descriptors
+C.2.4 [ Computer-Communication Networks ]: Distributed Sys-
+tems; F.2.2 [ Analysis of Algorithms and Problem Complexity ]:
+Nonnumerical Algorithms and Problems
+General Terms
+Algorithms, Theory
+1. INTRODUCTION
+Peer-to-peer computing is one of the most intriguing network-
+ing paradigms of the last decade. Numerous Internet applications
+∗This work was supported by NSF award CCF-0830704 and by the
+DFG-Project SCHE 1592/1-1.
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+PODC’09,August 10–12, 2009, Calgary, Alberta, Canada.
+Copyright 2009 ACM 978-1-60558-396-9/09/08 ...$10.00.
+make use of peer-to-peer technology, including ﬁle sharing, stream-
+ing and gaming tools. A distinguishing feature of these networks
+is that they typically have an open clientele, allowing machines to
+join and leave at any time and concurrently. If no countermeasures
+are taken, the dynamic membership changes can degenerate the net-
+work, rendering central operations such as routing inefﬁcient. In
+an effort to gain deeper insights into (and deal with) these dynam-
+ics, researchers have studied different approaches. In theory, the
+dominating approach has been to make sure that an overlay network
+never leaves a certain set of legal states so that at any time, infor-
+mation can be efﬁciently exchanged between its members. This is
+mostly achieved through redundancy in the overlay network topol-
+ogy, which can signiﬁcantly increase its maintenance overhead, so
+the rate of changes such networks can sustain might be rather lim-
+ited. However, a high change rate can happen due to heavy churn
+or join-leave attacks. Also, partitions of the underlying physical
+network or DoS attacks may push the overlay network into some
+illegal state. In this case, the overlay network may get into a state
+in which it is highly vulnerable to further changes, so proper re-
+covery mechanisms are needed to get it back into a legal state as
+quickly as possible . Some results are known in this direction, but
+most of the proposed protocols only manage to recover the network
+from a restricted class of illegal states (e.g., [2, 5, 34]). Those few
+results known for truly self-stabilizing networks either just show
+eventual self-stabilization (e.g., [12]) or do not provide sublinear
+bounds on the convergence time (e.g., [19, 31]). Our work is the
+ﬁrst that demonstrates that sublinear, in fact, polylogarithmic recov-
+ery time is possible. More precisely, we present a self-stabilizing
+algorithm for a proper extension of the skip graph [3] (as the origi-
+nal skip graph is not locally checkable). Skip graphs are very useful
+for scalable overlay networks. They have logarithmic diameter and
+degree and constant expansion w.h.p. [4]. Also, like in hypercubic
+networks, no extra routing tables have to be maintained for fast, low
+congestion routing. Before we delve into the details of our solution,
+we discuss related work and present our model.
+1.1 Related Work
+There is a large body of literature on how to maintain peer-to-
+peer networks efﬁciently, e.g., [3, 8, 10, 18, 22, 28, 30, 32, 34].
+Recently, the ﬁrst structured overlay networks have also found their
+way into the practical world; for instance, the Kademlia [29] over-
+
+lay is used in the popular Kad network which can be accessed with
+eMule clients. An interesting and ﬂexible overlay structure are skip
+graphs [3, 7, 20, 21, 22]. These networks are based on the clas-
+sical skip list data structure and allow for efﬁcient, low-congestion
+routing while requiring a small node degree only. Due to the typi-
+cally very dynamic nature of peer-to-peer systems, there is a need to
+maintain the overlay topology or—in case of catastrophic events—
+recover it from arbitrary connected states. While many results are
+already known on how to keep an overlay network in a legal state,
+not much is known about self-stabilizing overlay networks.
+In the ﬁeld of self-stabilization, researchers are interested in al-
+gorithms that are guaranteed to eventually converge to a desir-
+able system state from any initial conﬁguration. The idea of self-
+stabilization in distributed computing ﬁrst appeared in a classical
+paper by E.W. Dijkstra in 1974 [15] in which he looked at the prob-
+lem of self-stabilization in a token ring. Since Dijkstra’s paper, self-
+stabilization has been studied in many contexts, including commu-
+nication protocols, graph theory problems, termination detection,
+clock synchronization, and fault containment. For a survey see, e.g.,
+[11, 16, 24].
+Also general techniques for self-stabilization have been consid-
+ered. Awerbuch and Varghese [9] showed that every local algorithm
+can be made self-stabilizing if all nodes keep a log of the state tran-
+sitions until the current state. Since then several other methods have
+emerged including various local and global checking and correc-
+tion techniques [6, 13, 25, 35, 36]. Also so-called time-adaptive
+techniques [23, 26, 27] as well as local stabilizers [1] have been
+presented which can recover any distributed algorithm inO(f) time
+depending only on the number f of faults. This, however, does not
+hold any more if faults include changes in the topology. In this case,
+a single fault may require the involvement of all nodes in the sys-
+tem and is therefore quite expensive to ﬁx. Thus, people have also
+looked at so-called superstabilizing protocols, which are protocols
+that can handle a single topology change as well as arbitrary state
+faults with low overhead (e.g., [17]).
+Interestingly, though much attention has been given to self-
+stabilizing distributed computing, even in the context of dynamic
+networks, the problem of designing self-stabilizing networks has
+only been given very little attention. The general techniques men-
+tioned above are not applicable here as they have not been designed
+to actively perform local topology changes (network changes are
+only considered as faults or dynamics not under the control of the
+algorithm). Even though logging techniques such as [9] to convert
+non-self-stabilizing algorithms into self-stabilizing algorithms can
+also be applied to self-stabilizing networks, they usually need some
+non-local knowledge of the network (such as its size) to bound the
+state space which can make self-stabilization very expensive. Our
+goal instead was to ﬁnd dedicated, much more light-weight algo-
+rithms for self-stabilizing networks.
+Some preliminary work in this direction has already been done.
+In the technical report of the Chord network [34], protocols are de-
+scribed which allow the topology to recover from certain degenerate
+states. Similarly, it is also known how to repair skip graphs from cer-
+tain degenerate states [3] but the problem of recovering them from
+an arbitrary connected state has remained open. This is not sur-
+prising as the neighborhood information alone is not sufﬁcient for
+the Chord network as well as skip graphs to locally verify the cor-
+rectness of the topology. Hence, additional information would be
+needed, which signiﬁcantly complicates the self-stabilization pro-
+cess.
+In order to recover scalable overlays from any initial graph, re-
+searchers have started with simple non-scalable line and ring net-
+works. The Iterative Successor Pointer Rewiring Protocol [14] and
+the Ring Network [33] organize the nodes in a sorted ring. How-
+ever, the runtime of both protocols is rather large. Aspnes et al. [2]
+describe an asynchronous protocol which turns an initially weakly
+connected graph into a sorted list. Unfortunately, their algorithm is
+not self-stabilizing. In a follow-up paper [5], a self-stabilizing al-
+gorithm is given for the case that nodes initially have out-degree 1.
+In [31], Onus et al. present a local-control strategy called lineariza-
+tion for converting an arbitrary connected graph into a sorted list.
+However, the algorithm is only studied in a synchronous environ-
+ment, and the strategy may need a linear number of communication
+rounds. Clouser et al. [12] formulated a variant of the lineariza-
+tion technique for asynchronous systems in order to design a self-
+stabilizing skip list. Gall et al. [19] combined the ideas from [12,
+31] and introduced a model that captures the parallel time complex-
+ity of a distributed execution that avoids bottlenecks and contention.
+Two algorithms are presented together with an analysis of their dis-
+tributed runtime in different settings. No sublinear time bounds are
+shown there either.
+To the best of our knowledge, this is the ﬁrst paper to describe
+a self-stabilizing algorithm for a scalable overlay network (in our
+case, skip graphs) in sublinear time. In fact, the skip graph con-
+struction terminates in a polylogarithmic number of communication
+rounds. In addition to being able to recover quickly from an arbi-
+trary connected state, we also show that when the network forms the
+desired topology, our algorithm efﬁciently supports join and leave
+events, which incur only a polylogarithmic amount of work to ﬁx.
+This means (in contrast to considering a completely new starting
+situation and recovering the structure in polylogarithmic time) that
+only a small part of the nodes are involved in repairing the overlay
+topology.
+1.2 Model
+We represent an overlay network as a directed graphG = (V,E ),
+where|V| = n. Each node is assumed to have a unique identiﬁer
+(or short: ID) v.id ∈ U that is immutable, where U is the (or-
+dered) universe of all identiﬁers. At any time, each node can in-
+spect its own state and the state of its current neighbors. Beyond
+that, a node does not know anything, including the current size n
+of the overlay network. Only local topology changes are allowed,
+i.e., a node may decide to cut a link to a neighbor or ask two of its
+neighbors to establish a link. The view and the inﬂuence of a node
+are essentially local. The decisions to cut or establish links are con-
+trolled through actions (which we will also callrules). An action has
+the form label : guard→ commands where guard is a Boolean
+predicate over the state of the executing node and its neighbors and
+commands is a sequence of commands that may affect the state of
+the executing node or request a new edge between two neighbors.
+This is done via an insert(v,w ) request by which a node asks its
+neighborv to establish an edge to neighbor w. An action is called
+enabled if and only if its guard is true.
+For simplicity, we assume that time proceeds in rounds, and all
+requests generated in round i are delivered simultaneously at the
+beginning of round i + 1. In other words, we assume the standard
+synchronous message-passing model with the restriction that a node
+can only communicate with nodes that it has currently links to. In
+each round, all actions that are enabled are executed by the nodes.
+If two actions executed by the same node are in conﬂict with each
+other, any one of them may win and the other is discarded. Our goal
+is to minimize the number of rounds needed in the worst case (over
+all initial states in which the network is weakly connected) until the
+overlay network has reached its desired structure. We make this a
+bit more precise by deﬁning what we mean by self-stabilization.
+When using the synchronous message-passing model, the global
+state of the system at the beginning of each round is well-deﬁned.
+A computation is a sequence of states such that for each state si at
+the beginning of round i, the next state si+1 is obtained after exe-
+cuting all actions that were ﬁred in round i. In our context, we call
+a distributed algorithm self-stabilizing if from any initial state (from
+which a legal state is still reachable) it eventually reaches a legal
+
+state in which no more actions are enabled, i.e., once the overlay
+network reaches its desired topology, it does not change anymore.
+Our goal will be to ﬁnd a self-stabilizing algorithm that needs as few
+rounds as possible for this.
+1.3 Our Contributions
+We present a variant of the skip graph, called SKIP+, that can be
+locally checked for the correct structure. For this graph, we present
+a distributed self-stabilizing algorithm that arrives at SKIP+ for any
+initial state in which the nodes are weakly connected in O(log2n)
+rounds. This is an exponential improvement over all previous results
+on the number of communication rounds needed to arrive at a scal-
+able overlay network. We also show that a single join event (i.e., a
+new node connects to an arbitrary node in the system) or leave event
+(i.e., a node just leaves without prior notice) can be handled by our
+algorithm with polylogarithmic work, demonstrating that our algo-
+rithm is not just useful for the worst case but also for the case where
+the overlay network is already forming the desired topology (which
+is the standard case in the literature).
+1.4 Paper Organization
+In the rest of this paper we present and analyze our self-stabilizing
+algorithm for SKIP+ graphs. The paper ends with a conclusion.
+2. ALGORITHM
+We ﬁrst introduce the skip graph SKIP+ we want to construct and
+then present our algorithm ALG+.
+2.1 The SKIP + Graph
+We start with the deﬁnition of the skip graph. In skip graphs, the
+identity of a nodev consists of two components:v.id, a unique but
+otherwise arbitrarily chosen identiﬁer, andv.rs, a (pseudo-)random
+bit string of sufﬁcient length that was uniformly chosen at random
+when the node entered the system. Both parts are assumed to be
+immutable.
+For a nodev and a subsetW⊆V of nodes deﬁne thepredecessor
+of v in W pred(v,W ) to be the node u∈ W such that u.id =
+max{w.id|w∈W andw.id <v. id}. By the assumption that no
+two nodes share the same id, this is well deﬁned. If such a u does
+not exist, set pred(v,W ) :=⊥ and deﬁne⊥.id =−∞. Similarly
+deﬁne the successor ofv inW succ(v,W ) to beu∈ W such that
+u.id = min{w.id|w∈W andw.id > v.id}, or if this does not
+exist succ(v,U ) :=⊤ and deﬁne⊤.id =∞. Here,−∞ and +∞
+are resp. the lowest and largest elements in the identiﬁer space U
+not allowed as identiﬁers of real nodes.
+The deﬁnitions needed for the ideal skip graph are marked by a
+superscript∗ to distinguish them from analogous deﬁnitions used in
+the algorithm, which are all based on the current local views of the
+nodes.
+For any i ≥ 0, let prei(v) denote the ﬁrst i bits of v.rs (i.e.,
+the preﬁx of v.rs of length i) and v.rs[i] represent the ith bit of
+v.rs. Now deﬁne the level-i predecessor of v by pred∗
+i (v) :=
+pred(v,{w| prei(w) = prei(v)}), and the level-i successor ofv
+by succ∗
+i (v) := succ(v,{w| prei(w) = prei(v)}).
+DEFINITION 2.1 (S KIP GRAPH ). Assume we are given a set
+of nodes together with associated IDs and random strings. In the
+corresponding skip graph, every node v is connected exactly to
+pred∗
+i (v) and succ∗
+i (v) for every i≥ 0 (except for the case of ⊥
+and⊤).
+Given unique node identiﬁers, the skip graph is uniquely deﬁned.
+It is not difﬁcult to see that the skip graph has logarithmic diameter
+and maximum degree and allows hypercubic-style routing between
+any pair of nodes inO(logn) time, w.h.p. However, the nodes can-
+not locally verify the correctness of the skip graph topology. There-
+fore, we propose a slight extension of the skip graph that we call
+SKIP+.
+The deﬁnition of SKIP + requires us to also deﬁne (extended)
+predecessors and successors on level i with a speciﬁc value in the
+next bit. For any i ≥ 0 and x ∈ {0, 1} deﬁne pred∗
+i (v,x ) =
+pred(v,{w| prei+1(w) = prei(v)◦x}) and similarly succ∗
+i (v,x )
+(where operator ◦ means concatenation of bit strings). Let
+low∗
+i (v) = min{pred∗
+i (v, 0).id, pred∗
+i (v, 1).id} and high∗
+i (v) =
+max{succ∗
+i (v, 0).id, succ∗
+i (v, 1).id}, and let v.range∗[i]⊆ U be
+deﬁned as [low∗
+i (v), high∗
+i (v)]. With this, the SKIP+ graph has the
+neighbor set N∗
+i (v) of v at level i as the set of all nodes w with
+prei(w) = prei(v) andw.id∈v.range∗[i].
+DEFINITION 2.2 (SKIP +GRAPH ). Assume we are given a set
+of nodes together with associated IDs and random strings. In the
+corresponding SKIP+ graph every node v is connected to exactly
+the nodes inN∗
+i (v) for alli≥ 0, i.e.,N(v) =⋃
+i≥0N∗
+i (v).
+Figure 1 illustrates the connections in SKIP +. The white (resp.
+black) nodes in the ﬁgure illustrate the nodes v at leveli for which
+v.rs[i + 1] = 0 (resp.v.rs[i + 1] = 1 ). The total sorted order of
+the nodes according to their identiﬁers is shown at the bottom; the
+SKIP+ structure at level 0 is depicted in the middle, whereas the
+top part of the ﬁgure (top two connected components of black and
+white nodes) correspond to level 1. Note that skip graph edges of
+leveli + 1 appear in the SKIP+ graph already on leveli.
+i=0
+i=1
+rs=0...
+rs=1...
+rs=01..
+rs=00..
+rs=10..
+rs=11..
+Figure 1: Visualization of SKIP+ connections.
+Since the skip graph is a subgraph of SKIP + (on the same set of
+nodes), SKIP+ has a logarithmic diameter and constant expansion.
+Also, it is not too difﬁcult to see that the maximum degree remains
+logarithmic w.h.p.
+DEFINITION 2.3 (H EIGHT H). The height HG of a SKIP +
+graphG is deﬁned as the maximal number of non-trivial levels. A
+non-trivial level is a level which consists of more than one node,
+that is, HG = max{|ρ| :|Vρ|≥ 2} whereVρ ={v∈ V | ρ =
+pre|ρ|(v)}.
+It is straightforward to show thatHSKIP+ is inO(logn) w.h.p.
+The goal is to establish the SKIP + graph as the target topology
+using bi-directed edges (this is why the edges in Figure 1 are undi-
+rected), but during the construction, the network has to deal with
+directed edges.
+2.2 The ALG + Algorithm
+In the description and analysis of our algorithm, we will make use
+of the following deﬁnitions.
+DEFINITION 2.4 (G RAPH Gρ). Given any directed graph
+G = (V,E ) currently formed by the nodes and any preﬁx ρ, the
+graphGρ = (Vρ,Eρ) is a subgraph of G whereEρ ={(u,v )∈
+E :u,v ∈Vρ}. The nodes in Vρ are calledρ-nodes and the edges
+inEρ are calledρ-edges.
+
+DEFINITION 2.5 (C ONNECTED ρ-COMPONENT ). Given a
+preﬁxρ, we will refer to a weakly connected component of nodes
+in Gρ as a connected ρ-component. A pair of nodes in such a
+component is calledρ-connected.
+For any node v let N(v) be its current outgoing neighbor-
+hood and v.range[i] be its current range at level i, which is
+based on its current view of predi(v,x ) and succi(v,x ), where
+predi(v,x ) is the node such that predi(v,x ).id = max{w.id |
+w∈ N(v) andw.id < v.id and prei+1(w) = prei(v)◦x} and
+succi(v,x ) is the node such that succi(v,x ).id = min{w.id |
+w∈N(v) andw.id > v.id and prei+1(w) = prei(v)◦x}. For
+each level i, v.range[i]⊇ v.range∗[i], i.e, the current range will
+always be a superset of the desired range in the target topology (as
+deﬁned in SKIP +). We will see that as long as no faults or adver-
+sarial changes happen during the self-stabilization process, ALG +
+monotonically converges to the desired ranges for everyi.
+ALG+ distinguishes between stable edges and temporary edges.
+Nodev considers an edge(v,w ) to be temporary if fromv’s point of
+view (v,w ) does not belong to SKIP+ and sov will try to forward it
+to some of its neighbors for which the edge would be more relevant.
+Otherwise, v considers (v,w ) to be a stable edge and will make
+sure that the connection is bi-directed, i.e., it will propose (w,v )
+tow. There is a binary ﬂag v.F (w) for each neighborw that states
+whether the edge to it is stable. The ﬂag turns out to be important
+when a stable edge destabilizes (i.e., converts into a temporary edge)
+because this triggers the introduction of several temporary edges
+that are needed for our proofs to go through. The other conversion,
+from temporary to stable, essentially boils down to introducing also
+the other direction of the edge. More details will be given later.
+The intuition behind the ALG +algorithm is as follows. The
+algorithm has two main phases: The ﬁrst phase proceeds in a
+bottom-up (i.e., from level 0 upwards) fashion, forming connected
+ρ-components for every preﬁxρ. This will be accomplished by let-
+ting each nodev ﬁnd another nodew of the opposite color, i.e., such
+that prei(w) = prei(v) andv.rs[i + 1]⁄=w.rs[i + 1] for all levels
+i≥ 0 (we will call w a buddy of v). We can show that once all
+nodes in Vρ have formed a single connected component and have
+found a buddy, then connecting all nodes which are at most three
+hops away in theρ-component results in a single connectedρ0- and
+ρ1-component. This will be accomplished by Rules 1 (where new
+nodes in the range of a node are discovered and where ranges may
+be reﬁned) and Rules 3 (where an efﬁcient variation of a local tran-
+sitive closure is performed) below.
+Once the connected ρ-components are formed, the second phase
+of the algorithm will form a sorted list out of each ρ-component.
+This is accomplished in a top-down fashion by merging the two
+already sorted ρ0- and ρ1-components into a sorted ρ-component
+until all nodes in the bottom level form a sorted list.
+Of course, this “division into phases”-intuition oversimpliﬁes
+what is really going on in our algorithm. Whereas for the sake of
+simplicity, we can think of the execution of the phases of the algo-
+rithm as being perfectly synchronized, with all nodes waiting for the
+connected components at leveli to converge before the components
+at leveli+1 are formed in the ﬁrst phase, and with the sorting of the
+components at leveli only starting after we have successfully sorted
+the components at leveli+1 in the second phase (and of course with
+the second phase only kicking in after the ﬁrst phase is completed),
+all actions in our algorithm may be enabled at any time, causing the
+phases to be intertwined in the real execution. Hence, the main chal-
+lenge in this paper is to show that nevertheless the actions transform
+any initially connected graph into SKIP+ inO(log2n) rounds.
+Now we are ready to present ALG +. The local state of a nodev
+consists ofv.id,v.rs,N(v) (which imply the edges and ranges ofv)
+and its ﬂags. We assume that every node v knows (besides its own
+local state) the current local state of all nodesw∈N(v). Hence, the
+actions of a nodev may be based on any local state information ofv
+or its neighbors. Recall that we assume the synchronous message-
+passing model. At the beginning of a round i, every node receives
+all the requests to establish an edge that were generated in the pre-
+vious round. After a preprocessing step in which each node updates
+its neighborhood and the state information about its neighborhood,
+a set of three types of actions is processed, which we also call rules
+here. For readability, we will present the rules in words, but trans-
+forming them into the formal terminology of our model is straight-
+forward. We note that the preprocessing step is separated from the
+actions to ensure a deterministic state transition in the synchronous
+message-passing model. In an asynchronous model, the preprocess-
+ing step would be continuously performed in the background at any
+time. For each nodeu we do the following in a round:
+Preprocessing.
+First, a node u processes all insert(u,v ) requests from the pre-
+vious round where v∈ V \ ({u}∪ N(u)) (the others would be
+thrown away, but our algorithm avoids issuing such requests in the
+ﬁrst place). This is done by adding v toN(u) and setting its ﬂag
+u.F (v) to 0 (temporary). Then u makes sure that its state is valid,
+i.e., the ﬂags carry binary values and N(u) is a set of nodes v⁄=u
+that are all alive (otherwise,u removes that node fromN(u)). Now
+u determines for every i its current predecessors predi(u, 0) and
+predi(u, 1) and its current successors succi(u, 0) and succi(u, 1)
+(withinN(u)). This allows u to update its range information. The
+updated local state is exchanged between the nodes so that the rules
+below are based on up-to-date information.
+DEFINITION 2.6 (S TABLE EDGES ). Every edge (u,v ) is con-
+sidered stable, if
+• its endpoints mutually fall on each other’s range at some level
+prei(u) = prei(v), i.e., v.id ∈ u.range[i] and u.id ∈
+v.range[i], for some i. In this case (u,v ) is deﬁned to be
+stable on all levelsj≥i with prej(u) = prej(v). Or
+• v = predi(u,x ) oru = predi(v,x ), orv = succi(u,x ) or
+u = succi(v,x ), for some level i and bitx∈{ 0, 1}. In this
+case (u,v ) is stable only on leveli.
+This second kind of stable edges is needed to stay in touch with
+a “buddy” (see below), in order to forward temporary edges. Our
+algorithm guarantees that once a node has a buddy to the left (or to
+the right), it will always have such a buddy in the future.
+DEFINITION 2.7 (L EVEL OF TEMPORARY EDGE ). We deﬁne
+the level of a temporary edge (u,v ) as the length of the longest
+common preﬁx ofu andv.
+All of the rules below are only activated if the resulting action
+changes the graph or the state, i.e., if the to be inserted edge does
+not already exist or the ﬂag changes its value.
+Rule 1a: Create Reverse Edges.
+For every stable edge(u,v ),u setsF (v) = 1 (if it has not already
+done so) and initiates an insert(v,u ) request.
+Rule 1b and Rule 1c: Introduce Stable Edges.
+For every stable neighborv (the edge (u,v ) is considered stable
+as deﬁned in Preprocessing) of a node u, for everyi≥ 0 and every
+node w ∈ N(u),w ⁄= v with prei(v) = prei(w) and w.id ∈
+v.range[i], nodeu initiates insert(v,w ) (Rule 1b) andinsert(w,v )
+(Rule 1c).
+
+Rule 2: Forward Temporary Edges.
+Every temporary edge (u,v ) is forwarded to a stable neighbor
+ofu that has the largest common preﬁx with v.rs. (Such an edge
+exists because otherwise (u,v ) would be a stable edge.)
+Rule 3a: Introduce All.
+For all nodes u∈ V whose set of stable neighbors is different
+from the previous round,u initiates insert(v,w ) for all neighborsw
+ofu. (In particular, if an edge destabilizes, both incident nodes will
+introduce their neighbors.)
+Rule 3b: Linearize.
+For every leveli,u identiﬁes the stable neighborsv1,...,v k with
+v1.id < v2.id < ... < vk.id that have exactly the ﬁrst i bits in
+common withu.rs and initiates insert(v1,v 2), insert(v2,v 3),... ,
+insert(vk−1,vk) for them.
+3. ANALYSIS
+We ﬁrst analyze the bottom-up phase and then tackle the top-
+down phase.
+3.1 Bottom-up Phase
+LEMMA 3.1. Consider any bit stringρ∈{ 0, 1}∗. Suppose that
+nodesa and b areρ-connected at time t0. Then a andb are also
+ρ-connected at any timet≥t0.
+PROOF. We prove the lemma by induction over the time steps.
+Consider any edge e = (u,v ) (temporary or stable) at time t≥ t0
+withu,v ∈Vρ. The only rule that may remove this edge is Rule 2,
+all other rules only create edges. If the edgee is forwarded by Rule 2
+to a nodew, nodew must have a shared preﬁx withu that extendsρ,
+and all three nodesu,v,w remain connected inGρ at the next time
+step.
+In the following lemma, an edge (u,v ) is said to be to the right
+(resp. left) ifu.id <v. id (resp.u.id >v. id).
+LEMMA 3.2. Assume a node u has a stable ρ-edge to the right
+(left) at timet0. Then at any time t>t 0, nodeu will have a stable
+ρ-edge to the right (left).
+PROOF. By induction over time. A stable ρ-edge (u,v ) only
+destabilizes because the |ρ|-range of u has become smaller, and
+there now is another ρ-nodew stably connected to u, and w is be-
+tweenu andv.
+A ρ-buddy of a node u is a stable neighbor v (the edge (u,v )
+exists and is considered stable) with pre|ρ|(u) = pre|ρ|(v) = ρ
+andu.rs[|ρ| + 1]⁄=v.rs[|ρ| + 1]. Our algorithm ensures that once
+a node has a left (or right) buddy at time t, then it will also have a
+left (or right) buddy at all times t′≥ t. In the following, the V in
+V-linked does not refer to a set V but to the V-shaped situation of
+two nodes being linked indirectly via precisely two edges to a third
+node.
+DEFINITION 3.3 ( σ-V-LINK ). Consider anyρ∈{ 0, 1}∗ and
+x∈{ 0, 1}. Assume there are two nodes u,v with preﬁx ρx = σ
+and one nodew with preﬁxρ¯x. Ifu,v∈N(w), we say thatu andv
+areσ-V-linked viaw.
+LEMMA 3.4. Assume that u and v are σ-V-linked via w at
+time t. Then, at time t + 1 the nodes u and v are σ-connected,
+i.e., in the same connected component ofGσ.
+PROOF. Assume (w.l.o.g.) that u,v have label σ = ρ1, and w
+has label ρ0. By Rule 3b, all stable ρ1-neighbors of w are in the
+sameρ1-componentC at timet + 1. If (w,u ) is a temporary edge,
+this is forwarded to one of the stable ρ1 neighbors ofw, and hence
+u is also in the ρ1-componentC. By the same reasoning v is also
+inC at timet + 1, which proves the lemma.
+LEMMA 3.5. Consider any ρ∈{ 0, 1}∗ and x∈{ 0, 1}. Let
+nodea with label ρx be a ρ-buddy of u at time t andb aρ-buddy
+ofu at timet′≥t. Then a andb are in the sameρx-component at
+timet′ + 1.
+PROOF. If than t =t′, this follows from Lemma 3.4. Otherwise
+the proof is an induction over time. Let a = at,at+1,...,a t′ =
+b be ρ-buddies of u at the respective times. With Lemma 3.1, it
+sufﬁces to show that ai−1 andai are in the same ρx-component at
+timei + 1. Because no rule deletes or forwards stable edges, the
+edge (u,ai−1) exists at timei and Lemma 3.4 can be applied.
+Note that theσ in “σ-V-linked” refers to the nodes that are linked,
+not the node that is providing the link. Similarly, we deﬁne a bridge
+by the preﬁx of the nodes that are connected by this bridge, not by
+the nodes that provide the bridge.
+DEFINITION 3.6 (T EMPORARY /S TABLE BRIDGE ). Consider
+two nodes a,b with preﬁx σ = ρx that are in different connected
+components of Gσ. Then, for k ≥ 1, a and b are connected by
+a (σ,k )-bridge if there is a node c with stable edge (c,a ) and a
+noded with stable edge (d,b ), wherec,d have preﬁxρ¯x and have
+the edge (c,d ) at level|ρ| +k (i.e., pre|ρ|+k(c) = pre|ρ|+k(d)). If
+(c,d ) is stable, this is a stable bridge; if (c,d ) is temporary, it is a
+temporary bridge.
+The following deﬁnition is needed to show connectedness mov-
+ing up the levels by the rules. It is central to the bottom-up proof
+that eventually for all preﬁxes ρ we have that Gρ consists of only
+one connected component. In the process where the connectedness
+ofGρ0 follows fromGρ being connected, the bridges play an impor-
+tant role. First, as long as a bridge is temporary, the level increases
+in every step, but then, once it becomes a stable bridge, the level of
+the used bridges decreases.
+DEFINITION 3.7 ( (σ,k )-PRE -COMPONENT ). Two nodes a
+andb, both with preﬁx σ = ρx for somex∈{ 0, 1}, are (directly)
+(σ,k )-pre-connected if (1)Gρ is connected, if (2) every node inGρx
+knows at least one node from Gρx and vice versa,1 and if (3) there
+is an edge (irrespective of this being temporary or stable), between
+a andb, or if they areσ-V-linked, or if there exists a stable (σ,k′)-
+bridge with k′ ≤ k between them. The transitive closure of this
+(undirected) relation deﬁnes the (σ,k )-pre-component.
+Requirements (1) and (2) will be made precise in the subsequent
+analysis and especially Lemma 3.14 where the connectivity ofGρ is
+proved by induction. Note that fork = 0, theσ-links and the(σ, 0)-
+pre-component (but without stable bridges) yield the transitive hull
+of theσ-V-links. Figure 2 illustrates the situation.
+LEMMA 3.8. Assume nodes a,b are in the same (σ,k )-pre-
+component at timet0,k≥ 1. Then a andb are in the same (σ,k )-
+pre-component at any timet>t 0.
+1Throughout this paper,· will denote the logical negation.
+
+ρ1τ ρ1τ
+ρ1
+ρ0
+Figure 2: The shaded nodes belong to the same (ρ0,k )-pre-
+component. In this ﬁgure, |τ| = k− 1, temporary edges are
+dashed and stable edges are solid.
+PROOF. Assume w.l.o.g. σ = ρ1. By induction over time, and
+the deﬁnition of the pre-component being a transitive closure, it is
+sufﬁcient to argue that nodes a,b with preﬁx ρ1 that are directly
+(σ,k )-pre-connected at timet are in the same(σ,k )-pre-component
+at timet + 1.
+If a,b are directly linked, we can employ Lemma 3.1, and the
+case that they are σ-V-linked is due to Lemma 3.4. The remaining
+(and only interesting) case is thata andb have a (σ,k )-bridge via a
+stable edge e = (u,v ) (then there are also stable edges (u,a ) and
+(v,b )) at timet. Let a′ andb′ beσ-nodes that are stable neighbors
+ofu andv respectively. Thena anda′ areσ-V-linked and are in the
+sameσ-component at timet+1 by Lemma 3.4. The same reasoning
+shows that b and b′ are in the same σ-component at time t + 1.
+If e remains stable, a′ and b′ have a (σ,k )-stable bridge also at
+time t + 1. Otherwise e destabilizes and by Rule 3a a temporary
+edge (v,a′) or (u,b′) is present at time t + 1, so a′ andb′ areσ-
+V-linked viav oru, and hence in the same (σ,k )-pre-component at
+timet + 1.
+LEMMA 3.9. Assume that nodesa,b are in the same (σ,k )-pre-
+component at timet,k >1. Then, a andb areσ-connected at time
+t + 4.
+PROOF. If a andb are in the same(σ,k )-pre-component (assume
+again that σ = ρx for some x∈{ 0, 1}), there must exist a path
+a =p1↝p2↝...↝p𝓁 =b wherepj is connected topj+1 either
+directly, via aσ-V-link, or via a stable(σ,k )-bridge. We only allow
+a bridge betweenpj andpj+1 if these two nodes are not in the same
+(σ, 0)-pre-component.
+Consider this path and assume pj and pj+1 are connected by a
+bridge over an edgee = (u,v ) of lengthλ (w.r.t. node identiﬁers,u
+andv having preﬁxes of the formρxτy where|τ| =k− 1 andy∈
+{0, 1}). Then, whenever possible, we replace e by two edges via
+an intermediate nodew if for the lengths it holds that|(u,w )|< λ
+and|(w,v )|< λ. Thus, in our path, a new node p∗— w’s buddy—
+is inserted, maintaining our “path property”. Note that this process
+terminates (the number of “turning points”—the local extrema of
+the identiﬁers along the path—does not increase).
+Consider a bridge edge (u,v ) on this path with shortest bridges.
+First, consider the case that (u,v ) is unilaterally stable because of
+the nearest neighborhoods. That is, w.l.o.g. assume v isu’s nearest
+neighbor but for some level,u is not inv’s range. Then, it holds that
+v must know two closer nodes than u (due to the range deﬁnition),
+one of which will be proposed to u in the next round (hence (u,v )
+will no longer be stable), triggering Rule 3a att+2 , from which the
+claim follows.
+From now on it remains to consider the case where u andv mu-
+tually include each other in their ranges on some level. First assume
+that (u,v ) is stable on a level >|σ|—the other case where (u,v )
+is stable on level|σ| is treated later. Let us refer to the lowest level
+where (u,v ) is stable asi+1, that is, whereprei+1(u) = prei+1(v)
+but eitheru.id /∈ v.range[i] orv.id /∈ u.range[i] (or both, cf Def-
+inition 2.6), so |σ| + k ≥ i + 1 > |σ|. W.l.o.g., assume that
+u.id /∈v.range[i]. Due to the deﬁnition of the ranges, v must have
+both a stable predecessor (relatively to the current neighborhood)
+with last bit 0 and a predecessor with last bit 1 that lie between u
+andv:w0 = predi(v, 0) andw1 = predi(v, 1). Letw∈{w0,w 1}
+such that prei+1(u) = prei+1(w) = prei+1(v). See Figure 3.
+pj
+w=w1
+w2
+u
+pj+1
+ρ0τ1
+ρ0τ0
+w’
+ρ1
+v
+u.range[i+1]
+v.range[i]
+v.range[i+1]u.range[i]
+Figure 3: Situation fori+1 >|σ| in proof of Lemma 3.9 at time
+t. Here we usex = 0.
+u v
+c
+xρ
+xρ
+ρ x
+xρ
+uw
+µ
+v
+w’
+Figure 4: The two situations for i + 1 = |σ| in proof of
+Lemma 3.9.
+However, (w,u )⁄∈E at timet, due to our selection of the short-
+est bridge path: (u,w ) and (w,v ) would imply a path (see your
+“path property” described before) with shorter bridges. Thus, at
+timet + 1, (u,w ) is created by Rule 1b. Now, we will show that
+this triggersu to ﬁre Rule 3a att+2, either because (u,w ) becomes
+stable or because (u,v ) becomes instable. (Note that (u,v ) must be
+stable at time t, since the edge forms a bridge.) Observe that it is
+not possible that (u,v ) remains stable and (u,w ) is instable, since
+both are withinu’s range on leveli + 1, asu andw have a common
+preﬁx ρ = prei+1(w). Thus, at time t + 1, Rule 3a is triggered at
+u, and thus, att + 2,a andb areσ-V-linked and connected in round
+t + 3.
+Observe that if w has a buddy w′ closer to u, see Figure 3, the
+same arguments apply, asw′ will be introduced tov, which triggers
+Rule 3a atv.
+It remains to study the case where(u,v ) is stable on leveli =|σ|
+(see Figure 4). Assume u is stably connected to pj andv is stably
+connected topj+1 (u,v ∈ Gρx). We distinguish two cases: Either
+there is a nodec∈Gρx betweenu andv or not. First, assume there
+is such a node c, and w.l.o.g., assumec is stably connected to v on
+level|ρ|. (Observe that due to our path selection, c /∈ Gρx, and
+hence it holds thatc∈Gρx.) We will show that in this case, a new
+connection (u,c ) is proposed. Thus, there cannot be both edges
+(u,c ) and (c,v ), otherwise the bridge would not be necessary, as
+the nodes must be in the same (σ, 0)-pre-component. Therefore,
+either (u,v ) destabilizes at timet+1 , triggering Rule 3a att+2 , or
+(u,c ) or (c,v ) must be proposed according to Rule 1b. By the same
+reasoning as above, the claim follows for timet + 4 in this case.
+If there is no such node c, consider the buddy of u orv closest
+to position µ = (u.id +v.id)/2. That is, let B denote the set of
+
+all buddies ofu andv on leveli, i.e.,B = (N(u)∪N(v))∩Gρx.
+Letw∈B be the buddy which minimizes|µ−w|. Without loss of
+generality, assumew is the buddy ofu. Now letw′ be the buddy ofv
+which is located on the same side ofµ asw. Observe thatv.range[i]
+is deﬁned by w′ due to our assumption that c does not exist and
+sincew′ is further away from µ and hence also from v. Therefore,
+w ∈ v.range[i]. On the other hand, if no such w′ exists, then
+v.range[i] is not bounded, and the claim follows trivially. Thus,
+a and b are σ-V-linked in round t + 2. Therefore, the claim also
+follows for the casei + 1 =|σ|, which concludes the proof.
+LEMMA 3.10. A temporary edge (u,v ) of level 𝓁 at time t is
+either transformed into a stable edge or forwarded and changed by
+this into a temporary edge of level at least𝓁 + 1.
+PROOF. Let ρ be the common preﬁx of u and v with|ρ| = 𝓁,
+and assume w.l.o.g. thatu has labelρ0 andv has labelρ1. If (u,v )
+is temporary, it either becomes stable by Rule 1a or there must be
+a stable ρ1-nodew∈ N(u) betweenu andv In this case, Rule 2
+replaces (u,v ) with (w,v ) for such aw, which is a temporary edge
+of level at least𝓁 + 1.
+The following lemma follows from the previous one because no
+temporary edge has a level higher than the heightH.
+LEMMA 3.11. Every temporary edge becomes stable after H
+time steps.
+Next, the case of temporary bridges is investigated.
+LEMMA 3.12. Assume two ρx-nodesa,b for some x∈{ 0, 1}
+are directly connected by a temporaryρx-bridge, i.e., there is a tem-
+porary edge (u,v ) and stable edges (u,a ) and (v,b ). Then, for
+k =H−|ρ|,a andb are (ρx,k )-pre-connected at timet +k.
+PROOF. W.l.o.g. let x = 1. By the rules of temporary edges, the
+destinationv never changes. Letbi be aρ-buddy ofv, i.e., the stable
+edge (v,bi) exists at timet +i,b0 =b. At time t +i + 1, there is
+at least the temporary edge (v,bi), andbi andbi+1 areρ1-V-linked,
+and hence, by Lemma 3.8,bi is (ρ1,k )-pre-connected withb also at
+timet +k.
+Letui be the starting point of the temporary edge at time t +i,
+i.e. (ui,v ) be the temporary edge, and letai (witha0 =a) be some
+stable neighbor ofui at that time, i.e., the stable edge(ui,ai) exists
+at timet+i. At timet+i the stable edge (ui,ui+1) exists (because
+the temporary edge was forwarded along this edge). Further, let ci
+be some stable neighbor ofui+1 at timet +i. If this does not exist,
+setci =ai, and note that at timet+i+1 the stable edge (ui+1,ai)
+must exist because of Rule 1b. By deﬁnition,ai andci have a stable
+(ρ1,k′)-bridge fork′≤k and are hence (ρ1,k )-pre-connected. At
+time t +i + 1 at least the temporary edge (ui+1,ci) exists, and
+henceci andai+1 areρ1-V-linked, so by Lemma 3.8ai is (ρ1,k )-
+pre-connected witha at timet +k.
+By Lemma 3.10 the level of (ui,v ) is at least|ρ| +i. Hence for
+somej≤k the stable edge (uj,v ) exists at level smaller thanH at
+timet +j. Hence, at timet +j the nodesaj andbj are (ρ1,k )-pre-
+connected, and we can conclude from Lemma 3.8 that a andb are
+(ρ1,k )-pre-connected at timet +k.
+LEMMA 3.13. Consider any bit string ρ ∈ {0, 1}∗. Suppose
+thatGρ is weakly connected at time t0. Then every node u∈ Vρ
+will have a neighbor inVρ0 andVρ1 withinO(logn) rounds.
+PROOF. Consider any node u that does not have a neighbor in
+Vρ0 orVρ1. In this case, u.range[i] =U fori =|ρ|, which implies
+together with Rule 1b and Rule 1c that every node v∈N(u)∩Vρ
+with missing ρ-buddy will introduce every node w∈ N(v)∩Vρ
+tou. Suppose w.l.o.g. that u is still missing a node in Vρ0. Then
+the neighbor introduction of Rule 1b and Rule 1c implies that the
+distance ofu inGρ to the closest node in Vρ0 is cut in half in each
+round. Thus, it takes at most O(logn) rounds into a node inVρ0 is
+a direct neighbor ofu, which implies the lemma.
+Lemma 3.13 can also be proved by observing that in every round,
+due to the “pointer doubling” operations, the diameter of the con-
+nected component formed by nodes without a buddy is cut in half.
+LEMMA 3.14. AssumeGρ is connected at timet. Then, at time
+t+(H−|ρ|)+O(logn) the graphGρ0 is connected and so isGρ1.
+PROOF. Deﬁne k = H−|ρ|. At time t0 = t +O(logn), by
+Lemma 3.13, everyρ0 node has a stable connection to aρ1 node and
+vice versa. Leta andb be twoρ1 nodes. BecauseGρ is connected at
+timet, it is so at timet0, and there is a patha =u1,u 2,...,u m =b
+inGρ at time t0. If ui is a ρ0 node, deﬁne vi to be one of its ρ1
+buddies, otherwise set vi = ui. Then, by deﬁnition, at time t0 the
+nodesvi andvi+1 are either directly connected, or connected by a
+temporary (ρ1,k )-bridge. Hence, by Lemma 3.12 (or Lemma 3.1),
+at time t0 +k the nodes vi andvi+1 are in the same (ρ1,k )-pre-
+component, and by Lemma 3.9, Lemma 3.8, and Lemma 3.1vi and
+vi+1 are in the same connected component ofGρ1 at timet0 +k +
+O(1). With this and the symmetric argument for Gρ0 the claim of
+the lemma follows.
+3.2 Top-down Phase
+In the previous section, it has been shown that in O(log2n)
+rounds, all nodes sharing a given preﬁxρ have discovered each other
+and are connected (via other nodes with preﬁx ρ). In addition, each
+node is connected—on each level—to at least one “buddy” having
+the opposite last bit of the corresponding preﬁx. We now prove that
+after these properties have been achieved, the ﬁnal SKIP +topology
+is established in onlyO(logn) rounds.
+The analysis of the top-down phase is done by induction over-
+loading. For our induction step, we need the concept of ﬁnished
+levels.
+DEFINITION 3.15 ( i-FINISHED ). We say that a graph is i-
+ﬁnished if and only if
+1.∀ρ with|ρ| = i, it holds that Gρ contains all edges of the
+SKIP+-graph as stable edges;
+2.∀u∈ V letρ = prei(u) and∀j < i: if v is a level j right-
+buddy ofu (current closest node on the right with prej(v) =
+prej(u) and v.rs[j + 1] ⁄= u.rs[j + 1]), then for all ∀w
+with prei(w) = ρ (i.e., w ∈ Gρ) and w lying between u
+and v, i.e., w.id ∈ [u.id,v. id], it holds that u and w are
+connected by a stable edge. If there is no such buddyv, thenu
+is connected to all nodes to the right ofu inGρ; and similarly
+to the left.
+Figure 5 shows an example.
+Observe that after the bottom-up phase, the “top label” is ﬁn-
+ished trivially: This label forms a graph Gρ with more than one
+node, whereasGρ1 andGρ0 are trivial, i.e., consist of a single node.
+Clearly, for a top label ρ the graph Gρ consists of precisely two
+nodes. In addition, once the graph Gρ is connected, it contains all
+edges of the SKIP+-graph as stable edges.
+The following reasoning shows that the levels will ﬁnish one after
+the other starting from the highest level (hence this phase’s name),
+where each level takes constant time only.
+LEMMA 3.16. Assume at timet the graph isi-ﬁnished. Then, at
+timet + 3, the graph is (i− 1)-ﬁnished
+PROOF. Figure 6 illustrates the situation. We consider a node
+u. We will show that at time t + 1, u knows its closest level- i
+neighbor w in the direction of the old buddy (that must exist due
+
+=σ=ρ1...u.rs
+rs=ρ...
+ρ0...
+Figure 5: Visualization of the i-ﬁnished concept: node u is
+connected to all nodes having preﬁx ρ between its buddies on
+leveli. Note that the distances to the buddies may not decrease
+monotonously towards lower levels!
+to Lemma 3.14 of the bottom-up phase). Having established this, it
+follows directly that at time t + 2,w will inform u about all other
+neighbors in the desired region (Rule 1b and Rule 1c). At timet+3,
+nodeu will be informed about its neighbors on the opposite side of
+the leveli− 1 interval by the corresponding buddy, establishing our
+induction invariant.
+w v
+u w´
+ρ1
+ρ0
+w v
+u w´
+ρ1
+ρ0
+w=v
+u
+ρ1
+ρ0
+w
+uw´
+ρ1
+ρ0
+v
+Case I
+Case II
+Case III
+Figure 6: Proof of Lemma 3.16.
+In order to prove thatu knows its closest neighborw at timet+1,
+we distinguish three cases. From the bottom-up phase, we know
+thatu already has a buddy on one side. Without loss of generality,
+assume this buddy is on the right of u. Let this buddy node be
+denoted byv.
+Case I: Ifv is already the closest node to the right, the claim holds
+trivially (v =w).
+We know thatw also has a buddy, which can either be on the right
+(Case II) or on the left (Case III) of w (and hence also u). Let w’s
+buddy (take any ifw has two) be denoted byw′.
+Case II: Assumew′ is also on the right ofw. We distinguish two
+cases: Either v is left of w′ or right of w′. If v is left of w′, by
+our induction hypothesis,w must have a stable edge to node v. By
+Rule 1b and Rule 1c,v will introducew tou att + 1 (edge (w,u )),
+and the claim follows. The case where v is right ofw′ is analogue:
+the roles ofv andw′ are simply switched.
+Case III: Now assumew has a buddy w′ on the left. We distin-
+guish two cases. If u has another buddy u′ on the left as well, the
+same arguments as in Case II show that eitheru′ orw′ will introduce
+the corresponding neighbors at time t + 1. If, on the other hand, u
+does not have a buddy on the left, then by our induction hypothesis,
+w′ must have a stable edge tou, over whichu is introduced tow in
+the next round as well.
+Finally, observe that after all levels are ﬁnished, all non-SKIP +
+edges must be temporary. They will be forwarded towards the high-
+est level and disappear in logarithmic time (in H rounds). There-
+fore, we conclude that the top-down phase takes logarithmic time
+only.
+3.3 Combining Bottom-up and Top-down
+From the previous discussion, we can draw the following con-
+clusions. From Lemma 3.14, by summing up over all levels, it fol-
+lows that the bottom-up phase lasts for at most O(log2n) rounds
+w.h.p. The subsequent top-down phase takes time O(logn) (cf
+Lemma 3.16) w.h.p. Thus, we have derived the following theorem.
+THEOREM 3.17. Given an arbitrary weakly connected graph,
+the self-stabilizing algorithm ALG+ constructs SKIP+ inO(log2n)
+rounds, w.h.p.
+4. NODE JOIN/LEA VE
+In this section we study the amount of work it takes to handle a
+node departure (leave) or the inclusion of a new node (join). We
+show that once we reach a valid SKIP + graph, our algorithm can
+efﬁciently support any single join or leave operation in O(log4n)
+work and O(logn) rounds w.h.p. For proving this result, we ﬁrst
+need to bound the degree of a node in SKIP+.
+LEMMA 4.1. The degree of a node v in SKIP + is O(logn)
+w.h.p.
+PROOF. Recall the deﬁnition of a SKIP + graph and consider any
+nodev. For any leveli, let the random variableXR
+i be deﬁned as
+XR
+i = max{|{w∈N∗
+i (v)|w.id>v.id }|− 1, 0}.
+In order to bound the probability that XR
+i = k for some k > 0,
+we consider three cases. If v does not have k + 1 nodes inN∗
+i (v)
+to the right of it, then Pr[XR
+i = k] = 0 . If v has exactly k + 1
+nodes inN∗
+i (v) to the right of it, thenXR
+i =k if and only if for the
+k closest successors w ofv inN∗
+i (v) it holds that w.rs[i + 1] =
+succ∗
+i (v).rs[i + 1], so Pr[XR
+i = k] = 1/2k−1. Finally, if v has
+more than k + 1 nodes in N∗
+i (v) to the right of it, then XR
+i = k
+if and only if the closest k successors w of v in level i have the
+property thatw.rs[i + 1] = succ∗
+i (v).rs[i + 1] and the (k + 1)th
+closest successor ofv,w′, satisﬁesw′.rs[i + 1]⁄= succ∗
+i (v).rs[i +
+1], so Pr[XR
+i = k] = 1/2k. In any case, Pr[XR
+i = k]≤ 1/2k−1
+for anyk> 0, and this probability bound holds independently of the
+other levels. Hence, forXR =∑H
+i=1XR
+i , whereH = Θ(logn) is
+an upper bound on the number of levels that holds w.h.p., it follows
+that
+Pr[XR =d]≤
+(
+d
+H
+)
+1
+2d−H.
+Ifd =c·H, we get
+(
+d
+H
+)
+1
+2d−H ≤ (ec)H
+2cH−H ≤ 1
+nc′
+for some constantc′ that can be made arbitrarily large if the constant
+c is sufﬁciently large. Hence, the number of v’s neighbors to the
+right is at most O(logn) w.h.p. A similar argument applies to the
+left neighbors ofv, which implies the claim.
+THEOREM 4.2. When a node v leaves the system, it takes
+O(logn) rounds of the algorithm and O(log4n) total work w.h.p.
+for the graph to converge back to a valid SKIP+ structure.
+
+PROOF. Certainly, only the nodes that were directly connected
+to nodev will need to adapt their current set of neighbors upon the
+departure ofv (since the departure ofv could not possibly alter the
+neighborhoods or ranges of other nodes, given thatv is directly con-
+nected to all nodes in its range for all levels). By Lemma 4.1, the size
+of the entire neighborhood of node v (across all levels) isO(logn)
+w.h.p., so onlyO(logn) nodes need to change their neighborhood.
+In order to show that theseO(logn) nodes can quickly adapt their
+neighborhoods, we distinguish between several cases for every level
+i. In these cases, let Vl (resp.Vr) be the set of all left (resp. right)
+neighborsw∈ N∗
+i (v) withw.rs[i + 1] = v.rs[i + 1] and letWl
+(resp.Wr) be the set of all left (resp. right) neighbors w∈ N∗
+i (v)
+withw.rs[i + 1]⁄=v.rs[i + 1]. Certainly, Vl∪Vr∪Wl∪Wr =
+N∗
+i (v). Letvl,vr,wl andwr be the closest neighbors inVl,Vr,Wl
+andWr tov. Let us assume for now thatvl,vr,wl andwr exist.
+Case 1: wl.id < vl.id < vr.id < wr.id. In this case, all neigh-
+borhoods are correct once v has been removed, so no further edges
+are needed by the nodes.
+Case 2: vl.id < wl.id < vr.id < wr.id. In this case, all nodes
+in{vl}∪ Wl\{wl} have to learn aboutvr and vice versa to update
+the neighborhoods. The other nodes just have to removev from their
+neighborhood. Since wl has edges to all nodes in{vl,vr}∪ Wl, a
+single round of applying Rule 3a sufﬁces to update all neighbor-
+hoods correctly.
+Case 3: wl.id < vl.id < wr.id < vr.id. This case is just the
+reverse of Case 2.
+Case 4: vl.id < wl.id < wr.id < vr.id. In this case, all nodes
+in{vl}∪ Wl have to learn aboutWr∪{vr} and vice versa. Since
+wl knows{vl}∪ Wl∪{wr} andwr knows{wl}∪ Wr∪{vr},
+after one round of applying Rule 3a, all nodes in {vl}∪ Wl learn
+about wr and all nodes in Wr∪{vr} learn about wl. Since the
+stable neighborhoods ofwl andwr just got updated,wl andwr will
+trigger another round of "introduce all" by Rule 3a, son nodes in
+{vl∪Wl∪Wr∪{vr} will have updated their neighborhoods by
+the second round.
+The other cases when some of the nodes vl, vr, wl and wr do
+not exist are very similar and dropped here. Hence, after at most
+two rounds, all (stable) neighborhoods have been updated. Since
+onlyO(logn) nodes need to change their neighborhood, and each
+of these nodes inserts at most O(log2n) edges due to Rule 3a in
+each round, at most O(log3n) edges are inserted in total. These
+either merge with stable edges, become a new stable edge or become
+a temporary edge. Each of the temporary edges will need at most
+O(logn) applications of Rule 2 until it merges with a stable edge.
+Hence, altogether the time is bounded by O(logn) and the work is
+bounded byO(log4n).
+THEOREM 4.3. Assume a new nodev joins the system by estab-
+lishing an edge to a nodeu which is currently in SKIP+. It will take
+O(logn) rounds of the algorithm and O(log4n) total work w.h.p.
+for the graph to converge back to a valid SKIP+ structure.
+PROOF. Upon learning about node u, node v immediately con-
+siders edge (v,u ) as stable (sinceu is currently the only predecessor
+or successor nodev knows). That will prompt the insertion of edge
+(u,v ) by Rule 1a. Ifu considers (u,v ) as a temporary edge, then it
+forwards the edge via Rule 2 to a nodeu′ with a longer preﬁx match
+withv thanu. This leads, after at most H steps, to a stable edge
+(w,v ). Till then,v keeps inserting the edge (u,v ) in each round (as
+it considers u to be a stable neighbor), so there will be a string of
+temporary edges moving upwards fromu. Besides Rule 2, no other
+rule will be applied at this point by the old nodes in SKIP+.
+Suppose thatw is the ﬁrst node that considers the edge (w,v ) to
+be stable. Leti be the maximum level such thatprei(v) = prei(w).
+LetVl (resp.Vr) be the set of all nodes to the left (resp. right) ofv in
+SKIP+ of maximum cardinality so that for all w′∈Vl (resp.w′∈
+Vr), prei+1(w′) = prei+1(v) and there is no node w′′ in between
+the nodes ofVl (resp.Vr) with maximum common preﬁx equal to i
+withv. Moreover, letWl (resp.Wr) be the set of all nodes to the left
+(resp. right) of v of maximum cardinality so that for all w′∈ Wl
+(resp.w′∈Wr), the maximum common preﬁx with v is equal toi
+and there is no nodew′′ in between the nodes ofWl (resp.Wr) with
+maximum common preﬁx more thani withv. Letvl,vr,wl andwr
+be the closest neighbors in Vl,Vr,Wl andWr tov. Let us assume
+for now thatvl,vr,wl andwr exist. Recall thatw considersv to be
+a stable neighbor. Suppose w.l.o.g. that v is to the right of w. We
+distinguish between the following cases.
+Case 1: wl.id < vl.id < vr.id < wr.id. In this case, all nodes
+in{wl}∪ Vl∪Vr∪{wr} have to connect to v and vice versa,
+and besides these, no other connections are needed to fully integrate
+v into level i. Since w = wl andw therefore knows all nodes in
+Vl∪Vr∪{wr} by the SKIP + deﬁnition, one round of applying
+Rule 3a (which is caused by (w,v )) sufﬁces to fully integrate node
+v into leveli.
+Case 2: vl.id < wl.id < vr.id < wr.id. In this case, all nodes
+in{vl}∪ Wl∪Vr∪{wr} have to learn about v and vice versa to
+fully integratev into leveli. Sincew is a node inWl,w has links to
+all nodes in{vl}∪Wl∪Vr∪{wr}, so again one round of applying
+Rule 3a sufﬁces to fully integrate nodev into leveli.
+Case 3: wl.id < vl.id < wr.id < vr.id. In this case, all nodes
+in{wl}∪Vl∪Wr∪{vr} have to learn aboutv and vice versa to fully
+integratev into leveli. Since w = wl,w has links to all nodes in
+Vl∪{wr}. Hence, one round of Rule 3a introducesv to the nodes in
+Vl∪{wr} and vice versa. Afterwards,wr will apply Rule 3a since
+its stable neighborhood changed due tov, sowr will introducev to
+Wr∪{vr} and vice versa, which completes the integration ofv into
+leveli.
+Case 4: vl.id < wl.id < wr.id < vr.id. In this case, all nodes
+in{vl}∪ Wl∪Wr∪{vr} have to learn about v and vice versa
+to fully integrate v into leveli. As w is any node in Wl,w knows
+about{vl}∪ Wl∪Wr∪{vr}, so one round of applying Rule 3a
+sufﬁces to fully integrate nodev into leveli.
+The remaining cases in which vl,vr orwr do not exist are sim-
+ilar and dropped here. Hence, it takes at most two rounds to fully
+integratev into leveli.
+Oncev is fully integrated into a level i, it knows the closest pre-
+decessor and successor w in SKIP+with maximum preﬁx match at
+leasti + 1 (if it exists). Since each of these nodes will consider v
+to be a stable neighbor in level i + 1, we can use similar case dis-
+tinctions as above to show that v will be fully integrated into level
+i + 1 in at most two further rounds. Node v also knows its closest
+predecessor and successorw in SKIP+with maximum preﬁx match
+at least i. Since each of these nodes will consider v to be a stable
+neighbor in leveli− 1, we can also use similar case distinctions as
+above to show thatv will be fully integrated into leveli−1 in at most
+two further rounds. Using these arguments inductively implies that
+v will be fully integrated into the SKIP + graph in O(logn) time.
+It remains to bound the work. The ﬁrst part (creating and forward-
+ing temporary edges),2 just consumesO(log2n) work. Each time a
+node destabilizes,O(log2n) new edges are created. Certainly, only
+nodes that will considerv to be their stable neighbor (and vice versa)
+will destabilize, and we know from Lemma 4.1 that the degree ofv
+in SKIP + will be O(logn) in the end w.h.p. Hence, altogether at
+mostO(log3n) new edges are created. These either merge with sta-
+ble edges, become a new stable edge or become a temporary edge.
+Each of the temporary edges will need at most O(logn) applica-
+tions of Rule 2 until it merges with a stable edge. This yields the
+claim.
+2By “ﬁrst part” we mean the part where v contacts u until a ﬁrst
+node is met that considers the edge to v to be stable. The sequence
+of nodes involved here will continuously forward temporary edges
+upwards untilv ceases to insert the edge (u,v ). This happens once
+v is not a nearest neighbor ofu anymore for some level.
+
+5. CONCLUSION
+This paper described the ﬁrst self-stabilizing algorithm that
+quickly establishes a scalable peer-to-peer topology out of any state
+in which this is in principle possible. Our work opens many impor-
+tant directions for future research. In particular, so far, we do not
+have a polylogarithmic bound on the enabled actions per node and
+round. Hence, we want to explore the corresponding complexities
+further and come up with the necessary algorithmic modiﬁcations.
+6. REFERENCES
+[1] Y . Afek and S. Dolev. Local stabilizer.Journal of Parallel and
+Distributed Computing, 62(5):745–765, 2002.
+[2] D. Angluin, J. Aspnes, J. Chen, Y . Wu, and Y . Yin. Fast
+construction of overlay networks. In Proc. 17th Annual ACM
+Symposium on Parallelism in Algorithms and Architectures
+(SPAA), pages 145–154, 2005.
+[3] J. Aspnes and G. Shah. Skip graphs. ACM Transactions on
+Algorithms, 3(4):37, Nov. 2007.
+[4] J. Aspnes and U. Wieder. The expansion and mixing time of
+skip graphs with applications. In Proc. 17th ACM Symposium
+on Parallelism in Algorithms and Architectures (SPAA), pages
+126–134, 2005.
+[5] J. Aspnes and Y . Wu.O(logn)-time overlay network
+construction from graphs with out-degree 1. In Proc.
+International Conference on Principles of Distributed Systems
+(OPODIS), volume 4878 of LNCS, pages 286–300, 2007.
+[6] B. Awerbuch, B. Patt-Shamir, and G. Varghese. Self
+stabilization by local checking and correction. In Proc. of the
+32nd IEEE Symp. on Foundations of Computer Science
+(FOCS), 1991.
+[7] B. Awerbuch and C. Scheideler. Peer-to-peer systems for
+preﬁx search. In Proc. of the 22nd ACM Symposium on
+Principles of Distributed Computing (PODC), 2003.
+[8] B. Awerbuch and C. Scheideler. The hyperring: A
+low-congestion deterministic data structure for distributed
+environments. In Proc. 15th Ann. ACM-SIAM Symposium on
+Discrete Algorithms (SODA), pages 318–327, 2004.
+[9] B. Awerbuch and G. Varghese. Distributed program checking:
+A paradigm for building self-stabilizing distributed protocols.
+In Proc. 32nd Annual IEEE Symposium on Foundations of
+Computer Science (FOCS), pages 258–267, 1991.
+[10] A. Bhargava, K. Kothapalli, C. Riley, C. Scheideler, and
+M. Thober. Pagoda: A dynamic overlay network for routing,
+data management, and multicasting. In Proc. 16th Annual
+ACM Symposium on Parallelism in Algorithms and
+Architectures (SPAA), pages 170–179, 2004.
+[11] J. Brzezinski and M. Szychowiak. Self-stabilization in
+distributed systems - a short survey. Foundations of
+Computing and Decision Sciences, 25(1), 2000.
+[12] T. Clouser, M. Nesterenko, and C. Scheideler. Tiara: A
+self-stabilizing deterministic skip list. In Proc. 10th Int. Symp.
+on Stabilization, Safety, and Security of Distributed Systems
+(SSS), 2008.
+[13] A. Costello and G. Varghese. Self-stabilization by window
+washing. In Proc. of the 15th ACM Symposium on Principles
+of Distributed Computing (PODC), pages 35–44, 1996.
+[14] C. Cramer and T. Fuhrmann. Self-stabilizing ring networks on
+connected graphs. Technical Report 2005-5, System
+Architecture Group, University of Karlsruhe, 2005.
+[15] E. Dijkstra. Self-stabilization in spite of distributed control.
+Communications of the ACM, 17:643–644, 1974.
+[16] S. Dolev. Self-Stabilization. MIT Press, 2000.
+[17] S. Dolev and T. Herman. Superstabilizing protocols for
+dynamic distributed systems. Chicago Journal of Theoretical
+Computer Science, 4:1–40, 1997.
+[18] P. Druschel and A. Rowstron. Pastry: Scalable, distributed
+object location and routing for large-scale peer-to-peer
+systems. In Proc. 18th IFIP/ACM International Conference
+on Distributed Systems Platforms (Middleware), 2001.
+[19] D. Gall, R. Jacob, A. Richa, C. Scheideler, S. Schmid, and
+H. Täubig. Modeling scalability in distributed
+self-stabilization: The case of graph linearization. Technical
+Report TUM-I0835, Technische Universität München,
+Computer Science Dept., Nov. 2008.
+[20] M. T. Goodrich, M. J. Nelson, and J. Z. Sun. The rainbow
+skip graph: A fault-tolerant constant-degree distributed data
+structure. In Proc. 17th Annual ACM-SIAM Symposium on
+Discrete Algorithm (SODA), pages 384–393, 2006.
+[21] N. Harvey and J. Munro. Deterministic SkipNet. Inf. Process.
+Lett., 90(4):205–208, 2004.
+[22] N. J. A. Harvey, M. B. Jones, S. Saroiu, M. Theimer, and
+A. Wolman. Skipnet: A scalable overlay network with
+practical locality properties. In Proc. 4th USENIX Symposium
+on Internet Technologies and Systems (USITS), pages
+113–126, 2003.
+[23] T. Herman. Observations on time adaptive self-stabilization.
+Technical Report TR 97-07, University of Iowa, 1997.
+[24] T. Herman. Self-stabilization bibliography: Access guide.
+University of Iowa, December 2002. See
+ftp://ftp.cs.uiowa.edu/pub/selfstab/bibliography/.
+[25] S. Katz and K. Perry. Self-stabilizing extensions for
+message-passing systems. Distributed Computing,
+7(1):17–26, 1993.
+[26] S. Kutten and B. Patt-Shamir. Time-adaptive self stabilization.
+In Proc. of the 16th ACM Symposium on Principles of
+Distributed Computing (PODC), pages 149–158, 1997.
+[27] S. Kutten and D. Peleg. Fault-local distributed mending. In
+Proc. of the 14th ACM Symposium on Principles of
+Distributed Computing (PODC), pages 20–27, 1995.
+[28] D. Malkhi, M. Naor, and D. Ratajczak. Viceroy: A scalable
+and dynamic emulation of the butterﬂy. In Proc. 21st PODC,
+pages 183–192, 2002.
+[29] P. Maymounkov and D. Mazières. Kademlia: A peer-to-peer
+information system based on the xor metric. In Proc. 1st
+International Workshop on Peer-to-Peer Systems (IPTPS),
+pages 53–65, 2002.
+[30] M. Naor and U. Wieder. Novel architectures for P2P
+applications: the continuous-discrete approach. ACM
+Transactions on Algorithms (TALG), 3, 2007.
+[31] M. Onus, A. Richa, and C. Scheideler. Linearization: Locally
+self-stabilizing sorting in graphs. In Proc. 9th ALENEX, 2007.
+[32] S. Ratnasamy, P. Francis, M. Handley, R. Karp, and
+S. Schenker. A scalable content-addressable network. In Proc.
+ACM SIGCOMM, pages 161–172, 2001.
+[33] A. Shaker and D. S. Reeves. Self-stabilizing structured ring
+topology P2P systems. In Proc. 5th IEEE International
+Conference on Peer-to-Peer Computing, pages 39–46, 2005.
+[34] I. Stoica, R. Morris, D. Karger, M. F. Kaashoek, and
+H. Balakrishnan. Chord: A scalable peer-to-peer lookup
+service for internet applications. Technical Report
+MIT-LCS-TR-819, MIT, 2001.
+[35] G. Varghese. Self-Stabilization by local checking and
+correction. PhD thesis, MIT, 1992.
+[36] G. Varghese. Self stabilization by counter ﬂushing. In Proc. of
+the 13th ACM Symposium on Principles of Distributed
+Computing (PODC), 1994.

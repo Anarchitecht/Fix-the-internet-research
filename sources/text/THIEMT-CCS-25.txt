@@ -1,0 +1,3236 @@
+An extended abstract [TRB+25a] of this article appears in the proceedings of ACM CCS 2025. The full version [TRB+25b] is available as entry 2025/1619 in the
+IACR eprint archive. The source code of the corresponding implementation as well as a performance evaluation are available as a Zenodo record [Sch25].
+Generic Anonymity Wrapper for Messaging Protocols
+Lea Thiemt
+FAU Erlangen-Nürnberg
+Erlangen, Germany
+lea.thiemt@fau.de
+Paul Rösler
+FAU Erlangen-Nürnberg
+Erlangen, Germany
+paul.roesler@fau.de
+Alexander Bienstock∗
+J.P. Morgan AI Research and J.P.
+Morgan AlgoCRYPT CoE
+New York, NY, USA
+alex.bienstock@jpmchase.com
+Rolfe Schmidt
+Signal Messenger
+Mountain View, CA, USA
+rolfe@signal.org
+Yevgeniy Dodis
+New York University
+New York, NY, USA
+dodis@cs.nyu.edu
+Abstract
+Modern messengers use advanced end-to-end encryption protocols
+to protect message content even if user secrets are ever temporarily
+exposed. Yet, encryption alone does not prevent user tracking, as
+protocols often attach metadata, such as sequence numbers, public
+keys, or even plain user identifiers. This metadata reveals the social
+network as well as communication patterns between users. Existing
+protocols that hide metadata in Signal (i.e., Sealed Sender), for MLS-
+like constructions (Hashimoto et al., CCS 2022), or in mesh networks
+(Bienstock et al., CCS 2023) are relatively inefficient or specially
+tailored for only particular settings. Moreover, all existing practical
+solutions reveal crucial metadata upon exposures of user secrets.
+In this work, we introduce a formal definition of Anonymity
+Wrappers (AW) that generically hide metadata of underlying two-
+party and group messaging protocols. Our definition captures for-
+ward and post-compromise anonymity as well as authenticity in the
+presence of temporary state exposures. Inspired by prior wrapper
+designs, the idea of our provably secure AW construction is to use
+shared keys of the underlying wrapped (group) messaging protocols
+to derive and continuously update symmetric keys for hiding meta-
+data. Beyond hiding metadata on the wire, we also avoid and hide
+structural metadata in users’ local states for stronger anonymity
+upon their exposure.
+We implement our construction, evaluate its performance, and
+provide a detailed comparison with Signal’s current approach based
+on Sealed Sender: Our construction reduces the wire size of small 1:1
+messages from 441 bytes to 114 bytes. For a group of 100 members,
+it reduces the wire size of outgoing group messages from 7240 bytes
+to 155 bytes. We see similar improvements in computation time
+for encryption and decryption, but these improvements come with
+substantial storage costs for receivers. For this reason, we develop
+extensions with a Bloom filter for compressing the receiver storage.
+Based on this, Signal considers deploying our solution.
+1 Introduction
+Most modern messengers are based on advanced encryption proto-
+cols that continuously update the used key material. Due to these
+updates, exposing the local secrets of a user does not affect the con-
+fidentiality of past or future encrypted messages, which is called
+Forward Secrecy(FS) andPost-Compromise Security(PCS), respec-
+tively.
+∗Alexander Bienstock did not contribute to the implementation for this paper.
+Privacy and Anonymity.While these encryption protocols pro-
+vide strong confidentiality for the communicated payload, metadata
+about the communicating users remains unprotected. In particular,
+without further measures, central messaging providers learn the so-
+cial network and the communication patterns between their users.
+A range of techniques has been proposed to protect user anonymity
+in messaging, targeting different layers of the communication stack.
+Network-level approaches, such as onion routing [RSG98, DMS04]
+and mix networks [Abe99, SW06], obfuscate communication paths
+and patterns in transit. Similarly, server-side techniques like Pri-
+vate Information Retrieval [CKGS98, SJ17] and Oblivious Message
+Retrieval [LT22] prevent servers from learning which messages
+users send or receive. While these mechanisms are essential for
+achieving full anonymity in practice, they are orthogonal to our
+work. Concretely, our approach does not hide metadata which a
+routing service attaches to the ciphertext. Instead, our approach
+operates at the protocol level and falls in line with the approaches
+we discuss in the following. Notably, our protocols can be efficiently
+instantiated by standard building blocks.
+Sealed Sender.With Signal’s anonymization layer, calledSealed
+Sender, a sender 𝑆 public-key-encrypts each messaging cipher-
+text𝑐′ with the receiver’s long-term key pk𝑅. While the Double
+Ratchet ciphertext𝑐′ contains visible metadata like a sequence num-
+ber or repeating sender public keys, the Sealed Sender ciphertext
+𝑐∗ =enc(pk 𝑅,𝑐′) looks random. For efficient delivery via the cen-
+tral messaging server, the sender attaches the receiver’s identifier
+to the anonymized ciphertext:𝑐=(𝑐 ∗,𝑅) ; the actual Sealed Sender
+protocol is slightly more complex and, additionally, offers sender au-
+thentication. Overall, this anonymizing public-key encryption layer
+hides all explicit metadata towards observers on the wire, except the
+receiver identity, which serves as routing information. The receiver
+can simply decrypt all incoming ciphertext with their long-term
+secret key sk𝑅. Recent analyses of Sealed Sender [MKA+21, BH23]
+demonstrate that, despite hiding explicit metadata, the interac-
+tion between communication partners can reveal their identities;
+this issue arises on the routing level and, as mentioned above, is
+outside the scope of our work. However, the approach of Sealed
+Sender has three further crucial drawbacks: (a) when sending mes-
+sages to a group𝐺={𝑅 𝑖}𝑖∈[𝑛] , the sender encrypts the compact
+group messaging ciphertext individually to every other group mem-
+ber𝑅𝑖,𝑖∈[𝑛] , which induces a linear computation and communi-
+cation overhead; (b) if a receiver is ever corrupted, their exposed
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+long-term secret key sk𝑅 reveals the sender identity of every cipher-
+text sent to them; (c) it is unclear how the Diffie-Hellman-based
+design of Sealed Sender can be made post-quantum secure.
+Double Ratchet Extension.To protect hidden metadata even
+after exposures of user secrets, the specification of Signal’s Double
+Ratchet (DR) [PM16a] proposes an alternative concept to Sealed
+Sender, calledHeader Encryption. With this, users regularly derive
+fresh additional keys 𝑘𝑖 from the key updates of the DR, which
+are used to encrypt metadata of the messaging ciphertexts via
+𝑐∗
+𝑖 =enc(𝑘 𝑖,𝑐′
+𝑖). However, it remains unclear from this concept
+specification how receivers identify the right key for decrypting
+ciphertexts𝑐∗
+𝑖 with encrypted metadata. (Note that receivers have
+multiple ongoing DR session in parallel—at least one with each
+sender—and possibly many header encryption keys in each session;
+if the header-encrypted ciphertext contains no visible metadata
+about its session or its sender, identifying the right key may require
+expensive trial decryptions.) Therefore, Signal’s Header Encryption
+is not suited for practice.
+Metadata in MLS.The MLS standard [ BBR+23] for secure group
+messaging proposes a concept similar to Header Encryption, called
+Private Messages. There, all metadata of messaging ciphertexts𝑐′
+𝑖 ,
+except a session identifier for the group chat and the current epoch
+therein, are encrypted with dedicated keys: 𝑐𝑖 =(id 𝐺,ep𝐺,
+enc(𝑘 id𝐺,ep𝐺,𝑐′
+𝑖)). Using the revealed group identifier and epoch
+number(id𝐺,ep𝐺), receivers can efficiently find the right key𝑘id𝐺,ep𝐺
+in their local state for decrypting the remaining metadata. The on-
+going MIMI standardization initiative extends MLS forinteroperable
+messaging; the MIMIMI [KK25] draft, which extends MIMI for hid-
+ing metadata, proposes techniques that are similar to MLS’s Private
+Messages. So far, Signal’s Sealed Sender, MLS’s Private Messages,
+and MIMIMI have not been formally analyzed.
+Private Messages in MLS only hide metadata for messaging ci-
+phertexts. The metadata of the remaining MLS traffic is not pro-
+tected by this, which includes cryptographic key updates and group
+membership operations. Hashimoto et al. [HKP22] propose a spe-
+cialized extension for this. Their extension is designed to facilitate
+key updates in tree-based Continuous Group Key Agreement (CGKA)
+protocols without leaking the structure of the group or the initiator
+of such updates.
+Further Academic Work.From a rather theoretical perspective,
+Dowling et al. [DHRR22] develop a strongly anonymous protocol
+that continuously establishes fresh keys in a unidirectional two-
+party session; for this, they extend prior non-anonymous concepts
+of unidirectional messaging [BSJ+17, PR18b, PR18a, BRV20, RSS23,
+CR25]. While this hides metadata on the wire as well as in the users’
+local states, the novel pairing-based Lamport signature scheme in
+their protocol is too inefficient for real-world deployment.
+Finally, as a byproduct of their messaging protocol for mesh
+networks, Bienstock et al. [ BRT23] propose a simple anonymiz-
+ing wrapper protocol for the DR. Similar to Header Encryption,
+senders regularly derive fresh keys𝑘𝑖 from the DR to anonymize
+messaging ciphertexts𝑐′
+𝑖 that contain metadata. In additition to
+each derived key𝑘𝑖, a random looking tag𝑡𝑖 is derived, which is
+attached to the final anonymized ciphertext 𝑐𝑖 =(enc(𝑘 𝑖,𝑐′
+𝑖),𝑡𝑖)
+before sending. The receiver pre-computes multiple derived keys
+and tags(𝑘𝑗,𝑡𝑗) in advance such that, when receiving an anony-
+mized ciphertext𝑐𝑗 =(𝑐∗
+𝑗,𝑡𝑗), they can take the attached tag𝑡𝑗 to
+find the matching de-anonymization key 𝑘𝑗 for decryption. Our
+protocol is inspired by this. Yet, the construction by Bienstock et
+al. [BRT23] has notable drawbacks: (a) since it does not offer sender
+authentication, it is not directly generalizable to group messaging;
+(b) the size of the lists of pre-computed keys and tags in the receiver
+state can be too large for deployment in practice; (c) although the
+authors aimed to reduce metadata in the local user states, their
+construction leaks communication patterns due to stored sequence
+numbers of (not yet) received ciphertexts.
+In conclusion, there exist many specially tailored techniques
+for hiding metadata of certain messaging protocols. An overview
+thereof can be found in Table 1. All practically relevant techniques
+reveal some metadata upon user corruptions and, more importantly,
+there has been no attempt to formalize a cryptographic abstraction
+that covers the idea of a generic Anonymity Wrapper.
+Cryptographic Primitive.We introduce the concept of an Anony-
+mity Wrapper (AW) as a cryptographic primitive, which generically
+hides metadata from existing messaging protocols. This primitive
+has four algorithms:AW.upS, which initializes or updates the sender
+state, AW.upR, which does the same for the receiver state,AW.encS,
+which wraps ciphertexts of underlying messaging protocols to
+hide metadata and anonymize their users, and AW.decR, which
+de-anonymizes wrapped ciphertexts.
+Anonymity under State Exposures.We require that AW proto-
+cols offer Forward Anonymity (FA), which means that a wrapped
+ciphertext𝑐 must look random even if the local states of sender or
+receivers are exposedafter 𝑐 was sent and received, respectively.
+Furthermore, AW must offer Post-Compromise Anonymity (PCA),
+which means that the update algorithms AW.upS and AW.upR re-
+fresh the user states such that the wrapped ciphertext𝑐 looks ran-
+dom even if the user states were exposedbeforesuch an update. We
+formalize these two requirements withgame-baseddefinitions in
+Section 3.1.
+We complement these definitions in Section 5.1 focusing on the
+metadata leakage of the sender and receiver state to meaningfully
+capture a broader sense of anonymity under state exposures. For
+this, consider an example protocol with random looking ciphertexts,
+which fulfills the two above requirements. However, this protocol
+stores sequence numbers and timestamps for all (not yet) received
+ciphertexts in the local sender and receiver states, which does not
+contradict these two requirements. Yet, upon state exposure, the
+sequence numbers reveal the users’ communication patterns, which
+intuitively undermines our goal. For this reason, ourUC-based
+definition in Section 5.1 specifies which metadata the user states of
+an ideal AW protocol should (not) leak. This definition is slightly
+more complex than our compact game-based definition.
+We note that, when wrapped around an underlying messaging
+protocol, only our wrapper avoids and hides metadata in its own
+state. However, when our wrapper entirely replaces an underlying
+messaging protocol (see below), also the state metadata is fully
+protected.
+
+Generic Anonymity Wrapper for Messaging Protocols
+Group FA PCA Snd |𝑐|in State PQ Deployed
+protocol Snd Rcv Snd Rcv auth. groups obf. ready in
+Double Ratchet (DR) [PM16a] ✗ ✗ ✗ ✗ ✗ ✗ ✗ WA, Messenger
+Post-Quantum DRs [Ste24, DJK+25] ✗ ✗ ✗ ✗ ✗ ✗ ✓ iMessage
+DR & Header Enc. [PM16a] ✗ ✓ ✓ ✓ ✓ ✗ (✓) Impractical
+DR & Sender Keys (SK) [RMS18, BCG23] ✓ ✗ ✗ ✗ ✗ ✓ 1 ✗ (✓) WA, Messenger
+DR & Sealed Sender (SS) [Lun18] ✗ ✓ ✓ ✗ ✓ ✓ ✗ ✗ ✗ Signal
+DR & SK & SS ✓ ✓ ✓ ✗ ✓ ✓ ✗ ✓ n ✗ ✗ Signal
+MLS [BBR+23] ✓ (✓) (✓) (✓) (✓) ✓ 1 ✗ ✓ Wire
+MLS Metadata Hiding [HKP22] ✓ (✓) (✓) (✓) (✓) ✓ 1 ✗ ✓
+MIMIMI [KK25] ✓ (✓) (✓) (✓) (✓) ✓ 1 ✗ ✓
+Strongly Anon. RKE [DHRR22] ✗ ✓ ✓ ✓ ✓ ✓ ✓ ✗ ✓ ✗
+ASMesh [BRT23] ✗ ✓ ✓ ✓ ✓ ✓ ✓ ✗ ✓
+Anonymity Wrapper (AW) ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✗ 1 ✓ ✓
+Authenticated AW (AAW) ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ 1 ✓ ✓
+Table 1: Comparison of messaging protocols for two-party and group chats in composition with methods that hide metadata on
+the wire and from local user states. ✓/✗: A protocol has/does not have the property. We distinguish Forward Anonymity (FA)
+and Post-Compromise Anonymity (PCA) for sender and receiver state exposure. Here, ✓ ✓means the protocol has immediate
+FA/PCA on exposure, ✓ indicates that a key update is required to restore it, and ( ✓) indicates that the given FA/PCA only
+partially fulfills our strong anonymity definition. For group chat protocols, we list whether senders are authenticated in the
+presence of malicious receivers and we provide the asymptotic communication overhead. Besides our protocols, only one other
+hides all relevant metadata in user states. There exist post-quantum secure variants/replacements for all protocols except Sealed
+Sender and [ DHRR22] and we list the real-world messengers that use these protocols. Post-quantum readiness of compositions
+with the DR is marked with (✓) to denote that post-quantum variants of the DR must be used.
+Composition with Messaging Protocols.The strength of our
+approach is that an AW protocol can simply be added on top of
+existing messaging protocols. Yet, for initializing an AW session
+and for updating the user states, algorithms AW.upS and AW.upR
+take fresh symmetric keys that are shared between sender and
+the receivers from some external source. This source can be an
+initial authenticated key exchange protocol (like X3DH [PM16b]
+or Noise [Per18, DRS20]) or the wrapped messaging protocol itself;
+for this, generic composition has been formally studied in [FG14,
+BFWW11, BSJ+17].
+Application to Double Ratchet.For example, when applying
+our wrapper approach to the Signal two-party Double Ratchet (DR)
+algorithm, sender and receiver regularly derive additional keys
+from the DR to feed them into the AW update algorithms. As a
+result, FS and PCS of the DR are leveraged for FA and PCA of the
+AW protocol wrapped around it. Thereby, our protocol is directly
+applicable to the two-party chats in WhatsApp, Signal, Facebook
+Messenger, iMessage, etc. An evaluation of the resulting perfor-
+mance is given in Section 4.2, where we also conduct a comparison
+with the Signal Sealed Sender wrapping protocol. By reducing the
+ciphertext overhead by a factor of4and the en- and decryption time
+by a factor of14, we demonstrate that our results do not only offer
+strong security and privacy guarantees but also that the efficiency
+is far better than with Sealed Sender.
+Replacing Sender Keys.As another example, our AW protocol
+can be wrapped around Signal’s Sender Keys [BCG23], which is the
+group messaging protocol in WhatsApp, Signal, Facebook’s Messen-
+ger, Matrix, etc. We observe that our notion of anonymity already
+includes the confidentiality guarantees of Sender Keys, and we add
+sender authenticity (see below) to AW, which yields anAuthenti-
+catedAnonymity Wrapper (AAW). Overall, AAW offers slightly
+stronger security guarantees than Sender Keys and it hides meta-
+data with FA and PCA. Thus, one can simply replace Sender Keys in
+the listed messengers with our AAW protocol to gain far stronger
+privacy for the users. Our performance evaluation in Section 4.2
+demonstrates the practicality of our approach and, in comparison
+with Signal’s composition of Sender Keys and Sealed Sender, our
+AAW protocol is substantially more efficient: recall that the main
+drawback of Sealed Sender is thelinearcommunication overhead
+because every compact group message is individually public-key-
+encrypted to each group member. In contrast, our wrapper only
+adds asmall constantcommunication overhead and it is based on
+symmetric encryption, such that confidentiality and anonymity can
+be achieved even against quantum adversaries.
+Roadmap.Our main contribution is formalizing the concept of Ano-
+nymity Wrappers (AW) for hiding metadata of generically wrapped
+two-party and group messaging protocols. We introduce game-
+based definitions of anonymity in Section 3.1 and of symmetric and
+sender authenticity in Section 3.2, where the latter yields Authenti-
+cated AW (AAW). Next, we present our AW and AAW constructions
+in Section 4 and we sketch the proofs that are provided in the ap-
+pendix. With the implementation of our construction [Sch25], we
+conduct a performance evaluation in Section 4.2. By measuring
+computation and communication costs, we demonstrate the practi-
+cal deployability of our constructions, and we compare these costs
+with the Signal Sealed Sender metadata hiding protocol. Concretely,
+our construction substantially outperforms Signal’s current ap-
+proach in all dimensions except the receiver state size, which is a
+few hundred kilobytes per session. Motivated by this, we develop
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+optimizations for the receiver state in Section 6. In particular, we
+propose a Bloom-filter-based compression that decreases the state
+size to a few dozen kilobytes in total. Finally, with the UC-based def-
+inition in Section 5.1, we propose a formalization that complements
+our game-based definitions for meaningfully capturing that local
+user states should hide metadata. We currently collaborate with
+Signal for implementing and, possibly, deploying AW and AAW in
+their messenger.
+Anonymity Guarantees in Practice.To clarify the impact of
+our results, we discuss anonymity under state corruptions in a
+broader sense: when a user’s cryptographic key material is exposed,
+a possible scenario is that their whole device was compromised,
+including the user’s address book. One could argue that this reveals
+the user’s social network and thus makes FA and PCA redundant.
+Yet, these anonymity guarantees can still substantially contribute
+to the user’s anonymity. That is, users can have an enormous ad-
+dress book and communicate with very few of those people and
+contacts can be deleted either intentionally or when a user gets
+a new device. This means that prior to the exposure and after a
+key update, an adversary thus does not learn whether a user was
+or is actually in contact with a specific user in their address book.
+The anonymity guarantees become even more meaningful when
+an app implements features to cryptographically hide contacts and
+thus does not reveal them on exposure. For instance, opening a
+conversation requires entering a PIN hardened with a system like
+Signal’s SecureValueRecovery protocol [Mes25b].
+Limitations.As mentioned above, our work is only effective with
+further, complementary measures for comprehensive anonymity
+and it provokes future research in multiple directions. This includes
+anonymous contact discovery and communication initialization,
+routing that leverages the guarantees of our constructions for fully
+(i.e., not only sender-)anonymous messaging, anonymous session
+synchronization in multi-device settings, or plausible anonymity
+in the broader messaging app environment, which includes hiding
+contacts in the address book. On a rather technical level, our proofs
+in the random oracle model could be lifted to the standard model;
+in this work, we use the random oracle model to simplify the proofs
+for better comprehensibility and compactness. Finally, for broader
+applicability, we develop (A)AW as wrapper protocols that need
+external input of symmetric keys from (continuous) key exchange
+protocols like the DR; for avoiding redundancy, it remains an in-
+teresting open problem to modify messaging protocols like the DR
+directly for offering anonymity.
+1.1 Technical Overview
+Initialization and State Updates.The protocol execution be-
+tween the sender and one or more receivers begins with executing
+algorithms AW.upS and AW.upR, respectively, which take a shared
+symmetric input key𝑘0 to establish an internal shared symmetric
+chain key ck0,0. Whenever sender and receivers re-run the update
+algorithms for PCA on another input key𝑘𝑖, a new epoch𝑖 begins in
+which chain key ck𝑖,0 is derived from the mix of𝑘𝑖 and an internal
+secret derived from the prior epoch’s initial chain keyck 𝑖−1,0 .
+Anonymizing Ciphertexts.To anonymize some input message𝑚—
+which can be a plaintext message or a ciphertext with metadata
+from the underlying messaging protocol—, the sender takes current
+chain key ck𝑖,𝑗−1 to derive a new chain key ck𝑖,𝑗 , a tag𝑡𝑖,𝑗 , and a
+message key𝑘𝑖,𝑗 that encrypts𝑚. Using authenticated encryption,
+the anonymized ciphertext𝑐𝑖,𝑗 =(enc(𝑘 𝑖,𝑗,𝑚),𝑡 𝑖,𝑗) looks pseudo-
+random and, therefore, hides all metadata on the wire. We note
+that methods for anonymously routing and forwarding anonymous
+ciphertexts from sender to receiver are outside the scope of this
+work; by just attaching (and, thereby, leaking) the receiver identity
+to the anonymous ciphertext, efficient delivery is facilitated.
+Key Computation.While the sender always only has the single
+current chain key in their state, the receiver pre-computes multiple
+key-tag pairs(𝑘𝑖,𝑗,𝑡𝑖,𝑗) in advance to enable immediate decryption
+of ciphertexts that arrive out of order. Since anonymized cipher-
+texts look random—even to the receiver—, the pre-computed tags
+identify the right key for de-anonymizing incoming ciphertexts.
+For this reason, the pre-computed key-tag pairs for all sessions of
+the receiver are stored in a single consolidated receiver state.
+Receiver State.Conceptually, the so far described AW construc-
+tion is similar to the simple design by Bienstock et al. [ BRT23].
+However, a weakness of the construction in [BRT23] is that, along
+with every pre-computed key-tag pair, the receiver stores the corre-
+sponding epoch number (i.e., the number of updates so far) and the
+sequence number in that epoch; this is done to delete unnecessarily
+pre-computed key-tag pairs during epoch progressions. Upon ad-
+versarial state exposure, the revealed epoch and sequence numbers
+leak which ciphertexts have (not) been received so far.
+To avoid this, our construction maintains three constant sized
+lists of pre-computed key-tag pairs: one list forfutureciphertexts
+in thecurrentepoch, one list foroldernot yet received ciphertext,
+and, potentially, one list for future ciphertexts in thenextepoch. If
+needed, the list for older ciphertexts is filled with indistinguishable
+dummy entries. Furthermore, when advancing to the next epoch
+and, thereby, cleaning key-tag pairs, we use the first unnecessar-
+ily pre-computed tag as an implicit pointer for deletion instead of
+explicit epoch or sequence numbers. Using this slightly advanced
+referencing scheme, which we elaborate on in Section 5, our con-
+struction does not leak which ciphertexts have (not) been received
+so far.
+Sender Authentication.Due to authenticated encryption, our
+anonymized ciphertexts are authenticatedsymmetrically. For se-
+curely anonymizinggroupmessaging protocols with potentially
+malicious receivers, we add sender authentication: the sender can
+generate a signature key pair(sk,vk) with every update and the
+receiver obtains the corresponding verification key vk upon their
+update. When anonymizing a message, the sender signs the anony-
+mized ciphertext. To hide the resulting signature𝜎 on the wire, the
+sender derives an additional key𝑘otp from the current chain key,
+which one-time-pad-encrypts𝜎:𝑐=(𝑐 ∗,𝑡,sign(sk,(𝑐 ∗,𝑡))⊕𝑘 otp).
+To ensure that the relation between pre-computed key-tag pairs in
+the receiver state remains hidden, the receiver does not store vk
+in plain; instead, it stores a randomized commitment of vk with
+every key-tag pair:(𝑘𝑖,𝑗,𝑡𝑖,𝑗,comm(𝑟 𝑖,𝑗,vk𝑖)). To verify signatures
+on receipt, the sender includes vk in every message that will be
+
+Generic Anonymity Wrapper for Messaging Protocols
+anonymized; the receiver then verifies the signature and checks if
+the commitment opens tovk.
+Recent literature [JKS24, JK25] formalized fine-grained attacker
+models against confidentiality and authenticity—but not anonymity—
+for thestatelessprimitive Symmetric Signcryption. The construc-
+tion idea behind this is that authenticated encryption with a long-
+term symmetric key is enriched with and bound to signature-based
+authentication with a long-term asymmetric key. In essence, our
+statefulAuthenticated AW construction sketched above follows a
+similar design approach but adds continuous key updates, which
+yields confidentiality, authenticity, as well as anonymity with FS,
+FA, PCS, and PCA. A detailed discussion of the differences between
+AAW and Symmetric Signcryption is provided in Appendix A.2.
+Performance.We implement our construction and evaluate its
+performance in Section 4.2 by comparing it to Signal’s current
+protocol.
+For two-party messaging, our protocol would be wrapped around
+the Double Ratchet, whereas Signal currently anonymizes Double
+Ratchet ciphertexts with Sealed Sender. Besides the strengthened
+anonymity under state exposures, our protocol enhances the com-
+munication overhead from441bytes to114bytes per ciphertext,
+and it reduces the en- and decryption time from about60µs to4µs.
+In groups, the performance gain is even more evident: Signal
+currently encrypts group messages using Sender Keys; the resulting
+compact ciphertext is wrapped with Sealed Sender to each group
+member individually. This yields a total packet size of440 + 68·
+𝑛 bytes, where𝑛 is the group size, and an encryption time of1.1ms
+for a group of size 𝑛= 100. Our AAW protocol can replace this
+entirely, which yields a constant ciphertext size of155bytes and
+and a constant encryption time of21µs; decryption time is halved
+from61µs to32µs.
+The main drawback of our construction is the size of pre-computed
+key-tag pairs in the receiver state: for AW, the receiver stores120KB
+globally plus288KB per session; for AAW, the latter increases to
+480KB per session.
+Receiver State Compression.The simplest reduction of space can
+be achieved by not storing dummy tag-key pairs in the list for old
+not yet received ciphertexts, which only leaks minimal additional
+metadata.
+For the two remaining lists that contain pre-computed tag-key
+pairs for future ciphertexts, we develop a Bloom-filter-based en-
+hancement in Section 6. Concretely, instead of storing many tag-key
+pairs for the future explicitly, we only store very few of them for
+the standard case in which only few ciphertexts are dropped or
+re-ordered during delivery. For the bad case in which many cipher-
+texts are dropped or re-ordered, the receiver pre-computes the tags
+and only stores them implicitly in session-wise Bloom filters. Upon
+receipt of a bad-case ciphertext for which the tag-key pair is not
+stored explicitly, the receiver searches for the ciphertext’s tag in all
+sessions’ Bloom filters; when this is found, the full tag-key pair is
+computed explicitly. While this approach only increases the compu-
+tation time of the receiver minimally, it reduces the storage size by
+a factor14, which yields a construction with practical performance
+in all dimensions.
+2 Preliminaries
+We use[𝑛], where𝑛 is an element of the natural numbers N, as
+shorthand for the set{1, 2,...,𝑛} , and(𝑥𝑖)𝑖∈[𝑛] as shorthand for the
+sequence(𝑥1,𝑥 2,...,𝑥 𝑛). We use𝑥←𝑦 to assign the value𝑦 to the
+variable𝑥. We also use this notation to assign multiple values in
+one line, e.g.,(𝑥𝑖)𝑖∈[𝑛] ← 0𝑛 denotes𝑥1← 0,...,𝑥 𝑛← 0. If𝑌 is
+a set, we write 𝑥← $ 𝑌 to denote that the value 𝑥 is randomly
+sampled from𝑌 . For a function 𝑓 with (potentially empty) input
+(𝑎𝑖)𝑖∈[𝑛],𝑛∈N , we write(𝑥𝑗)𝑗∈[𝑚],𝑚∈N ←($) 𝑓((𝑎 𝑖)𝑖∈[𝑛]) to indicate
+that𝑓 is a deterministic (or probabilistic) function which outputs
+values(𝑥𝑗)𝑗∈[𝑚],𝑚∈N . Similarly, we define a function 𝑓 through
+𝑓 :𝑉→ ($) 𝑊 , denoting 𝑓 takes as input arguments from𝑉 and
+outputs (probabilisticly) a value in𝑊 . To initialize variable𝑥, set𝑉 ,
+and dictionary𝐷 with empty values, we write𝑥,𝑉,𝐷[·]←⊥ 3. The
+Cartesian product of two sets𝑉,𝑊 is denoted as𝑉×𝑌 , and we use
+𝑋
+∪
+←𝑉 as shorthand for𝑋←𝑋∪𝑉 . We denote bitwise XOR of
+two variables by𝑥⊕𝑦.
+In security definitions and proofs, we denote the adversary as
+A,B,C, etc. Writing (𝑥𝑗)𝑗∈[𝑚] ←($) A((𝑎𝑖)𝑖∈[𝑛]) means that
+A is executed on some (potentially empty) input (𝑎𝑖)𝑖∈[𝑛] and
+(probabilisticly) outputs some value(s)(𝑥𝑗)𝑗∈[𝑚] . In security defini-
+tions and constructions, we use the keyword “Requirecondition"
+to indicate that if theconditionevaluates to false, we immediately
+rewind all changes which happened during the function execu-
+tion and return⊥. When using a hash functionHwith input 𝑎
+which returns multiple values(𝑥1,...,𝑥 𝑛,𝑦 1,...,𝑦 𝑚)← H((𝑎𝑖)𝑖∈[𝑛]),
+for𝑛,𝑚∈N , where some values 𝑦1,...,𝑦 𝑚 are not required for
+further computation, we implicitly discard these values and write
+(𝑥1,...,𝑥 𝑛)←H((𝑎 𝑖)𝑖∈[𝑛]).
+Our constructions use an Authenticated Encryption with Asso-
+ciated Data (AEAD) scheme AE=(AE.gen,AE.enc,AE.dec) with
+pseudo-random (IND$) and strongly unforgeable ( SUF-CMA) ci-
+phertexts, a signature schemeS =( S.gen, S.sgn, S.vfy) with strong
+unforgeability (SUF-CMA), and a commitment schemeC =( C.com,
+C.vfy) that provides binding and hiding. We use the data structures
+linked list (LL) and hash table (HT) with standard interfaces. Fur-
+thermore, we use a Counting Bloom Filter (CBF), which is a compact
+and efficient representation of a modifiable set with membership
+testing: elements can be added to and removed from the set and the
+membership of elements in the set can be tested with a configurable
+low false positive rate. We provide the full security definitions for
+these standard building blocks in Appendix B.
+3 Anonymity Wrapper
+The concept of anonymity wrappers was introduced informally
+by Bienstock et al. [BRT23] and formally, but specially tailored to
+MLS-like group messaging protocols, by Hashimoto et al. [HKP22].
+We take a step back and propose a generic notion that captures
+anonymous wrapping of two-party and group messaging and, as
+demonstrated by our construction in Section 4, allows for highly
+efficient instantiations. More concretely, we consider an anonymity
+wrapper AW to be connected to and wrapped around arbitrary
+underlying two-party or group messaging protocols such that the
+wrapped messaging traffic sent over the network—and seen by
+messaging providers—reveals no metadata. Thereby, we consider
+efficient (anonymous) routing of messaging traffic out of scope:
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+senders can either attach the receiver identity to the anonymized
+traffic or employ more advanced routing techniques that hide this
+information.
+Syntax.An anonymity wrapper is a tuple of algorithms AW=
+(AW.upS,AW.up R,AW.enc S,AW.dec R) for some sender state space
+ST𝑆, update key space K, verification key spaceVK , receiver
+state spaceST𝑅, session identity spaceID , message spaceM,
+and ciphertext spaceC:
+•AW.up S :({⊥}∪ST 𝑆)×K→ $ST𝑆×({⋄}∪VK) Ini-
+tializes (with first input⊥) or updates a sender state with
+some update key𝑘∈K ; for asymmetric sender authenti-
+cation, some verification key vk∈VK can be output and
+shared with receivers.
+•AW.up R :({⊥}∪ST 𝑅)×ID×K×({⋄}∪VK)→ST 𝑅
+Initializes (with first input⊥) or updates the receiver state
+for a session locally identified by id∈ ID with some
+update key𝑘and, possibly, some verification keyvk.
+•AW.enc S :ST𝑆×M→ $ST𝑆×C Anonymizes a pay-
+load message𝑚∈M.
+•AW.dec R :ST𝑅×C→ST 𝑅×ID×M De-anonymizes
+a ciphertext𝑐∈Cby extracting message𝑚in sessionid.
+Consolidated Receiver State.Each sender uses an individual state
+stS ∈ ST𝑆 for every session in which they communicate as a
+sender, where the number of receivers per session is unbounded.
+Whenever the sender wants to send in a session via AW.encS, the
+respective sender state is selected and used by the higher level
+application. Receivers, in contrast, cannot know in advance to which
+session a received ciphertext belongs, since ciphertexts hide this
+information; thus, receivers cannot select the matching individual
+receiver statebeforeprocessing a ciphertext with AW.decR. For this
+reason, receivers store the information for all the sessions in which
+they receive in a single, consolidated receiver statestR∈ST 𝑅. This
+means that, in our single-device setting, every user has one sender
+state for each of their sessions and a single consolidated receiver
+state for all of their sessions.
+Session Identifier.To update the key material of a session, the
+sender can just take the corresponding sender state stS together
+with an update key𝑘𝑖 via(stS,vk)← $ AW.upS(stS,𝑘𝑖). In contrast,
+since the receiver maintains a consolidated state stR for all its re-
+ceiver sessions, updates of a particular session in that state need
+to be addressed with identifier id via stR←AW.up R(stR,id,𝑘 𝑖,vk) .
+This identifier is only used and specified locally by each receiver in-
+dividually. Therefore, different receivers of the same session can use
+different identifiers for that session. For authentication, algorithm
+AW.decR outputs the identifier of the session in which a ciphertext
+was received.
+Update Keys.Sender and receiver(s) of a session use the same
+initial key𝑘0 to initiate a session and, thereafter, keys𝑘𝑖 to continu-
+ously update their session state. Each fresh key starts a newepoch
+in the session, which allows for forward and post-compromise ano-
+nymity. The source of the initial key and of update keys can be
+some external key exchange or the underlying messaging proto-
+col itself. For example, when the AW wraps traffic of a two-party
+Double Ratchet session, sender and receiver can derive symmetric
+keys𝑘𝑖 from internal DR root-key updates that they then feed into
+the updates of the AW session. In contrast, for anonymizing group
+chats that are based on Signal’s Sender Keys, our AW protocol
+can essentially replace Sender Keys, which avoids redundancy and
+strengthens security. Thereby, the update keys are always randomly
+sampled and distributed from the sender to each receiver via their
+existing pairwise channels (see [BCG23]).
+Verification Keys.In a multi-receiver session for a group chat, it
+can be desirable that authenticity of sent ciphertexts is maintained
+even if some of the session’s receivers act maliciously. For this, we
+let the sender’s update algorithm possibly output asymmetric veri-
+fication keys; these keys belong to signing keys that are internally
+held in the sender’s updated state. During receiver updates, these
+verification keys can be included in the receiver state such that,
+upon decryption, the authenticity of incoming ciphertexts can be
+verified. We call this variantAuthenticatedAW (AAW). (In state-
+less communication, similar concepts, yet without anonymity, have
+been studied under the term Symmetric Signcryption [JKS24, JK25];
+we elaborate on this in Appendix A.2.) For single-receiver sessions,
+this feature can be undesirable; thus, senders and receivers output
+and input symbol⋄in this standard AW case instead.
+Out-of-order Receipt.Modern messaging protocols like the Dou-
+ble Ratchet Algorithm [ PM16a] for two-party chats or Signal’s
+Sender Key Mechanism [BCG23] for group chats offer so-calledIm-
+mediate Decryption. This means that, even if ciphertexts are received
+out of order, their encrypted payload messages can be decrypted
+immediately. For practicality, both mentioned real-world protocols
+limit the out-of-order tolerance with parameters past and fut1
+such that at most past ciphertexts older than the newest decrypted
+one can be decrypted, and at most fut− 1omitted ciphertexts after
+the newest decrypted one are tolerated for successful decryption of
+a newer one. We follow the same approach and parameterize our
+definitions with these two constants: for correctness, we require
+that ciphertexts in the current receivable window that is defined
+by(past,fut) must be decryptable, and for security we require
+that corruptions of receiver secrets do not affect the anonymity
+of ciphertext outside the current receivable window. Thus, proto-
+cols with different levels of tolerance for unreliable delivery can be
+analyzed with our parameterizable definitions.
+Correctness.Intuitively, an (Authenticated) Anonymity Wrapper
+is correct if the decrypted message(stR,id,𝒎)←AW.dec R(stR,𝑐)
+of a received ciphertext𝑐 equals the message encrypted in that sent
+ciphertext𝑐← $ AW.encS(stS,𝒎) and the receiver’s local identi-
+fieridbelongs to the matching session as long as: (a) out-of-order
+delivery did not exceed the tolerance parameters(past,fut) and
+(b) sender and receiver continuously updated their states com-
+patibly with equal input keys 𝑘𝑖 and honestly forwarded veri-
+fication keys vk𝑖 via(stS,vk𝑖) ←$ AW.upS(stS,𝑘𝑖) and stR ←
+AW.upR(stR,id,𝑘 𝑖,vk𝑖), respectively.
+Formally, this is captured by game CORR in Appendix A.1, Fig-
+ure 4 for which we require that Pr[CORR AW,past,fut(A)= 1]= 0
+for all adversariesA.
+1past= 2, 000and fut= 25, 000in lines 8 and 9 in https://github.com/signalapp/lib
+signal/blob/525e8bce0c84576014268ab5b3982612b765f598/rust/protocol/src/consts.rs
+
+Generic Anonymity Wrapper for Messaging Protocols
+3.1 Game-based Anonymity
+To model anonymity, we define game IND𝑏
+AW,past,fut with chal-
+lenge bit 𝑏∈ { 0, 1} in Figure 1 that is parameterized with the
+receivable window via (past,fut) and proceeds in two phases:
+Initially, adversaryA specifies the number of receivers𝑛∈N in
+thechallenge sessionwith the single sender as well as the local
+identifiers id∗
+𝑖 with which each receiver𝑖∈[𝑛] refers to that joint
+challenge session (see line 00). The adversary acts as the senders
+for all remaining non-challenge sessions with each receiver. Since
+all fresh input update keys are sampled uniformly at random, a
+standard hybrid argument proves that this single-sender, single-
+session game generalizes to multi-user, multi-session security; for
+this, note that (A)AW does not use or rely on any long-term key
+material that would be shared between sessions. Moreover, existing
+literature [BFWW11, FG14, BSJ+17] covers generic composition
+with (continuous) key exchange protocols that provide the fresh,
+independent update keys.
+After this challenge session initialization step, A is invoked
+with its ephemeral state𝜔 to continue with querying the following
+oracles:
+•Up S(𝑘) : updates the sender state with key 𝑘 or, if input
+𝑘=⊥ , with a randomly sampled key (line 12); if 𝑘≠⊥
+and this is either the initial epoch or the previous epoch
+was markedtrivially de-anonymized(see below), this new
+epoch is markedtrivially de-anonymized, too (lines 10-11).
+Variables. epS: sender’s current epoch;𝑠: send operations in that
+epoch;𝑋: de-anonymized send operations due to ex posures;
+𝐾: sender’s update keys;VK: sender’s v erification keys.
+•Up R(𝑖,id,𝑘,vk) : updates session id in the state of receiver𝑖
+with verification keyvk and key𝑘 or, for empty input𝑘=⊥
+inchallenge session id=id ∗
+𝑖 , key𝑘 is synchronized with the
+sender by taking their update key from this epoch (line 27);
+if the keys of the sender and receiver𝑖 are not synchronized,
+𝑖is markedout of sync(lines 25-26).
+Variables.𝑛: number of possible receivers in challenge session;
+id∗
+𝑖 : receiver𝑖’s localidentifier for challenge session;epR𝑖: receiver𝑖’s
+current epoch in challenge session; oos𝑖: epoch in which receiver𝑖
+went out of sync in challenge session.
+•Enc(𝑚,ch) : anonymizes message𝑚 and outputs resulting
+real ciphertext𝑐 or, if ch= 1and 𝑏= 1, a random challenge
+ciphertext𝑐∗←$Cinstead (lines 33-34).
+Variables. RC: real ciphertexts; CC: output challenge ciphertexts
+(real or random);CH: ch allenges.
+•Dec(𝑖,𝑐) : de-anonymizes ciphertext𝑐 and outputs identi-
+fier id and message𝑚; if𝑐 was a random challenge cipher-
+text output by Enc, the underlying hidden real ciphertext
+is de-anonymized instead (line 38). If𝑐 is consideredreceiv-
+ablebased on parameters(past,fut) , it is marked received
+(lines 40-41).Variable. 𝑅𝑖: ciphertexts received by𝑖.
+•Expose S: outputs sender state stS and marks all subsequent
+ciphertexts in the current epochtrivially de-anonymized.
+•Expose R(𝑖): outputs state stR𝑖 of receiver𝑖 and marks all
+ciphertexts in the current or prior epochstrivially de-anony-
+mizedthat were both not yet received by𝑖 and sent before𝑖
+was markedout of sync.
+The adversary terminates with a guess𝑏′ and wins if𝑏=𝑏 ′, unless
+a challenge query to oracle Enc(𝑚,ch= 1) was markedtrivially de-
+anonymized. Based on this, we define the advantage of adversaryA
+asAdv ind
+AW(A)=|Pr[IND 0
+AW(A)=1]−Pr[IND 1
+AW(A)=1]|.
+GameIND𝑏
+AW,past,fut(A)
+00(𝜔,𝑛,(id ∗
+𝑖)𝑖∈[𝑛])← $A()
+01(ep S,(ep R𝑖)𝑖∈[𝑛])←0 1+𝑛
+02(𝑠,(oos 𝑖)𝑖∈[𝑛])←∞ 1+𝑛
+03(𝐾[·],VK[·],RC[·],CC[·])←⊥ 4
+04((𝑅 𝑖)𝑖∈[𝑛] ,𝑋,CH)←∅ 2+𝑛
+05(st S,(st R𝑖)𝑖∈[𝑛])←⊥ 1+𝑛
+06𝑏 ′←$A(𝜔)
+07·RequireCH∩𝑋=∅
+08Stop with𝑏 ′
+OracleUp S(𝑘)
+09Require𝑘∈K∪{⊥}
+10·If𝑘≠⊥∧(ep S =0∨(ep S,𝑠)∈𝑋):
+11·𝑋
+∪
+←{(ep S+1,𝑠 ′)|𝑠 ′∈N}
+12If𝑘=⊥:𝑘← $K
+13ep S←ep S+1;𝑠←0
+14(st S,vk)← $ AW.upS(stS,𝑘)
+15𝐾[ep S]←𝑘;VK[ep S]←vk
+16Returnvk
+OracleExpose S
+17·𝑋
+∪
+←{(ep S,𝑠′)|𝑠 ′ >𝑠}
+18Returnst S
+OracleExpose R(𝑖)
+19·𝑋
+∪
+←{(ep ′,𝑠′)∉𝑅 𝑖|
+ep′≤min(ep R𝑖,oos𝑖−1)}
+20Returnst R𝑖
+OracleUp R(𝑖,id,𝑘,vk)
+21Require𝑖∈[𝑛]∧𝑘∈K∪{⊥}
+22Ifid=id ∗
+𝑖∧ep R𝑖 <oos 𝑖:
+23Require𝐾[ep R𝑖+1]≠⊥
+24ep R𝑖←ep R𝑖+1
+25·If𝑘∉{𝐾[ep R𝑖],⊥}
+∨vk≠VK[ep R𝑖]≠⋄:
+26·oos 𝑖←min(ep R𝑖,oos𝑖)
+27Else ifep R𝑖 <oos 𝑖:𝑘←𝐾[ep R𝑖]
+28st R𝑖←AW.up R(stR𝑖,id,𝑘,vk)
+29Return
+OracleEnc(𝑚,ch)
+30Require𝑠<∞
+31(st S,𝑐)← $ AW.encS(stS,𝑚)
+32𝑠←𝑠+1;RC[ep S,𝑠]←𝑐;𝑐 ∗←𝑐
+33·Ifch:
+34·If𝑏=1:𝑐 ∗←$C
+35·CH
+∪
+←{(ep S,𝑠)}
+36CC[𝑐 ∗]←𝑐
+37Return𝑐 ∗
+OracleDec(𝑖,𝑐)
+38IfCC[𝑐]≠⊥:𝑐←CC[𝑐]
+39(st R𝑖,id,𝑚)←AW.dec R(stR𝑖,𝑐)
+40·If∃(ep ′,𝑠′)∈Rcvbl(𝑅 𝑖,RC,ep R𝑖,past,
+fut):RC[ep ′,𝑠′]=𝑐∧ep R𝑖 <oos 𝑖:
+41·𝑅 𝑖
+∪
+←{(ep ′,𝑠′)}
+42Return(id,𝑚)
+Figure 1: Multi-receiver games IND for A W scheme AW.
+Helper Procedure Rcvbl is provided in Figure 4. Teal code
+is only relevant for AA W with sender authentication.
+Intuitive Security Requirements.The game described above in-
+tuitively capturesForward AnonymityandPost-Compromise Ano-
+nymity: every ciphertext 𝑐 must look random, unless the sender
+state was exposed in the current epoch before𝑐 was sent or a re-
+ceiver state in the current (or later) epoch was exposed before 𝑐
+was received. Ciphertexts sent and received before an exposure
+or in earlier or later epochs are required to remain anonymous.
+Furthermore, we require that differing update keys between sender
+and receiver drive the parties out of sync such that subsequent
+receiver exposures become harmless.
+Limitations of Definition.While the above definition requires
+that ciphertexts on the wire look random, it does not require that
+metadata in the local sender and receiver states are avoided or
+hidden. Concretely, an example construction with pseudo-random
+ciphertexts would be secure with respect to the game in Figure 1
+even if a receiver stores a list of sequence numbers and timestamps
+for all their received ciphertexts in each of their sessions in their
+local state. Thus, an adversary who exposes this state learns the
+receiver’s social network as well as the communication patterns
+therein. Since we aim for anonymity under state exposures, we de-
+velop a complementary, slightly more complex UC-based definition
+in Section 5 that captures that metadata is also avoided or hidden
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+in sender and receiver states. Our construction in Section 4 takes
+both definitions into account.
+We see it as an advantage that we have two complementary
+definitions for a broad sense of anonymity. While we do not see a
+clean approach for extending our game-based definition to capture
+metadata hiding in the user state2, our special UC-based definition
+is already very sophisticated and complex. Thus, the above compact
+game captures the core requirements of AW protocols and our UC-
+based definition can be viewed as a meaningful extension.
+3.2 Game-based Authenticity
+Besides anonymity, we require that an Anonymity Wrapper (AW)
+offers authenticity. The basic requirement is that decryption only
+succeeds for honestly sent ciphertexts, unless a state exposure of
+either of the session membersallows for a trivial ciphertext forgery.
+With stronger sender authenticity for anAuthenticatedAnony-
+mity Wrapper (AAW), we require that decryption only succeeds
+for honestly sent ciphertexts, even if any of the session’s receiver
+states were ever exposed; thus, with this second notion, only state
+exposures ofthe senderallow for trivial ciphertext forgeries.
+More concretely, we define game AUTHAW,past,fut that, again,
+proceeds in two phases: initially, adversaryA specifies the number
+of receivers𝑛∈N in thechallenge sessionwith the single sender
+as well as the local identifiers id∗
+𝑖 with which each receiver𝑖∈[𝑛]
+refers to that joint challenge session. After this initial step,A can
+query the following oracles; we use the termsreceivableas well as
+symmetricallyandasymmetrically insecureresp.ineffective, which
+we will elaborate on below:
+•Up S(𝑘) : updates the sender state with key 𝑘 or, if input
+𝑘=⊥ , with a randomly sampled key; if𝑘≠⊥ , this update
+is markedsymmetrically ineffective.
+•Up R(𝑖,id,𝑘,vk) : updates session id in the state of receiver𝑖
+with verification keyvk and key𝑘 or, for empty input𝑘=⊥
+inchallenge session id=id ∗
+𝑖 , key𝑘 is synchronized with
+the sender by taking their update key from this epoch; if
+the keys of sender and receiver 𝑖 are not synchronized,
+𝑖 is markedout of sync; moreover, for AAW, this epoch is
+markedasymmetrically insecureif the input vk was not
+honestly forwarded from the corresponding sender update.
+•Enc(𝑚) : anonymizes message𝑚 and outputs resulting ci-
+phertext𝑐.
+•Dec(𝑖,𝑐) : de-anonymizes ciphertext𝑐 and outputs resulting
+identifier id and message𝑚; if𝑐 is successfully decrypted in
+the challenge session id∗
+𝑖 , but𝑐 is not consideredreceivable
+therein (because it was either received already or never
+honestly sent) while all receivable ciphertexts are marked
+symmetrically secureor, for AAW,asymmetrically secure,
+the adversary wins due to this non-trivial ciphertext forgery
+of𝑐.
+•Expose S: outputs sender state stS and marks all subsequent
+ciphertexts in the current epochsymmetrically insecure;
+moreover, for AAW, this epoch is markedasymmetrically
+insecure.
+2In their Appendix B.2, Bienstock et al. [BRT23] provide a convincing explanation for
+this.
+•Expose R(𝑖): outputs state stR𝑖 of receiver𝑖 and marks all
+ciphertexts in the current or prior epochssymmetrically
+insecurethat were not yet received by𝑖.
+Receivable and Synchronicity.Ciphertexts are markedreceivable
+if they are covered by the out-of-order tolerance window, which
+is specified by parameters (past,fut) . A ciphertext that is not
+considered receivable should not be decrypted successfully, unless
+some (not yet received) receivable ciphertexts are markedinsecure;
+in the latter case, a ciphertext forgery is trivial.
+Symmetrically Insecure and Ineffective.A ciphertext is marked
+symmetrically insecureif it is receivable by the receiver state when
+the latter is exposed, or if it is sent after the sender was exposed in
+the same epoch. Symmetric insecurity is inherited to a subsequent
+epoch if the next sender update takes a key that was chosen by the
+adversary; such an update is calledsymmetrically ineffective.
+Asymmetrically Insecure.With sender authentication in AAW,
+epochs are markedasymmetrically insecureif the sender was ex-
+posed therein or if the update of the respective receiver was con-
+ducted with an adversarially chosen verification key.
+Based on winning the game by querying oracle Dec with a non-
+trivial ciphertext forgery, we define the advantage of adversaryA
+as Advauth
+AW(A)=Pr[AUTH AW(A)= 1]. For space reasons, the
+pseudo-code specification of game AUTHAW is deferred to Appen-
+dix A.2, Figure 5.
+4 Construction
+The goal of the construction is to create anonymous ciphertexts and
+reduce metadata in sender and receiver states. For the ciphertext
+processing, we adapt the construction from Bienstock et al. [BRT23]
+from two-party communication in mesh networks to generic group
+chats. As the state structure in [BRT23] and other existing protocols,
+such as [PM16a], leak information about past communication, we
+present a state structure which improves state anonymity. In the
+following, we first describe the contruction’s message and cipher-
+text processing and sketch out how our construction satisfies the
+anonymity and authenticity definitions (the full proofs are in Sec-
+tion C). Then, we present the state management. We show a formal
+definition of state anonymity in Section 5.1. The full pseudocode
+of our construction is in Figure 2 and an illustration explaining
+receiver state operations is in Figure 3.
+Message Flow and Ciphertext Processing.The general idea is that
+sender and receiver(s) initialize their states with a shared key𝑘 to
+derive message keys and tags. After a sender encrypts a message,
+they attach the tag and send it to the (one or more) receivers who
+find the corresponding decryption key in their states through the
+tag. Since all parties now share a symmetric key, each receiver could
+thus impersonate the sender. To prevent this, the AAW construction
+allows the sender to additionally generate a signing key pair(sk,vk)
+and distributevkto all receivers.
+In more detail, the protocol is as follows. When Alice wants
+to send a message to the group, she first updates her state with a
+shared key𝑘 to initiate a new epoch. In case Alice wants to sign her
+ciphertexts, she generates a new signing key pair(sk,vk) (line 04).
+
+Generic Anonymity Wrapper for Messaging Protocols
+ProcAW.up S(st,𝑘)
+00Ifst=⊥:tag end,vk prv←⊥ 2,uk←★
+01Else:
+02(tag end,ck,uk,sk,vk,vk prv)←st
+03tag end←H 1(ck),vk prv←vk
+04(sk,vk)← $ S.gen()
+05(ck,uk)←H 2(𝑘,uk,vk)
+06Returnst=(tag end,ck,uk,sk,vk,vk prv),vk
+ProcAW.up R(st=(ht,ST),id,𝑘,vk)
+07Ifst=⊥:ST[·]←⊥,ht←HT.init()
+08IfST[id]=⊥:
+09𝐿 prv,𝐿 now,𝐿 nxt←LL.init() 3
+10ck now,ck nxt,uk←⊥,⊥,★
+11For all𝑖: 0≤𝑖<past:
+12insertDummy new(𝐿prv,ht,vk)
+13For all𝑖: 0≤𝑖<fut:
+14insertDummy new(𝐿now,ht,vk)
+15Else:
+16(ck now,ck nxt,uk,𝐿 prv,𝐿 now,𝐿 nxt)←ST[id]
+17Requireck nxt =⊥
+18(ck nxt,uk nxt)←H 2(𝑘,uk,𝑣𝑘)
+19For all𝑖: 0≤𝑖<fut:// pre-compute next epoch
+20addEntry new(𝐿nxt,ht,ck nxt,vk)
+21ST[id]←(ck now,ck nxt,uk nxt,𝐿 prv,𝐿 now,𝐿 nxt)
+22Returnst=(ht,ST)
+ProcAW.enc S(st=((tag end,ck,uk,sk,vk,vk prv),m)
+23(ck,mk,tag,r,r b)←H 1(ck)
+24𝑐 ′←$ AE.enc(mk,(tag end,m,vk,r,vk prv),tag)
+25𝜎← $ S.sgn(sk,(tag,𝑐 ′))
+26Return(st=(tag end,ck,uk),𝑐=(tag,𝑐 ′,𝜎⊕r b))
+ProcaddEntry pos(𝐿,ht,ck,vk)
+27(ck,mk,tag,r,r 𝑏)←H 1(ck)// updatesck
+28cm←C.com(vk;r)
+29ptr←𝐿.push pos(mk,tag,cm,r 𝑏)
+30ht.add({tag:ptr})
+ProcAW.dec R(st=(ht,ST),𝑐=(tag,𝑐 ′,𝜎′))
+31ptr←ht.acc(tag)
+32Requireptr≠⊥
+33(id,mk,cm,r b)←ptr.getData()
+34(ck now,ck nxt,uk,𝐿 prv,𝐿 now,𝐿 nxt)←ST[id]
+35(tag end,m,vk,r,vk prv)←AE.dec(mk,𝑐 ′,tag)
+36Require(tag end,m)≠⊥
+37Require(C.vfy(vk,cm,r)
+38∧S.vfy(vk,(tag,𝑐 ′),𝜎′⊕r b))=tru
+39Ifptr∈𝐿 nxt:// initiate next epoch
+40ptr end←ht.acc(tag end)
+41Ifptr end =⊥∧tag end ≠⊥:// compute remaining tags
+42tag ′←H 1(cknow)// peek next tag
+43Whiletag ′ ≠tag end:
+44addEntry new(𝐿now,ht,ck now,vk prv)// updatesck now
+45tag ′←H 1(cknow)
+46Else iftag end ≠★:// remove unnecessary tags
+47𝑖 end←𝐿 now.index(ptr end)
+48𝐿 now.crop(ht,until=𝑖 end)// keep oldest
+49𝐿 prv←(𝐿 prv,𝐿 now),𝐿 now←𝐿 nxt,𝐿 nxt←[]
+50ck now←ck nxt,ck nxt←⊥
+51Ifptr∈𝐿 now:
+52ptr nxt←𝐿 now.popold()
+53addEntry new(𝐿now,ht,ck now,vk)
+54Whileptr nxt.getTag()≠tag:// untiltag, move entries
+55𝐿 prv.pushnew(ptr nxt)from𝐿 now to𝐿 prv
+56addEntry new(𝐿now,ht,ck now,vk)
+57ptr nxt←𝐿 now.popold()
+58ht.rem(ptr nxt)
+59𝐿 prv.crop(ht,from=𝐿 prv.len()−past)// keep newest
+60Else://ptr∈𝐿 prv
+61𝐿 prv.rem(ptr),ht.rem(tag)
+62insertDummy old(𝐿prv,ht)
+63ST[id]←(ck now,ck nxt,uk,𝐿 prv,𝐿 now,𝐿 nxt)
+64Return(st=(ht,ST),m)
+ProcinsertDummy pos(𝐿,ht)
+65(tag,mk,cm,r 𝑏)← $T×K×CM ×R 𝑏
+66ptr←𝐿.push pos(mk,tag,cm,r 𝑏)
+67ht.add({tag:ptr})
+Figure 2: Construction for A W schemeAW. Teal code is only relevant for AA W with sender authentication.
+She uses the input𝑘, the update key uk from her state, and poten-
+tially the verification key vk, as input to a KDF to obtain the initial
+chain key ck and the update key for the next epoch (line 05). Simi-
+larly, the receiver(s) update their state with𝑘, and potentially vk,
+and derive the epoch’s initial chain key ck and the next epoch’s
+update key uk (line 18). They use ck to pre-compute fut tags and
+key material for processing future ciphertexts sent by Alice (lines 19
+and 20). Note that using the secret update key uk as input to the
+KDF ensures that, even if an adversary chooses the input key𝑘 for
+an update to a new epoch, they do not control the full key material
+in that new epoch, unless they also know uk from the prior epoch.
+Moreover, uk ensures that it does not go unnoticed when the re-
+ceiver state is updated with different key material than the sender:
+After this point, the receiver will not be able to correctly decrypt
+any ciphertexts from the sender since the receiver key material
+diverges irrecoverably from the sender’s as soon as the state update
+uses a dishonest𝑘(orvk).
+To send a message, Alice usesck to derive message keymk (line 23)
+which she uses for encrypting the message into a ciphertext (line 24),
+and corresponding tag, which she attaches to the ciphertext. If she
+signs the ciphertext, she additionally derives a blinding value 𝑟𝑏
+to encrypt the signature𝜎 (line 26), such that an observer cannot
+use the plain signature to identify the sender of that ciphertext.
+Since we only want to hide the signature, our construction uses an
+efficient one-time-pad-like approach which works with arbitrary
+signature schemes. Once Bob receives the ciphertext, he uses the
+tag to look up the corresponding mk (and blinding value for the
+signature) (lines 31 to 34). We note that Bob is able to immediately
+decrypt out-of-order ciphertexts since he pre-computes the next
+futkeys and retains up topastskipped keys.
+Forward and Post-Compromise Anonymity.Our construction of-
+fers immediate forward security since both sender and receivers
+use a key for en-, respectively decrypting, one message and delete
+it after use. Moreover, the keys do not hold any information about
+previous keys. Since the security of the states may be restored
+through an update with fresh key material, our construction offers
+post-compromise security. Additionally, even if the adversary de-
+termines the key given to the update function, the derived chain
+key is not compromised since the KDF takes as second input the
+secret update keyuk.
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+Theorem (Informal) 4.1.Taking a secure AEAD scheme AE and
+random oraclesH 1, H2, the A W construction in𝐹𝑖𝑔𝑢𝑟𝑒 2fulfills the
+anonymity definitionIND AW,past,fut from Figure 1.
+Proof Sketch for Ciphertext Anonymity.Informally, a ciphertext
+produced by a sender is anonymous because the tag looks random
+and the anonymity of the encrypted message can be reduced to the
+IND$security of the AEAD scheme. Remaining advantages for an
+adversary to break anonymity can occur if there are collisions in the
+KDF, which we model as a random oracle, that are negligible events
+when the tag and key space is large enough. Moreover, if the sender
+attaches a signature in plain, an observer who has the per-epoch
+verification key could check the signature to determine which epoch
+a ciphertext belongs to. Since we blind the signature with a random
+value, this functions as a one-time-pad and the signature thus looks
+anonymous. We show the full proof in Section C.1.
+Theorem (Informal) 4.2.Taking secure AEAD scheme AE, com-
+mitment schemeC, signature schemeS, and random oraclesH 1, H2,
+the A W construction in𝐹𝑖𝑔𝑢𝑟𝑒 2fulfills the authenticity definition
+AUTHAW,past,fut from Figure 5.
+Proof Sketch for Ciphertext Authenticity.Ciphertexts from the
+construction are authentic since only the communicating parties
+know the shared key and the AEAD scheme offers ciphertext un-
+forgeability. Additionally, the AAW construction provides authen-
+ticity even when a receiver is exposed who holds the symmetric key
+material. In this case, the sender’s signing key remains secret and
+the authenticity guarantees can be reduced to the unforgeability of
+the signature scheme. The full proof for AUTHAW is in Section C.2.
+State Management.As described in Section 3, the sender Alice
+knows which session she is communicating with and, for that
+session, she needs to hold only key material for the next encryption
+in the state. On the other hand, the receiver Bob does not know
+to which session an incoming ciphertext belongs and thus has a
+consolidated state over all sessions. This state holds pre-computed
+tags and keys for immediate decryption of out-of-order ciphertexts.
+In case Bob pre-computed unnecessary keys which will never be
+used by Alice, he should be able to delete these to avoid the memory
+from growing too much. A straight-forward solution would be to
+index each key with a message number (e.g., as in [PM16a, BRT23])
+and delete key material based on the index. However, such a state
+structure leaks which ciphertexts were (not) received since the
+respective index would (not) be missing from the state. In our
+construction, we thus refrain from using explicit indices and instead
+use ordered lists to store only the order in which keys were derived.
+When a receiver uses key material, they delete the entry from the
+list, and, since tags and keys look random, this construction does
+not leak which entries are missing, i.e., which ciphertexts were
+(not) received.
+We could use one consolidated ordered list and, after a state
+update, append the new keys to the existing list. However, this
+approach is impractical: Once the receiver appended keys from the
+new epoch, the list alone would not suffice to let the receiver know
+which keys belong to the previous epoch and can be deleted. To
+solve this without storing any additional data, we create three sep-
+arate lists such that the receiver is able to handle pre-computation
+and deletion of keys. First, the receiver stores one list (𝐿now) which
+: dummy
+tag ptr
+a3e 0x..
+yxw 0x..
+tt6 0x..
+… …
+LnowLprv Lnxt
+id1
+id2
+id3
+id4
+Receiver state
+1) AW.decR, tag ∈ Lnow
+2) AW.upR
+3) AW.decR, tag ∈ Lnxt
+4) AW.decR, tag ∈ Lprv
+: new: moves list: delete: tag
+Lprv Lnow Lprv Lnow Lnxt
+tagend
+Figure 3: Illustration of the receiver state of our construction
+from Figure 2. A detailed description is in Section 4.
+holds the fut pre-computed for the current epoch. When a cipher-
+text arrives (Figure 3, (1)) and the receiver uses a pre-computed
+key mk𝑖 (line 51), the key mk𝑖+1, which is next in the list (line 54),
+moves to the beginning of the list, and we pre-compute the nec-
+essary keys such that the list has again fut keys (lines 52 to 58).
+If keys from𝐿now are skipped, the receiver keeps them in state to
+allow for delayed ciphertexts (line 55). For that, the keys move (in
+order) to the list𝐿prv, potentially evicting older keys (line 59), as𝐿prv
+has the capacity to store past entries. When the receiver updates
+their state with fresh key material, they fill a new list𝐿nxt with fut
+pre-computed keys for the next epoch (lines 19 and 20; Figure 3, (2)).
+Then, when the sender sends a ciphertext in this new epoch (i.e.,
+the receiver’s list𝐿nxt; Figure 3, (3)), they tell the receiver the tag
+after the last key they used for the previous epoch (tagend, line 03).
+The receiver learns that any list entries after (including) tagend will
+not be needed and they delete the excess entries (lines 46 to 48) or
+pre-computes necessary tags until tagend (lines 41 to 45). To finalize
+the state update, the receiver first moves all keys which are older
+than just used key to𝐿prv and then moves the fut pre-computed
+keys for the new epoch from𝐿 nxt to𝐿 now.
+Additionally, to reduce metadata leakage through list sizes, we
+enforce constant size for the lists of the receiver. Specifically,𝐿now
+and (potentially)𝐿nxt always hold fut pre-computed entries. To
+keep the list𝐿prv, which has key material of delayed ciphertexts, of
+constant size past, we use dummies: When initializing the receiver
+state, we fill 𝐿prv with past dummies (lines 11 and 12) and 𝐿now
+with fut dummies (lines 13 and 14; cf. Figure 3, (1)), and whenever
+we delete an entry from𝐿prv after decrypting a ciphertext, we fill it
+up with a dummy (line 62; Figure 3, (4)).
+Through the lists, we eliminate explicit connections between a
+stored key and the epoch it was derived in. However, when using
+AAW, the receiver needs a verification keyvk to verify the signa-
+ture. Storing vk linked to each message key would reveal which
+epoch a message key belongs to. It is also not an option to only
+send vk to the receiver because then, a corruption of the message
+
+Generic Anonymity Wrapper for Messaging Protocols
+key would allow an adversary to send a dishonest vk. Thus, the re-
+ceiver instead hides vk by pre-computing and storing commitments
+to vk (line 28), where the commitment scheme can be efficiently
+instantiated by a hash function. That is, for a state update, the
+receiver obtains vk and additionally derives random openings 𝑟
+from the chain key which they use to create commitments to the
+verification key. The receiver then discards the openings and the
+verification key. The sender derives the same𝑟 from the chain key
+and sends (vk,𝑟) to the receiver (line 24) who then checks if the
+commitment matches (vk,𝑟) (line 37). Then, the receiver immedi-
+ately uses the obtained vk to pre-compute the commitments for
+upcoming decryptions (lines 44, 53 and 56).
+A W for Dynamic Groups.Our construction readily extends to
+dynamic groups. That is, to add a user to the group, the sender
+takes their current key material and sends it to the user (we provide
+the construction of this function in the Appendix, Figure 12). The
+added user then cannot read any prior communication since they
+have only the keys for future communication. To remove a user
+from a group, the senders perform a key update without sending
+the fresh key material to the removed user.
+4.1 Generic Wrapper vs. Direct Replacement
+AW requires external fresh key material to use as initial chain keys.
+These keys can be agreed upon by an underlying messaging proto-
+col itself or by some external protocol, enabling AW to operate in
+two distinct modes: as a generic wrapper around existing protocols
+or as a direct messaging protocol.
+Direct Replacement.When AW update keys are distributed via
+external mechanisms, AW can directly encrypt plaintext messages
+to directly provide a secure messaging protocol. For example, AAW
+update keys can be distributed over a pre-existing secure channel,
+just as the Sender Key protocol distributes the sender’s key material
+via secure two-party channels. Group members can then use AAW
+to directly encrypt and decrypt messages yielding a protocol with
+security properties similar to Sender Key plus FA and PCA.
+Generic Wrapper.Many existing messaging protocols already
+perform Continuous Key Agreement that can serve as a source of
+AW update keys. For instance, when combining AW and DR, one can
+extend DR’s internal KDF—which derives a new root key and chain
+key in each epoch from the current root key and a Diffie-Hellman
+key—to also output an update key for AW. Similarly, post-quantum
+secure ratchet protocols [Ste24, DJK+25] can produce AW update
+keys with both DH-based and post-quantum security guarantees.
+This approach requires updating the interface of secure messag-
+ing protocols to optionally return sending and receiving update
+keys, but the modification is straightforward. Since AW and AAW
+are generic constructions, their state updates do not need to have
+the same frequency as the key updates of the underlying wrapped
+messaging protocol. Given that AW updates are more expensive
+than regular message encryption, one can develop policies to use
+only selected update keys and amortize the computational costs
+over multiple messages. In the particular composition with DR,
+we acknowledge that AW and the symmetric chain in DR have
+similar structures, but we expect the improvement from remov-
+ing redundancy to be relatively modest. This optimization, along
+with determining optimal update frequencies, presents interest-
+ing directions for future work and deployment in applications like
+Signal.
+4.2 Performance
+To evaluate the concrete performance of AW and AAW, we imple-
+mented both as generic wrappers in Rust as an addition to Signal’s
+official libsignal_protocol crate [Mes25a] and make the implementa-
+tion available at [Sch25]. We evaluated AW wrapping both Double
+Ratchet and Sender Keys messages and evaluated AAW wrapping
+plaintext messages directly, where the update keys input to AW
+and AAW, respectively, were sampled uniformly at random. A full
+integration with DR or other messaging protocols, as described in
+Section 4.1, remains a task for deployment in practice.
+AW and AAW were instantiated using 16 byte tags, using HKDF
+[KE10] for random oracles, and using AES-256-GCM [MV04] for
+authenticated encryption. For AAW, commitments were 32 bytes of
+HKDF output and EdDSA [JL17] with the curve Ed25519 [LHT16]
+was used for signing.
+All measurements of Double Ratchet, Sender Keys, and Sealed
+Sender were performed using Signal’s production implementation
+in libsignal, and timing data was collected using libsignal’s bench-
+marking framework. Experiments were performed on a 32 core
+Intel®Core™i9-14900K processor.
+Communication Cost.Table 2 shows the size of encrypted mes-
+sages for Signal’s deployed implementations of group and 1:1 mes-
+saging alongside AW and AAW based alternatives. AW yields sig-
+nificantly smaller messages for all group sizes and since Signal’s
+Sealed Sender scales linearly in the size of the group, the difference
+for large groups is dramatic.
+Message Size (bytes)
+Group SK 109
+AW(SK) 157
+AAW 155
+SS(SK) 440+68·group_size
+1:1 DR 66
+AW(DR) 114
+SS(DR) 441
+Table 2: Size of group and 1:1 messages sent using Signal’s
+deployed techniques—Sender Keys, Sealed Sender, and Dou-
+ble Ratchet—compared with alternatives using AW and AAW.
+AW(SK) and AW(DR) denote AW wrapping Sender Keys and
+Double Ratchet messages respectively. SS(SK) and SS(DR)
+denote Sealed Sender wrapping Sender Keys and Double
+Ratchet messages respectively.
+Computation Cost.Table 3 shows the mean time to encrypt and
+decrypt messages in microseconds for Signal’s deployed implemen-
+tations of group and 1:1 messaging alongside AW and AAW based
+alternatives. Since Sealed Sender requires a separate encrypted en-
+velope for each recipient, encryption costs grow significantly with
+the number of recipients. Encryption and decryption are not the
+only computation costs for AW and AAW, they must also process
+updates. The cost of these updates is amortized over the length of an
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+epoch, so a tradeoff between amortized update cost and PCS/PCA is
+possible. With our implementation, AW had a mean time of 1.5245
+ms to update, andAAWhad a mean time of 2.7591 ms to update.
+Group Size 2 5 10 100 1000
+Group SK 20.098 (31.201)
+AW(SK) 21.796 (32.502)
+AAW 21.079 (32.185)
+SS(SK) 131.12
+(61.286)
+283.58
+(61.286)
+343.41
+(61.286)
+1,116.4
+(61.286)
+6,052.5
+(61.286)
+1:1 DR 2.1979 (2.7178)
+AW(DR) 3.7412 (4.2402)
+SS(DR) 61.171 (52.750)
+Table 3: Mean encryption (decryption) times, measured in
+microseconds, for group and 1:1 messages sent using Signal’s
+deployed techniques—Sender Keys, Sealed Sender, and Dou-
+ble Ratchet—compared with alternatives using AW and AAW.
+AW(SK) and AW(DR) denote AW wrapping Sender Keys and
+Double Ratchet messages respectively. SS(SK) and SS(DR)
+denote Sealed Sender wrapping Sender Keys and Double
+Ratchet messages respectively.
+Storage Cost. AW’s data structures add directly to the storage
+costs of existing Double Ratchet and Sender Key sessions. Using
+fut=past= 2000, AW adds 96 bytes to each session for sending,
+288,096 bytes to each session for the recipient keys and lists (96
+bytes for keys and 48 bytes per list entry), and 120,000 bytes per
+recipient for a compact representation of the tag-indexed hash
+table (20 bytes per entry). AAW adds 192 bytes to each session for
+sending 480,096 bytes to each session for the recipient keys and
+lists (96 bytes for keys and 80 bytes per list entry), and 120,000
+bytes per recipient for a compact representation of the tag-indexed
+hash table (20 bytes per entry). This is a significant cost considering
+that current double ratchet sessions, even with Signal’s upcoming
+post-quantum additions, are typically less than 5 KB in size.
+5 Reducing State Metadata
+We designed the state structure of our AW construction such that
+metadata leakage on state exposures is reduced. Particularly, our
+construction prevents an adversary from learning about past com-
+munication. To model the exact information which an adversary can
+learn about the state, we present a formal definition for capturing
+state metadata in this section. Game-based approaches appear un-
+suitable for defining this: since user states are highly construction-
+dependent, it is unclear how a game could cleanly model that cer-
+tain metadata in exposed states can be leaked while other metadata
+must be hidden from adversaries. A natural alternative would be
+employing a construction-dependent simulator. For this reason, we
+use a UC definition [Can01] in which our ideal functionalityFAW
+explicitly describes which information a state exposure reveals.3
+FAW inherits the same protocol syntax as introduced in Section 3.
+3To avoid thecommitment problemcaused by a corruption of a receiver after a secure
+ciphertext is seen by the adversary, we use a technique of, e.g., [ AJM22] and the
+references therein, that considers a weakened variant of UC-security which only
+guarantees UC properties for a restricted set of admissible environments that do not
+trigger the commitment problem.
+In the following, we first describe the ideal functionalityFAW in
+Section 5.1 and argue how our construction realizesFAW. Lastly, we
+discuss state metadata leakage of the underlying protocol and possi-
+ble extensions of AW to protect state anonymity of the underlying
+protocol.
+5.1 Ideal Functionality
+The ideal functionality,FAW, is formally defined in Appendix D
+in Figures 13 and 14. There we also provide a detailed explanation
+ofFAW. Here, we provide a high-level overview of the functionality
+and our design choices for it. This functionality captures multiple
+senders𝑆𝑖∈[𝑛] and multiple receivers𝑅𝑗∈[𝑚] , where each sender𝑆𝑖
+communicates with a fixed subset of receivers in a given session.
+The functionality allows senders and receivers to update their
+states as well as send and receive messages, respectively. The func-
+tionality keeps track of the abstract components of sender and
+receiver states during these operations such as current epoch, cur-
+rent chain key stored, current message keys stored by receivers,
+current dummy keys stored by receivers, etc. This is similar to the
+way in which the anonymity game of Figure 1 keeps track of the
+current epoch and index within that epoch for the sender, as well
+as the current epoch of the receivers and for which (epoch, index)
+pairs they have already received messages. We model receiving
+inFAW by giving the receiver all messages stored in ciphertexts on
+the delivery server and intended for them which have not yet been
+received. Once a ciphertext stored on the delivery server has been
+received by all intended receivers, it is deleted.
+Importantly,FAW does not send any information to the adversary
+when a message is sent or received. Indeed, in order to analyze the
+anonymity that AW cancryptographicallyachieve, we choose not
+to model any consequences ofnetworkobservation that can lead to
+de-anonymization. For example, an all-powerful network adversary
+that can see from where ciphertexts originate and to where they are
+sent can already obtain a lot of de-anonymizing information, and
+necessitatesnetwork routinganonymization techinques in addition
+tocryptographicanonymization techniques. Instead, we assume
+idealized channels that reveal nothing about what is sent/received
+or by/to whom, to focus on the cryptographic aspects.
+We do, however, allow the adversary to expose the delivery
+server, which leaks ciphertexts that have not yet been delivered
+to all recipients. This models a delivery server complying with a
+subpoena, a breach of the delivery server, etc. Hence, any cipher-
+text that the adversary sees through such an exposure should look
+completely random and anonymous, except for those for which
+it has obtained the corresponding key material through a party
+exposure (see below). Now we explain the other effects of adver-
+sarial exposure of any sender or receiver. Such exposures leak the
+abstract chain keys stored by senders, and thus any chain/message
+key which can be derived by them, as well as the chain key, stored
+message keys, and dummy keys stored by receivers. Thus, any ci-
+phertext that the adversary sees through an exposure of the delivery
+server is compromised if the corresponding key is ever obtained
+through a party exposure. Through subsequent leaks of parties in
+the same session, the adversary can also learn how newly exposed
+chain keys can be derived from previously exposed chain keys. Fur-
+thermore, upon exposures of the delivery server, the adversary can
+
+Generic Anonymity Wrapper for Messaging Protocols
+also learn how any previously exposed chain keys can be used to
+derive the message keys for those ciphertexts. However, it is impor-
+tant to observe that for a given exposed message key, if no chain
+key that can be used to derive it is ever exposed, then it should look
+completely random to the adversary and indistinguishable from
+dummy keys in receiver states.
+Finally, the adversary can take some actions that correspond to
+network drops and malicious behavior of the delivery server. For
+instance, the adversary can instructFAW to randomly drop some
+proportion of ciphertexts that are still on the delivery server. Addi-
+tionally, the adversary can instructFAW to drop some ciphertexts
+that it saw during an exposure of the delivery server, as well as
+change the underlying message of such a ciphertext, if it has the
+necessary key material to do so.
+5.2 Our A W Construction
+Informally, our AW construction realizesFAW as follows. The sender
+only stores key material needed immediately for the next encryp-
+tion which does not reveal information about any previous commu-
+nication; a key exposure only compromises future communication
+in the epoch. Moreover, tagend is derived only after the final en-
+cryption in an epoch, and thus never attached to a ciphertext. It
+can only be used to determine the length of the previous epoch if a
+chain key in the previous epoch was exposed. The receiver deletes
+tagend from their state (if it was pre-computed) upon initiation of a
+new epoch and an adversary thus cannot use tagend to determine
+epoch ranges in𝐿 prv.
+Further, the receiver state hides information about (past and
+ongoing) communication as follows. Entries in the lists and hash
+table are message keys, tags, and random blinding values, which
+are independent of each other and cannot be used to infer previous
+or future values. Additionally, in AAW, the receiver does not store
+verification keys in plaintext but commitments which hides the
+keys such that an adversary cannot associate entries to epochs.
+Only when a chain key is exposed, the adversary can derive all
+upcoming entries and identify entries from that epoch and potential
+gaps in the sequence of list entries. Otherwise, the adversary can
+neither tell which entries in𝐿prv belong to which epoch, nor how
+many entries were not yet received since the list has constant size
+and, if necessary, is filled with dummies that are indistinguishable
+from real entries. From𝐿now (and𝐿nxt), the adversary only learns
+which tags belong to the current epoch (and next epoch) and are
+expected to be received.
+5.3 State Anonymity of Underlying Protocol
+The AW uses key material established through an underlying proto-
+col to anonymize that protocol’s ciphertexts. While the state of the
+AW is carefully designed to reduce metadata, the underlying proto-
+col may have an arbitrary state structure. Thus, fully compromising
+a party can still reveal the information which AW hides because
+of the underlying protocol’s state. Consider, for instance, Signal’s
+Double Ratchet: The pre-computed keys in the receiver state are
+indexed with sequence numbers which AW explicitly omits. To
+avoid metadata leakage through the underlying protocol, we can
+use AW to also anonymize the state. The construction idea is that
+sender and receiver share a symmetric key which the receiver uses
+to encrypt their underlying protocol’s state. After the receiver en-
+crypted the state, they discard the key. The sender includes the key
+in each ciphertext such that the receiver can decrypt their state
+temporarily, encrypt it again, discard the key, and so on. If the ad-
+versary exposes the receiver, the receiver state remains anonymous.
+However, the adversary still obtains the message key from AW to
+decrypt the next ciphertext and thereby obtain the state key. To
+avoid these weak anonymity guarantees, the parties could make
+use of the potential state granularity of the underlying protocol and
+use different keys to encrypt different parts of the state. If there is
+a high granularity, the parties could derive a state encryption key
+for every derived message key and link the tags to their respective
+memory section. Such a construction would intuitively inherit FA
+and PCA guarantees from AW.
+Finally, we note again that using (A)AW as the messaging proto-
+col itself (e.g., when replacing Sender Keys with AAW), our state
+anonymity guarantees hold directly.
+6 Trade-Offs and Optimizations
+While the computation and communication overhead of AW clearly
+outperforms the Signal Sealed Sender protocol, the size of the re-
+ceiver state in AW is worse. In the following, we present possible
+optimization strategies. It is important to note that the parameters
+influencing these optimizations depend on the specific application.
+Relevant factors include, e.g., the available memory, the degree of
+privacy concerns, and the likelihood of receiving ciphertexts out of
+order. Therefore, we only present general concepts and leave the
+task of identifying optimal configurations and evaluating concrete
+instantiations to the respective use case.
+6.1 Efficient Data Structures
+We begin to reduce the memory of the lists𝐿now and𝐿nxt. These lists
+contain fut pre-computed keys, tags, and potentially commitments
+to verification keys to allow for immediate decryption. In the case
+that delays and drops (especially of many consecutive) ciphertexts
+are rare, a large part of the pre-computed values is usually not
+needed for receiving the next ciphertext. Decreasing fut is still
+not an option in order to maintain functionality with immediate
+decryption even in the anticipated worst case.
+Instead, we propose that the receiver stores full values, including
+entries in the hash table, only for the next𝑥 keys which are most
+likely to be received. That is, if the last decryption used the key
+mk𝑖 (with an entry in𝐿now or𝐿nxt), we assume that it is most likely
+that the next received ciphertext corresponds to a key mk𝑗,𝑖<
+𝑗≤𝑖+𝑥 . For the remaining fut−𝑥 values, the receiver does
+not store the full entry but only information to decide whether
+an incoming ciphertext is receivable, i.e., has key material within
+this range. This can be achieved, e.g., through a Counting Bloom
+Filter (CBF) (cf. Section B.4) as follows. When initializing their state,
+the receiver first pre-computes the initial 𝑥 values, as described
+in the AW construction (Section 4), and then stores the resulting
+chain key ck𝑥 for the corresponding session. Then, they continue
+deriving the upcoming fut−𝑥 tags and add (only) the tags to the
+CBF, also storing the resulting chain keyck fut.
+When a ciphertext arrives, the receiver first looks up the tag in
+the hash table which spans all sessions. If they find the tag in the
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+hash table, they proceed as in the AW construction. Otherwise, the
+tag is not in hash table, in which case the receiver goes through the
+CBFs of all sessions and checks whether the tag is in one of them.
+If a CBF from some session contains the tag, the receiver loads the
+corresponding chain key ck𝑥 and derives entries until arriving at
+the entry which corresponds to the tag (until at mostfut−𝑥 steps).
+Note that, if the match was a false positive, this would result in
+one wasted iteration over the fut−𝑥 tags. Otherwise, the receiver
+arrived at the corresponding chain key ck𝑖, uses the matching mk𝑖
+to decrypt the ciphertext, and moves all skipped entries to the list
+𝐿prv. If the decryption was successful, the receiver then updates
+their state, starting from the chain keyck𝑖 which corresponds to the
+received tag, as follows: (1) they re-fill the fully pre-computed values
+such that they store full entries for the entries which correspond
+to the next𝑥 chain keys ck𝑗,𝑖<𝑗≤𝑖+𝑥 , (2) they delete all tags
+for chain keys ck𝑗,𝑗<𝑖+𝑥 from the CBF, (3) they add all tags for
+chain keysck 𝑗,𝑖+𝑥<𝑗≤𝑖+futto the CBF.
+Verification Key Commitments in the CBF.One problem arises
+in the CBF approach when implementing AAW which concerns
+the commitments to the sender’s verification key. Recall that the
+receiver stores commitments to the sender’s verification key such
+that a state exposure does not reveal which epoch a key belongs
+to. When a ciphertext arrives, the receiver uses the opening, which
+is included in the message, to decrypt the verification key and
+check the signature. Only the decrypted verification key allows the
+receiver to precompute new commitments such that the signature
+verification of the following fut entries is possible. Now, looking
+at the new construction, when a ciphertext arrives whose tag is
+in the CBF, the tag is the only information that the receiver stores
+for this incoming ciphertext. That means, the receiver neither has
+the corresponding commitment to the verification key, nor can it
+recover the verification key from entries which are not in the Bloom
+filter, as the receiver does not store the corresponding opening (but
+only obtains it through a message from the sender).
+We note that hiding the epoch for precomputed keys and tags
+is only meaningful in the list of previously skipped keys𝐿prv. All
+precomputed information in the lists 𝐿now and 𝐿prv necessarily
+belongs to two consecutive epochs, respectively. For this reason,
+we can store the verification keys for the current and next epoch in
+plaintext without using the commitment approach. Only for entries
+in the list𝐿prv, we hide the verifications keys via commitments to
+conceal the entries’ epochs. For computing the commitments for
+𝐿prv, we propose the following adaptation.
+Instead of storing commitments of verification keys for the cur-
+rent (and next) epoch, the receiver stores the verification keys in
+plaintext together with the openings for the commitments. More
+specifically, the first𝑥 entries of lists𝐿now and𝐿nxt in the receiver
+state store the openings𝑟. That means, whenever the receiver de-
+rives an opening, i.e., when computing the values for the𝑥 entries
+in the hash table, the receiver does not immediately compute the
+commitment, but instead stores the opening. Then, when moving
+an entry from𝐿now to the list of older keys𝐿prv, the receiver uses the
+stored opening to compute the commitment to the corresponding
+epoch’s verification key. When the receiver decrypts a ciphertext
+from a new epoch𝑖+ 1, they move the necessary entries from𝐿now
+to𝐿prv, thereby computing the remaining commitments. Then, they
+discard the verification key for the epoch𝑖.
+Impact on Provable Security.Using a CBF for the updated state
+and storing the verification key for the current and next epoch
+in plaintext is provably secure and falls within our anonymity
+models (both for Section 3 and Section 5.1). First, the CBF in this
+construction functions exactly like the hashtable from the original
+state. The CBF is thus simply a more compact representation used
+to decide whether an incoming tag is receivable. Concretely, the
+adversary can only interact with the CBF by submitting decryption
+queries. Per our construction, the decryption only returns messages
+if the tag was a true positive. In all other cases, the receiver does not
+have the key material, the decryption fails, and the state remains
+unchanged. Thus, the CBF is not affected by adversarial queries
+(e.g., as studied in [FPUV22, MFS23]).
+Second, storing the verification key in plaintext for the current
+(and next) list does not give the adversary any more information on
+state exposure as before. That is because the verification key alone
+does not reveal any information about the sender’s identity. More-
+over, the adversary, by the structure of the receiver state, already
+knows that all entries in the current list𝐿now (and future list𝐿nxt)
+belong to the same epoch. Lastly, knowing the verification key only
+allows the adversary to deanonymize ciphertexts (by checking the
+signatures) if they also know the decryption key for the signature.
+Otherwise, the signature is encrypted and the verification key is
+of no use for the adversary. Additionally, observe that the cipher-
+texts whose verification key is leaked on exposure are exactly a
+subset of the ciphertext whose decryption keys are leaked. That
+means, the exposed verification key does not enable the adversary
+to deanonymize any (prior or future) ciphertexts beyond what can
+already be deanonymized with the decryption keys alone.
+Estimated Savings.Depending on the chosen parameters for
+the CBF, this approach can significantly reduce the storage while
+adding relatively small computational overhead as operations on
+the CBF are mainly inexpensive hash operations. We support this
+claim by sketching out an exemplary performance calculation in
+the following.
+Storage Costs.The following calculation applies to both 𝐿now and
+𝐿nxt, assuming they have the same requirements. Assume we want
+to offer immediate decryption for the next fut= 2000ciphertexts,
+and we fully pre-compute𝑥= 100of them, which means that our
+CBF stores𝑛= 1900tags. We allow for false positive rate of𝑝= 0.01.
+Let ns be the number of sessions in which the receiver is. Using
+the equations from [ Blo70], we calculate the optimal number of
+entries𝑚and the optimal number of hash functions𝑘as
+𝑚=− 𝑛·ln𝑝
+(ln 2)2 ≈18,200and𝑘=⌈ 𝑚
+𝑛 ·ln 2⌉=7.
+If all of the 1900 tags map to the same index, a counter would need
+to be able to store ⌈log2 1900⌉= 11bits. However, it is very un-
+likely that each tag maps to the same entry, and thus, we choose
+to go down to the practical size of 8 bits. 4 The overall storage
+cost for the CBF is then8 · 18, 200 bits= 18, 200 bytes for each
+4To be fully certain that overflows are avoided, one could choose to use 11-bit counters,
+or the next practical chunk size of 16-bit counters, which would increase the resulting
+storage by 2.
+
+Generic Anonymity Wrapper for Messaging Protocols
+list (𝐿now and𝐿prv) times the number of sessions. With an efficient
+instantiation of CBF (e.g., [BMP+06]), we can reduce this space by
+a factor of 2, resulting in18 , 200bytes per session in addition to
+storing two lists of 100 full values (which include list and hash
+table entries). To estimate the storage cost of the 100 full values
+for both lists, we use the values reported in Section 4.2. For AW,
+we calculate2 ·( 96+ 100·( 48+ 20))= 13, 792 bytes; and for
+AAW2 ·( 96+ 100·( 80+ 20))= 20, 192 bytes. This results in
+an overall storage of18, 200+ 13, 792 = 31, 992 bytes for AW and
+18, 200+20, 192 = 38, 392 bytes for AAW. Additionally, for AAW, we
+additionally store two 32-byte verification keys; storing the open-
+ings for the commitments instead of the commitments themselves
+does not change the occupied storage. Comparing this with the
+original construction, the new approach results in around 7.8% for
+AW and 6.4% for AAW of the required storage size.
+Computational Costs.Each full entry (in the hash table and a
+list) is computed once—either for immediate use or for storage in
+𝐿now or𝐿prv. The CBF adds one insertion and one deletion per tag,
+totaling2𝑘 hash operations. In the (assumed rare) case of many
+dropped or re-ordered ciphertexts, i.e., when a tag is missing from
+the hash table, the receiver performs a CBF lookup: this involves
+𝑘 hash operations and checking 𝑘 entries per CBF. In the worst
+case, all session CBFs must be checked, yieldingO(𝑘·n s) lookups,
+matching the cost of a false positive. Thus, the total overhead per
+tag is2𝑘+ 1hashes and up toO(𝑘·n s) lookups. As both hashes and
+lookups are cheap, and CBF lookups are rare, the added overhead
+is low, making a CBF-based approach a practical alternative to the
+original design.
+Optimizations.The construction can be improved using efficient
+CBF variants [ RKK14, PRM16]. If out-of-order delivery is infre-
+quent, reducing 𝑥 and storing more items in the CBF can lower
+storage needs. Accepting a higher false positive rate can also save
+space. Similarly, reducing counter size from 8 to 4 bits halves stor-
+age if overflows are unlikely. Additionally, going through the CBFs
+by relevance of the sessions would decrease the time it takes to find
+a match. Enhancing parameters depends on specific use cases and
+requires insight into network and application behavior, making this
+an interesting optimization problem for tailored deployments.
+6.2 Omitting Dummy Keys
+The receiver adds dummy values to their state during initialization
+or when using keys from𝐿prv. This keeps𝐿prv at a constant size and
+prevents leakage of past communication patterns. When ciphertexts
+arrive mostly in order, few keys are skipped, so most entries in𝐿prv
+are dummies and not functionally needed. Omitting these dummies
+can save up to past entries, which, based on our evaluation in
+Section 4.2, reduces storage by up to a third—around 136,000 bytes
+for AW and 200,000 bytes for AAW per session.
+Impact on Provable Security.Since the dummy keys are never
+used for encryption, this change does impact the game-based ano-
+nymity guarantees from Section 3. Regarding the model for state
+anonymity (Section 5.1), there is only a minor change to the anony-
+mity guarantees: Removing the dummies allows the adversary to
+learn the number of not received old ciphertexts but nothing else
+about the past communication. Therefore, this (informal) trade-off
+for anonymity can be a reasonable optimization option.
+Acknowledgments
+We would like to thank Benedikt Auerbach and Guillermo Pascual-
+Perez for initial and ongoing discussions about related questions.
+We are also thankful for the feedback from the anonymous review-
+ers.
+Lea Thiemt was supported by Deutsche Forschungsgemeinschaft
+(DFG, German Research Foundation) as part of the Research and
+Training Group 2475 “Cybercrime and Forensic Computing” (grant
+number 393541319/GRK2475/2-2024).
+Disclaimer
+This paper was prepared for informational purposes in part by the
+Artificial Intelligence Research group of JPMorgan Chase & Co.
+and its affiliates ("JP Morgan”) and is not a product of the Research
+Department of JP Morgan. JP Morgan makes no representation and
+warranty whatsoever and disclaims all liability, for the complete-
+ness, accuracy or reliability of the information contained herein.
+This document is not intended as investment research or investment
+advice, or a recommendation, offer or solicitation for the purchase
+or sale of any security, financial instrument, financial product or
+service, or to be used in any way for evaluating the merits of par-
+ticipating in any transaction, and shall not constitute a solicitation
+under any jurisdiction or to any person, if such solicitation under
+such jurisdiction or to such person would be unlawful.
+©2025 JPMorgan Chase & Co. All rights reserved.
+References
+[Abe99] Masayuki Abe. Mix-networks on permutation networks. In Kwok-Yan
+Lam, Eiji Okamoto, and Chaoping Xing, editors,Advances in Cryptology -
+ASIACRYPT’99, pages 258–273, Berlin, Heidelberg, 1999. Springer Berlin
+Heidelberg.
+[AJM22] Joël Alwen, Daniel Jost, and Marta Mularczyk. On the insider security of
+MLS. In Yevgeniy Dodis and Thomas Shrimpton, editors,CRYPTO 2022,
+Part II, volume 13508 ofLNCS, pages 34–68. Springer, Cham, August 2022.
+[BBR+23] Richard Barnes, Benjamin Beurdouche, Raphael Robert, Jon Millican,
+Emad Omara, and Katriel Cohn-Gordon. The Messaging Layer Security
+(MLS) Protocol. RFC 9420, July 2023.
+[BCG23] David Balbás, Daniel Collins, and Phillip Gajland. WhatsUpp with sender
+keys? Analysis, improvements and security proofs. In Jian Guo and Ron
+Steinfeld, editors,ASIACRYPT 2023, Part V, volume 14442 ofLNCS, pages
+307–341. Springer, Singapore, December 2023.
+[BFWW11] Christina Brzuska, Marc Fischlin, Bogdan Warinschi, and Stephen C.
+Williams. Composability of Bellare-Rogaway key exchange protocols. In
+Yan Chen, George Danezis, and Vitaly Shmatikov, editors,ACM CCS 2011,
+pages 51–62. ACM Press, October 2011.
+[BH23] Eric Brigham and Nicholas Hopper. Poster: No safety in numbers: traffic
+analysis of sealed-sender groups in signal.CoRR, abs/2305.09799, 2023.
+[BHMS16] Colin Boyd, Britta Hale, Stig Frode Mjølsnes, and Douglas Stebila. From
+stateless to stateful: Generic authentication and authenticated encryption
+constructions with application to TLS. In Kazue Sako, editor,CT-RSA 2016,
+volume 9610 ofLNCS, pages 55–71. Springer, Cham, February / March
+2016.
+[Blo70] Burton H. Bloom. Space/time trade-offs in hash coding with allowable
+errors.Commun. ACM, 13(7):422–426, July 1970.
+[BMP+06] Flavio Bonomi, Michael Mitzenmacher, Rina Panigrahy, Sushil Singh, and
+George Varghese. An improved construction for counting bloom filters.
+In Yossi Azar and Thomas Erlebach, editors,Algorithms – ESA 2006, pages
+684–695, Berlin, Heidelberg, 2006. Springer Berlin Heidelberg.
+[BRT23] Alexander Bienstock, Paul Rösler, and Yi Tang. ASMesh: Anonymous and
+secure messaging in mesh networks using stronger, anonymous double
+ratchet. In Weizhi Meng, Christian Damsgaard Jensen, Cas Cremers, and
+Engin Kirda, editors,ACM CCS 2023, pages 1–15. ACM Press, November
+2023.
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+[BRV20] Fatih Balli, Paul Rösler, and Serge Vaudenay. Determining the core primi-
+tive for optimally secure ratcheting. In Shiho Moriai and Huaxiong Wang,
+editors,ASIACRYPT 2020, Part III, volume 12493 ofLNCS, pages 621–650.
+Springer, Cham, December 2020.
+[BSJ+17] Mihir Bellare, Asha Camper Singh, Joseph Jaeger, Maya Nyayapati, and
+Igors Stepanovs. Ratcheted encryption and key exchange: The security of
+messaging. In Jonathan Katz and Hovav Shacham, editors,CRYPTO 2017,
+Part III, volume 10403 ofLNCS, pages 619–650. Springer, Cham, August
+2017.
+[Can01] Ran Canetti. Universally composable security: A new paradigm for cryp-
+tographic protocols. In42nd FOCS, pages 136–145. IEEE Computer Society
+Press, October 2001.
+[CKGS98] Benny Chor, Eyal Kushilevitz, Oded Goldreich, and Madhu Sudan. Private
+information retrieval.J. ACM, 45(6):965–981, November 1998.
+[CR25] Daniel Collins and Paul Rösler. GURKE: Group unidirectional ratcheted
+key exchange. InAdvances in Cryptology - CRYPTO 2025, 2025.
+[DHRR22] Benjamin Dowling, Eduard Hauck, Doreen Riepel, and Paul Rösler.
+Strongly anonymous ratcheted key exchange. In Shweta Agrawal and
+Dongdai Lin, editors,ASIACRYPT 2022, Part III, volume 13793 ofLNCS,
+pages 119–150. Springer, Cham, December 2022.
+[DJK+25] Yevgeniy Dodis, Daniel Jost, Shuichi Katsumata, Thomas Prest, and Rolfe
+Schmidt. Triple ratchet: A bandwidth efficient hybrid-secure signal proto-
+col. In Serge Fehr and Pierre-Alain Fouque, editors,Advances in Cryptology
+- EUROCRYPT 2025, 2025.
+[DMS04] Roger Dingledine, Nick Mathewson, and Paul F. Syverson. Tor: The
+second-generation onion router. In Matt Blaze, editor,USENIX Security
+2004, pages 303–320. USENIX Association, August 2004.
+[DRS20] Benjamin Dowling, Paul Rösler, and Jörg Schwenk. Flexible authenticated
+and confidential channel establishment (fACCE): Analyzing the noise
+protocol framework. In Aggelos Kiayias, Markulf Kohlweiss, Petros
+Wallden, and Vassilis Zikas, editors,PKC 2020, Part I, volume 12110 of
+LNCS, pages 341–373. Springer, Cham, May 2020.
+[FG14] Marc Fischlin and Felix Günther. Multi-stage key exchange and the case
+of Google’s QUIC protocol. In Gail-Joon Ahn, Moti Yung, and Ninghui Li,
+editors,ACM CCS 2014, pages 1193–1204. ACM Press, November 2014.
+[FGJ24] Marc Fischlin, Felix Günther, and Christian Janson. Robust channels:
+Handling unreliable networks in the record layers of QUIC and DTLS 1.3.
+Journal of Cryptology, 37(2):9, April 2024.
+[FPUV22] Mia Filic, Kenneth G. Paterson, Anupama Unnikrishnan, and Fernando
+Virdia. Adversarial correctness and privacy for probabilistic data struc-
+tures. In Heng Yin, Angelos Stavrou, Cas Cremers, and Elaine Shi, editors,
+ACM CCS 2022, pages 1037–1050. ACM Press, November 2022.
+[HKP22] Keitaro Hashimoto, Shuichi Katsumata, and Thomas Prest. How to hide
+MetaData in MLS-like secure group messaging: Simple, modular, and
+post-quantum. In Heng Yin, Angelos Stavrou, Cas Cremers, and Elaine
+Shi, editors,ACM CCS 2022, pages 1399–1412. ACM Press, November
+2022.
+[JK25] Joseph Jaeger and Akshaya Kumar. Analyzing group chat encryption in
+MLS, session, signal, and matrix. In Serge Fehr and Pierre-Alain Fouque,
+editors,Advances in Cryptology - EUROCRYPT 2025, 2025.
+[JKS24] Joseph Jaeger, Akshaya Kumar, and Igors Stepanovs. Symmetric sign-
+cryption and E2EE group messaging in keybase. In Marc Joye and Gregor
+Leander, editors,EUROCRYPT 2024, Part III, volume 14653 ofLNCS, pages
+283–312. Springer, Cham, May 2024.
+[JL17] Simon Josefsson and Ilari Liusvaara. Edwards-Curve Digital Signature
+Algorithm (EdDSA). RFC 8032, January 2017.
+[KE10] Hugo Krawczyk and Pasi Eronen. HMAC-based Extract-and-Expand Key
+Derivation Function (HKDF). RFC 5869, May 2010.
+[KK25] Raphael Robert Konrad Kohbrok. Mimi metadata minimalization (mim-
+imi). https://www.ietf .org/id/draf t- kohbrok- mimi- metadata-
+minimalization-02.html, 04 2025.
+[KPB03] Tadayoshi Kohno, Adriana Palacio, and John Black. Building secure
+cryptographic transforms, or how to encrypt and MAC. Cryptology
+ePrint Archive, Report 2003/177, 2003.
+[LHT16] Adam Langley, Mike Hamburg, and Sean Turner. Elliptic Curves for
+Security. RFC 7748, January 2016.
+[LT22] Zeyu Liu and Eran Tromer. Oblivious message retrieval. In Yevgeniy
+Dodis and Thomas Shrimpton, editors,CRYPTO 2022, Part I, volume 13507
+ofLNCS, pages 753–783. Springer, Cham, August 2022.
+[Lun18] Joshua Lund. Technology preview: Sealed sender for signal. https:
+//signal.org/blog/sealed-sender/, 10 2018.
+[Mes25a] Signal Messenger. libsignal. https://github.com/signalapp/libsignal/,
+2025.
+[Mes25b] Signal Messenger. Securevaluerecovery2. https://github.com/signalapp/S
+ecureValueRecovery2, 2025.
+[MFS23] Sam A. Markelon, Mia Filic, and Thomas Shrimpton. Compact frequency
+estimators in adversarial environments. In Weizhi Meng, Christian Dams-
+gaard Jensen, Cas Cremers, and Engin Kirda, editors,ACM CCS 2023,
+pages 3254–3268. ACM Press, November 2023.
+[MKA+21] Ian Martiny, Gabriel Kaptchuk, Adam J. Aviv, Daniel S. Roche, and Eric
+Wustrow. Improving Signal’s sealed sender. InNDSS 2021. The Internet
+Society, February 2021.
+[MV04] David A. McGrew and John Viega. The galois/counter mode of operation
+(gcm). https://csrc.nist.rip/groups/ST/toolkit/BCM/documents/proposed
+modes/gcm/gcm-spec.pdf, 1 2004.
+[Per18] Trevor Perrin. The noise protocol framework. https://noiseprotocol.org/
+noise.pdf, 07 2018.
+[PM16a] Trevor Perrin and Moxie Marlinspike. The double ratchet algorithm.
+https://signal.org/docs/specifications/doubleratchet/doubleratchet.pdf,
+11 2016.
+[PM16b] Trevor Perrin and Moxie Marlinspike. The x3dh key agreement protocol.
+https://signal.org/docs/specifications/x3dh/x3dh.pdf, 11 2016.
+[PR18a] Bertram Poettering and Paul Rösler. Asynchronous ratcheted key ex-
+change. Cryptology ePrint Archive, Report 2018/296, 2018.
+[PR18b] Bertram Poettering and Paul Rösler. Towards bidirectional ratcheted
+key exchange. In Hovav Shacham and Alexandra Boldyreva, editors,
+CRYPTO 2018, Part I, volume 10991 ofLNCS, pages 3–32. Springer, Cham,
+August 2018.
+[PRM16] Salvatore Pontarelli, Pedro Reviriego, and Juan Antonio Maestro. Improv-
+ing counting bloom filter performance with fingerprints.Information
+Processing Letters, 116(4):304–309, 2016.
+[RKK14] Ori Rottenstreich, Yossi Kanizo, and Isaac Keslassy. The variable-
+increment counting bloom filter.IEEE/ACM Transactions on Networking,
+22(4):1092–1105, 2014.
+[RMS18] Paul Rösler, Christian Mainka, and Jörg Schwenk. More is less: On the
+end-to-end security of group chats in signal, whatsapp, and threema. In
+2018 IEEE EuroS&P 2018, London, United Kingdom, April 24-26, 2018, pages
+415–429. IEEE, 2018.
+[RSG98] M.G. Reed, P.F. Syverson, and D.M. Goldschlag. Anonymous connections
+and onion routing. volume 16, pages 482–494, 1998.
+[RSS23] Paul Rösler, Daniel Slamanig, and Christoph Striecks. Unique-path iden-
+tity based encryption with applications to strongly secure messaging.
+In Carmit Hazay and Martijn Stam, editors,EUROCRYPT 2023, Part V,
+volume 14008 ofLNCS, pages 3–34. Springer, Cham, April 2023.
+[RZ18] Phillip Rogaway and Yusi Zhang. Simplifying game-based definitions -
+indistinguishability up to correctness and its application to stateful AE. In
+Hovav Shacham and Alexandra Boldyreva, editors,CRYPTO 2018, Part II,
+volume 10992 ofLNCS, pages 3–32. Springer, Cham, August 2018.
+[Sch25] Rolfe Schmidt. Artifact – generic anonymity wrapper for messaging
+protocols. https://zenodo.org/records/16929590, 2025.
+[SJ17] Hua Sun and Syed Ali Jafar. The capacity of private information retrieval.
+volume 63, pages 4075–4088, 2017.
+[Ste24] Douglas Stebila. Security analysis of the imessage PQ3 protocol. https:
+//security.apple.com/assets/files/Security_analysis_of_the_iMessage_P
+Q3_protocol_Stebila.pdf, 2024.
+[SW06] Vitaly Shmatikov and Ming-Hsiu Wang. Timing analysis in low-latency
+mix networks: Attacks and defenses. In Dieter Gollmann, Jan Meier, and
+Andrei Sabelfeld, editors,Computer Security – ESORICS 2006, pages 18–33,
+Berlin, Heidelberg, 2006. Springer Berlin Heidelberg.
+[TRB+25a] Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yev-
+geniy Dodis. Generic anonymity wrapper for messaging protocols. In
+Proceedings of the 2025 ACM SIGSAC Conference on Computer and Com-
+munications Security, CCS 2025. ACM, 2025.
+[TRB+25b] Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yev-
+geniy Dodis. Generic anonymity wrapper for messaging protocols. Cryp-
+tology ePrint Archive, Paper 2025, 2025.
+A Supplementary A W Definitions
+A.1 Correctness
+In Figure 4, we formally define correctness via game CORR in
+which adversaryA can query oracles UpS, UpR, Enc, and Dec to
+execute the corresponding algorithms AW.upS, AW.upR, AW.encS,
+and AW.decR. As long as oracles UpS and UpR are queried with
+matching input and output keys𝑘 and vk in the challenge session,
+respectively, it is required that algorithm AW.decR outputscorrect
+messages𝑚 and session identifiers id (see line 36). For this, helper
+procedure Rcvbl computes the set of ciphertexts that are expected
+
+Generic Anonymity Wrapper for Messaging Protocols
+to be receivable based on the out of order tolerance parameters
+(past,fut) . Similar concepts of unreliable delivery in secure chan-
+nel protocols are covered in [KPB03, BHMS16, RZ18, FGJ24].
+A.2 Game-Based Authenticity
+Figure 5 captures the game for defining authenticity that is de-
+scribed in Section 3.2. Helper procedureExpsd traces symmetrically
+and asymmetrically insecure ciphertexts.
+Encrypt-then-Sign Binding.Our construction of Authenticated
+AW from Section 4 first anonymizes payload with authenticated
+encryption and, then, directly signs the resulting ciphertext with-
+out, additionally, signing metadata that is already contained in
+the encrypted payload. Since recent literature on Symmetric Sign-
+cryption [JKS24, JK25] may suggest that further binding measures
+between authenticated encryption and signature is necessary, we
+elaborate on the differences between AAW and Symmetric Sign-
+cryption.
+Symmetric Signcryption [JKS24, JK25] is modeled as a standalone
+stateless primitive that offers confidentiality with long-term sym-
+metric keys as well as authenticity with long-term asymmetric keys.
+For this reason, the security definition of Symmetric Signcryption
+models that symmetric encryption keys and asymmetric signing
+keys can both be re-used for multiple messages and across different
+communication settings; this motivates that, in the security defi-
+nitions of [JKS24, JK25], encryption keys and signing keys can be
+corrupted fully independently.
+In contrast, whenever the exposure of the sender state in our
+AAW setting reveals the signing key, corresponding future encryp-
+tion keys of the same epoch are leaked as well. As a result, our
+definitions from figures 1 and 5 consider confidentiality of payload
+hopelessly lost once asymmetric authenticity for that same payload
+is not achievable anymore. This relation of dependent corruption
+renders additional binding measures between authenticated encryp-
+tion and signature in our construction from Figure 2 redundant.
+Another difference towards [JKS24, JK25] is that, in AAW, there
+is only a single sender in each session and that sender only exists for
+the corresponding group of receivers; this sender is authenticated
+with its chain of signing keys. The user behind that sender may
+only become relevant on the higher level application and on the
+lower level (continuous) key exchange that produces fresh, sym-
+metric input update keys for (A)AW. Thus, the sender, its chain
+of signing keys, its group of receivers, and the session collapse to
+the same concept in (A)AW, which obviates the need for binding
+this information explicitly. Furthermore, our construction is based
+on probabilistic authenticated encryption and (A)AW has no as-
+sociated data input. For these reasons, parallel authentication and
+additional binding measures for encryption nonces or externally
+input associated data strings are not necessary in our setting.
+Nevertheless, we want to emphasize that our (A)AW security
+definitions require, and our (A)AW constructions securely offer
+strong authentication. The mentioned techniques developed for
+Symmetric Signcrytion only become necessary due to the sophis-
+ticated corruption model that is motivated by parallel use of the
+long-term symmetric and asymmetric key material, which does not
+apply to our setting.
+B Cryptographic Primitives
+B.1 Authenticated Encryption with Associated
+Data
+The AEAD scheme provides the following three algorithms (AE.gen,
+AE.enc,AE.dec):
+•AE.gen:()→ $KGenerates a symmetric key𝑘∈K.
+•AE.enc :K×M×AD→ $C Takes a symmetric key𝑘, a
+message𝑚∈M , and an associated data string ad∈AD
+and encrypts the message such that the resulting ciphertext
+𝑐∈Cand associated data are authenticated.
+•AE.dec :K×C×AD→M∪{⊥} Takes a symmetric key𝑘,
+a ciphertext𝑐, and an associated data stringad, and decrypts
+the message if ciphertext and associated data string are
+authentic.
+Security: Indistinguishability of Ciphertexts from Random under
+Chosen-Plaintext Attacks.The advantage of an adversary A against
+the multi-instance authenticated encryption scheme with associ-
+ated dataAEin gameIND$from Figure 6 is defined as:
+Advind$
+AE(A) :=
+Pr[IND$0
+AE(A)=1]−Pr[IND$ 1
+AE(A)=1]
+ .
+Security: Strong Existential Unforgeability under Chosen-Message
+Attacks.The advantage of an adversaryA against the multi-instance
+authenticated encryption scheme with associated data AE in game
+SUF-CMAfrom Figure 7 is defined as:
+Advsuf-cma
+AE (A) :=Pr[SUF-CMA AE(A)=1].
+B.2 Signature SchemeS
+Syntax.The signature scheme is a tuple of algorithmsS =( S.gen,
+S.sgn, S.vfy) for some message spaceM, signing key spaceSK,
+verification key spaceVK, and signature spaceS:
+• S.gen :()→ $(SK,VK) Generates a pair of signing key
+skand verification keyvk.
+• S.sgn :SK×M→ $S Creates a signature𝜎∈S for𝑚
+usingsk.
+• S.vfy :SK×M×S→{tru,fal} Verifies whether𝜎 is a
+valid signature for𝑚usingsk.
+Security: Strong Existential Unforgeability.We define the advan-
+tage of an adversaryA against the multi-instance signature scheme
+Sin gameSUF-CMAfrom Figure 8 as:
+Advsuf-cma
+S (A) :=Pr[SUF-CMA S(A)=1].
+B.3 Commitment schemeC
+Syntax.The commitment scheme is a tuple of algorithmsC =
+(C.com, C.vfy) for some message spaceM, randomness spaceR ,
+and commitment spaceCM:
+• C.com :M×R→CM Creates a commitment cm∈CM
+to message𝑚∈Mand opening𝑟∈R.
+• C.vfy :M×CM×R→{tru,fal} Verifies if cm is a valid
+commitment to𝑚using opening𝑟.
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+GameCORR AW,past,fut(A)
+00(𝜔,𝑛,(id ∗
+𝑖)𝑖∈[𝑛])← $A()
+01(ep S,(ep R𝑖)𝑖∈[𝑛])←0 1+𝑛
+02(𝑠,(oos 𝑖)𝑖∈[𝑛])←∞ 1+𝑛
+03(KG[·],(𝐾 𝑖[·])𝑖∈[𝑛])←⊥ 1+𝑛
+04(𝐶[·],𝑀[·],VK[·])←⊥ 3
+05(𝑅 𝑖)𝑖∈[𝑛] ←∅ 𝑛
+06(st S,(st R𝑖)𝑖∈[𝑛])←⊥ 1+𝑛
+07InvokeA(𝜔)
+08Stop with0
+OracleUp S(𝑘)
+09Require𝑘∈K
+10(st S,vk)← $ AW.upS(stS,𝑘)
+11ep S←ep S+1;𝑠←0
+12IfKG[ep S]=⊥:KG[ep S]←𝑘
+13VK[ep S]←vk
+14·For all𝑖∈[𝑛]:𝐾 𝑖[epS]∉{𝑘,⊥}:
+15·oos 𝑖←min(ep S,oos𝑖)
+16Returnvk
+OracleEnc(𝑚)
+17Require𝑠<∞
+18(st S,𝑐)← $ AW.encS(stS,𝑚)
+19𝑠←𝑠+1
+20·𝐶[ep S,𝑠]←𝑐
+21·𝑀[ep S,𝑠]←𝑚
+22Return𝑐
+OracleUp R(𝑖,id,𝑘,vk)
+23Require𝑖∈[𝑛]∧𝑘∈K
+24Ifid=id ∗
+𝑖∧ep R𝑖 <oos 𝑖:
+25RequireVK[ep R𝑖+1]≠⊥
+26ep R𝑖←ep R𝑖+1
+27IfKG[ep R𝑖]=⊥:KG[ep R𝑖]←𝑘
+28·Else ifKG[ep R𝑖]∉{𝑘,⊥}∨VK[ep R𝑖]≠vk:
+29·oos 𝑖←min(ep R𝑖,oos𝑖)
+30𝐾 𝑖[epR𝑖]←𝑘
+31st R𝑖←AW.up R(stR𝑖,id,𝑘,vk)
+32Return
+OracleDec(𝑖,𝑐)
+33Require𝑖∈[𝑛]
+34(st R𝑖,id,𝑚)←AW.dec R(stR𝑖,𝑐)
+35·If∃(ep ′,𝑠′)∈Rcvbl(𝑅 𝑖,𝐶,ep R𝑖,past,fut):
+𝐶[ep′,𝑠′]=𝑐∧ep R𝑖 <oos 𝑖:
+36·If𝑚≠𝑀[ep ′,𝑠′]∨id≠id ∗
+𝑖 : Stop with1
+37Else:𝑅 𝑖
+∪
+←{(ep ′,𝑠′)}
+38·Else if𝑚≠⊥∧id=id ∗
+𝑖 :oos 𝑖←min(ep R𝑖,oos𝑖)
+39Return(id,𝑚)
+Helper ProcRcvbl(𝑅,𝐶,ep R,past,fut):
+40𝑃 ′←{(ep ′,𝑠′)∉𝑅|𝐶[ep ′,𝑠′]≠⊥∧(ep ′ <ep R
+∨ep′ =ep R∧𝑠′ <max(𝑠 ∗|(ep ′,𝑠∗)∈𝑅))}
+41𝑃←Set ofpastgreatest(ep ′,𝑠′)∈𝑃 ′
+42𝐹←{(ep ′,𝑠′)∉𝑅|𝐶[ep ′,𝑠′]≠⊥
+∧(ep′ =ep R+1∧𝑠 ′≤fut∨ep ′ =ep R
+∧𝑠∗ <𝑠′≤𝑠∗+fut∧𝑠 ∗ =max(𝑠◦|(ep ′,𝑠◦)∈𝑅))}
+43Return𝑃∪𝐹
+Figure 4: GameCORRfor A W schemeAW.
+Security: Binding.We define the advantage of an adversary A
+against commitment schemeCin gameBINDfrom Figure 9 as:
+Advbind
+C (A) :=Pr[BIND 0
+C(A)=1].
+B.4 Counting Bloom Filter
+A Counting Bloom Filter (CBF) is a data structure that supports effi-
+cient insertions, deletions, and membership queries using an array
+of integer counters. To add an element, we hash it𝑘 independent
+hash functions, each producing an index into the counter array. We
+then increment the counters at these 𝑘 positions by 1. Similarly,
+we remove an element from the CBF by hashing it and decreasing
+the counter at the resulting indices by 1. To test membership, we
+verify that all corresponding counters are non-zero. It can occur
+that the CBF yields false positives. This false positive probability𝑝
+is taken into account when choosing the size and number of hash
+functions for the CBF. The CBF does not report false negatives as
+long as counters do not underflow.
+B.5 Linked List
+A linked list is a data structure with the following interface.
+•LL.init()→𝐿: Initializes a new empty linked list.
+•LL.push new/pushold(data): Appends an item containingdata
+to the list as the newest/oldest entry.
+•LL.pop new/popold() →ptr : Removes the oldest/newest
+item from the list and returns a pointer to it.
+•LL.len()→𝑛: Returns the length of the list.
+•LL.rem(ptr) : Removes the item which ptr points to from
+the list.
+•LL.crop(ht,from=𝑖) : Crops the list such that all items
+starting from index𝑖 until the highest index remain in the
+list. Removes deleted items from the hash tableht.
+•LL.crop(ht,until=𝑖) : Crops the list such that all items start-
+ing from index0until index 𝑖 remain in the list. Removes
+deleted items from the hash tableht.
+B.6 Hash Table
+A hash table is a data structure with the following interface.
+•HT.init()→ht: Initializes a new empty hash table.
+•HT.add({key : value}): Adds an entry to the hash table
+indexed withkeystoringvalue.
+•HT.acc(key)→value : Returns value stored under index
+key.
+•HT.rem(key) : Removes the entry indexed by key from the
+hash table.
+C Proofs
+C.1 Game-based Anonymity
+Theorem C.1.Let AE be an AEAD scheme andH 1, H2 random
+oracles. LetA be an adversary against the IND security of the AW
+scheme with parameters fut,past . LetB be an adversary against
+the SUF-CMA security of the AEAD scheme, and let C be an adver-
+sary against the IND$ security of the AEAD scheme. LetCK ,UK ,
+andT denote the chain key space, update key space, and tag space,
+respectively. We show that our AW construction is secure with respect
+toIND AW,fut,past such that
+
+Generic Anonymity Wrapper for Messaging Protocols
+GameAUTH AW,past,fut(A)
+00(𝜔,𝑛,(id ∗
+𝑖)𝑖∈[𝑛])← $A()
+01(ep S,(ep R𝑖)𝑖∈[𝑛])←0 1+𝑛
+02(𝑠,(oos 𝑖)𝑖∈[𝑛])←∞ 1+𝑛
+03(triv 𝑖)𝑖∈[𝑛] ←fal𝑛
+04(𝐾[·],(KR 𝑖[·])𝑖∈[𝑛] ,VK[·],𝐶[·])←⊥ 3+𝑛
+05((𝑅 𝑖,XSK𝑖,XR𝑖)𝑖∈[𝑛] ,XS,SKS)←∅ 2+3𝑛
+06(st S,(st R𝑖)𝑖∈[𝑛])←⊥ 1+𝑛
+07InvokeA(𝜔)
+08Stop with0
+OracleUp S(𝑘)
+09Require𝑘∈K∪{⊥}
+10ep S←ep S+1;𝑠←0
+11If𝑘=⊥:𝑘← $K
+12·Else:SKS
+∪
+←ep S
+13(st S,vk)← $ AW.upS(stS,𝑘)
+14𝐾[ep S]←𝑘;VK[ep S]←vk
+15Returnvk
+OracleEnc(𝑚)
+16Require𝑠<∞
+17(st S,𝑐)← $ AW.encS(stS,𝑚)
+18𝑠←𝑠+1;𝐶[ep S,𝑠]←𝑐
+19Return𝑐
+Helper ProcExpsd(𝑖,ep)
+20𝑋←∅
+21For allep ′ : 0≤ep ′≤ep:
+22If(ep ′∈SKS∨ep ′≥oos 𝑖)
+∧((ep ′−1,∞)∈𝑋∨ep ′ =0):
+23𝑋
+∪
+←{(ep ′,𝑠′′)|𝑠 ′′∈N}
+24Ifep ′ <oos 𝑖:
+25𝑋
+∪
+←{(ep ′,𝑠′′)∈XS|𝑠 ′′∈N}
+26For all𝑖 ′∈[𝑛]:∀ep ′′≤ep′
+KR𝑖′[ep′′]=KR 𝑖[ep′′]:
+27𝑋
+∪
+←{(ep ′,𝑠′′)∈XR 𝑖′|𝑠′′∈N}
+28Return𝑋
+OracleUp R(𝑖,id,𝑘,vk)
+29Require𝑖∈[𝑛]∧𝑘∈K∪{⊥}
+30Ifid=id ∗
+𝑖 :
+31Require𝐾[ep R𝑖+1]≠⊥
+32ep R𝑖←ep R𝑖+1
+33If𝑘∉{𝐾[ep R𝑖],⊥}∨vk≠VK[ep R𝑖]≠⋄:
+34oos 𝑖←min(ep R𝑖,oos𝑖)
+35Else ifep R𝑖 <oos 𝑖:𝑘←𝐾[ep R𝑖]
+36KR 𝑖[epR𝑖]←𝑘
+37·Ifvk≠VK[ep R𝑖]:XSK 𝑖
+∪
+←{ep R𝑖}
+38st R𝑖←AW.up R(stR𝑖,id,𝑘,vk)
+39Return
+OracleDec(𝑖,𝑐)
+40(st R𝑖,id,𝑚)←AW.dec R(stR𝑖,𝑐)
+41 ¯𝑅←Rcvbl(𝑅 𝑖,𝐶,min(ep R𝑖,oos𝑖−1),past,fut)
+42𝑅 ∗←{(ep ′,𝑠′)|oos 𝑖≤ep′ <∞,𝑠 ′∈N}
+43𝑋←Expsd(𝑖,ep R𝑖)
+44·Ifid=id ∗
+𝑖∧triv𝑖 =fal∧𝑚≠⊥∧(ep ′,𝑠′)∈ ¯𝑅:𝐶[ep ′,𝑠′]=𝑐:
+45·If∀(ep ′′,𝑠′′)∈ ¯𝑅∪𝑅 ∗ :(ep ′′,𝑠′′)∉𝑋∨ep ′′ ∉XSK 𝑖:
+46·Stop with1
+47·Else:triv 𝑖←tru
+48Else iftriv 𝑖 =fal∧ep R𝑖 <oos 𝑖
+∧∃(ep′,𝑠′)∈ ¯𝑅:𝐶[ep ′,𝑠′]=𝑐:
+49𝑅 𝑖
+∪
+←{(ep ′,𝑠′)}
+50Return(id,𝑚)
+OracleExpose S
+51·XS
+∪
+←{(ep S,𝑠′)|𝑠 ′ >𝑠}
+52·For all𝑖∈[𝑛]:XSK 𝑖
+∪
+←{ep S}
+53Returnst S
+OracleExpose R(𝑖)
+54·XR 𝑖
+∪
+←{(ep ′,𝑠′)∉𝑅 𝑖|ep′ <ep R𝑖∧𝑠′∈N\{∞}}
+55·XR 𝑖
+∪
+←{(ep ′,𝑠′)∉𝑅 𝑖|ep′ =ep R𝑖∧𝑠′∈N}
+56Returnst R𝑖
+Figure 5: Multi-receiver gamesAUTHfor A W schemeAW. Helper ProcedureRcvblis provided in Figure 4.
+GameIND$𝑏
+AE(A)
+00𝑛←0;CH←∅;𝑋←∅
+01𝑏 ′←$A
+02RequireCH∩𝑋=∅
+03Stop with𝑏 ′
+OracleGen
+04𝑘 𝑛←$ AE.gen
+05𝑛←𝑛+1
+06Return
+OracleExpose(𝑖)
+07𝑋
+∪
+←{𝑖}
+08Return𝑘 𝑖
+OracleEnc(𝑖,𝑚,ad)
+09𝑐← $ AE.enc(𝑘𝑖,𝑚,ad)
+10Return𝑐
+OracleChall(𝑖,𝑚,ad)
+11Require𝑚∈M
+12𝑐 0←$ AE.enc(𝑘𝑖,𝑚,ad)
+13𝑐 1←${0,1}|𝑐0|
+14CH
+∪
+←{𝑖}
+15Return𝑐 𝑏
+Figure 6: Games IND$ for authenticated encryption scheme
+with associated dataAE.
+AdvIND
+AW,fut,past[A]≤ (𝑞enc·(1+fut)+𝑞 H1)2
+|CK| +(𝑞H2+𝑞 upS)2
+|UK|
++𝑞H1·( 𝑞enc
+|CK| + 𝑞upS
+min(|CK|,|UK|) )+ (𝑞enc·(1+fut)+𝑞 H1)2
+|T|
++AdvSUF-CMA
+AE [B]+Adv IND$
+AE [C],
+GameSUF-CMA AE(A)
+00𝑛←0;MC←∅;𝑋←∅
+01InvokeA
+02Stop with0
+OracleGen
+03𝑘 𝑛←$ AE.gen
+04𝑛←𝑛+1
+05Return
+OracleExpose(𝑖)
+06𝑋
+∪
+←{𝑖}
+07Return𝑘 𝑖
+OracleEnc(𝑖,𝑚,ad)
+08𝑐← $ AE.enc(𝑘𝑖,𝑚,ad)
+09MC←MC∪{(𝑖,𝑚,ad,𝑐)}
+10Return𝑐
+OracleDec(𝑖,ad,𝑐)
+11𝑚←AE.dec(𝑘 𝑖,ad,𝑐)
+12If(𝑖,𝑚,ad,𝑐)∉MC∧𝑚≠⊥∧𝑖∉𝑋:
+13Stop with1
+14Return𝑚
+Figure 7: Game SUF-CMA for authenticated encryption
+scheme with associated dataAE.
+where𝑞enc,𝑞 dec,𝑞 upS are the number of queries to oracles Enc, Dec,
+UpS, and𝑞H1,𝑞 H2 the number of queries to the random oraclesH 1, H2,
+respectively.
+We create a sequence of games from G0 to G6 given in Figure 10.
+The random oraclesH 1 andH 2 in Figure 11 both offer an internal
+interface for the game and an interface to the adversary.
+Game 0.We start with the IND game for AW (Figure 1).
+Advind
+AW,fut,past[A]=Adv G0
+A
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+GameSUF-CMA S(A)
+00𝑛←0;MS←∅;CR←∅
+01(𝑖,𝑚,𝜎)← $A
+02𝑏←S.vfy(vk 𝑖,𝑚,𝜎)
+03If(𝑖,𝑚,𝜎)∉MS∧𝑖∉CR∧𝑏=tru:
+04Stop with1
+05Stop with0
+OracleCorrupt(𝑖)
+06CR
+∪
+←{𝑖}
+07Returnsk 𝑖
+OracleGen
+08(sk 𝑛,vk𝑛)← $ S.gen
+09𝑛←𝑛+1
+10Returnvk 𝑛−1
+OracleSign(𝑖,𝑚)
+11𝜎← $ S.sgn(sk𝑖,𝑚)
+12MS
+∪
+←{(𝑖,𝑚,𝜎)}
+13Return𝜎
+Figure 8: GameSUF-CMAfor signature schemeS.
+GameBIND C(A)
+00(𝑚,𝑟,𝑚 ′,𝑟′)← $A
+01If(𝑚,𝑟)≠(𝑚 ′,𝑟′)
+∧cm=C.com(𝑚,𝑟)=C.com(𝑚 ′,𝑟′)
+∧C.vfy(𝑚,cm,𝑟)=tru:
+02Stop with1
+03Stop with0
+Figure 9: GameBINDfor commitment schemeC.
+Game 1.We first introduce lazy sampling for the random oracle.
+That means, the random oracle randomly generates a return value
+whenever it is queried with a new input value. If this input is queried
+again, the random oracle remains consistent and returns the initially
+sampled value. This only changes the time of computation and thus
+an adversary cannot distinguish between Game 0 and Game 1.
+AdvG0
+A =Adv G1
+A
+Game 2.In this game, we show that the probability of chain key
+and update key collisions in the random oracle outputs is negligible.
+If the random oracle samples a used chain key (update key) twice,
+a loop occurs. This lets the adversary win if they, e.g., exposed
+the first usage of the chain key, and then the chain key comes up
+in another epoch and is used to obtain the encryption key for a
+challenge. The number of chain keys which are used as input to
+the random oracle is bounded by𝑞enc encryption queries plus at
+most𝑞enc·fut queries for pre-computed values, and𝑞H1 adversarial
+random oracle queries. Now assume the same update key is sampled
+twice, once in epoch𝑖− 2, and once in epoch𝑖. The adversary could
+expose at an earlier epoch𝑖− 2to obtain the update key. Epoch 𝑖 is
+then considered unexposed, even if the adversary controls the input
+chain key. Knowing the update key and the chain key, the adversary
+can now query the random oracle to obtain the encryption keys.
+The number of update keys is bounded by𝑞upS update queries and
+𝑞H2 adversarial random oracle queries. With the birthday bound,
+we obtain the following advantage to distinguish between Game 1
+and Game 2.
+AdvG1
+A≤Adv G2
+A+(𝑞enc·(1+fut)+𝑞 H1)2
+|CK| +(𝑞H2+𝑞 upS)2
+|UK|
+Game 3.With this game, we show that the probability with
+which the adversary correctly guesses a secret chain key (and up-
+date key), and can thus query the random oracle for a decryption
+key, is negligible. We implement this by aborting in the random
+oracle whenever the adversary queries a secret value which the
+game used before, or when the game arrives at a secret value which
+was first queried by the adversary. For this, we set permissions for
+each random oracle input through the map Status. When the adver-
+sary is the first to query a value, we mark it with adv. Internally
+generated (secret) values keep the empty flag (⊥). The exception for
+when an adversary can query an internally used value is when they
+exposed the sender or receiver state to obtain a chain key ck or set
+the chain key ck in upS while knowing the update key uk. For this,
+we introduce the flag allow which marks that the adversary may
+query the respective input. We mark an entry withallow when the
+sender is exposed (Lines 20 and 21), the receiver is exposed (Lines 26
+to 29), or the adversary set the initial chain key in a sender update
+and knows the next update key (Lines 12 and 13). Moreover, after
+the adversary queried an internally used but “allow’ed” entry, they
+may query the next entry (but they may not skip an entry). The
+random oracle captures this by propagating the flag allow to the
+next entry.
+The adversary successfully distinguishes Game 2 and Game 3 if
+they query the random oracle at an internally used chain key ck or
+if they query an entry(ck,uk) used for a state update. In the first
+case, the probability of guessing one of the chain keys from 𝑞enc
+encryptions is 𝑞enc
+|CK| . The probability of guessing the update query
+pair(ck,uk) from𝑞upS update queries is
+𝑞upS
+|CK|+|UK| . If we assume
+that the adversary knows one of the keys, we arrive at the upper
+bound
+𝑞upS
+min(|CK|,|UK|) . An adversary which makes𝑞H1 queries to
+the random oracles thus has the following advantage to distinguish
+between Game 2 and Game 3.
+AdvG2
+A≤Adv G3
+A+𝑞 H1·( 𝑞enc
+|CK| + 𝑞upS
+min(|CK|,|UK|) )
+Observation for AAW. AAW uses a random value𝑟𝑏 derived
+from the chain key to blind the signature. If the adversary knows
+𝑟𝑏 they could use the verification key returned from AW.upS to
+verify the signature by which they could determine whether the
+ciphertext is a random string or a real encryption. The advantage
+of such an adversary is negligible because of the following. The
+adversary only knows this value if a (prior) chain key is exposed
+in which case anonymity is lost anyway. Otherwise, they can only
+learn this value by guessing the corresponding chain key (covered
+in Game 3) or correctly guessing the𝑟𝑏 which functions as a one
+time pad and is thus bounded by the number of encryptions𝑞enc
+over the size of the space of random valuesR𝑏.
+Game 4.We now show that the probability of tag collisions is
+negligible. We bound the probability of tag collisions so that we
+can unambiguously address SUF-CMA challengers in the following
+game. The random oracle samples a tag whenever a new input is
+queried. This happens in at most𝑞enc encryption queries plus fut
+pre-computed values, and𝑞H1 adversarial queries to the random
+oracle. Tag collisions are thus limited by the birthday bound in the
+tag spaceT and the advantage to distinguish between games is as
+follows.
+AdvG3
+A≤Adv G4
+A+(𝑞enc·(1+fut)+𝑞 H1)2
+|T|
+
+Generic Anonymity Wrapper for Messaging Protocols
+GameIND𝑏
+AW,past,fut(A)
+00(ep S,(ep R𝑖)𝑖∈[𝑛])←0 1+𝑛
+01(𝑠,(oos 𝑖)𝑖∈[𝑛])←∞ 1+𝑛
+02(𝐾[·],VK[·],RC[·],CC[·])←⊥ 4
+03((𝑅 𝑖)𝑖∈[𝑛] ,𝑋,CH)←∅ 2+𝑛
+04(st S,(st R𝑖)𝑖∈[𝑛])←⊥ 1+𝑛
+05Status[·]←⊥ ≥𝐺3
+06𝑏 ′←$A(𝜔)
+07·RequireCH∩𝑋=∅
+08Stop with𝑏 ′
+OracleUp S(𝑘)
+09Require𝑘∈K∪{⊥}
+10·If𝑘≠⊥∧(ep S =0∨(ep S,𝑠)∈𝑋):
+11·𝑋
+∪
+←{(ep S+1,𝑠 ′)|𝑠 ′∈N}
+12(_,uk,_)←st S ≥𝐺3
+13Status[𝑘,uk]←⊥ ≥𝐺3
+14If𝑘=⊥:𝑘← $K
+15ep S←ep S+1;𝑠←0
+16(st S,vk)← $ AW.upS(stS,𝑘)
+17𝐾[ep S]←𝑘;VK[ep S]←vk
+18Returnvk
+OracleExpose S
+19·𝑋
+∪
+←{(ep S,𝑠′)|𝑠 ′ >𝑠}
+20Status[st S.ck]←allow≥𝐺3
+21Status[st S.cknxt]←allow≥𝐺3
+22Returnst S
+OracleExpose R(𝑖)
+23·𝑋
+∪
+←{(ep ′,𝑠′)∉𝑅 𝑖|
+ep′≤min(ep R𝑖,oos𝑖−1)}
+24(ht,ST)←st R𝑖 ≥𝐺3
+25ForidinST.Keys:≥𝐺3
+26ck now←ST[id].ck now ≥𝐺3
+27ck nxt←ST[id].ck nxt ≥𝐺3
+28Status[ck now]←allow≥𝐺3
+29Status[ck nxt]←allow≥𝐺3
+30Fortag∈ht.Keys:≥𝐺5
+31TX
+∪
+←{tag} ≥𝐺5
+32Returnst R𝑖
+OracleUp R(𝑖,id,𝑘,vk)
+33Require𝑖∈[𝑛]∧𝑘∈K∪{⊥}
+34Ifid=id ∗
+𝑖∧ep R𝑖 <oos 𝑖:
+35Require𝐾[ep R𝑖+1]≠⊥
+36ep R𝑖←ep R𝑖+1
+37·If𝑘∉{𝐾[ep R𝑖],⊥}
+∨vk≠VK[ep R𝑖]≠⋄:
+38·oos 𝑖←min(ep R𝑖,oos𝑖)
+39Else ifep R𝑖 <oos 𝑖:𝑘←𝐾[ep R𝑖]
+40st R𝑖←AW.up R(stR𝑖,id,𝑘,vk)
+41Return
+OracleEnc(𝑚,ch)
+42Require𝑠<∞
+43(st S,𝑐)← $ AW.encS(stS,𝑚)
+44𝑠←𝑠+1;RC[ep S,𝑠]←𝑐;𝑐 ∗←𝑐
+45(tag,𝑐 ′)←𝑐≥𝐺5
+46TC[tag]←𝑐 ′ ≥𝐺5
+47·Ifch:
+48·If𝑏=1
+∨𝑏=0:≥𝐺6
+49·If𝑏=1:𝑐 ∗←$C
+50·CH
+∪
+←{(ep S,𝑠)}
+51(tag,_)←𝑐≥𝐺4
+52If𝑇[tag]≠⊥: Abort≥𝐺4
+53CC[𝑐 ∗]←𝑐
+54Return𝑐 ∗
+OracleDec(𝑖,𝑐)
+55IfCC[𝑐]≠⊥:𝑐←CC[𝑐]
+56(tag,𝑐 ′)←𝑐≥𝐺5
+57(ht,ST)←st R𝑖 ≥𝐺5
+58Iftag∈ht.Keys∧TC[tag]≠𝑐 ′ ≥𝐺5
+∧tag∉TX:≥𝐺5
+59Return⊥ ≥𝐺5
+60(st R𝑖,id,𝑚)←AW.dec R(stR𝑖,𝑐)
+61·If∃(ep ′,𝑠′)∈Rcvbl(𝑅 𝑖,RC,ep R𝑖,past,
+fut):RC[ep ′,𝑠′]=𝑐∧ep R𝑖 <oos 𝑖:
+62·𝑅 𝑖
+∪
+←{(ep ′,𝑠′)}
+63Return(id,𝑚)
+Figure 10: Game hops multi-receiver gamesINDfor A W schemeAW. The annotations≥𝐺𝑖indicate that the line is valid from
+game𝑖and in all following games. Teal code is only relevant for AA W with sender authentication.
+Game 5.In Game 5, we reduce the capabilities of the active
+adversary to a passive adversary by enforcing that the adversary
+cannot forge a valid ciphertext. We modify the game such that
+decryption fails (i.e., the return value is⊥) when the decryption
+oracle receives a ciphertext which is a non-trivial forgery, i.e., for
+which the corresponding key was not leaked. We track the tags
+whose keys are exposed through the set TX by adding tags on
+receiver exposure and adversarial random oracle queries. To forbid
+non-trivial forgeries, we first observe that the adversary needs to
+submit a tag that is in the receiver state to trigger the decryption.
+If the tag is in the receiver state and the submitted ciphertext is not
+the one produced by the game, we simulate a failed decryption by
+returning⊥. When a receiver is out-of-sync, there must have been
+some input key which let the receiver state diverge from the sender
+state. From this point on, the collision-free update key which is
+sampled by the random oracle and cannot be determined by the
+receiver enforces that an out-of-sync receiver cannot get back in-
+sync with the receiver. Thus, if the game produces a tag using the
+sender state, this tag will not appear in the receiver state after it
+becomes out-of-sync and the decryption will fail. We note that the
+adversary can also submit a forgery for the pre-computed tags in a
+receiver state. For these forgeries, the adversary additionally has to
+correctly guess a randomly sampled tag which would reduce their
+win advantage by a factor of fut
+|T| . The following reduction thus has
+an upper bound.
+We now reduce this change to the SUF-CMA security of the
+underlying AEAD scheme. We use a multi-instance SUF-CMA game
+where each encryption and decryption are forwarded to a SUF-
+CMA challenger which is indexed with the respective tag. If a
+distinguisher can detect the change between Game 4 and Game
+5, that means they can create a valid ciphertext forgery and thus
+break the SUF-CMA security of the underlying AEAD scheme. Note
+that whenever we address a SUF-CMA challenger in the reduction,
+we can do this unambiguously through the tag since we ruled out
+tag collisions in Game 4. This also means that multiple receivers
+which store the same tag communicate with the same SUF-CMA
+challenger.
+•Enc : Forward the message and associated data to the en-
+cryption oracle of a new challenger. Use the tag derived
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+OracleH 1,adv(ck)
+00(ck nxt,mk,tag,𝑟,𝑟 𝑏)←H 1[ck,uk]
+01If(ck nxt,mk,tag,𝑟,𝑟 𝑏)≠⊥ 5∧Status[ck]=⊥: Abort≥𝐺3
+02If(ck nxt,mk,tag,𝑟,𝑟 𝑏)=⊥ 5:
+03(ck nxt,mk,tag,𝑟,𝑟 𝑏)← $CK×K×T×UK×R×R 𝑏
+04IfTK[tag]≠⊥: Abort≥𝐺4
+05TK[tag]←mk≥𝐺4
+06Ifck nxt∈H 1.Keys: Abort≥𝐺2
+07Ifuk nxt∈𝑈\{⊥}: Abort≥𝐺2
+08IfStatus[ck]=⊥:Status[ck]←adv
+09H 1[ck]←(ck nxt,mk,tag,𝑟,𝑟 𝑏)
+10IfStatus[ck]=allow:Status[ck nxt]←allow≥𝐺3
+11TX
+∪
+←{tag} ≥𝐺5
+12Return(ck nxt,mk,tag,𝑟,𝑟 𝑏)
+OracleH 2,adv(ck,uk,vk)
+13(ck nxt,uk nxt)←H 2[ck,uk,vk]
+14If(ck nxt,uk nxt)≠⊥ 2∧Status[ck,uk,vk]=⊥: Abort≥𝐺3
+15If(ck nxt,uk nxt)=⊥ 2:
+16(ck nxt,uk nxt)← $CK×UK
+17Ifck nxt∈H 2.Keys: Abort≥𝐺2
+18Ifuk nxt∈𝑈\{⊥}: Abort≥𝐺2
+19𝑈
+∪
+←{uk nxt} ≥𝐺2
+20IfStatus[ck,uk,vk]=⊥:Status[ck,uk,vk]←adv
+21H 2[ck,uk,vk]←(ck nxt,mk,tag,uk nxt)
+22IfStatus[ck,uk,vk]=allow:Status[ck nxt,uk nxt,vk]←allow≥𝐺3
+23Return(ck nxt,uk nxt)
+OracleH 1(ck)
+24(ck nxt,mk,tag,𝑟,𝑟 𝑏)←H 1[ck,uk]
+25IfStatus[ck]=allow∧Status[ck nxt,uk nxt]=adv:≥𝐺3
+26Status[ck nxt]←allow≥𝐺3
+27IfStatus[ck]=adv: Abort≥𝐺3
+28If(ck nxt,mk,tag,𝑟,𝑟 𝑏)=⊥ 5:
+29(ck nxt,mk,tag,𝑟,𝑟 𝑏)← $CK×K×T×UK×R×R 𝑏
+30Ifuk=⊥:uk nxt←⊥
+31IfTK[tag]≠⊥: Abort≥𝐺4
+32TK[tag]←mk≥𝐺4
+33Ifck nxt∈H 1.Keys: Abort≥𝐺2
+34H 1[ck]←(ck nxt,mk,tag,𝑟,𝑟 𝑏)
+35Return(ck nxt,mk,tag,𝑟,𝑟 𝑏)
+OracleH 2(ck,uk,vk)
+36(ck nxt,uk nxt)←H 2[ck,uk,vk]
+37IfStatus[ck,uk,vk]=allow∧Status[ck nxt,uk nxt,vk]=adv:≥𝐺3
+38Status[ck nxt,uk nxt,vk]←allow≥𝐺3
+39IfStatus[ck,uk,vk]=adv: Abort≥𝐺3
+40If(ck nxt,uk nxt)=⊥ 2:
+41(ck nxt,uk nxt)← $CK×UK
+42Ifck nxt∈H 2.Keys: Abort≥𝐺2
+43Ifuk nxt∈𝑈\{⊥}: Abort≥𝐺2
+44𝑈
+∪
+←{uk nxt} ≥𝐺2
+45H 2[ck,uk,vk]←(ck nxt,uk nxt)
+46Return(ck nxt,uk nxt)
+Figure 11: External and internal random oracles for the proof in Section C.1. The annotations ≥𝐺𝑖 indicate that the line is valid
+from game𝑖and in all following games. Teal code is only relevant for AA W with sender authentication.
+from the chain key to associate the index of the SUF-CMA
+challenger with the tag. Use the challenger’s encryption as
+ciphertext and the derivedtagas return value.
+•Dec : Look up the tag attached to the ciphertext in the re-
+ceiver’s hash table. If the tag is in the state, disregard the
+message key in the state and instead forward the decryption
+to the SUF-CMA challenger whose index corresponds to
+tag to obtain the decrypted messagem. Otherwise, there is
+no key material for the submitted ciphertext in the receiver
+state and the decryption fails, i.e.,m ←⊥ . Sendmto the
+distinguisher.
+• Random Oracle: For all entries which the adversary queries,
+take the tag which the random oracle generates, corrupt
+the challenger whose index corresponds to tag to obtain
+mkand programmkinto the random oracle.
+•Expose R: Corrupt all SUF-CMA challengers whose index
+corresponds to a tag in the receiver state to obtain the keys
+mk. Embed all mk in the respective positions in the receiver
+state and also in the random oracle. Note that the adversary
+exposes only one receiver state at a time. Thus, while the
+exposed key material may be in other receiver states as
+well, the adversary only ever sees the other receiver states
+when they explicitly expose them. We can therefore lazily
+program the other receiver states on exposure.
+•Expose S: As the sender state exposure only reveals chain
+keys and not message keys, we do not need to corrupt any
+SUF-CMA challenger here. All corruptions on adversarial
+queries are handled through the random oracle.
+The advantage of a distinguisher to detect the change between
+Game 4 and Game 5 is bounded by the advantage of an adversaryB
+which plays the multi-instance SUF-CMA game against the AEAD
+scheme.
+AdvG4
+A≤Adv G5
+A+Adv SUF-CMA
+AE [B]
+Game 6.In this game hop, we replace the real challenge cipher-
+text with a random ciphertext to arrive in the random world where
+an adversary has no advantage of winning the IND game. Note
+that a receiver, after they become out-of-sync, will never have key
+material for a challenge ciphertext in their state, as we prevented
+key collisions and thus the update key enforces that sender and re-
+ceiver diverge. We reduce detecting this change to a multi-instance
+AEAD-IND$ game, which means that a successful distinguisher
+between Game 5 and Game 6 can break the IND$ of the underlying
+AEAD scheme. The reduction is as follows.
+•Enc : On a challenge encryption, derive the tag through the
+random oracle and forward the message to the encryption
+interface of a new AEAD challenger along with the tag
+as associated data. Save the message and tag. Proceed as
+before on non-challenge encryptions.
+•Dec : When receiving a decryption query, check if the tag
+corresponds to a prior challenge encryption. If yes, find
+the corresponding message and send it to the distinguisher.
+Otherwise, the decryption oracle remains unchanged.
+• The other oracles are not affected and provide the usual
+interfaces to the distinguisher. That is because we do not
+allow state exposures or key updates which reveal key ma-
+terial for challenge ciphertexts.
+The advantage of a distinguisher to detect the change between
+Game 5 and Game 6 is bounded by the advantage of an adversary
+
+Generic Anonymity Wrapper for Messaging Protocols
+C which plays the multi-instance IND$ game against the AEAD
+scheme.
+AdvG5
+A≤Adv G6
+A+Adv IND$
+AE [C]
+In the end, we arrive at the game where the adversary always
+obtains random ciphertexts andA’s best strategy is to guess the
+bit𝑏, i.e.,Adv G6
+A =0.
+C.2 Game-based Authenticity
+Game AUTH in Figure 5 captures that it should be hard for an
+adversary to submit a non-trivial forgery. In the following, we first
+show that AW satisfies the basic AUTH definition. Then, we show
+that AAW satisfies the extended definition AUTHAAW which also
+captures exposures of the signing key.
+Theorem C.2.Let AE be an AEAD scheme andH 1, H2 random
+oracles. LetA be an adversary against the AUTH security of the AW
+scheme with parameters fut,past . LetB be an adversary against
+the SUF-CMA security of the AEAD scheme. Let CK ,UK , andT
+denote the chain key space, update key space, and tag space, respec-
+tively. We show that our AW construction is secure with respect to
+AUTHAW,fut,past such that
+AdvIND
+AW,fut,past[A]≤ (𝑞enc·(1+fut)+𝑞 H1)2
+|CK| +(𝑞H2+𝑞 upS)2
+|UK|
++𝑞H1·( 𝑞enc
+|CK| + 𝑞upS
+min(|CK|,|UK|) )+ (𝑞enc·(1+fut)+𝑞 H1)2
+|T|
++AdvSUF-CMA
+AE [B],
+where𝑞enc,𝑞 dec,𝑞 upS are the number of queries to oracles Enc, Dec,
+UpS, and𝑞H1,𝑞 H2 the number of queries to the random oraclesH 1, H2,
+respectively.
+Proof for AW.Let AUTH′
+AW be the game for AW where line 45
+is always false and thus line 47 always applies, such that the adver-
+sary never wins the game. To detect this change, we prove that a
+distinguisher would need to create a non-trivial ciphertext forgery,
+i.e., a forgery where the corresponding key has not been exposed.
+First, we observe that an adversary could create such a forgery if
+they learn the encryption key through other means than exposure.
+That is, like in the IND proof, if the adversary correctly guesses the
+input to the random oracle or if there are any key or tag collisions
+in the random oracle. We can bound this probability like Game 1-4
+in the proof for IND. Now, the distinguisher can only detect the
+change if they successfully hand in a forgery against the underly-
+ing AEAD scheme. To show that a distinguisher between AUTH
+and AUTH′ would break the SUF-CMA security of the underlying
+AEAD scheme, we use the reduction from Game 5 in theIND game.
+We note that, in the IND proof, we argued that once a receiver be-
+comes out-of-sync, their future key material will never be in-sync
+again with the sender. Thus, submitting a forgery against an out-of-
+sync receiver is irrelevant since we do not enforce anyIND security
+guarantees for the ciphertexts which are sent with out-of-sync key
+material. In contrast, theAUTH definition enforces that ciphertexts
+also cannot be forged against receivers which are out-of-sync with
+the sender. Note that we enforce that if two receivers diverge with
+the same keys, exposing one of them also exposes the other one,
+thus making a forgery against both of them trivial. Overall, the
+advantage of an adversary against AUTHAW corresponds to the ad-
+vantage of a distinguisher between AUTHAW and AUTH′
+AW which
+is bounded by the accumulated advantage of the distinguishers
+from Game 1 to Game 5 in theINDproof.
+Theorem C.3.Let AE be an AEAD scheme andH 1, H2 random
+oracles. LetA be an adversary against the AUTH security of the AAW
+scheme with parameters fut,past . LetB be an adversary against
+the AUTH security of the AW scheme with parameters fut,past .
+LetC be an adversary against the BIND security of the Commitment
+scheme. LetD be an adversary against the SUF-CMA security of the
+Signature scheme. LetCK ,UK , andT denote the chain key space,
+update key space, and tag space, respectively. We show that our AW
+construction is secure with respect toAUTH AW,fut,past such that
+AdvAUTH
+AAW,fut,past[A]≤Adv AUTH
+AW,fut,past[B]
++Advbind
+C [C]+Adv suf-cma
+S [D].
+Proof for AAW.Now, we show that AAW satisfies the extended
+AUTHAAW definition. The extended definition says that it is hard
+for an adversary to forge a ciphertext even if either the AEAD key
+or the signing key are compromised. To bound the advantage of an
+adversary to win AUTHAAW, we start with an adversaryA playing
+the AUTHAAW game. Then, we modifyAUTHAAW in two hops such
+that finally, the adversary has no winning advantage, i.e., Line 45 is
+always false. We make the following case distinction. If both AEAD
+key and signing key are compromised, no security guarantees hold.
+If neither key is compromised, the adversary is bounded by the
+smaller advantage of both breaking security of the AEAD scheme
+(see above) or breaking the singature and commiment scheme (as
+described in the following). If for a ciphertext 𝑐 the signing key
+is compromised and the AEAD key is not (i.e., the sender was
+compromised after sending𝑐), the proof for AAW corresponds to
+the AUTH proof for AW. In case the AEAD key is compromised and
+the signing key is not (i.e., the receiver was compromised but not
+the sender which holds the signing key; and the verification key
+for the receiver was not set by the adversary), we can reduce the
+detection of this change to breaking the security of the underlying
+commitment and signature scheme. Note that we only need to
+consider the case where the adversary submits a non-trivial forgery
+against the verification key which corresponds to the sender’s (non-
+exposed) signing key because of the following observation. The
+receiver initially stores commitments for the verification key vk
+given via AW.upR. If vk was chosen by the adversary in AW.upR,
+then there are no security guarantees for the signature. Otherwise,
+vk given through AW.upR corresponds to the sender’s signing key.
+Since the receiver does not store vk in the state but only holds it
+in memory while running AW.upR and AW.decR to pre-compute
+commitments. If the adversary sent some vk′ which got accepted
+by the receiver, then the receiver would use thisvk′ to pre-compute
+commitments. But for this event to occur, the adversary would
+need to create a non-trivial forgery against vk in the first place (or
+trivial forgery) through which they already win the AUTH game
+(or looses the ability to win).
+First, we prove that if the adversary attempts to submit a signa-
+ture forgery, it has to be a forgery against the verification key for
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+which the receiver stores the commitment. Let AUTH′
+AAW be the
+game where we abort if the adversary sends a(vk′,𝑟′) which is not
+the same(vk,𝑟) used for the commitment. To implement this game
+hop, we create a mapping from tags to pairs of(vk,𝑟) . When the
+receiver pre-computes tags and the openings𝑟 of commitments for
+a given verification key vk, we store for each tag the corresponding
+pair(vk,𝑟) . When the receiver now successfully decrypts a cipher-
+text and obtains(vk′,𝑟′), we look up the stored(vk,𝑟) and abort if
+(vk′,𝑟′)≠(vk,𝑟) . A distinguisher can only differentiate between
+AUTH and AUTH′
+AAW if they find a(vk′,𝑟′)≠(vk,𝑟) which breaks
+the binding securityBIND C of the commitment scheme.
+The advantage of a distinguisher to differentiate betweenAUTHAAW
+and AUTH′
+AAW is bounded by the advantage of an adversary C
+against the binding security BINDC of the commitment scheme as
+follows.
+AdvAUTH
+A,AAW≤Adv AUTH′
+A,AAW+Adv bind
+C [C]
+Second, we prove that the adversary cannot forge a valid sig-
+nature for the verification key vk or otherwise they break the un-
+derlying commitment scheme. We modify AUTH′
+AAW such that the
+condition in Line 45 (Figure 5) is always false and call this game
+AUTH′′
+AAW. Since we enforced that the adversary has to submit
+the forgery against the honest verification key, a successful distin-
+guisher between AUTH′
+AAW and AUTH′′
+AAW breaks the SUF-CMA
+security of the underlying signature scheme. The reduction for a
+distinguisher between AUTH′ and AUTH′′ plays against a multi-
+instance SUF-CMA challenger as follows:
+•Up S: Obtain the verification key vk provided by a new SUF-
+CMA challenger, embed vk in the sender state, and return
+vk.
+•Enc : Forward the encrypted ciphertext and tag to the sign-
+ing oracle of the current SUF-CMA challenger. Attach the
+challenger’s signature to the returned ciphertext.
+•Expose S: Corrupt the current SUF-CMA challenger to ob-
+tain the signing keysk. Embedskin the sender state.
+The advantage of a distinguisher to differentiate betweenAUTHAAW
+and AUTH′′
+AAW is bounded by the advantage of an adversary D
+against the SUF-CMA security of the signature scheme as follows.
+AdvAUTH′
+A,AAW≤Adv AUTH′′
+A,AAW+Adv suf-cma
+S [D]
+Through GameAUTH′′ we prohibited the adversary from win-
+ning and thusAdv AUTH′′
+A,AAW =0.
+C.3 Adding a Group Member
+Figure 12 shows the functions for adding a user to an existing
+group. The sender extracts a screenshot of its current key material
+through AW.addS which the new user uses to initialize their state
+withAW.join R.
+D Ideal Functionality for State Anonymity
+The ideal functionality,FAW, is formally defined in Figures 13 and 14.
+This functionality captures multiple senders 𝑆𝑖∈[𝑛] and multiple
+receivers𝑅𝑗∈[𝑚] , where each sender𝑆𝑖 communicates with a fixed
+subset of receivers, denoted by𝐺[𝑖]=𝑔 𝑖⊆[𝑚].
+ProcAW.add S(st=(tag end,ck,uk,sk,vk,vk prv))
+00Returnkeys=(ck,uk,vk)
+ProcAW.join R(st,keys=(ck,uk,vk),id)
+01Ifst=⊥:ST[·]←⊥,ht←HT.init()
+02𝐿 prv,𝐿 now,𝐿 nxt←LL.init() 3
+03For all𝑖: 0≤𝑖<past:
+04insertDummy new(𝐿prv,ht)
+05ck nxt←⊥
+06(ck now,uk nxt)←(ck,uk)
+07For all𝑖: 0≤𝑖<fut:
+08addEntry new(𝐿now,ht,ck now,vk)
+09ST[id]←(ck now,ck nxt,uk nxt,𝐿 prv,𝐿 now,𝐿 nxt)
+10Returnst=(ht,st)
+Figure 12: Functions for adding a group member in A W
+scheme AW. Teal code is only relevant for AA W with sender
+authentication. The functions addEntry and insertDummy are
+shown in Figure 2.
+First, we describe the update commands (in Figure 14). When a
+sender𝑆𝑖 wishes to update their state, they send toFAW command
+UpS. As a result,FAW, stores the last encryption key identifier for
+the current epoch, ep (i.e., the index of the last message sent in
+this epoch). It then updates𝑆𝑖’s epoch to ep+ 1and registers 𝑆𝑖’s
+current chain key identifier to reflect the new epoch, via dictio-
+nary Ck: Ck[𝑆𝑖]←(ep, 0). On the receiver side, when receiver𝑅𝑗
+wishes to update their state corresponding to Sender𝑆𝑖, they send
+toFAW command UpR(𝑖) . If this is the first time UpR(𝑖) has been
+received from𝑅𝑗 ,FAW adds past+fut dummy key identifiers to
+the receiver’s state (Note that these dummy keys are synchronized
+for each receiver in𝑔𝑖 for this session, via dictionary Du𝑝).FAW also
+registers that the receiver has obtained key material for the new
+epoch in dictionary Up and registers that the first fut encryption
+key identifiers for the new epoch as well as the fut-th chain key
+identifier for the new epoch are in the receiver’s state.
+We note that to facilitate updates, we implicitly assume that any
+protocol instantiatingFAW will need to use some internal mecha-
+nism to sample fresh keys𝑘ep, where for each sender𝑆𝑖, they and all
+receivers𝑅𝑗∈𝑔𝑖 must be able to obtain the same key𝑘ep for each
+epoch ep. This can be facilitated, e.g., by using a sub-functionality
+Fkey for each sender𝑆𝑖 and associated𝑔𝑖, which keeps a separate
+epoch counter for𝑆𝑖 and each𝑅𝑗∈𝑔𝑖, and delivers key𝑘ep to those
+parties who have already received the keys for epochs ep′ <ep ,
+when requested. As written earlier, we consider the actual protocol
+for sampling and delivering these keys to parties out of scope for
+this work.
+Now we explain how messages are sent (Figure 13). Sender𝑆𝑖
+uses command Send, to send a message𝑚. The functionalityFAW
+first retrieves𝑆𝑖’s current chain key identifier that it has stored,
+and assigns it to the message via dictionary M, then increments𝑆𝑖’s
+current chain key identifier. Note that we do not send any informa-
+tion to the simulatorS when𝑆𝑖 sends a message. Indeed, in order
+to analyze the anonymity that AW cancyptographicallyachieve,
+we choose not to model any consequences ofnetworkobservation
+that can lead to de-anonymization, and instead assume idealized
+channels that reveal nothing about what is sent/received or by/to
+whom. Note that we still allow the adversary to leak ciphertexts
+
+Generic Anonymity Wrapper for Messaging Protocols
+that are still stored on the delivery server via commandExposeDB
+(see below).
+Next, we describe how messages are received (in Figure 13). A
+receiver𝑅𝑗 uses command Receive to download from the delivery
+server all yet-unreceived messages from all sessions 𝑔𝑖 ∋𝑅 𝑗 of
+which it is a part. First,FAW marks each such message as delivered
+to𝑅𝑗 . If𝑅𝑗 does not have the key identifier stored for any of these
+messages, which can occur if, e.g., the message is too old or too many
+messages have been skipped, the message will not be delivered to
+𝑅𝑗 . Then,FAW checks to which epoch each message belongs. If the
+given message belongs to the epoch following the one that 𝑅𝑗 is
+currently in for this session,FAW advances the receiver to the next
+epoch, registers the first fut encryption key identifiers for the new
+epoch as well as the fut-th chain key identifier for the new epoch
+in the receiver’s state, and finally removes the oldest key identifiers
+(including dummies) from the receiver state until only the newest
+past+fut identifiers remain. Else if the message corresponds to
+one of the newest fut keys stored for this epoch, the next fut
+encryption key identifiers are registered in the receiver’s state, the
+chain key identifier is updated, and the oldest key identifiers from
+the receiver state are removed until only the newest past+fut or
+past+ 2·fut identifiers remain (depending on if the receiver has
+key material for the next epoch or not, respectively). Otherwise,
+the message corresponds to one of the oldestpast keys. In all cases,
+the message’s key identifier is removed from the receiver state.
+In the last case, it is replaced by a dummy identifier. Finally,FAW
+deletes the messages from the delivery server which have now
+been delivered to all intended receivers and then delivers the above
+processed messages to 𝑅𝑗 . Note again: since we want to model
+cryptographicanonymity, we do not send any information to S
+upon this delivery.
+Now we discuss adversarial actions which can be taken by S
+(in Figure 14). First, command DropRandom(𝑥) instructsFAW to
+randomly drop𝑥% of the messages which have been sent by some
+𝑆𝑖 but not yet received by all𝑅𝑗∈𝑔𝑖. We include this command to
+model random network drops. Next, commandExposeDBis used
+byS to expose the ciphertexts that are still stored on the delivery
+server. This command of course reveals toS all such ciphertexts
+and marks them as exposed, but also, if a chain key was previously
+exposed for the epoch in which such a ciphertext was created,
+FAW gives information about how the ciphertext’s encryption key
+was derived from that chain key. This matches the logic that the
+real world adversary would be able to trial decrypt this ciphertext
+with all encryption keys that can be derived from the chain keys it
+posseses. Additionally,S can instructFAW to drop some messages
+that it received through such anExposeDBcommand by using
+commandDrop.
+Now, we discuss state exposures. The simulatorS uses command
+ExposeR(𝑗) to expose receiver𝑅𝑗 . FunctionalityFAW first colects
+all key identifiers marked as stored in 𝑅𝑗 ’s state. Importantly, if
+any of those keys correspond to a ciphertext that was leaked by
+anExposeDBcommand when the key had not previously been
+leaked,FAW aborts the command (in order to avoid the committ-
+ment problem, see, e.g., [AJM22] and the references theirein). Then
+FAW marks those key identifiers as exposed, and if any older chain
+key from the epoch in which a key was created was exposed,FAW
+collects information for how that key was derived from that older
+chain key. Also,FAW marks all keys which can be derived from
+the current chain key as exposed. Finally,FAW adds to the above
+stored key identifiers any dummies stored in𝑅𝑗 ’s state and sends
+all the collected information toS. Similarly,S can use command
+ExposeS(𝑖) to expose sender𝑆𝑖. FunctionalityFAW does much of
+the same as above; collecting derivation information from any chain
+keys leaked in the past to the one currently held and marking those
+encryption key identifiers that can be derived from the current
+chain key as exposed. However,FAW also marks𝑆𝑖’s signing key of
+the current epoch as exposed before leaking toS the current chain
+key identifier, the collected deriviation information, and the key
+identifier of the last key from𝑆𝑖’s previous epoch.
+Finally,S can use commandInjectto change the message con-
+tents of any ciphertext (i) for whichS has the corresponding en-
+cryption key thoughExposeRorExposeS, (ii) for which S has
+the corresponding signing key through the latter, and (iii) which
+has not already been delivered to all receivers.
+E Artifact Appendix
+E.1 Abstract
+This artifact appendix describes how to install and test the programs
+used to to implement and evaluate protocols in this paper, and how
+to run tests to verify the specific claims.
+E.2 Description and Requirements
+E.2.1 Security, privacy, and ethical concerns.None.
+E.2.2 How to access.The artifact [ Sch25] is packaged in an archive
+accessible at https://zenodo.org/records/16929590.
+E.2.3 Hardware dependencies.None.
+E.2.4 Software dependencies.This artifact requires the following
+software dependencies:
+•Rust 1.88.0 : On Unix-like systems, the rust toolchain can
+be installed withrustupusing the command:
+curl --proto'=https'--tlsv1.2 \\
+-sSf https://sh.rustup.rs | sh
+To install the specific version, you can run:
+rustup install 1.88.0
+rustup default 1.88.0
+but be aware that this will override the default version of
+Rust on your system, affecting other Rust projects. The tests
+are likely to work with earlier versions of Rust, but have
+not been tested.
+•protoc: Available at
+https://github.com/protocolbuffers/protobuf/releases. On
+Debian, it can be installed using the command:
+apt-get install protobuf-compiler
+E.2.5 Benchmarks.None.
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+On Ideal FunctionalityF AW Initialization Init(𝑛,𝑚,𝐺):
+InitializesFAW with𝑛 senders𝑆𝑖∈[𝑛] and𝑚 receivers𝑅𝑗∈[𝑚] ;𝐺[𝑖]=𝑔 𝑖⊆[𝑚] specifies that sender𝑆𝑖 communicates with receivers𝑅𝑗∈𝑔𝑖 .
+Note that a sender id 𝑖 now describes a session which includes the sender and its receivers. FAW interacts with senders, receivers and
+simulatorS, and stores variables:
+•Ep[𝑆 𝑖]/Ep[𝑅 𝑗][𝑖]←−1: current epoch of sender𝑆 𝑖 / receiver𝑅 𝑗 in session𝑖
+•Up[𝑅 𝑗][𝑖]←−1: receiver𝑅 𝑗 ’s next epoch after a state update in session𝑖
+•K[𝑖][ep][𝑠] : map of keys, where each key is uniquely described through session𝑖, epoch ep, and index𝑠; this describes both encryption
+keys and chain keys. The key in a sender state is always a chain key. In a receiver state, the newest key in the current epoch and
+potentially the upcoming epoch are chain keys, all others are encryption keys.A key (𝑖,ep,𝑠) is newer than a key (𝑖,ep′,𝑠′) if
+ep>ep ′∨ep=ep ′∧𝑠>𝑠 ′.Kalso stores the following attributes for all𝑖,ep,𝑠.
+–K[𝑖][ep][𝑠].rkid← $KID: random unique key identifier which is leaked toS
+–K[𝑖][ep][𝑠].X←fal: indicates whether the key is exposed
+–K[𝑖][ep][𝑠].stR 𝑗←fal: indicates whether receiver𝑅 𝑗 has the key in its state
+•M[mid]: map of messages, where
+–M[mid].m←⊥: messagem
+–M[mid].key←⊥ 3: key described through(𝑖,ep,𝑠)used to encrypt the message
+–M[mid].hasC←fal: indicates whether the simulator has simulated a ciphertext without knowing the associated key
+–M[mid].p 𝑅𝑗←fal: indicates whether the message has been processed by𝑅 𝑗
+–M[mid].X←fal: indicates whether themidhas been exposed toS
+•Ck[𝑆 𝑖]←⊥ 2/Ck[𝑅 𝑗][𝑖]←∅ : current chain key/keys specified by(ep,𝑠) of sender𝑆𝑖 / receiver𝑅𝑗 in session𝑖 // receiver may have
+multiple keys in its state after an update
+•NE[𝑖][ep]←⊥: index𝑠of newest exposed chain key in session𝑖and epochep
+•Lk[𝑖][ep]←⊥: index𝑠of sender𝑖’s last encryption key from epochep
+•XSK[𝑖][ep]←fal: indicates whether sender𝑖’s signing key for epochepwas exposed
+•Du[𝑅 𝑗][𝑖]←[] : list of dummy key identifiers rkid for receiver𝑅𝑗 in session𝑖. When dummy keys are treated as part of the receiver
+state, the dummy keys are considered the oldest key material, i.e., the keys which are discarded first.
+•On Send(mid,m) from𝑆 𝑖:
+–skip ifM[mid]≠⊥
+–obtain current sender key(𝑖,ep,𝑠)←Ck[𝑆 𝑖]and assign it to the messageM[mid].key←(𝑖,ep,𝑠),M[mid].m←m
+–update sender’s chain key:Ck[𝑆 𝑖]←(ep,𝑠+1)
+•On Receive(𝑅 𝑗 ) from𝑅 𝑗 :
+– create set of messages Ms←∅ to be delivered to𝑅𝑗 . Process all messages mid∈M which are sent to a group where 𝑅𝑗 is a
+member, i.e., the message’s associated key(𝑖,ep,𝑠)←M[mid].keyis from a session𝑖:𝑗∈𝑔 𝑖.
+∗first, indicate that the message was processed by𝑅 𝑗 :M[mid].p 𝑅𝑗←tru
+∗skip to next message if no key material formidis in the receiver state (K[𝑖][ep][𝑠].stR 𝑗 =fal)
+∗ if the receiver state was recently updated ( Up[𝑅𝑗][𝑖]=Ep[𝑅 𝑗][𝑖]+ 1) and the message is from the new epoch ( ep=
+Up[𝑅𝑗][𝑖] ), advance receiver state to next epoch: Ep[𝑅𝑗][𝑖] ←Ep[𝑅𝑗][𝑖]+ 1. Then, remove the message’s key from
+the receiver state ( K[𝑖][ep][𝑠].stR 𝑗 ←fal ) and include the next fut keys in the receiver state (∀𝑠<𝑠 ∗≤𝑠+fut :
+K[𝑖][ep][𝑠 ∗]←tru ). Update the receiver’s set of chain keys (Ck[𝑅𝑗][𝑖]←{(ep,𝑠+fut)} ). Remove the oldest keys from
+the receiver state and the dummiesDu[𝑖][𝑅 𝑗], until only the newestpast+futkeys remain.
+∗ else if the message’s key is in the newest fut keys ((ep′,𝑠′) ←Ck[𝑅𝑗][𝑖]∧ep=ep ′∧𝑠′−fut≤𝑠<𝑠 ′), remove
+the message’s key from the receiver state ( K[id][ep][𝑖].stR 𝑗 ←fal ) and include the next fut keys in the receiver
+state (∀𝑖<𝑖 ′≤𝑖+fut : K[𝑖][ep][𝑠] ←tru ). Remove the receiver’s current chain key in ep and add the new key
+(Ck[𝑅𝑗][𝑖]←Ck[𝑅 𝑗][𝑖]\{ep ′,𝑠′}∪{ep,𝑠+fut} ). If𝑅𝑗 does not have key material for the next epoch (|Ck[𝑖][𝑅 𝑗]|= 1),
+then remove the oldest keys from the receiver state and the dummies Du[𝑖][𝑅 𝑗], until only the newest past+fut keys
+remain. Otherwise, keep the next epoch’s pre-computed keys, i.e., remove until the newestpast+fut+futremain.
+∗ otherwise, the key is in the oldest past keys. Then, remove the message’s key from the receiver state (K[𝑖][ep][𝑠].stR 𝑗←
+fal) and add an entry to the dummy list:Du[𝑖][𝑅 𝑗]← $KID
+∗add message to setMs:Ms
+∪
+←{mid}
+– delete messages mid from M which are now processed by all intended receivers:∀𝑖∈[𝑛] :if∀𝑗∈𝑔 𝑖 : M[mid].p𝑅𝑗 =tru , set
+M←M\M[mid]
+–sendMsto𝑅 𝑗
+Figure 13: Ideal functionalityF AW for A W schemeAW. Teal code is only relevant for AA W with sender authentication.
+
+Generic Anonymity Wrapper for Messaging Protocols
+E.3 Set-up
+With the Rust toolchain installed, the artifact can be built by open-
+ing a shell in the root directory of the project and running the
+following:
+cd simple-aw-artifact && cargo build --release
+This will compile the Rust code and produce an executable in the
+simple-aw-artifact/target/releasedirectory.
+E.3.1 Installation.Once compiled, no further installation is needed.
+E.3.2 Basic test.To run all unit tests and verify the implementa-
+tion:
+cargo test
+To run specific test suites:
+# Test cryptographic primitives
+cargo test -p signal-crypto
+# Test protocol implementations, including Double
+# Ratchet, Sender Keys, Sealed Sender, AW, and AAW
+cargo test -p libsignal-protocol
+# Test core utilities
+cargo test -p libsignal-core
+E.4 Evaluation workflow
+Benchmark programs and tests are provided to reproduce all im-
+plementation dependent claims in the paper.
+E.4.1 Major Claims.The following claims are made in the paper,
+and are supported by the experiments in this artifact:
+(C1):AW and AAW have small communication cost overhead
+when compared with Signal’s current Sealed Sender im-
+plementation. Specifically, the paper reports the following
+measured message sizes for plaintexts less than 16 bytes in
+length:
+•Sender Keys:109bytes
+•AW-wrapped Sender Keys:157bytes
+•AAW messages (using AAW as a standalone group
+messaging protocol):155bytes
+• Sealed Sender-wrapped Sender Keys:440+ 68𝑁 bytes
+where𝑁is the group size.
+•Double Ratchet:66bytes
+•AW-wrapped Double Ratchet:114bytes
+•Sealed Sender-wrapped Double Ratchet:441bytes
+(C2): The computational time overhead for AW and AAW encryp-
+tion and decryption are significantly smaller than the cor-
+responding overhead for Sealed Sender. In the paper we
+report the following numbers which came from tests on a
+32-core Intel Core i9-14900K processor.
+•Sender Keys:20.098𝜇𝑠(encrypt),31.201𝜇𝑠(decrypt)
+• AW-wrapped Sender Keys:21.796𝜇𝑠 (encrypt),32.502𝜇𝑠
+(decrypt)
+•AAW messages (using AAW as a standalone group
+messaging protocol):21.079𝜇𝑠 (encrypt),31.185𝜇𝑠 (de-
+crypt)
+• Sealed Sender-wrapped Sender Keys depends on group
+size,𝑁:
+–𝑁=2:131.12𝜇𝑠(encrypt),61.286𝜇𝑠(decrypt)
+–𝑁=5:283.58𝜇𝑠(encrypt),61.286𝜇𝑠(decrypt)
+–𝑁=10:343.41𝜇𝑠(encrypt),61.286𝜇𝑠(decrypt)
+–𝑁= 100:1, 116.4𝜇𝑠 (encrypt),61.286𝜇𝑠 (decrypt)
+–𝑁= 1000:6 , 052.5𝜇𝑠 (encrypt),61 .286𝜇𝑠 (de-
+crypt)
+• Double Ratchet:2.1979𝜇𝑠 (encrypt),2.7178𝜇𝑠 (decrypt)
+• AW-wrapped Double Ratchet:3 .7412𝜇𝑠 (encrypt),
+4.2402𝜇𝑠(decrypt)
+• Sealed Sender-wrapped Double Ratchet:61.171𝜇𝑠 (en-
+crypt),52.750𝜇𝑠(decrypt)
+(C3): The computational cost of AW and AAW updates is signif-
+icant compared to their encryption and decryption times.
+Specifically, on the same Intel Core i9 test device AW was
+measured to have a mean update time of1.5245𝑚𝑠 and AAW
+was measured to have a mean update time of2.7591𝑚𝑠.
+E.4.2 Experiments.This section provides instructions for repro-
+ducing results that support the claims of the paper.
+(E1): [Message Sizes] [1 human-minute + 1 compute-minute]: pro-
+duce serialized messages for each protocol and measure its
+size.
+ExecutionExecute the command
+cargo test aw -- --nocapture
+Results To assess claim C1, review the message sizes for
+the various protocol messages printed in the output
+and compare them to those reported in the paper
+(E2): [Computation time] [1 human-minute + 5 compute-minutes]:
+benchmark the computation time required for encryption and
+decryption in all protocols, and updates forAWandAAW.
+ExecutionExecute the command
+cargo bench --bench sealed_sender
+Results A number of benchmark tests will run and statis-
+tics will be reported after each test. To assess claim C2
+look at the times reported for the following tests:
+• Sender Keys baseline: sk/encrypt and
+sk/decrypt.
+•AW wrapping Sender Keys:aw-sk/encrypt and
+aw-sk/ decrypt.
+•AAW as standalone protocol: aaw/encrypt and
+aaw/ decrypt.
+• Sealed Sender wrapping Sender Keys:
+v2/encrypt/
+multirecipient/<N> reports encryption time
+for groups of size 𝑁 , v2/decrypt reports de-
+cryption time.
+• Double Ratchet baseline: dr/encrypt and
+dr/decrypt.
+•AW wrapping Double Ratchet: aw-dr/encrypt
+andaw-dr/decrypt.
+• Sealed Sender wrapping Double Ratchet:
+v1/encryptandv1/decrypt.
+
+Lea Thiemt, Paul Rösler, Alexander Bienstock, Rolfe Schmidt, and Yevgeniy Dodis
+To asses claim C3, look at benchmark results for
+aw/updateandaaw/update.
+Note that the precise times reported by these bench-
+marks depend on the platform used for testing. The
+claims in the paper are about the relative performance
+of the evaluated protocols, and those differences should
+be stable on different platforms even though the abso-
+lute numbers will vary.
+E.5 Notes on Reusability
+This implementation was built as an experimental integration into
+https://github.com/signalapp/libsignal, Signal Messenger’s core li-
+brary. As libsignal is a special purpose library and is not designed
+for general use, the implementations of AW and AAW are not easy
+to reuse directly as packaged here. With that said, the files aw.rs
+and aaw.rs have minimal dependencies and should be simple for a
+developer to incorporate into a new project. The implementations
+of the benchmarks and tests give direct examples of how the code
+for both protocols can be used.
+E.6 Contribution Note
+Alex Bienstock did not contribute to the implementation of this
+artifact.
+
+Generic Anonymity Wrapper for Messaging Protocols
+•On UpR(𝑖) from𝑅 𝑗 :
+–skip if the receiver did not move to the next epoch after the last state update:Ep[𝑅 𝑗][𝑖]+1=Up[𝑅 𝑗][𝑖]
+–indicate that the receiver has key material for an epoch update:ep=Up[𝑅 𝑗][𝑖]←Up[𝑅 𝑗][𝑖]+1
+– if this is the first time key material is added to the receiver’s state, add past+fut dummies to the receiver state: For 𝑘 in
+past+fut:Du[𝑖][𝑅 𝑗]← $KID
+–include firstfutkeys of new epoch in receiver state:∀𝑠 ′ : 0≤𝑠 ′ <fut:K[𝑖][ep][𝑠 ′].stR𝑗←tru
+–include new chain key in receiver state:Ck[𝑅 𝑗][𝑖]
+∪
+←{𝐾[𝑖][ep][fut]}
+•On UpS from𝑆 𝑖:
+–get current chain key(ep,𝑠)←Ck[𝑖]and set last encryption key for this epochLk[𝑖][ep]←𝑠
+–update sender epoch:Ep[𝑆 𝑖]←ep+1
+–update key in sender state for new epochep←Ep[𝑆 𝑖]:Ck[𝑆 𝑖]←(ep,0)
+•On ExposeR(𝑗) fromS: Collect set of keysKs←∅and derivation infoDI[]←[]in each session𝑖:
+– collect ordered list of randomized key identifiers in𝑅𝑗 ’s state:𝐾←[K[𝑖][ep][𝑠].rkid :∀ep,𝑠,K[𝑖][ep][𝑠].stR 𝑗 =tru] , add list
+to the keys set:Ks
+∪
+←{𝐾}
+For each of these keys (𝑖,ep,𝑠) : K[𝑖][ep][𝑠].rkid∈𝐾 , set K[𝑖][ep][𝑠].X←tru , then collect derivation info DI[rkid] as
+follows:
+∗ abortif this would reveal a key for a previously key-less simulated ciphertext: ∃mid : M[mid].key=(rkid,ep)∧
+M[mid].hasC=tru
+∗ if a prior chain key(𝑖,ep,𝑠 ′) from epoch ep was exposed (⊥≠𝑠 ′←NE[𝑖][ep]∧𝑠 ′ <𝑠 ), collect derivation info from
+(𝑖,ep,𝑠 ′) to(𝑖,ep,𝑠) : DI[rkid]←[K[𝑖][ep][𝑠 ∗].rkid :𝑠′≤𝑠∗ <𝑠] . Then update the newest exposed key for this session
+and epoch:NE[𝑖][ep]←𝑠
+–set all keys which can be derived from the current chain key(s)(𝑖,ep,𝑠)as exposed:∀𝑠≤𝑠 ′ :K[𝑖][ep][𝑠 ′].X←tru
+–prepend list of dummy identifiersDu[𝑖][𝑅 𝑗]to𝐾:𝐾←Du[𝑖][𝑅 𝑗]+𝐾
+Send(Ks,DI)toS
+•On ExposeS(𝑖) fromS:
+–get the current chain key(ep,𝑠)←Ck[𝑆 𝑖]and its identifierrkid←K[𝑖][ep][𝑠].rkid
+–initialize map for key derivation infoDI[]←[]
+– if in the current epoch, a prior chain key(𝑖,ep,𝑠 ′) was exposed (⊥≠𝑠 ′←NE[𝑖][ep]∧𝑠 ′ <𝑠 ), collect derivation info from
+(𝑖,ep,𝑠 ′) to(𝑖,ep,𝑠) : DI[rkid]←[K[𝑖][ep][𝑠 ∗].rkid :𝑠′≤𝑠∗ <𝑠] . Then update the highest exposed chain key for this session
+and epoch:NE[𝑖][ep]←𝑠
+–set all keys which can be derived from the current chain key(𝑖,ep,𝑠)as exposed:∀𝑠≤𝑠 ′ :K[𝑖][ep][𝑠 ′].X←tru
+–set the sender’s signing key for this epoch as exposed:XSK[𝑖][ep]←tru
+–find the key identifier of the last key from the previous epoch:rkid prv←K[𝑖][ep−1][𝑠 prv]where𝑠 prv←Lk[𝑖][ep−1]
+–send (rkid,DI,rkid prv) toS
+•On DropRandom(𝑥) fromS
+–sample a random subset of messagesM ′⊆Mwhich contains𝑥%of the setMand remove these messages fromM:M←M\M ′
+•On ExposeDB fromS:
+–process all messagesmid∈Mto build a setMs←∅and key derivation infoDI[·]←[]as follows:
+∗ (𝑖,ep,𝑠)←M[mid].key;m←M[mid].m;m ′←⊥;rkid ′←⊥
+∗ifK[𝑖][ep][𝑠].X=tru:
+·m ′←m;rkid ′←K[𝑖][ep][𝑠].rkid
+· if a prior chain key(𝑖,ep,𝑠 ′) from epoch ep was exposed (⊥≠𝑠 ′←NE[𝑖][ep]∧𝑠 ′ <𝑠 ), collect derivation info from
+(𝑖,ep,𝑠 ′) to(𝑖,ep,𝑠) : DI[rkid′]←[K[𝑖][ep][𝑠 ∗].rkid :𝑠′≤𝑠∗ <𝑠] . Then update the newest exposed exposed chain
+key for this session and epoch:NE[𝑖][ep]←𝑠
+∗otherwise, mark that there now exists a ciphertext formid:M[mid].hasC←tru
+∗mark thatSknowsmid:M[mid].X←tru
+∗Ms
+∪
+←{(mid,|m|,m ′,rkid′)}
+–send𝑀,DItoS
+•On Drop(mid) fromS:
+–skip if themidhas not been shown toS(M[mid].X=fal)
+–removemidfrom the messages:M←M\M[mid]
+•On Inject(rkid,m) fromS:
+–retrieve key information ((𝑖,ep,𝑠):K[𝑖][ep][𝑠].rkid=rkid) and corresponding message (mid:M[mid].key=(𝑖,ep,𝑠))
+–skip ifK[𝑖][ep][𝑠].X=fal∨XSK[𝑖][ep]=fal∨∀𝑗:M[mid].p 𝑅𝑗 =tru
+–otherwise, replace the corresponding messageM[mid].m=m
+Figure 14: Ideal functionalityFAW for the anonymizing wrapper continued. Teal code is only relevant for AA W with sender
+authentication.

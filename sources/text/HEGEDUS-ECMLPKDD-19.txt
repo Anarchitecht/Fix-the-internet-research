@@ -1,0 +1,888 @@
+Decentralized Recommendation based on Matrix
+Factorization: A Comparison of Gossip and
+Federated Learning ⋆
+István Hegedűs 1[0000−0002−5356−2192], Gábor Danner 1[0000−0002−9983−1060], and
+Márk Jelasity 1,2[0000−0001−9363−1482]
+1 University of Szeged, Szeged, Hungary
+2 MTA SZTE Research Group on Artiﬁcial Intelligence, Szeged, Hungary
+Abstract. Federated learning is a well-known machine learning approach
+over edge devices with relatively limited resources, such a s mobile phones.
+A key feature of the approach is that no data is collected cent rally; in-
+stead, data remains private and only models are communicate d between
+a server and the devices. Gossip learning has a similar appli cation do-
+main; it also assumes that all the data remains private, but i t requires
+no aggregation server or any central component. However—on e would
+assume—gossip learning must pay a price for the extra robust ness and
+lower maintenance cost it provides due to its fully decentra lized design.
+Here, we examine this natural assumption empirically. The a pplication
+we focus on is making recommendations based on private logs o f user
+activity, such as viewing or browsing history. We apply low r ank matrix
+decomposition to implement a common collaborative ﬁlterin g method.
+First, we present similar algorithms for both frameworks to eﬃciently
+solve this problem without revealing any raw data or any user -speciﬁc
+parts of the model. We then examine the aggregated cost in bot h cases
+for several algorithm-variants in various simulation scen arios. These sce-
+narios include a real churn trace collected over mobile phon es. Perhaps
+surprisingly, gossip learning is comparable to federated l earning in all the
+scenarios and, especially in large networks, it can even out perform feder-
+ated learning when the same subsampling-based compression technique
+is applied in both frameworks.
+1 Introduction
+Mobile phones represent a key source of data and a very import ant platform not
+only for running pre-trained models but also for learning [1 7]. This is because
+collecting data centrally has become more and more problema tic over the past
+⋆ In Springer CCIS 1167 (Proc. DMLE 2019). The ﬁnal authentica ted version is
+available online at https://doi.org/10.1007/978-3-030- 43823-4_27. This study was
+supported by the Hungarian Government and the European Regi onal Develop-
+ment Fund under the grant number GINOP-2.3.2-15-2016-0003 7 (“Internet of Liv-
+ing Things”) and by the Hungarian Ministry of Human Capaciti es (grant 20391-
+3/2018/FEKUSTRAT).
+
+few years due to novel data protection rules [7] as well as the increasing public
+awareness to privacy issues. For this reason, there is an inc reasing interest in
+methods that keep the raw data on the device and process it usi ng distributed
+algorithms.
+Google introduced federated learning to answer this challenge [10, 12]. Not
+unlike the well-known parameter server architecture [6], a server maintains the
+current model and regularly distributes it to the workers wh o in turn calculate
+a gradient update and send it back to the server, where the upd ates are ag-
+gregated. In federated learning, this framework is optimiz ed so as to minimize
+communication between the server and the workers. For this r eason, the local
+update calculation is more thorough, and compression techn iques can be applied
+when uploading the updates to the server. Gossip learning has also been pro-
+posed to address the same challenge [9, 14]. This approach is fully decentralized,
+no parameter server is necessary. Nodes exchange and aggreg ate models directly.
+Since no infrastructure is required, and there is no single p oint of failure, gos-
+sip learning enjoys a signiﬁcantly cheaper scalability and better robustness than
+centralized approaches.
+However, it is not clear whether gossip learning is competit ive in terms of con-
+vergence time and communication cost. To shed light on this q uestion, we carry
+out an empirical comparison of the two approaches. To do this , we implement a
+recommender system in both paradigms, based on low-rank mat rix decomposi-
+tion. The gossip learning implementation is based on our pre vious work [9]. We
+propose a federated learning implementation as well, follo wing the same design,
+but adapted to the centralized communication pattern. Also , inspired by [10],
+we apply subsampling to reduce communication in both approa ches.
+The result of our comparison is that gossip learning is in gen eral comparable
+to the centrally coordinated federated learning approach, and in some scenarios
+it actually outperforms federated learning. One should obv iously not jump to
+conclusions based on one empirical study, but our results su ggest that fully
+decentralized algorithms perhaps deserve more attention i n the future.
+To sum up our key original contributions in the present study : (1) we propose
+an eﬃcient collaborative ﬁltering method for federated lea rning; (2) we improve
+several details of our previous solution [9] as well includi ng the introduction of
+coordinate-based age parameters to manage aggregation and the application of
+an optimized version of subsampling to gossip learning; and (3) we compare
+the two methods empirically based on a realistic churn trace collected by the
+application Stunner [2].
+We are aware of only two (at the time of writing, unpublished) studies that
+address the speciﬁc problem of recommender systems in feder ated learning. The
+ﬁrst is based on the idea of meta-learning [4]. Here, it is ass umed that the devices
+have enough data to learn a model based only on local data. The n, federated
+learning is used to ﬁnd the optimal hyperparameters for the a lgorithm, using
+the devices to calculate gradients for the hyperparameters . We are interested in
+scenarios where there is not much local data, so meta-learni ng is not an option.
+The second study is closer to our approach [1] in spirit. Howe ver the authors as-
+
+sume a diﬀerent setup with only implicit binary feedback as d ata (e.g., a movie
+was watched or not). Due to this, their input data is a dense ma trix (there are
+no ratings labeled as “unknown”) so compressed communicati on is more prob-
+lematic. We focus on modeling only the known ratings (a small minority of all
+ratings) and make predictions based on these. Also, the opti mization algorithm
+they approximate is alternating least squares with a federa ted gradient optimiza-
+tion step in the inner loop, while we use simple SGD which is mo re robust to
+failure and asynchrony.
+We note that both approaches oﬀer mechanisms for explicit pr ivacy protec-
+tion, apart from the basic feature of not collecting data. In federated learning,
+Bonawitz et al. [3] describe a secure aggregation protocol, whereas for gossip
+learning one can apply the methods described in [5]. Here, we are concerned
+only with the eﬃciency of the diﬀerent communication patter ns and do not
+compare security mechanisms.
+The outline of the paper is as follows. In Section 2, we descri be the low rank
+matrix decomposition problem, formulated as a machine lear ning problem. Here,
+we also present the key ideas to solve this problem in a decent ralized setting. In
+Section 3, we describe the basics of solving the problem with federated learning
+while in Section 4 we present the gossip learning algorithm f or the same problem.
+In Section 5 we present the key details of the learning algori thm that are common
+to both approaches. These include the details of the update r ule, the subsampling
+technique, and the initialization. Finally, in Section 6, w e present our empirical
+results.
+2 Rank- k matrix approximation
+Here, we present the problem deﬁnition in the form of a model a nd a corre-
+sponding loss function. We also describe our approach and ma in assumptions—
+common to both federated learning and gossip learning—regar ding the optimiza-
+tion of the model.
+2.1 Problem deﬁnition
+The problem of rank- k matrix approximation [11] is deﬁned in the following way.
+Let A ∈ I Rm×n be a matrix that contains our data (for example, user ratings
+of items such as movies, songs, or locations). The goal is to ﬁ nd two matrices
+X ∈ I Rm×k and Y ∈ I Rn×k that minimize the error function
+J(X, Y ) = 1
+2
+‖‖A − XY T ‖‖2
+F = 1
+2
+m∑
+i=1
+n∑
+j=1
+(aij −
+k∑
+l=1
+xilyjl)2. (1)
+We consider the matrix XY T an optimal rank- k approximation of A. Note that
+the rank of X and Y T (and therefore XY T ) is at most k. Usually a k much
+smaller than m and n is chosen to signiﬁcantly compress the data. X and Y T
+
+can be interpreted as high level features (e.g. genres of mov ies and tastes of
+users) that compactly represent the original data.
+Often in practice we have only partial information regardin g A; that is, some
+values in A might be unknown. As an important generalization of the prob lem
+above, here we are looking for a rank- k decomposition that approximates only
+the known values. A common approach is to minimize the error f unction
+J(X, Y ) = 1
+2
+∑
+(i,j)∈I
+(aij −
+k∑
+l=1
+xilyjl)2 + λ
+2 ‖X‖2
+F + λ
+2 ‖Y ‖2
+F , (2)
+where I contains the indices of the known values of A. We can then use the
+decomposition XY T to approximate the unknown values in A, since XY T is
+fully deﬁned. Note the here we also included additional regu larization terms and
+the regularization parameter λ. This helps stabilize the optimization process in
+a machine learning context.
+Another practical technique used is to add bias terms to the m odel. The bias
+terms b ∈ I Rm×1 and c ∈ I R1×n are incorporated into the model via the loss
+function
+J(X, Y, b, c ) = 1
+2
+∑
+(i,j)∈I
+(aij − bi − cj −
+k∑
+l=1
+xilyjl)2 + λ
+2 ‖X‖2
+F + λ
+2 ‖Y ‖2
+F . (3)
+For example, in a recommender system, the bias can represent the fact that some
+users tend to give higher or lower scores than others, and som e movies tend to get
+higher or lower scores. Intuitively, the bias represents av erage scores, and X and
+Y represent relative diﬀerences. This often enhances the pre diction performance.
+With bias, the approximation of A (both known and unknown values) is given
+by XY T + b1n + cT 1m where 1k is a row vector of k ones.
+2.2 Optimization approach
+Our targeted application environment consists of a potenti ally large set of per-
+sonal devices holding private data. We follow the approach i n our previous pa-
+per [9] and we will adapt the same approach to federated learn ing. We shall
+assume that each row in matrix A is stored on exactly one device. We shall also
+assume that each device will host exactly one row. This setup covers applica-
+tions where one row of the matrix belongs to one user and the de vices belong to
+exactly one user, as in the case of mobile phones. One matrix r ow can naturally
+represent any kind of private user activity, such as watchin g movies. We should
+add though that if more than one row is stored on a device, the a lgorithms are
+still applicable.
+The main idea is that matrix X will also be stored in a similar manner; that
+is, every device will store the row of X that belongs to the row of A stored on
+the device. This way, the matrix X that contains information about the users
+is completely private, every device knows only its own row. H owever, the entire
+
+Algorithm 1 Federated Learning Master
+1: (t, Y, c)← initY()
+2: loop
+3: (~t, ~Y , ~c)← (0n, 0n,k, 0n)
+4: for every node i in parallel do ⊲ non-blocking (in separate thread(s))
+5: send (t, Y, c) to i
+6: receive (t′, Y ′, c′) from i ⊲ model gradient
+7: (~t, ~Y , ~c)← (~t + t′, ~Y + Y ′, ~c + c′)
+8: end for
+9: wait (∆f ) ⊲ the round length
+10: for j← 1 . . . n do
+11: if ~tj⁄= 0 then
+12: Yj← Yj + ~Yj/~tj
+13: cj← cj + ~cj /~tj
+14: tj← tj + 1
+15: end if
+16: end for
+17: end loop
+matrix Y will be shared among all the devices. This is safe, because ma trix Y
+contains only user-independent information about all the i tems the users might
+consume.
+The gradient of Y computed by a single user may leak private data. In
+federated learning, Bonawitz et al. [3] describe a secure ag gregation protocol
+with additional measures to prevent this kind of informatio n leakage. In gossip
+learning, one can apply the secure distributed mini-batch m ethods described
+in [5]. We do not include such additional techniques in our pr esent study.
+Using the loss function deﬁned in Equation (3), and assuming that every
+device has a copy of Y , the gradient of both its own row of X and the global
+matrix Y can be computed by each device locally, w.r.t. the local row o f A.
+Devices can use these gradients to update their own row of X locally. Therefore,
+all we need to take care of is to somehow aggregate the gradien ts of Y over the
+devices and then redistribute new versions of Y . Federated learning and gossip
+learning oﬀer two, rather diﬀerent alternative solutions t o this problem. (Note
+that the bias vectors b and c are handled similarly to X and Y , respectively.)
+3 Federated Learning
+Here, we present the well-known federated learning algorit hm [10, 12], adapted
+to the problem of rank- k matrix decomposition.
+In this framework, there is a master node that runs Algorithm 1, and several
+worker nodes that execute Algorithm 2. The master ﬁrst initi alizes the global
+model (t, Y, c ) that contains matrix Y , the bias vector c and an age vector t. For
+each row j, tj counts how many times Yj and cj have been updated. Having a
+separate counter for each row is necessary because there can be a very diﬀerent
+
+Algorithm 2 Federated Learning Worker
+1: (xi, bi)← initX()
+2:
+3: procedure onReceiveModel(~t, ~Y , ~c)
+4: ((t, Y, c), (xi, bi))←update((~t, ~Y , ~c), (xi, bi), ai) ⊲ a i: the local ratings
+5: (t′, Y ′, c′)← (t− ~t, Y− ~Y , c− ~c)
+6: send (compress(t′, Y ′, c′)) to master
+7: end procedure
+number of examples for each item, and thus there can be a diﬀer ent number of
+updates applied to each row (see below).
+Similarly, each worker node initializes its private model (xi, b i) that contains
+its own row of X, xi, and the corresponding bias bi. After initialization, in every
+round, the master sends the global model to all the workers. T he workers then
+update the received global model and their own local user mod el using the local
+ratings, and they then send the (potentially compressed) mo del gradient to the
+master. In this message to the master, the vector t′ can contain only ones and
+zeros, indicating which rows of Y (and elements of c) were updated. At the end of
+each round, the server updates the global model with the aver age of the received
+gradients.
+Each row Yj (and value cj) will typically have diﬀerent associated ~tj values
+depending on how many valid (non-missing) values are there i n the matrix col-
+umn Aj, and also on which clients manage to send a message to the mast er in
+the given round. We can think of ~tj as the eﬀective mini-batch size correspond-
+ing to updating Yj and cj. Thus, by normalizing with ~tj, we eﬀectively perform
+parallel mini-batch updates on Yj and cj.
+Note that in the federated learning framework it is typicall y assumed that the
+workers are synchronized; that is, the master has to wait unt il all (or most of)
+the nodes send a gradient in the given round and, most importa ntly, the workers
+have to wait as well for the next globally aggregated model fr om the master
+to process. Although asynchronous distributed learning is common, federated
+learning also seeks to handle the non-uniform sampling of tr aining data, which
+is expected to make asynchronous implementations less stab le.
+The methods upda te, compress, initX and initY shall be explained in detail
+in Section 5. Note that the same methods are used in gossip lea rning as well.
+4 Gossip Learning
+In gossip learning, there is no master node. All the particip ants are equivalent,
+and form a P2P network [14]. All the nodes run Algorithm 3. The nodes ﬁrst
+initialize their own copy of the global model (t, Y, c ) as well as the private model
+(xi, b i). Then, in each cycle, they send their (potentially compress ed) copy of the
+global model to a random online neighbor in the P2P network. U pon receiving a
+
+Algorithm 3 Gossip Learning
+1: (t, Y, c)← initY()
+2: (xi, bi)← initX()
+3: loop
+4: wait (∆g)
+5: p← selectPeer()
+6: send (compress(t, Y, c)) to p
+7: end loop
+8:
+9: procedure onReceiveModel(~t, ~Y , ~c)
+10: (t, Y, c)←merge((t, Y, c), (~t, ~Y , ~c))
+11: ((t, Y, c), (xi, bi))←update((t, Y, c), (xi, bi), ai)
+12: end procedure
+Algorithm 4 Various versions of the merge function
+1: procedure mergeNone((t, Y, c), (~t, ~Y , ~c))
+2: return (~t, ~Y , ~c)
+3: end procedure
+4:
+5: procedure mergeA verage((t, Y, c), (~t, ~Y , ~c))
+6: for j← 1 . . . n do
+7: if ~tj⁄= 0 then
+8: w←
+~tj
+tj +~tj
+9: tj← max(tj, ~tj)
+10: Yj← (1− w)Yj + w ~Yj
+11: cj← (1− w)cj + w~cj
+12: end if
+13: end for
+14: return (t, Y, c)
+15: end procedure
+model, the node merges it into its own, then updates both the r esulting merged
+new global model and the local model, using the local ratings .
+As mentioned above, methods upda te, compress, initX and initY shall be
+explained in detail in Section 5. Note that the same methods a re used by feder-
+ated learning as well.
+Method merge, however, is speciﬁc to gossip learning, and it is responsib le
+for aggregating the updates computed at the devices. Possib le implementations
+of this method are listed in Algorithm 4. The ﬁrst option is no t to perform any
+aggregation, in which case diﬀerent versions of the global m odel perform random
+walks in the network independently. The other option is to ta ke the average of
+the two models row by row, weighted by the corresponding elem ents of the age
+vectors so that the more converged copy has a larger eﬀect.
+An important eﬀect of this weighted merging technique is tha t the freshly
+initialized rows of the model of any newly joined node are ign ored. This is because
+
+Algorithm 5 Model initialization
+1: procedure initX()
+2: for d← 1 . . . k do
+3: xd← rand()·
+√
+(Rmax− Rmin)/k ⊲ rand()∼ U (0, 1)
+4: end for
+5: b← Rmin/2
+6: return (x, b)
+7: end procedure
+8:
+9: procedure initY()
+10: for j← 1 . . . n do
+11: tj← 0
+12: (Yj, cj )←initX()
+13: end for
+14: return (t, Y, c)
+15: end procedure
+if a row has never been updated, then the age is zero for the giv en row. The
+new model will be assigned the maximum of the two merged ages. This is a
+conservative heuristic that performed better in our prelim inary experiments than
+possible alternatives such as the sum of the two ages. Note th at the age of the
+diﬀerent rows can diﬀer signiﬁcantly because the number of k nown ratings for
+diﬀerent items typically has a large variance.
+Since gossip learning uses a P2P network, we have to make our a ssumptions
+about this network explicit. We assume that there is a member ship service in
+our system. This service provides unique identities to the p articipants that might
+include public and private keys for public key cryptography that are tied to the
+network address of the node. The membership service also oﬀe rs peer sampling,
+accessed through method selectPeer. That is, all the nodes are assumed to have
+access to addresses of live nodes from the network. In practi ce, peer sampling
+can have a decentralized implementation that can be dynamic [16] or it can be
+based on a static network with random neighbors [15] that is a ble to handle
+NAT devices as well. It can also be implemented as a centraliz ed service. Ideally,
+the neighbors returned by the peer sampling service should b e uniform random
+samples of the live nodes, but in practice it suﬃces if the net work has good mixing
+when, for example, the neighbors are sampled from a ﬁxed over lay network graph.
+5 Shared Methods
+Here, we present those methods that are used by both federate d learning and
+gossip learning. Let us begin with the initialization metho ds in Algorithm 5.
+Both X and Y are initialized with uniform random numbers from the range
+[0,
+√
+(Rmax − Rmin)/k ], and the initial bias is set to Rmin/ 2, where Rmax and
+Rmin are the largest and the smallest possible ratings, respecti vely. This ensures
+
+Algorithm 6 Model update rule
+1: procedure upda te((t, Y, c), (xi, bi), ai)
+2: for all j where aij is deﬁned do
+3: tj← tj + 1
+4: err← aij− xiY T
+j − bi− cj
+5: ( Yj, xi)← ((1− ηλ)Yj + η· err· xi, (1− ηλ)xi + η· err· Yj)
+6: cj← cj + η· err
+7: bi← bi + η· err
+8: end for
+9: return ((t, Y, c), (xi, bi))
+10: end procedure
+that when a prediction xiY T
+j + bi + cj is made using initial values, the result falls
+in the range [Rmin, R max].
+As for learning, both models use a stochastic gradient desce nt (SGD) update
+rule with the ﬁxed learning rate η (see Algorithm 6). The age vector t is incre-
+mented in positions corresponding to updated rows of Y (that is, for those items
+that the user rated). The update rule simply follows from the partial derivatives
+of (3). Note that this version of the update rule uses a consta nt learning rate,
+but other implementations might also use the age vector pass ed to the update
+method.
+Let us now turn to the compression methods. In this study, we f ocus on sub-
+sampling as a simple compression technique. That is, only s rows of Y are sent
+along with the corresponding elements of t and c, where s is the compression
+parameter (see Algorithm 7). Subsampling is performed rand omly without re-
+placement from the updated rows (that is, those rows where th e corresponding
+rating is known) and, if there is still room left, from the rem aining, non-updated
+rows. Note that sending non-updated rows in fact makes sense because in such
+cases the given node might act as a forwarding agent. In other words, such rows
+might be useful for the recipient nodes.
+6 Experiments
+Here, we present our simulation experiments with gossip lea rning and federated
+learning over the MovieLens database in several scenarios.
+6.1 Datasets
+The MovieLens data sets [8] were collected by the GroupLens R esearch Project
+at the University of Minnesota. The data was collected throu gh the MovieLens
+website (movielens.org) over various periods of time, depe nding on the size of
+the set. The main properties of the MovieLens data sets are sh own in Table 1
+and Figure 1. Each data set is split into a training matrix and a test matrix
+in such a way that for each user, there are either 0 or 10 deﬁned values in the
+
+Algorithm 7 Various versions of the compress function
+1: procedure compressNone(t, Y, c)
+2: return (t, Y, c)
+3: end procedure
+4:
+5: procedure compressSubsampling(t, Y, c)
+6: U←{ 1, . . . , n}
+7: D←{ j∈ U|aij is deﬁned}
+8: Jd← random subset of D of size min(s,|D|)
+9: Ju← random subset of (U\ D) of size ( s−| Jd|)
+10: for all j∈ Jd∪ Ju do
+11: t′
+j← tj
+12: Y ′
+j← Yj
+13: c′
+j← cj
+14: end for
+15: return (t′, Y ′, c′) ⊲ we assume a sparse vector representation
+16: end procedure
+T able 1. The main properties of the MovieLens data sets and algorithm parameters
+100K 1M 10M
+# users ( m) 943 6,040 69,878
+# movies ( n) 1,682 3,952 10,677
+# ratings 100,000 1,000,209 10,000,054
+Density 6.3% 4.2% 1.3%
+Training / Test 90.57% / 9.43% 93.96% / 6.04% 93.01% / 6.99%
+Time period 20.09.97 - 22.04.98 25.04.00 - 28.02.03 09.01.95 - 05.01.09
+η/λ/k 10−2/10−1/5 10−2/10−1/5 10−2/10−1/5
+message size 0.6 Mbit 1.5 Mbit 4.1 Mbit
+test matrix. Each row of the training matrix (representing t he ratings of a given
+user) was assigned to a unique node in the simulation experim ents.
+6.2 System Model
+In our simulations, ﬁxed random 20-out graphs were used as th e overlay network.
+The number of nodes was equal to the number of users in the give n data set. In
+the churn-free scenario, every node stayed online for the wh ole experiment. A real
+availability trace, gathered from smartphones, was used in the churn scenario.
+A message was considered successfully delivered if and only if both the sender
+and the receiver remained online during the transfer. Peer s election (method
+selectPeer) returned online nodes only.
+The nodes had the same upload and download bandwidths. The mo tivation
+for this was that it is likely that in a real application there will be a low, uniform,
+
+ 0
+ 1000
+ 2000
+ 3000
+ 4000
+ 5000
+ 6000
+ 7000
+ 8000
+ 1  10  100  1000  10000
+#ratings
+User ID (sorted by #ratings)
+10M (69878x10677)
+1M (6040x3952)
+100K (943x1682)
+Fig. 1. Visualization of the distribution of the number of rated ite ms per user. Users
+are sorted according to the number of their rated items for al l three databases.
+conﬁgured bandwidth cap. The server had inﬁnite bandwidth ( which favors fed-
+erated learning, as gossip learning does not use a server). T he transfer time of a
+full model was assumed to be 1728 s (irrespective of the data s et used) in the low
+bandwidth scenario, and 172.8 s in the high bandwidth scenar io. This allowed
+for around 100 and 1000 iterations over the course of 48 hours , respectively.
+The cycle length parameters ∆ g and ∆ f were set so that the two approaches
+fully utilized the available bandwidth. In our case this als o means that the two
+algorithms transfer the same amount of data overall in the ne twork in the same
+amount of time, making comparisons of convergence dynamics fair. The gossip
+cycle length ∆ g is exactly the transfer time of a model, which is proportiona lly
+smaller when compression is used. The cycle length ∆ f of federated learning is
+the round-trip time, that is, the sum of the upload and downlo ad times. In this
+case, only the upstream transfer is compressed.
+Note that we use rather low bandwidth settings because in the churn sce-
+nario if the transfer is very fast, the network hardly change s during the learning
+process, the models are learned over an eﬀectively static su bset of the nodes.
+Slower transfer is more challenging, because more transfer s fail, just like in the
+case of very large machine learning models such as deep neura l networks. (This
+issue is completely irrelevant in the churn-free scenario, since the dynamics are
+identical apart from the scale of time.)
+6.3 Smartphone T races
+We used a trace collected by STUNner, a locally developed, op enly available
+smartphone application [2]. In short, the app monitors and c ollects information
+about the battery level, charging status, bandwidth, and NA T type.
+
+ 1
+ 10
+ 100
+ 1000
+ 10000
+ 100000
+ 1x106
+48 0  5  10  15  20  25  30  35  40  45
+frequency
+Hours
+-20
+ 0
+ 20
+ 40
+ 60
+ 80
+48 0  5  10  15  20  25  30  35  40  45
+Percentage (%)
+Hours
+ever been online
+online rate
+new up
+new down
+Fig. 2. Online session length histogram (left) and device churn (ri ght).
+The trace contains time series spanning varying lengths of t ime, originating
+from 1191 diﬀerent users. Based on the UTC hour of day, we spli t the data into
+2-day segments (with a one-day overlap), resulting in 40,65 8 segments altogether.
+Using this, we can simulate a virtual 48-hour period by assig ning a segment to
+each simulated node.
+To make our algorithm phone and user friendly, we consider a d evice to be
+online (available) when it has been on a charger and connecte d to the Internet
+(with a bandwidth of at least 1 Mbit/s) for at least a minute, t herefore we do
+not use battery power at all.
+The main properties of the trace are shown in Figure 2. The plo t on the
+right illustrates churn by showing what percentage of the no des left, or joined
+the network (at least once) in any given hour. Notice that at a ny given moment
+about 20% of the nodes are online. The mean online session len gth is 81.368 min.
+6.4 Hyperparameters
+The learning rate η and regularization parameter λ were optimized in the churn-
+free, low-bandwidth, uncompressed scenario. The resultin g values are η = 10 −2
+and λ = 10 −1, as shown in Table 1. We used rank-5 factorization.
+6.5 Results
+We used PeerSim [13] for the simulations. We measured perfor mance with the
+help of the root-mean-square deviation
+RMSE =
+√
+1
+|T |
+∑
+i,j∈T
+(ri,j − xiyT
+j )2,
+where R ∈ I Rm×n is the test matrix, and T is the set of indices deﬁned in R. In
+the case of gossip learning, the error is calculated using th e models stored in the
+currently online nodes and the corresponding rows of R. In the case of federated
+
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+24 0  5  10  15  20
+RMSE
+Hours
+MovieLens 100K
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+24 0  5  10  15  20
+RMSE
+Hours
+MovieLens 100K
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+24 0  5  10  15  20
+RMSE
+Hours
+MovieLens 1M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+24 0  5  10  15  20
+RMSE
+Hours
+MovieLens 1M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+24 0  5  10  15  20
+RMSE
+Hours
+MovieLens 10M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+24 0  5  10  15  20
+RMSE
+Hours
+MovieLens 10M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+Fig. 3. Churn-free scenario with 1 epoch (left) and 10 epochs (right ).
+learning, the aggregated global model is used instead of the local ones. Figure 3
+contains our results without churn, and Figure 4 shows the sa me experiments
+over the smartphone trace. The evaluated algorithms are
+Gossip Learning: no merging and no subsampling. Here, the cycle length
+equals the time needed for one full model transmission.
+Gossip Learning Merge: with merging but no subsampling, so the cycle length
+is still one full transmission.
+Gossip Learning 10%: with merging and subsampling with s = n/ 10. Here,
+the cycle length corresponds to 0.1 full transmissions.
+F ederated Learning: no subsampling, so the cycle length corresponds to two
+full transmissions: upload and download.
+
+F ederated Learning 10%: the uploaded model is subsampled with s = n/ 10,
+so the cycle length corresponds to 1.1 full transmissions.
+In Figure 3 we include results with 1 and 10 epochs of local lea rning in the
+left and right columns, respectively. In the case of 10 epoch s, the local gradi-
+ent update step is iterated 10 times. Clearly, for both metho ds, increasing the
+number of epochs improves convergence speed without any ext ra communica-
+tion. The compressed variants consistently perform better . Federated learning
+has an initial advantage, which disappears after a few hours . In fact, for the
+largest problem, gossip learning is almost identical to fed erated learning, and
+the diﬀerence between the two methods seems to decrease with increasing net-
+work size. Interestingly, when only 1 epoch is performed, go ssip learning actually
+outperforms federated learning by a signiﬁcant margin espe cially on the largest
+network.
+In Figure 4 we ran one local epoch in each experiment, but the p lots on
+the right show the eﬀect of speeding up communication. Faste r communication
+results in a dramatically better performance, simply becau se the convergence
+speed is able to “beat” the speed of churn. Apart from this obs ervation, the
+other conclusions are similar, namely compression helps bo th methods and gossip
+learning performs relatively better in larger networks. Ov erall, federated learning
+and gossip learning have a very similar performance, despit e the disadvantage of
+gossip learning of not relying on a central server for aggreg ation and broadcast.
+7 Conclusions
+In this study, our main goal was to explore the diﬀerences bet ween federated
+learning and gossip learning over a collaborative ﬁltering task. Since gossip learn-
+ing does not rely on central servers, one might expect it to pa y a performance
+penalty in terms of convergence speed, when given the same co mmunication
+budget.
+Our main conclusion based on our empirical study is that fede rated learning
+does not seem to have a clear performance advantage. In fact, in certain sce-
+narios gossip learning proved to be preferable. Obviously, the design space for
+both protocols is very large, and there are many possibiliti es for improving the
+communication eﬃciency in both paradigms. It is also a non-t rivial question of
+how one should model communication constraints and costs, s ince this depends
+on many factors. However, it is interesting, and perhaps non -trivial, that gossip
+learning is clearly comparable in performance. This might m otivate further re-
+search into fully decentralized methods that otherwise hav e clear beneﬁts such
+as a very low cost of entry that is not dependent of the network size, or the
+robustness due to the lack of any critical components.
+References
+1. Ammad-ud-din, M., Ivannikova, E., Khan, S.A., Oyomno, W. , Fu, Q.,
+Tan, K.E., Flanagan, A.: Federated collaborative ﬁltering for privacy-
+
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+48 0  5  10  15  20  25  30  35  40  45
+RMSE
+Hours
+MovieLens 100K
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+48 0  5  10  15  20  25  30  35  40  45
+RMSE
+Hours
+MovieLens 100K
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+48 0  5  10  15  20  25  30  35  40  45
+RMSE
+Hours
+MovieLens 1M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+48 0  5  10  15  20  25  30  35  40  45
+RMSE
+Hours
+MovieLens 1M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+48 0  5  10  15  20  25  30  35  40  45
+RMSE
+Hours
+MovieLens 10M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+ 0.8
+ 1
+ 1.2
+ 1.4
+ 1.6
+ 1.8
+ 2
+ 2.2
+ 2.4
+48 0  5  10  15  20  25  30  35  40  45
+RMSE
+Hours
+MovieLens 10M
+Gossip Learning
+Gossip Learning Merge
+Gossip Learning 10%
+Federated Learning
+Federated Learning 10%
+Fig. 4. Churn trace scenario with low bandwidth (left) and 10 ×higher bandwidth
+(right).
+preserving personalized recommendation system. CoRR abs/1901.09888 (2019),
+http://arxiv.org/abs/1901.09888
+2. Berta, Á., Bilicki, V., Jelasity, M.: Deﬁning and underst anding smartphone churn
+over the internet: a measurement study. In: Proceedings of t he 14th IEEE In-
+ternational Conference on Peer-to-Peer Computing (P2P 201 4). IEEE (2014).
+https://doi.org/10.1109/P2P.2014.6934317
+3. Bonawitz, K., Ivanov, V., Kreuter, B., Marcedone, A., McM ahan, H.B., Patel, S.,
+Ramage, D., Segal, A., Seth, K.: Practical secure aggregati on for federated learning
+on user-held data. In: NIPS Workshop on Private Multi-Party Machine Learning
+(2016)
+4. Chen, F., Dong, Z., Li, Z., He, X.: Federated meta-learnin g for recommendation.
+CoRR abs/1802.07876 (2018), http://arxiv.org/abs/1802.07876
+
+5. Danner, G., Berta, Á., Hegedűs, I., Jelasity, M.: Robust f ully distributed mini-
+batch gradient descent with privacy preservation. Securit y and Communication
+Networks 2018, 6728020 (2018). https://doi.org/10.1155/2018/6728020
+6. Dean, J., Corrado, G.S., Monga, R., Chen, K., Devin, M., Le , Q.V., Mao, M.Z.,
+Ranzato, M., Senior, A., Tucker, P., Yang, K., Ng, A.Y.: Larg e scale distributed
+deep networks. In: Proceedings of the 25th International Co nference on Neural
+Information Processing Systems - Volume 1. pp. 1223–1231. N IPS’12, Curran As-
+sociates Inc., USA (2012), http://dl.acm.org/citation.c fm?id=2999134.2999271
+7. European Commission: General data protection regulatio n (GDPR) (2018),
+https://ec.europa.eu/commission/priorities/justice-and-fundamental-rights/data-
+protection/2018-reform-eu-data-protection-rules
+8. Harper, F.M., Konstan, J.A.: The movielens datasets: His tory and con-
+text. ACM Trans. Interact. Intell. Syst. 5(4), 19:1–19:19 (Dec 2015).
+https://doi.org/10.1145/2827872, http://doi.acm.org/10.1145/2827872
+9. Hegedűs, I., Berta, Á., Kocsis, L., Benczúr, A.A., Jelasi ty, M.: Robust decentralized
+low-rank matrix decomposition. ACM Transactions on Intell igent Systems and
+Technology 7(4), 62:1–62:24 (May 2016). https://doi.org/10.1145/285 4157
+10. Konecný, J., McMahan, H.B., Yu, F.X., Richtárik, P., Sur esh, A.T., Bacon, D.:
+Federated learning: Strategies for improving communicati on eﬃciency. In: Private
+Multi-Party Machine Learning (NIPS 2016 Workshop) (2016)
+11. Koren, Y., Bell, R., Volinsky, C.: Matrix factorization techniques for recommender
+systems. Computer 42(8), 30–37 (2009). https://doi.org/10.1109/MC.2009.263
+12. McMahan, B., Moore, E., Ramage, D., Hampson, S., y Arcas, B.A.:
+Communication-eﬃcient learning of deep networks from dece ntralized data. In:
+Singh, A., Zhu, J. (eds.) Proceedings of the 20th Internatio nal Conference on Arti-
+ﬁcial Intelligence and Statistics. Proceedings of Machine Learning Research, vol. 54,
+pp. 1273–1282. PMLR, Fort Lauderdale, FL, USA (20–22 Apr 201 7)
+13. Montresor, A., Jelasity, M.: Peersim: A scalable P2P sim ulator. In: Pro-
+ceedings of the 9th IEEE International Conference on Peer-t o-Peer Comput-
+ing (P2P 2009). pp. 99–100. IEEE, Seattle, Washington, USA ( Sep 2009).
+https://doi.org/10.1109/P2P.2009.5284506, cikkek/p2p09.pdf, extended abstract
+14. Ormándi, R., Hegedűs, I., Jelasity, M.: Gossip learning with linear models on fully
+distributed data. Concurrency and Computation: Practice a nd Experience 25(4),
+556–571 (2013). https://doi.org/10.1002/cpe.2858
+15. Roverso, R., Dowling, J., Jelasity, M.: Through the worm hole: Low cost,
+fresh peer sampling for the internet. In: Proceedings of the 13th IEEE In-
+ternational Conference on Peer-to-Peer Computing (P2P 201 3). IEEE (2013).
+https://doi.org/10.1109/P2P.2013.6688707
+16. Tölgyesi, N., Jelasity, M.: Adaptive peer sampling with newscast. In: Sips, H.,
+Epema, D., Lin, H.X. (eds.) Euro-Par 2009. Lecture Notes in C omputer Science,
+vol. 5704, pp. 523–534. Springer-Verlag (2009). https://d oi.org/10.1007/978-3-642-
+03869-3_50
+17. Wang, J., Cao, B., Yu, P.S., Sun, L., Bao, W., Zhu, X.: Deep
+learning towards mobile applications. In: IEEE 38th Intern a-
+tional Conference on Distributed Computing Systems (ICDCS ). pp.
+1385–1393 (Jul 2018). https://doi.org/10.1109/ICDCS.20 18.00139,
+https://arxiv.org/pdf/1809.03559.pdf

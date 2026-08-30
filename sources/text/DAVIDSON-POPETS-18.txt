@@ -1,0 +1,1605 @@
+Proceedings on Privacy Enhancing Technologies ; 2018 (3):164–180
+Alex Davidson, Ian Goldberg, Nick Sullivan, George Tankersley, and Filippo Valsorda
+Privacy Pass: Bypassing Internet Challenges
+Anonymously
+Abstract: The growth of content delivery networks
+(CDNs) has engendered centralized control over the
+serving of internet content. An unwanted by-product of
+this growth is that CDNs are fast becoming global ar-
+biters for which content requests are allowed and which
+are blocked in an attempt to stanch malicious traﬃc. In
+particular,insomecaseshonestusers—especiallythose
+behind shared IP addresses, including users of privacy
+tools such as Tor, VPNs, and I2P — can be unfairly
+targeted by attempted ‘catch-all solutions’ that assume
+these users are acting maliciously. In this work, we pro-
+vide a solution to prevent users from being exposed to a
+disproportionate amount of internet challenges such as
+CAPTCHAs. These challenges are at the very least an-
+noying and at their worst — when coupled with bad im-
+plementations — can completely block access from web
+resources. We detail a 1-RTT cryptographic protocol
+(based on an implementation of an oblivious pseudoran-
+dom function) that allows users to receive a signiﬁcant
+amount of anonymous tokens for each challenge solu-
+tion that they provide. These tokens can be exchanged
+in the future for access without having to interact with
+a challenge. We have implemented our initial solution
+in a browser extension named “Privacy Pass”, and have
+worked with the Cloudﬂare CDN to deploy compatible
+server-side components in their infrastructure. However,
+we envisage that our solution could be used more gener-
+ally for many applications where anonymous and hon-
+est access can be granted (e.g., anonymous wiki edit-
+ing). The anonymity guarantee of our solution makes
+it immediately appropriate for use by users of Tor/VP-
+Ns/I2P. We also publish ﬁgures from Cloudﬂare indi-
+cating the potential impact from the global release of
+Privacy Pass.
+Keywords: Anonymity, Blinded tokens, Oblivious PRF,
+Tor, CAPTCHA, Privacy, DLEQ, Content delivery net-
+works
+DOI 10.1515/popets-2018-0026
+Received 2017-11-30; revised 2018-03-15; accepted 2018-03-16.
+Alex Davidson: Royal Holloway, University of London
+(work completed during an internship at Cloudﬂare), E-mail:
+alex.davidson.2014@rhul.ac.uk
+1 Introduction
+1.1 Background
+An increasingly common trend for websites with glob-
+ally high visitation is to use content delivery networks
+(CDNs) to host or cache their resources. According to
+Cisco, CDNs will serve 71% of all traﬃc in 2021, up from
+52% in 2016 [7]. Some of the most well-known CDNs in-
+clude Akamai, Cloudﬂare, Fastly, and Amazon Cloud-
+front. These CDNs typically house data centers across
+the globe, meaning that access to websites is sped up
+by serving from locations geographically near requests.
+On top of this, CDNs usually oﬀer protection ser-
+vices to prevent customers from having their websites
+taken down by distributed denial of service (DDoS) at-
+tacks, or vandalized by spam. Protection of this sort
+takes numerous forms, but a common method is to use
+public IP-based reputation checking on requests that
+target protected websites. These checks involve analyz-
+ing whether incoming IPs have been used for past ma-
+licious activity before granting access. If an IP address
+is deemed to have a ‘poor’ reputation existing CDNs
+may use one of the following options [29] for guarding
+protected websites:
+– block access altogether;
+– issue human proof-of-work challenges to prevent ac-
+cess from bots (e.g., CAPTCHAs);
+– route requests through a web application ﬁrewall.
+Unfortunately, these measures disproportionately aﬀect
+users who happen to be assigned to IPs with poor rep-
+utations. In particular, users of Tor and VPN providers
+are allocated one of a small number of IP addresses (cor-
+responding to exit nodes in the case of Tor). Since dif-
+ferent users use these IP addresses, ifany one of them
+misbehaves then the IP will be assigned a bad reputa-
+Ian Goldberg: University of Waterloo, E-mail:
+iang@cs.uwaterloo.ca
+Nick Sullivan: Cloudﬂare, E-mail:nick@cloudflare.com
+George T ankersley:E-mail: george.tankersley@gmail.com
+Filippo V alsorda: E-mail: hi@filippo.io
+
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 165
+tion score. Future users may then have limited access
+to CDN-protected websites in the future, regardless of
+whether they are honest.
+Users of Tor/VPNs are often forced into doing so
+due to oppressive internet censorship, so access-limiting
+measures of this nature can further degrade internet ac-
+cessibility for an important subset of users. It is worth
+noting that 1.04% of the global traﬃc served by Cloud-
+ﬂare is challenged. [8] In comparison, the number of re-
+quests from Tor users challenged by Cloudﬂare sits at
+17%. Moreover, Cloudﬂare typically serves over10 tril-
+lion requests per month1 and approximately 0.05% of
+this traﬃc arrives over the Tor network [8]. As such,
+Cloudﬂare handles thousands of requests every second,
+and billions of requests every month, from the Tor net-
+work alone, not accounting for the numbers of requests
+originating from VPNs/I2P shared networks that oper-
+ate under similar conditions. Reducing the workload for
+these users will clearly have a large, undeniably positive
+eﬀect on web accessibility for these users.
+In this work, we develop a solution that works in
+tandem with any system that uses challenges to ascer-
+tain whether a client is honest. In particular, we grant
+an anonymous user, deemed to be honest at some point
+in the past, the ability to gain access to further web
+resources without the need for more challenges. Our so-
+lution maintains anonymity of the user — this is crucial
+so that CDNs cannot globally link requests and attempt
+to subvert anonymization measures.
+1.2 Related work
+1.2.1 Anonymous e-cash
+In essence, our solution grants a user anonymous tokens
+for each challenge that they solve; these tokens can be
+redeemed later to bypass future challenges. The setup
+is reminiscent of anonymous e-cash settings that were
+popularized by Chaum [3, 4]. Chaum showed that it was
+possible to modify textbook RSA such that a user could
+receive signatures from a signer on ‘blinded’ messages.
+Theuseristhenableto‘unblind’thesignaturesuchthat
+it is a valid signature for the unblinded message. The
+blinding prevents the signer from learning the under-
+lying message. These techniques were used by Chaum
+et al. [5] for an untraceable e-cash system and more
+1 https://www.cloudﬂare.com/case-studies/, accessed on 17
+Nov 2017
+recently as the backbone of the taxable, anonymous e-
+cash service Taler [9] released by the GNU project in
+2016. There have been numerous diﬀerent blind sig-
+nature schemes introduced since the blind-RSA vari-
+ant [1, 10–12, 24, 25, 27], though these typically are
+muchmoreconceptuallyinvolvedandsometimesrequire
+more than two rounds of communication.
+1.2.2 Anonymous blacklisting/whitelisting
+Anonymous e-cash systems can be useful in granting
+privacy-preserving access to resources. An alternative
+method for providing similar functionality is the us-
+age of anonymous blacklisting techniques [14]. In these
+schemes a user is asked to prove that they are not black-
+listed (or that they are part of a whitelist) using some
+ﬁnite resource that they control. This is very similar to
+the situation that we consider, where owning a token is
+equivalenttobeingpartofawhitelistornotbeingblack-
+listed. In fact, the work of Henry and Goldberg [14] is
+motivated by a similar scenario where honest users of
+Tor are denied access to resources. Additionally, they
+also explicitly consider the potential of using human
+challenges or CAPTCHAs as a method for whitelisting.
+Their formalization suggests numerous ways for main-
+taining an anonymous blacklist including using blind
+RSA signatures. They also discuss ‘Nymble-like’ [13, 22]
+systems that leverage the use of a trusted third party
+for maintaining anonymity during access requests. A
+similar situation is considered by Liu et al. [21] when
+proposing their solution TorPolice, a privacy-preserving
+mechanismthatenablesaccess-controlpolicyimplemen-
+tation with respect to connections originating from the
+Tor network.
+We ignore the ‘Nymble-like’ designs as they require
+an extra trusted party that we do not. While Henry
+and Goldberg [14] provide a formalization of multiple
+diﬀerent anonymous blacklisting methods, with various
+pros and cons, there is little work detailing the scal-
+ability of such systems. Moreover, our solution results
+in a browser extension that is easily supported by sim-
+ply running a small bit of code at the service provider.
+This scales much more eﬃciently than a service provider
+implementing their own blacklisting/whitelisting tech-
+niques. Our solution beneﬁts all users, not just those
+originating from Tor, and so we provide a more general
+browser-based solution than TorPolice [21].
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 166
+1.2.3 Privacy-preserving e-ticketing
+Another diverging thread of literature focuses on
+‘privacy-preserving e-ticketing’. The works of Heydt-
+Benjamin et al. [17] and Sadeghi et al. [26] were the
+ﬁrst to propose solutions to privacy-preserving ticketing
+for public transportation systems. These solutions were
+based on anonymous e-cash systems such as those listed
+above and on physically unclonable functions (PUFs).
+The work of Kerschbaum et al. [20] analyzed Singa-
+pore’s EZ-Link system and showed that it was easy
+to extract a traveler’s travel records. They proposed
+an encrypted bill processing procedure that allows for
+privacy-preserving data mining analysis by the trans-
+port company.
+Whilethesesolutionsaresimilartotheworkthatwe
+describe, they are heavily targeted at public-transport
+applications. Thus, their solution may not be optimal
+when carried across to more generic scenarios involving
+internet transactions. Additionally, data-mining analy-
+sis on the results of the transactions is the primary mo-
+tivation of these works, which we do not share.
+1.3 Our contributions
+In this work, we detail a deployable browser-based so-
+lution that allows honest users to drastically reduce the
+number of internet challenges that they are required to
+solve. Our solution retains anonymity for the user via
+the use of a cryptographic protocol engaged with a CDN
+that protects the requested resource. In particular, we
+provide a detailed case study of the eﬀectiveness of our
+solution in the form of a public integration with the
+architecture used by Cloudﬂare. We refer to this archi-
+tecture generically as the ‘edge’ throughout.
+Our cryptographic protocol makes use of an adapta-
+tion to the ‘oblivious pseudorandom function’ (OPRF)
+protocol introduced by Jarecki et al. [18, 19] for
+password-protected secret sharing. An OPRF protocol,
+in brief, allows for a user to ask for PRF evaluations on
+inputs that are hidden from the PRF key holder. An
+OPRF can be instantiated simply and eﬃciently using
+elliptic curve techniques, but the protocol is otherwise
+similar to that used in a blind-RSA interaction. In our
+designtheOPRFkeyholderistheedgeserviceprovider,
+while the user requesting a resource sends inputs to the
+OPRF. The OPRF protocol results in a 1-RTT proto-
+col for both signing and redemption — no current blind
+signing protocols operate in less than 1-RTT so this is
+comparable with the most eﬃcient previous work. Our
+work is also heavily related to recent advances in con-
+structing elliptic curve veriﬁable random functions by
+Papadopoulos et al. [23] and constructions of elliptic
+curve OPRFs by Burns et al. [2].
+The work of Jarecki et al. [18] uses a non-interactive
+zero-knowledge (NIZK) proof of discrete log equality
+(DLEQ) to provide veriﬁcation of the OPRF result to
+theuser.Theirconstructionishencea‘veriﬁable’OPRF
+or VOPRF and is proven secure in the random-oracle
+model. We adapt their construction slightly to use a
+‘batch’ DLEQ proof allowing for much more eﬃcient
+veriﬁcation; in short this allows a user to verify a sin-
+gle NIZK proof that states that all of their tokens are
+signed by the same private key. This prevents the edge
+from using diﬀerent key pairs for diﬀerent users in an
+attempt to launch a deanonymization attack; we give
+more details in Section 3.2. The security proofs from
+the above works [18, 23] immediately imply that our
+protocol maintains the privacy of the user in the inter-
+action, though we also provide short arguments as to
+why the protocol meets more speciﬁc security goals in
+Section 5. We also analyse the success of out-of-band
+attacks on our protocols in Section 8.
+Finally, we provide data in Section 7.1 from the de-
+ployment of our solution in the form of a browser ex-
+tension named ‘Privacy Pass’ for Chrome and Firefox.
+Privacy Pass interacts with Cloudﬂare’s edge server to
+store and spend tokens that are received when a user
+provides a valid Cloudﬂare CAPTCHA page solution.
+We show that our solution results in very little change
+to a user’s browsing habits in terms of the time taken
+for cryptographic operations to complete. To aid presen-
+tation of this impact we provide a detailed overview of
+Cloudﬂare’s edge architecture. While we focus predomi-
+nantly on Cloudﬂare, our protocol is suﬃciently general
+that it can be used in any situation where anonymous
+whitelisting is appropriate.
+1.3.1 Alternative CDN-level solutions
+Privacy Pass aims to be used in tandem with current
+challenge-response mechanisms used by CDNs that aim
+to reduce the inﬂux of malicious requests. As a result,
+if a CDN implemented no such security measures then
+the utility of Privacy Pass would be limited. Privacy
+Pass will decrease the number of challenges presented to
+honest users by a factor ofN, whereN is the number of
+tokens issued for a correct challenge solution. However,
+aCDNthathasahighfalse-positiverateforaparticular
+class of users (for example, those very users connecting
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 167
+via Tor or a VPN) would require a higher value ofN,
+but this comes with additional security disadvantages,
+as highlighted in Section 8.
+In summary, Privacy Pass does not represent a
+panacea. The success of our solution is somewhat de-
+pendent on the way that a CDN implements security
+measures and this is considered in our Cloudﬂare case
+study in Section 7.1.
+2 Current client-edge workﬂow
+To give better intuition for the problem that we are
+attempting to solve, we illustrate the workﬂow that is
+currently initiated between a user/client and an edge
+provider/CDN. An edge provider is a reverse proxy
+that examines connections from clients and determines
+whether they are allowed access to the requested origin
+site, and if so, serves a cached version (if possible), or
+forwards the request to the true origin site otherwise
+(for dynamic content, for example). The access check
+is one part of the security functionality provided by
+CDNs such as Cloudﬂare. These CDNs oﬀer a num-
+ber of diﬀerent security and eﬃciency enhancements;
+we focus speciﬁcally on the mechanism that is used for
+challenging users who are suspected to be malicious.
+Typically, the challenge is some manual ‘proof-of-work’
+that is completed by the user. CAPTCHAs are the most
+common type of such a test, determining whether the
+user is human or not.
+2.1 Gauging reputation
+Like many CDNs, Cloudﬂare uses a reputation gauging
+system that assigns scores based on activity witnessed
+from the client IP address. IP addresses are assigned
+malicious-reputation scores (from 0 to 100) suggesting
+the conﬁdence that the IP address has been involved
+in malicious behavior in the past. As an example, IP
+addresses that have been linked to ‘bot-like’ behavior
+(such as spamming or DDoS attacks) will likely have
+a high score. However, other indicators taken from the
+client can also be used to change the score.
+2.2 Deciding challenges
+Let 0<τ <100 be some threshold malicious-reputation
+score. Simply, if a userC with reputation ν > τat-
+tempts to access some website protected by the edge
+C E W
+V
+1. REQ(W)
+2. CHL
+3. SOLN(CHL)
+4. SOLN(CHL)
+5. Y/N
+6. REQ(W)
+7. RESP(W)
+8. RESP(W)
+Fig. 1.Current workﬂow for challenge system
+(i.e., a customer of the edge) then C will always be
+shown a challenge.
+While this simpliﬁcation ignores other possibilities
+for routing requests through CDN architecture, it helps
+us to generalize the workﬂow that we consider. Note
+that we are only interested in reducing the requirement
+for honest, human users to complete internet challenges;
+other methods of request routing are not explicitly cov-
+ered by our solution.
+2.3 Allowing access
+In Fig. 1, we detail the workﬂow that occurs when a
+user C with reputation scoreνC >τinteracts with the
+edge providerE to access anorigin websiteW. We also
+include a partyV known as a validator; this entity val-
+idates challenge solutions forE.
+In the interaction, we assume that there are mes-
+sages REQ() and RESP() that are used respectively
+for requesting and responding with content (mirroring
+HTTP requests/responses, for example). Furthermore,
+there is a message CHL requesting that a challenge be
+solved, and a human-involved task SOLN() that takes a
+challenge CHL as input and outputs a message contain-
+ing a (correct) solution thatV can validate. It is impor-
+tant that SOLN() is not mistaken for an algorithm that
+can be run on a given challenge instance. This mirrors
+the complexity of solving a CAPTCHA, for instance.
+In the case of an incorrect solution (i.e.,V returns ‘N’)
+then steps 6 onwards are not undertaken.
+A client in the current workﬂow has to compute
+a challenge solution for every request toE that they
+make. If there are multiple origins protected byE, then
+E could mitigate this by giving the client a method of
+authenticating in the future when a challenge is pro-
+vided. In the HTTP setting, this is typically done using
+cookies. These (single-origin) cookies prevent a client
+from having to solve a challenge again for the same ori-
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 168
+gin W for some predeﬁned interval of time. However,
+the same CDN serves a very large number of origins,
+and the client would still have to solve one challenge
+for each origin visited. Alternatively,E could usecross-
+domain cookies for multiple origins, although at the se-
+vere privacy cost of linking the client’s requests across
+all origins.
+2.4 Introducing tokens
+The rest of the work will focus on how we can use cryp-
+tographically blinded ‘tokens’ to alleviate the burden of
+the SOLN() step above. In particular, these tokens will
+be distributed byE on acceptance of a valid challenge
+solution. The tokens will be redeemed and veriﬁed by
+V instead of providing a future challenge solution. We
+present our improved workﬂow in Section 6.
+3 Notation and preliminaries
+In the introduction we mentioned that our solution ben-
+eﬁts users of a variety of PETs, but for ease of discus-
+sion we will refer to this entire set of users as Tor users.
+We will refer to a ‘user’ or ‘client’ as the initiator of a
+connection to some website. We deﬁne the ‘edge’ server
+as the entity that decides whether a user’s request will
+be allowed or denied. We use a ‘challenge’ generally to
+refer to some task that the edge provides to a user to
+perform to prove that they are acting in an ‘honest’ way
+(for CAPTCHAs this check simply proves the requests
+originates from a human). By an ‘honest’ user we simply
+mean a user thatshould be granted access to a website
+and conversely for a ‘malicious’ user. We will use the
+notion of a ‘protected’ page to refer to a website that
+uses the edge to supply users with challenge pages for
+granting access.
+For positive integersm, we writei∈[m] to denote
+that i takes some value in the set{1,... m}. For an al-
+gorithm A(·) we writez←A(x) to denote thatz takes
+the value of the output ofA on inputx. If we do not
+say otherwise thenz∈{0, 1}µwhereµ= poly(λ). For a
+setS we writez←$S to indicate thatz is sampled uni-
+formly fromS. We will use the acronym PPT to mean
+probabilisticpolynomialtimewithrespecttoalgorithms
+and adversariesA in security arguments. We denote by
+negl(λ) a ‘negligible’ function whereby, for all polyno-
+mials p(λ), then negl(λ) < 1/p(λ) for suﬃciently large
+λ. We writeb
+?
+= b′to indicate checking thatb equals
+b′before proceeding with further steps in a protocol. If
+b⁄= b′then we assume that the protocol is aborted at
+this point(with a message⊥sent to the client indicating
+as such). We use||to denote concatenation of elements.
+In our protocols, we will use the notationC and S
+to denote the client and server respectively.
+3.1 VOPRF description
+The main building block of our construction is a veri-
+ﬁable oblivious pseudorandom function (VOPRF) [18].
+An OPRF is a protocol between a server and a user. The
+server holds a keyk for a PRFF, while the user holds
+some elementx that they intend to use as an input. At
+the end of the protocol the user learnsFk(x) and the
+server learns nothing (i.e.,⊥).
+A VOPRF protocol extends the functionality to also
+includeaﬁxeddescriptor Y thatservesasacommitment
+to the private keyk. Then, much like a digital signature,
+Y can be used to verify that a claimed outputFk(x)
+is the (unique) correct value, but does not allow the
+computation of Fk(x).
+3.2 Discrete log equivalence proofs
+(DLEQ)
+We next detail a zero-knowledge protocol for proving
+that two pairs of values have the same discrete log rela-
+tion(e.g.,thatfor Y =Xk1 andQ =Pk2,then k1 =k2).
+We point readers towards prior work [6, 16, 18, 19]
+for arguments as to why this construction satisﬁes the
+soundness and security guarantees required for a NIZK
+proof.
+Let G be a group with prime orderq, letX,P be
+generators of G, and letH3 : G6→Zq be a hash func-
+tion modeled as a random oracle. Let Y = Xk and
+Q = Pk for some k∈Zq and X,P ∈G. Chaum and
+Pedersen [6] showed that it was possible to generate a
+proof Dk that logX(Y ) = logP (Q). We can think of the
+server and client that we deﬁned previously as a prover
+and veriﬁer in this interaction, respectively. Both are
+givenX,Y,P,Q while the prover knowsk as a secret.
+1. The prover samples a random nonce t←$ Zq and
+commits to t with respect to X,P by computing
+A =Xt and B =Pt.
+2. The prover computes c = H3(X,Y,P,Q,A,B ) and
+s = (t−ck) mod q.
+3. The prover sends Dk = (c,s ) to the veriﬁer.
+4. The veriﬁer computesA′=Xs·Yc andB′=Ps·Qc.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 169
+5. The veriﬁer calculates c′= H3(X,Y,P,Q,A ′,B′)
+and checksc′?
+=c.
+If c′= c, then the veriﬁer can be assured with over-
+whelming probability (except for negligible soundness
+error of size 1/q) that the discrete logs logX(Y ) and
+logP (Q) are equal. We use this proof system to verify
+that tokens in our protocol are all signed with the same
+private key. In the following, we will denote the com-
+putation of the proofDk by Dk←DLEQk(X,Y,P,Q )
+where k is the common exponent.
+An important property of NIZK proofs such as this
+is that an entity who has control over the random or-
+acle H3 can forge proofs without knowingk: this en-
+tity picks randomc,s←$ Zq, computesA =Xs·Yc and
+B =Ps·Qc, and programs the random oracleH3 such
+thatH3(X,Y,P,Q,A,B ) outputsc. This is useful in re-
+duction proofs, as we will see later.
+3.2.1 Batch DLEQ proofs
+Henry [16] showed that it was possible to batch the
+above proof system to verify many instantiations in one
+go. We detail a simpliﬁed parallelized Schnorr protocol
+for the common-exponent case from Henry and Gold-
+berg [15] with adaptations for non-interactivity. Letm
+denote the number of instantiations of the DLEQ proof
+system above; that is, for alli∈{1,...,m}we aim to
+prove thatDk,i←DLEQk(X,Y,P i,Qi) is a valid proof
+for each proof instance(Pi,Qi) with commonX andY,
+with Y = Xk. Assume that the prover and veriﬁer are
+aware of the same parameters as above.
+1. The prover calculates a seed
+w←H(X,Y,{Pi}i∈[m],{Qi}i∈[m])
+where H :{0, 1}∗→Zq is a random oracle.
+2. Theproverseedsapseudorandomnumbergenerator
+PRNG : Zq→Zm
+q with w to samplec1,...,cm←
+PRNG (w).
+3. The prover generates composite group elements:
+M = (Pc1
+1 )·...·(Pcm
+m ), Z = (Qc1
+1 )·...·(Qcm
+m )
+and sends the proof(c,s )←DLEQk(X,Y,M,Z ) to
+the user.
+4. The user recalculates w using knowledge of thePi
+and Qi, samples c1,...,cm ←PRNG (w), and re-
+computes M and Z as in the previous step.
+5. The user then veriﬁes thatlogX(Y )
+?
+= logM(Z) us-
+ing (c,s ) as in the procedure above.
+That this veriﬁcation procedure is valid is immediate
+from the fact thatQi =Pk
+i for eachi∈[m]. That it is
+sound and zero-knowledge (ZK) follows from Henry [16,
+Thm. 3.17]. We denote a batched proof,¯Dk, form in-
+stances by
+¯Dk←m-DLEQk(X,Y,{Pi}i∈[m],{Qi}i∈[m])
+where k is again the common exponent.
+4 Overview of our VOPRF
+protocol
+Beforewedescribeouradaptationstotheworkﬂowfrom
+Section 2 to reduce the number of user challenges, we
+give details on the underlying cryptographic protocol
+that we will use. As mentioned previously, our VOPRF
+is based on the 2HashDH-NIZK realization provided by
+Jarecki et al. [18] in the random oracle model. We en-
+hance the construction to have two extra features:
+– a batch DLEQ proof verifying a commitment to the
+same private key for all VOPRF evaluations;
+– a redemption phase where the user and server es-
+tablish a shared key based on the VOPRF output
+and verify a MAC.
+We ﬁrst give an overview of how the protocol is per-
+formed; in Section 5 we give a more formal treatment
+along with correctness and security guarantees.
+Let G be a group of prime orderq with a generator
+denoted byX. The secret key is chosen as an element
+k←$ Zq and a ‘public key’ is computed asY =Xk. Let
+H1,H 2,H 3 be three hash functions modeled as random
+oracles: H1 hashes into the non-identity elementsG∗of
+the group G, H2 hashes into strings of lengthκ=κ(λ),
+and H3 hashes into Zq. Let MACK(·) denote a secure
+MAC algorithm, keyed by some keyK. The parameters
+q, X, and Y are known to both parties but only the
+server has possession ofk.
+Our protocol has two phases: a signing phase and
+a redemption phase; the following subsections describe
+each of these phases respectively. The user seeks access
+to a particular resource and generates and redeems to-
+kens accordingly. The server signs tokens and veriﬁes
+redemptions to allow access to said resource.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 170
+4.1 Token signing
+1. The user samples N random values
+t1,...,tN←${0, 1}λ and N ‘blinding factors’
+r1,...,rN←$ Zq, whereN is the size of a ‘batch’.
+2. The user computes Ti = H1(ti) and Pi = Tri
+i and
+sends Pi to the server for eachi∈[N].
+3. The server computes Qi =Pk
+i and a batched proof
+¯Dk←N-DLEQk(X,Y,{Pi}i∈[N ],{Qi}i∈[N ])
+which is computed using the hash functionH3.
+4. The server sends ({Qi}i∈[N ], ¯Dk) to the user
+5. The user veriﬁes ¯Dk as in Section 3.2
+6. The user unblinds each Qi by calculatingQ1/ri
+i =
+Tk
+i =Wi and stores pairs of the form(ti,Wi).
+4.2 Token redemption
+1. The user calculates some request binding dataR.2
+2. The user pops a stored, unspent pair(t,W ).
+3. The user calculates a shared keyK←H2(t,W ) and
+sends a pair of the form(t, MACK(R)) to the server.
+4. The server recalculates their observed request bind-
+ing dataR′.
+5. The server checks thatt has not yet been redeemed.
+6. The server calculates T′= H1(t), W′= (T′)k and
+K′=H2(t,W′)
+7. The server checks thatMACK′(R′)
+?
+= MACK(R)and
+stores t for checking double-spending later.
+8. If veriﬁcation passes then the server provides the
+user with the requested resource.
+4.3 Overview of requirements
+For our protocol to be deemedcorrect, we require that
+any MAC value that is computed using a key that is
+derived from (ti,Wi) received in the signing phase will
+ultimately be veriﬁed successfully by the server in the
+redemption phase.
+For security, we require anunlinkability property
+— informally requiring that any given signing phase is
+unlinkable to an instantiation of a redemption phase —
+and aone-more-token security property; requiring that
+the client is unable to forge validly signed tokens using
+information it learns in the signing phase.
+2 Itmustbepossiblefortheservertogeneratethesame Rwhere
+R is speciﬁcally bound to the resource that the user requests.
+5 Concrete protocol
+To illustrate our two protocols we use a series of generic
+algorithms and show how these can be instantiated us-
+ing our scheme. We can then deﬁne a working protocol
+with correctness and security guarantees based on stan-
+dard assumptions.
+5.1 Scheme
+Let G be a group (written multiplicatively) of prime
+order q with generatorX. LetH1 : Zq→G∗, H2 : Zq×
+G→{0, 1}κand H3 : G6→Zq be the hash functions
+modeled as random oracles previously, and letsk =k∈
+Zq. The hash functionH3 is used in the computation of
+the batch DLEQ proof below.
+– T←GenToken(t): OutputH1(t).
+– (~T,r ) ←Blind(T ): Sample r←$ Zq and output
+(~T,r ) = (Tr,r ).
+– T′←Unblind(~T′,r ): OutputT′= (~T′)1/r.
+– fk(~T )←Sign(~T,k ): Outputfk(~T ) = ~Tk.
+– ck←Commit(k): Outputck =Y =Xk.
+– πk←Prove(k,ck,{~Ti}i∈[m],{fk(~Ti)}i∈[m]): Output
+¯Dk =m-DLEQk(X,Y,{Pi}i∈[m],{Qi}i∈[m]),
+where Pi = ~Ti and Qi = ~Tki
+i .
+– b←VerifyPrf(πk,ck,{~Ti}i∈[m],{fk(~Ti)}i∈[m]): Out-
+put the result of verifying πk = ¯Dk using
+(X,ck,{~Ti}i,{fk(~Ti)}i).
+– K←sKGen(a,B ): OutputsK =H2(a,B ), whereK
+is a permissible key for MAC algorithm below.
+– s←MACK(R): Outputs HMAC(K,R ) where HMAC
+is the standard HMAC algorithm accepting keyK∈
+{0, 1}κand some input dataR.
+– b ← Verify(t,R,M,k ): Check that
+MACsKGen(t,Sign(GenToken(t),k))(R)
+?
+= M and output
+‘1’ if it veriﬁes, and ‘0’ otherwise.
+5.1.1 Other algorithms
+We use the following algorithms without requiring ex-
+plicit instantiation as they are suﬃciently generic.
+– Store(x,B ): Stores the valuex in the data storeB
+– b ←Check(x,B ): Checks if x is stored in B and
+outputs b∈{0, 1}where b = 1 if x is stored.
+– x0 ←B.pop(): Outputs the itemx0 with index 0
+and removes it from a data storeB. Also re-orders
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 171
+C S
+t←$ Zq
+T←GenToken(t)
+~T,r ←Blind(t)
+~T
+fsk(~T )←Sign(~T, sk)
+πsk←Prove(sk,c sk,~T,f sk(~T ))
+(fsk(~T ),πsk)
+b←VerifyPrf(πsk,c sk,~T,f sk(~T ))
+b
+?
+= 1
+fsk(T )←Unblind(fsk(~T ),r )
+Store((t,f sk(T )),B C)
+Fig. 2.An overview of the token signing protocol.
+B so that the itemxi with indexi is moved to index
+i−1 for i> 0.
+5.2 Formal protocol
+We describe a formalized protocol, P, using the algo-
+rithms that we have deﬁned above, splittingP into a
+‘signing’ and ‘redemption’ phase as we have done pre-
+viously. The notation that we use could be expanded to
+a generic framework for such protocols using diﬀerent
+underlying schemes (e.g. using explicit blind signature
+schemes).
+5.2.1 Signing phase
+The signing phase between a serverS and a clientC can
+be constructed as described in Fig. 2. We assume thatsk
+is the signing key known toSand thatcsk←Commit(sk)
+is known to both. The description below is illustrated
+for the signing of one token but can easily be generalized
+for more.
+We writefsk(T )←P.SignPhase(t) to indicate a suc-
+cessful signing phase betweenC and S using the nota-
+tion above. If the signing phase is not successful, then
+the output will be denoted by⊥instead.
+5.2.2 Redemption phase
+The redemption phase allowsC to redeem a signed to-
+ken (obtained in Fig. 2) in order to receive a resource
+res. LetR∈{0, 1}𝓁be the request binding data associ-
+ated with this request, known to both parties. We give
+an explicit description in Fig. 3.
+C S
+(t,f sk(T ))←BC.pop()
+K←sKGen(t,f sk(T ))
+s←MACK (R)
+(t,s )
+Check(t,B S)
+?
+= 0
+T ′←GenToken(t)
+K′←sKGen(t,f sk(T ′))
+s′←MACK′(R)
+s′ ?
+=s
+Store(t,B S)
+res
+Fig. 3.An overview of the token redemption protocol.
+We writeb←P.RedeemPhase(t,f sk(T )) to indicate
+the response of the server in the redemption phase. We
+say thatb = 1 if res is received by the client andb = 0
+if⊥is received.3 Ifb = 1 (resp. 0), then we say that the
+redemption phase is successful (resp. unsuccessful).
+5.3 Correctness
+We give a generic correctness deﬁnition for protocolsP
+implementing the signing and redemption phases from
+Fig. 2 and Fig. 3 respectively. Correctness is evaluated
+with respect to the scheme □ implementing the algo-
+rithms from Section 5.1.
+Deﬁnition 1.The protocolP is correct if:
+Pr
+[
+1←P.RedeemPhase(t,f sk(T ))
+⏐⏐⏐
+t←$ Zq
+fsk(T )←P.SignPhase(t)
+]
+> 1−negl(λ).
+We can therefore prove the correctness ofP using the
+explicit properties of the scheme□ that we use.
+Lemma 1. Let □ detail the instantiation of the scheme
+given in Section 5.1. Then□ instantiates a protocolP
+satisfying the notion of correctness from Deﬁnition 1.
+Proof. Let (~T,r )←$ □.Blind(□.GenToken(t)) where
+t←$ Zq, therefore ~T = Tr.4 Let sk = k; when S re-
+ceives ~T it ﬁrst computes~Tk = fk(~T )←□.Sign(~T,k ).
+It then computes 1−DLEQk(X,Y, ~T, ~Tk) = ¯Dk =
+□.Prove(k,ck,fk(T )) and sends (~Tk, ¯Dk) back toC.
+3 C receives⊥if P is aborted due to a failed veriﬁcation.
+4 We prove correctness in the case of one token but this is easily
+generalizable tom.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 172
+Since ¯Dk is a valid DLEQ proof as given in Sec-
+tion 3.2, thenb←□.VerifyPrf( ¯Dk,X,Y, ~T, ~Tk) andb = 1
+(as long as the commitmentX,Y is valid). Therefore,
+the client computesTk←□.Unblind(~Tk,r ) and the sign-
+ing phase is complete.
+For the redemption phase, C computes a shared
+key K ←H2(t,T k) and sends (t, □.MACK(R)) to
+S.5 Given t, S calculates Tk = □.Sign(□.GenToken(t))
+and computes □.MACH2(t,T k)(R). SinceK = H2(t,T k)
+by deﬁnition, we conclude that □.MACK(R) =
+□.MACH2(t,T k)(R) and thus 1←P.RedeemPhase(t,T k),
+settling correctness.
+5.4 Security properties
+Here we give a treatment of the security model and
+properties that we require the protocolP to uphold.
+– We show that our protocol achievesunlinkability —
+anotionthatstatesthatthesigningandredemption
+phases are completely independent (Theorem 1).
+– Also, we achieve one-more-token security — this
+proves that a malicious client cannot use knowledge
+of validly signed tokens to forge a signature on a
+newly generated token (Theorem 2).
+– In Section 5.5 we also show that the server must
+commit to a single signing key — this prevents the
+server from using client-speciﬁc key pairs in an at-
+tempt to partition the clients’ anonymity set.6
+We argue that these properties are fundamental to the
+operation of our protocol. Unlinkability provides the
+client with the assurance that no server is going to be
+able to link disparate sessions together — this is the
+main premise of our solution. One-more-token security
+prevents the client from blatantly subverting the pro-
+tocol to commit token forgery and thus bypass the se-
+curity mechanisms in the current workﬂow. The proof
+of unlinkability is unconditional, and the proof of one-
+more-token security follows from a standard assumption
+on the El Gamal cryptosystem.
+There are undoubtedly more security properties
+that we could choose to prove here. This is not to say
+that we cannot prove more interesting properties, such
+as design modiﬁcations that may prevent tokens being
+5 We safely assume that the request binding dataR is public
+since it will be available via the request (e.g., speciﬁc headers
+and the HTTP path).
+6 We do not prove this explicitly as it follows naturally from
+the deﬁnition of the proof that we use (Section 3.2.1).
+used by other identities. We regard analysis of wider se-
+curity models as an interesting and important avenue
+for future work.
+5.4.1 Security model
+An adversary attempting to break the security of
+the protocol P has oracle access to the functions
+P.SignPhase(·) and P.RedeemPhase(·) and we deﬁne the
+‘view’ of the adversaryA to beA.view(P.SignPhase(·))
+and A.view(P.RedeemPhase()), respectively. By view,
+we essentially mean the set of all messages and out-
+puts that A witnesses during a phase execution.
+Therefore if A plays the role of the server then
+A.view(P.SignPhase(t))equatesto (~T,f sk(~T ),c sk,πsk)for
+csk ←□.Commit(sk),πsk ←□.Prove(sk,c sk,~T,f sk(~T )).
+Additionally,A.view(P.RedeemPhase(t,f sk(T ))) equates
+to (t,T,f sk(T )).We put no restrictions on howA makes
+calls to the oracles apart from that it runs in PPT.
+5.4.2 Unlinkability
+The notion of unlinkability captures the inability of an
+adversarial serverS to link together a redemption phase
+of the protocol to any individual signing phase. A proto-
+col satisfying unlinkability is necessary for meeting the
+anonymity guarantees that we require.
+Deﬁnition 2.(Unlinkability) The signing and redemp-
+tion phases of the protocolP are unlinkable if the view
+of the serverS in the signing phase is indistinguishable
+from a uniformly sampled element inG and independent
+of the view ofS in the redemption phase.
+Intuitively and in terms of our protocol, when a seedt
+is revealed in a redemption phase the best chance that
+S has in linking this to a particular signing interaction
+is randomly guessing.
+Agame-baseddeﬁnitionofthissecurityrequirement
+would see the challenger initiate two signing phases with
+an adversarial server. The challenger would then use the
+tokens from one of the signing phases in a redemption
+phase with the adversary. The adversary would output
+a bit corresponding to which signing phase it thinks
+the tokens were obtained from. A scheme secure in this
+gamewouldrequirethattheadversaryhadaprobability
+of success that was negligibly diﬀerent from1/2.
+A signing protocol trivially satisﬁes the unlinkabil-
+ity security property if the output~T of the algorithm
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 173
+Blind(T ) for some tokenT is uniformly distributed. This
+makes up the entire view of the server. For this reason,
+we do not elaborate any further on this formalization.
+Theorem 1. P is unconditionally unlinkable w.r.t.□.
+Proof. In our scheme,~T = Tr for a randomly selected
+r←$ Zq. Since T is a generator of G, ~T is a uniform
+element ofG, and contains no information aboutT ort.
+As such, sinceS.view(P.SignPhase(t)) is dependent only
+on~T andS.view(P.RedeemPhase(t,f sk(T )))isdependent
+on t and T, the phases are independent.
+5.4.3 One-More-Token security
+The notion ofone-more-token security enshrines the in-
+ability of the client to access the secret signing key of the
+server in a ‘meaningful’ way. By meaningful, we mean
+being able to use knowledge of signed tokens, received
+during a signing phase, to sign more tokens.
+Deﬁnition 3.(One-More-Token security)Our scheme
+has one-more-token security if a PPT client, after re-
+ceiving𝓁signed tokens from the server, cannot success-
+fully redeem𝓁+1 tokens, except with negligible probabil-
+ity.
+We will reduce this security property to a standard as-
+sumption on the El Gamal encryption scheme:
+Deﬁnition 4. (One-More-Decryption security of
+El Gamal) A challenger provides to an adversary a
+description of a groupG, its prime orderq, a generator
+X, and a public keyY = Xk where k←$ Zq is known
+only to the challenger.
+The challenger selects 𝓁+ 1 messages Mi←$ G,
+encrypts each with El Gamal to form the ciphertexts
+{(Ci,Di) = (Xri,Y ri·Mi}i∈[𝓁+1], and sends the cipher-
+texts to the adversary.
+The adversary can make𝓁oracle decryption queries
+to the challenger with messages of its choice.7
+The adversary wins if it outputs all𝓁+ 1plaintexts.
+El Gamal is secure against a one-more-decryption
+attack if any PPT adversary has at most a negligible (in
+lgq) probability of winning the game.
+7 Unlike in a CCA2 game, there is no restriction on querying
+one of the challenge ciphertexts.
+We note that Schnorr and Jakobsson [28] prove that
+no PPT adversary in the generic group model has a
+non-negligible advantage in winning a strictly weaker
+version of this game.8 An adversary who can win the
+above game can easily win the weaker game as well.
+Theorem 2.If El Gamal is secure against a one-more-
+decryption attack, then our scheme has one-more-token
+security.
+Proof. Given an adversary A who can get 𝓁tokens
+signed by the server, and then redeem𝓁+1, we will pro-
+duce an adversaryB who wins the one-more-decryption
+game against El Gamal.
+B starts the game by being givenG, q, X, Y, and
+{(Ci,Di)}i∈[𝓁+1].B initiatesA, using (G,q,X ) as the
+group description andY as the commitment to the sign-
+ing key.B also selects a random permutationπon Zq,
+but does not reveal it toA.
+Acanmaketwokindsofqueries:polynomiallymany
+random oracle queries toH1, H2, andH3, and at most
+𝓁token signing queries.
+WhenA makes a token signing query with blinded
+token ~Ti,B selects a randomFi←$ G, and sends the ci-
+phertext (~Ti,Fi) to the decryption oracle, which returns
+Mi = Fi/~Tk
+i .B then returnsFi/Mi = ~Tk
+i toA. It pro-
+vides a forged DLEQ proof, which it can do because it
+can program the responses ofH3.
+WhenA makes a random oracle request forH1(t),B
+replieswith ∏
+j∈[𝓁+1]C(aj−1)
+j ,where a =π(t).Onlywith
+negligible probability1/q will this value be the identity
+element of G, in which caseB aborts with failure.
+When A makes a random oracle request for
+H2(t,B ),B stores (t,B,K ) in a table for a randomly
+selected K, and replies withK. If the sameH2(t,B ) is
+queried again, the sameK will be returned.
+WhenA makes a random oracle request forH3,B
+programs it to forge the DLEQ proof, as above.
+At the end of the game,A will redeem𝓁+ 1 tokens
+{(ti,Ri, MACH2(ti,Bi)(Ri))}i∈[𝓁+1].B uses theH2 table
+to look up the value ofBi used to generate the MAC
+key in each token, and it will be the case thatBi =
+H1(ti)k =∏
+j∈[𝓁+1]
+(
+Ck
+j
+)((π(ti)j−1) for eachi∈[𝓁+ 1].
+If V is the (Vandermonde, and thus invertible) matrix
+with Vij = π(ti)j−1, and U is the inverse ofV, then
+8 In their version, the adversary is givend>𝓁ciphertexts, and
+the correct plaintexts in a permuted order, and must simply
+match𝓁+ 1 plaintexts to their corresponding ciphertexts using
+at most𝓁queries to the decryption oracle.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 174
+it will be the case that∏
+j∈[𝓁+1]BUij
+j = Ck
+i for each
+i∈[𝓁+1].B then outputsMi =Di/Ck
+i for eachi∈[𝓁+1]
+and wins the game.
+5.5 Key-consistency
+A potential attack on client anonymity is for the server
+to use diﬀerent values of the secret keyk for diﬀerent
+clients. A server that does this could then match a token
+redemption to the blinded token signing operation that
+generated it. To thwart this attack, we ensure that the
+server commits to the key it uses, and that clients are
+assured that the same commitment is visible to all users
+(for example, by placing it in the Tor consensus). The
+batch DLEQ proof then assures the client that all of
+the tokens are signed using the same key that was used
+to form the public commitment. Henry [16, Thm. 3.17]
+establishes the security of this batch proof.
+6 Reducing challenges
+In Section 5 we described an instantiation of a generic
+blindsigningprotocolbasedonaVOPRFdesign.Inthis
+section, we show how the current client-edge workﬂow
+from Section 2 can be augmented to include our privacy-
+preserving token protocol. The end result is an adapted
+workﬂow that results in many fewer challenges for users,
+speciﬁcally a reduction by a factor ofN, where a user
+receives N tokens from a signing phase. We also adapt
+the role of the validatorV to include the signing and
+veriﬁcation of tokens that are used in the signing and
+redemption phases of our protocol.
+6.1 Adapted workﬂow
+Recall that the workﬂow from Section 2 requires a user
+to solve a challenge for every access (modulo the use of
+cookies). To reduce the number of challenges exposed to
+the client without sacriﬁcing the unlinkability require-
+ment,weembedtheprotocolthatweconstructedinSec-
+tion 5 into this workﬂow. This allows a client to receive
+N unlinkable tokens that can then be used to bypass
+challenges on future accesses. We present two high-level
+workﬂows in Fig. 4 and Fig. 5 embedding the protocols
+that were discussed in Section 5.
+In summary, for every signing workﬂow as in Fig. 4
+completed by a clientC,C can engage inN redemption
+workﬂows. TheseN redemptions provide unlinkable to-
+C E W
+V
+1. REQ(W)
+2. (CHL,{cskj}j)
+3. SOLN(CHL),{~Ti}i
+4. SOLN(CHL),{~T i}i
+5. (Y,{~Tsk
+i}i)/N
+6. REQ(W)
+7. RESP(W)
+8. (RESP(W),{[~T ]sk
+i}i,πsk)
+Fig. 4.Adapted workﬂow for token issuance. Here,Ti =
+GenToken(ti) forti←$ Zq,~Ti ←Blind(Ti), and~T sk
+i ←
+Sign(~Ti, sk) is the signed token returned by the edge. Also,
+πsk ←Prove(sk,c sk,{Ti}i,{fsk(~Ti))}i is the key-consistency
+proof (Section 5.5);{cskj}j is a list of commitments correspond-
+ing to the currently accepted tokens (Section 6.2).
+C E W
+V
+1. REQ(W)
+2. (CHL,{cskj}j)
+3. (ti, MAC)
+4. (ti,MAC)
+5. Y/N
+6. REQ(W)
+7. RESP(W)
+8. RESP(W)
+Fig. 5.Adapted workﬂow for token redemption, notation is as in
+Fig. 4. The veriﬁerV now veriﬁes the pair(t, MAC) instead of
+the challenge solution.
+kens, and do not require human participation to solve
+challenges. A successful redemption could be exchanged
+for a single-origin cookie. These cookies allow clients
+to bypass future challenges for the same domain with-
+out using more redemption tokens, and without client
+browsing being linkable across multiple domains.
+6.2 Key rotation
+It is important that the serverS is able to implement
+a key rotation policy, both in the case that a key has
+exceeded its lifetime, and to reduce the potency of some
+attack vectors (Section 8). Key rotation in these work-
+ﬂows requires the server to publish a new commitment
+ck∗=Y∗=Xk∗
+to each client, wherek∗is the new se-
+cret key that is used. This is necessary so that the clients
+can verify the key-consistency proofs that are sent byS
+in the signing phase.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 175
+Our workﬂow in Fig. 4 is adapted so that the server
+can have multiple keys in play at any one time. This pre-
+vents key rotation from immediately rendering all pos-
+sessed tokens useless. Essentially,S sends a list of com-
+mitments{cskj}j corresponding to all secret keys that it
+accepts. The client checks the list of commitments and
+uses a corresponding pair to verify the key-consistency
+proof that it receives in the later stages. When a key
+is phased out for good, the server simply removes the
+commitment from the acceptance list.
+When multiple keys are in use, this acts to siphon
+the user base into smaller groups and thus increase the
+deanonymization potential. As a result, the list of keys
+that a service provider should be kept to a relatively low
+number; e.g., 2 or 3 at any one time.
+7 Browser extension
+implementation
+To instantiate the workﬂows shown in Section 6 we have
+created a client-side browser extension named “Privacy
+Pass” and have written compatible server-side support
+in Go that can be run on edge servers. The browser ex-
+tension handles the cryptographic operations that need
+to be carried out on the client side. Our browser ex-
+tension is written in JavaScript and is compatible with
+Chrome and Firefox; additionally, the code is open
+source and available online.9
+7.1 Cloudﬂare deployment case study
+Support for Privacy Pass has been written into existing
+Cloudﬂare infrastructure in order to reduce the num-
+ber of CAPTCHAs that are faced by honest users. As
+a consequence, this reduces the number of CAPTCHAs
+that need to be solved by a factor directly proportional
+to the numberN of signed tokens received for each ini-
+tial solution. CurrentlyN = 30 but the server supports
+up to N = 100. We use this upper bound to reduce
+the capacity for malicious clients to hoard tokens; see
+Section 8.2. The valueN = 30 was chosen because it
+provides a balance between usability, performance, and
+token hoarding considerations.
+Asecondbeneﬁtisthatsub-resourceshostedbehind
+CloudﬂareCAPTCHAswillnowbeaccessibleforclients
+9 https://privacypass.github.io/
+Fig. 6. Left:Website with CSS hosted behind CAPTCHA.Right:
+Website when using Privacy Pass.
+— even though clients would not previously have been
+able to submit CAPTCHA solutions for these URLs.
+For example, in Fig. 6 we show a website with various
+CSS ﬁles hosted on a diﬀerent origin, and protected by
+Cloudﬂare, before and after using Privacy Pass. Since
+the user has no way of solving a CAPTCHA for the CSS
+ﬁles (other than locating and navigating to the URL),
+the website is displayed without the CSS styling and
+thus appears with clear errors. Privacy Pass is able to
+redeem signed tokens with these resources instead and
+thus the user is now able to view the website as it was
+intended.
+While this is undoubtedly a ﬂaw with the imple-
+mentation of CAPTCHAs in general, it is an example
+of Privacy Pass being leveraged to make the browsing
+experience more pleasant and error-free for users.
+7.1.1 Signing
+Firstly, assume that a clientC (with suﬃciently poor IP
+reputation νC > νfor some thresholdν) is attempting
+to connect via HTTP to a Cloudﬂare-protected website
+W using a browser with Privacy Pass installed and with
+no passes available. When a challenge CAPTCHA is
+solved byC then Privacy Pass ﬁrst generates blinded
+tokens (as in Message 1 of Fig. 2) and appends these
+tokens to the body of the HTTP request containing the
+solution. This amended request is sent asynchronously
+and the edge veriﬁes whether the CAPTCHA solution is
+correct. If it is, the blinded tokens are signed and a key-
+consistency proof is generated. The edge now creates a
+new HTTP response indicating that the solution was
+valid (i.e., status code 200) and returns a single-origin
+clearance cookie in the header, and the signed tokens
+and the proof in the body of the response.
+Privacy Pass parses the signed tokens and the key-
+consistency proof, which is validated. If the proof is
+valid, then the signed tokens are unblinded and stored
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 176
+Table 1.Benchmarks (ms) for operations that are instantiated
+using our implementation from Section 5.N is the number of
+tokens to be signed in a batch.
+Operation Timings
+Client
+Token generation (GenToken() & Blind()) 120 + 64·N
+Verify DLEQ (VerifyPrf()) 220 + 110·N
+Total signing request 340 + 180·N
+Total redeem request 57
+Server
+Signing (Sign()) 0.04 + 0.20·N
+DLEQ Proof (Prove()) 0.32 + 0.55·N
+Total signing 1.48 + 0.87·N
+Total redemption 0.8
+for future use in the local storage of the browser. Af-
+ter storage is completed, Privacy Pass reloads the cur-
+rent page, which will now succeed because of the single-
+domain clearance cookie.
+7.1.2 Redemption
+Assumethattheclient Chasgainedtokensasaboveand
+that it has attempted to access another edge-protected
+websiteW′.ACAPTCHAwillbeservedandtheheader
+cf-chl-bypass will be present with value ‘1’ in the edge
+response. Privacy Pass uses the presence of this header
+to initiate the token redemption procedure when it has
+signed tokens stored.10
+Privacy Pass retrieves an unspent token(t,f sk(T ))
+from local storage and starts forming a new HTTP re-
+quest forW′. Recall that in the redemption protocol of
+Fig. 5 the client is required to construct a MAC over
+some request binding data; the key for the MAC is de-
+rived from the unspent token pair that was retrieved
+(see Fig. 3). The request binding dataR in this case is
+precisely the contents of the ‘Host’ header for the re-
+quest concatenated with the HTTP Path.11 The pair
+(t, MACK(R)) where K = sKGen(t,f sk(T )) is then ap-
+pended to the HTTP request as the value of a header
+named ‘challenge-bypass-token’ and the request is
+then sent to the edge.
+The edge takes the request and veriﬁes the value
+of the ‘challenge-bypass-token’ header using the pro-
+cedure in Fig. 3. If veriﬁcation succeeds,E serves the
+content ofW′toC and a single-origin clearance cookie.
+10 This header was also present in the ﬁrst case but was not
+actually used.
+11 This is not quite a unique identiﬁer for the request but is
+manageable for preventing various MitM attacks.
+Table 2.Size of additional information (bytes) for requests, sent
+as part of the protocol implementation from Section 5.N is the
+number of tokens to be signed in a batch.
+Operation Size (bytes)
+Signing request (C→E) 57 + 63·N
+Signing response (E→C) 295 + 121·N
+Redemption request (C→E) 396
+7.2 Benchmarks
+We illustrate the additional client and server overheads
+incurred due to the additional structure used for per-
+forming the protocol. We compile our data from a series
+of benchmarks taken over the key cryptographic opera-
+tions that are computed during a protocol run.
+We use the NIST P-256 elliptic curve; for eachN =
+5, 10, 15,..., 100, we have the client generateN tokens
+at a time and each of these is signed by the server, in-
+cluding generation and checking of batch DLEQ proofs,
+and redemption of a single token. We repeated this ex-
+periment 100 times. In Table 1 we provide a set of
+benchmarks for the operations that are computed for
+the client and server. In Table 2 we provide the size
+of the additional data for requests and responses due
+to Privacy Pass. We do not include the redemption re-
+sponse size as Privacy Pass does not change this ﬂow.12
+As is clear from our results, the overheads incurred
+from using Privacy Pass are quite acceptable. In par-
+ticular, redemptions are quick for both the client and
+server and require very little added communication. For
+signing, the biggest costs appear to be the time taken
+for the client to generate requests and verify server re-
+sponses. On the other hand, the initial cost for acquiring
+signedtokensiswarrantedgiventhatredemptionsareso
+eﬃcient and client proofs-of-work are then avoided for
+the lifetime of the tokens. Finally, the additional com-
+munication load is less than 6KB in total forN = 30,
+which is unlikely to trouble the browsing experience.
+7.3 Cloudﬂare adoption results
+We released the Chrome/Firefox browser extension Pri-
+vacy Pass on 8 November 2017, and also released the
+12 The signing responses are about double the size of the re-
+quests, because for performance reasons, the (JavaScript) client
+compresses the elliptic curve points in the signing request, but
+the (Go) server does not compress the elliptic curve points in the
+response, lest the JavaScript client have to do expensive point
+decompressions.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 177
+open-source code for the extension, which would allow
+a user to locally install the extension in their browser. In
+the following we will detail various numbers acquired di-
+rectly in partnership with Cloudﬂare [8] (we focus only
+on distinguishing requests coming from Tor and non-
+Tor users). The number of Chrome users by 28 Novem-
+ber 2017 stood at8499 and the number of Firefox users
+stood at 3489 — this does not include users manually
+installing the extension. Averaging over any given 7 days
+in this period, Cloudﬂare accepted1.6 trillion requests
+with 780 million of those requests coming over the Tor
+network. Of these requests, 1.04% were challenged in
+general globally, though17% of Tor traﬃc is challenged
+in the same period.13 This illustrates the disproportion-
+ate occurrences of challenges being shown to Tor users.
+Fortunately, Privacy Pass alleviates the burden of
+these challenges by a factor ofN for honest users who
+would usually complete the challenge. However, Privacy
+Pass may not result in a factor ofN reduction in the
+total number of challenges witnessed — i.e., we will not
+see an optimal drop to(17/N)%of requests being served
+challenges in the Tor case. This is due to the fact that
+these ﬁgures also include challenges that are served to
+requests from users that have no intention of solving the
+challenge (such as content scrapers).
+In terms of operating numbers, the number of re-
+demption phases occurring peaked globally at2000 per
+second and for Tor users at200 per second. Addition-
+ally,therewere 515millionrequestscontainingclearance
+cookies used to bypass challenges globally with34.5 mil-
+lionofthoseoccurringfromtheTornetwork.Asaresult,
+22.58% of requests coming from Tor users contain these
+clearance cookies. Using these cookies preserves tokens
+for use only on unseen domains, which is advantageous
+for users, and they cannot be tracked across domains
+due to the single-origin policy.
+This demonstrates a system that is clearly useful
+for clients with the extension installed. In the same
+time-frame, median request and response sizes for Tor
+users stood at 700–800 bytes and 5–6KB respectively
+while the median size of CAPTCHA submissions and
+responses were less than1KB.14 Consequently, the ad-
+ditional protocol messages do not result in unmanage-
+able request/response sizes.
+13 By challenged, we mean the response to the request displays
+a Cloudﬂare CAPTCHA.
+14 These ﬁgures are slightly diﬀerent to the benchmarks above
+as they include information speciﬁc to Cloudﬂare that we did
+not model in the benchmarking tests.
+8 Potential attacks and
+mitigations
+In Section 5 we showed that our protocol satisﬁed vari-
+ous security properties. However, this does not consider
+a number of out-of-band attacks that may still be able
+to eﬀectively subvert the protocol if mitigations are not
+considered. We consider measures that can be put in
+place to limit the eﬀectiveness of such attacks here.
+8.1 Interception of signing requests
+A characteristic of our protocol is that we do not cur-
+rently encode any useful information into the tokens
+that are signed by the server. This prevents the client
+fromgeneratingtokensthatmayinadvertentlyassociate
+metadata with the tokens that may lead to a greater
+chance of deanonymization/linkability during redemp-
+tion. Unfortunately, this leads to the issue that tokens
+are not associated with any one client. This increases
+the eﬀectiveness of monster-in-the-middle (MitM) ad-
+versaries since transmitted tokens are not cryptograph-
+ically linked to a speciﬁc protocol invocation.
+For example, consider a MitM adversaryM in the
+signing phase of the workﬂow in Fig. 4. When the client
+completes the given challenge and sends blinded tokens
+to the server, this message is hijacked byM who simply
+forwards the challenge solution under their own identi-
+ﬁer along with a set of their own generated tokens. If
+the challenge does not have some client-binding hijack-
+prevention mechanism, thenM will receive signed to-
+kens from the server without completing a challenge.
+This attack is particularly eﬀective as it removes
+the requirement for an adversary to authenticate to a
+service in order to receive tokens. For example, consider
+if the challenge mechanism were a CAPTCHA andM
+was some bot that was ordinarily not able to solve the
+CAPTCHA. This attack would allowM to receive to-
+kenswithoutcomputingaCAPTCHAsolutionandthen
+bypass future CAPTCHA invocations. In the case of
+Cloudﬂare, the CAPTCHA page is protected by TLS
+so this seems hard to hijack, however this remains a
+general attack vector.
+While this attack is eﬀective, it requires a renew-
+able source of authentications/challenge solutions for it
+to carry on indeﬁnitely. In this setting, even without
+Privacy Pass, such an adversary would essentially have
+access to a CAPTCHA solving farm and thus the need
+for acquiring tokens to authenticate would be made re-
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 178
+dundant anyway (except for a small gain in the speed
+that authentication could be performed). Although the
+current system requires anonline adversary looking to
+bypass a CAPTCHA maliciously, using Privacy Pass it
+becomes possible to intercept tokens and use them at a
+more convenient time in the near future (until the keys
+are rotated). However, as long as the maximum number
+of signed tokens is fairly small (in the case of Cloudﬂare
+only 100 tokens can be signed for each interaction), then
+the eﬀectivenessof the attack isnot especially increased.
+8.2 Token accumulation
+A related attack avenue would be for clients to ‘farm’
+signed tokens by repeatedly sending challenge solutions
+to invoke the signing phase of the protocol. This would
+allow the client to build up a stockpile of unused tokens
+that they could then redistribute amongst other clients
+or redeem tokens for a large period of time. Redistribu-
+tion of token pairs (ti,Wi) is possible due to the lack
+of data encoded into them. Building up a large store of
+tokens could be useful for launching distributed denial
+of service (DDoS) attacks on service providers.
+Clearly solving challenges incurs much larger over-
+heads than the token redemption process using the
+browser extension. Therefore, clients can invoke many
+redemptions in the same time that they could solve one
+challengepreviously.Therefore,itisimportantthatpass
+veriﬁcation is very eﬃcient for the server to carry out to
+reduce the threat of a DDoS attack reducing the avail-
+ability of the server. Fortunately, as we showed above,
+veriﬁcation of a token redemption occurs in less than
+1ms and a few hundred bytes of additional transmit-
+ted data. Additionally, carrying out these operations on
+powerful server hardware may lead to even faster run-
+ning times. However, depending on the size of the stock-
+pile, a client that amasses a huge number of tokens may
+still be able to cause problems.
+For these attacks we implement a number of possi-
+ble mitigations. Firstly, the low upper bound of100 to-
+kens signed at a time by Cloudﬂare means that it would
+take a large amount of eﬀort to build up a stockpile
+of tokens large enough to launch a credible DDoS at-
+tack (1, 000, 000 tokens would require minimum10, 000
+CAPTCHA solutions).
+Finally, as described in Section 6.2, we recommend
+regular key rotation so that signed tokens are implicitly
+related to epochs and are thus invalidated frequently.
+This prevents stockpiles of tokens from being useful for
+longer than the epoch they belong to. Ideally key rota-
+tion would occur over short time periods (such as 3–4
+days); a shorter time period directly reduces the number
+of useful tokens that can be stockpiled and redeemed. In
+our initial software distribution, key rotation is handled
+by updating the commitments directly in the browser
+extension. Moving forward, CDNs could upload their
+commitments to beacons or other globally visible and
+consistent locations, such as the Tor consensus.
+8.3 Token exhaustion
+Privacy Pass uses a ﬁnite list of low-entropy character-
+istics to determine whether a token should be redeemed
+or not. In the case of Cloudﬂare CAPTCHAs, the exten-
+sion looks for the presence of an HTTP response header
+and particular status code. Unfortunately, this means
+that it is easy to recreate the characteristics that are
+required by the extension to sanction a redemption.
+To view the attack at its most powerful, consider
+a sub-resource that embeds itself widely on many web-
+pages that can trigger token redemptions.15 Such a re-
+source would be able to drain the extension of all its to-
+kens by triggering redemptions until all the tokens were
+used. While it is unclear why such an attack would be
+useful, it is important to acknowledge that it is indeed
+possible to carry out and would thus render the usage of
+Privacy Pass useless if the sub-resource was especially
+prevalent.
+Our mitigation for this attack lies in the extension
+itself. First, the implementation of Privacy Pass pre-
+vents token redemptions occurring for the same URL in
+quick succession by keeping track of where spends have
+occurred. This data is refreshed when a single-domain
+cookie is removed to allow re-spending at the domain.
+This prevents a sub-resource from recursively draining
+tokens after each spend; it also spreads out the redemp-
+tions considerably. The sub-resource would have to force
+cookies to be removed and then schedule a page reload
+for each token spend.
+A coarser method of stopping these attacks — that
+has not been implemented at time of writing in the
+Cloudﬂare deployment — would be to blacklist URLs
+from spending after one attempt and then refresh this
+state every time the extension reaches 0 tokens. While
+this would be a more eﬀective countermeasure, it would
+also prevent a client from spending tokens on a URL,
+even if the cookie for the URL were removed. Other po-
+15 For example, a popular analytics script or JQuery code.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 179
+tential mitigations could include requiring the edge to
+sign the appropriate header, or the edge stripping the
+cf-chl-bypass header from origin responses.
+8.4 Time-based client deanonymization
+As with all systems that require some sort of registra-
+tion, there is the inherent problem that ‘early adopter’
+clients are part of a much smaller anonymity set than is
+optimal for enforcing privacy constraints. In particular,
+consider a scenario where some user is amongst the ﬁrst
+ﬁve to initiate a signing phase with some given CDN,
+or after key rotation has occurred. Then when a client
+comes to redeem a token, the provider will know that
+the client can be linked to one of the ﬁve only clients
+to have tokens signed. A malicious edge could also arti-
+ﬁcially reduce the size of the user base by only signing
+tokens for a small number of users or by using artiﬁcially
+small key windows.
+A more detailed analysis may also take into account
+patterns of behavior that lead to initiating signing and
+redemption phases in predictable ways. For instance, it
+may be possible to link token redemptions to signing
+queries that are linked to a user proﬁle that predictably
+asks for tokens to be signed at certain times.
+This threat bypasses the unlinkability of the proto-
+colandexploitsthefactthatlinkabilityispossiblebased
+on the timing of certain requests or via early registra-
+tion. The pervasiveness of the potential to deanonymize
+clients this way means that, like many PETs including
+Tor itself, such privacy solutions are only really eﬀective
+when the number of users is quite large. As we men-
+tioned previously, 20 days since it was ﬁrst deployed
+the number of Chrome users of Privacy Pass stands at
+8499, and at 3489 for Firefox (November 28 2017)[8].
+This suggests that linking browsing sessions is likely to
+incur signiﬁcant overheads and high error rates.
+8.5 Double-spending protection
+It is vital that services use their own private keys for
+signing tokens so that tokens cannot be spent multiple
+times across diﬀerent services. Moreover, each service
+that supports Privacy Pass should implement double-
+spend protection to ensure that tokens cannot be spent
+multiple times across their own architecture. Not check-
+ing double-spends properly essentially implies that the
+stockpile of unspent passes for any client is much larger.
+An eﬀective way of managing a large double-spend in-
+dex would be to use a hash table, Bloom ﬁlter or other
+similarly eﬃcient data structure.
+9 Conclusion
+In this work we have detailed the use of a VOPRF
+construction that can be instantiated using elliptic
+curves to achieve the functionality of a blind sign-
+ing protocol at much lower cost than a traditional
+blind-RSA-based construction. We have implemented
+the protocol and created a browser extension Privacy
+Pass to oﬀer a generic method of providing easier ac-
+cess for Tor users to web resources by reducing the
+amount of necessary human participation in completing
+CAPTCHA challenges. The protocol does not compro-
+mise the anonymity of the user by ensuring that the
+signing and redemption of tokens are cryptographically
+unlinkable. In addition, support for Privacy Pass within
+the Cloudﬂare infrastructure shows that the extension
+works in global-scale deployments and does not add any
+signiﬁcant overheads to either the client or server.
+We believe that Privacy Pass represents an innova-
+tive and eﬀective way to improve the usability of privacy
+enhancing technologies on the internet, while maintain-
+ing protections against abuse for content providers. We
+hope that support for Privacy Pass will increase as its
+beneﬁts, and more use cases, become more apparent.
+Acknowledgements
+The work beneﬁted from the use of the CrySP RIP-
+PLE Facility at the University of Waterloo. Davidson
+was supported by the EPSRC and the UK Govern-
+ment as part of the Centre for Doctoral Training in
+Cyber Security at Royal Holloway, University of London
+(EP/K035584/1). Goldberg gratefully acknowledges the
+support of NSERC for grant RGPIN-03858. We would
+like to thank Eric Tsai, Dan Boneh, Zi Lin, Peter
+Wu, and Blake Loring for their participation in various
+stages of the project. We would also like to acknowl-
+edge helpful feedback from Sharon Goldberg, Christo-
+pher Wood, Peter Eckersley, Brian Warner, Zaki Ma-
+nian, Tony Arcieri, Prateek Mittal, Zhuotao Liu, Isis
+Lovecruft, Henry de Valence, Mike Perry, Trevor Per-
+rin, Justin Paine, Marek Majkowski, Eoin Brady, Aaran
+McGuire, Yan Zhu, Roger Dingledine, Georg Koppen,
+and the anonymous reviewers.
+
+Privacy Pass: Bypassing Internet Challenges Anonymously 180
+References
+[1] Dan Boneh, Ben Lynn, and Hovav Shacham. Short signa-
+tures from the Weil pairing. In Colin Boyd, editor,ASI-
+ACRYPT 2001, volume 2248 ofLNCS, pages 514–532.
+Springer, Heidelberg, December 2001.
+[2] Jonathan Burns, Daniel Moore, Katrina Ray, Ryan Speers,
+and Brian Vohaska. EC-OPRF: Oblivious pseudorandom
+functions using elliptic curves. Cryptology ePrint Archive,
+Report 2017/111, 2017. http://eprint.iacr.org/2017/111.
+[3] David Chaum. Blind signatures for untraceable payments.
+In David Chaum, Ronald L. Rivest, and Alan T. Sherman,
+editors, CRYPTO’82, pages 199–203. Plenum Press, New
+York, USA, 1982.
+[4] David Chaum. Blind signature system. In David Chaum,
+editor, CRYPTO’83, page 153. Plenum Press, New York,
+USA, 1983.
+[5] David Chaum, Amos Fiat, and Moni Naor. Untraceable
+electronic cash. In Shaﬁ Goldwasser, editor,CRYPTO’88,
+volume 403 ofLNCS, pages 319–327. Springer, Heidelberg,
+August 1990.
+[6] David Chaum and Torben P. Pedersen. Wallet databases
+with observers. In Ernest F. Brickell, editor,CRYPTO’92,
+volume 740 ofLNCS, pages 89–105. Springer, Heidelberg,
+August 1993.
+[7] Cisco. The zettabyte era: Trends and analysis, 2017. https:
+//www.cisco.com/c/en/us/solutions/collateral/service-
+provider/visual-networking-index-vni/vni-hyperconnectivity-
+wp.html. Accessed Sep 2017.
+[8] Cloudﬂare. Personal communication, 2017.
+[9] Florian Dold and Christian Grothoﬀ. GNU Taler: Ethi-
+cal online payments for the internet age.ERCIM News,
+2016(106), 2016.
+[10] Georg Fuchsbauer, Christian Hanser, Chethan Kamath, and
+Daniel Slamanig. Practical round-optimal blind signatures
+in the standard model from weaker assumptions. Cryptology
+ePrint Archive, Report 2016/662, 2016. http://eprint.iacr.
+org/2016/662.
+[11] Sanjam Garg and Divya Gupta. Eﬃcient round optimal
+blind signatures. In Phong Q. Nguyen and Elisabeth Oswald,
+editors, EUROCRYPT 2014, volume 8441 ofLNCS, pages
+477–495. Springer, Heidelberg, May 2014.
+[12] Sanjam Garg, Vanishree Rao, Amit Sahai, Dominique
+Schröder, and Dominique Unruh. Round optimal blind sig-
+natures. In Phillip Rogaway, editor,CRYPTO 2011, volume
+6841 ofLNCS, pages 630–648. Springer, Heidelberg, August
+2011.
+[13] Ryan Henry and Ian Goldberg. Extending Nymble-like sys-
+tems. In 2011 IEEE Symposium on Security and Privacy,
+pages 523–537. IEEE Computer Society Press, May 2011.
+[14] Ryan Henry and Ian Goldberg. Formalizing anonymous
+blacklisting systems. In2011 IEEE Symposium on Security
+and Privacy, pages 81–95. IEEE Computer Society Press,
+May 2011.
+[15] Ryan Henry and Ian Goldberg. Batch proofs of partial
+knowledge. In Michael J. Jacobson Jr., Michael E. Lo-
+casto, Payman Mohassel, and Reihaneh Safavi-Naini, ed-
+itors, ACNS 13, volume 7954 ofLNCS, pages 502–517.
+Springer, Heidelberg, June 2013.
+[16] Henry, Ryan. Eﬃcient Zero-Knowledge Proofs and Ap-
+plications. PhD thesis, University of Waterloo, 2014.
+http://hdl.handle.net/10012/8621.
+[17] Thomas S. Heydt-Benjamin, Hee-Jin Chae, Benessa De-
+fend, and Kevin Fu. Privacy for public transportation. In
+George Danezis and Philippe Golle, editors,Privacy Enhanc-
+ing Technologies: 6th International Workshop (PET 2006),
+pages 1–19. Springer, 2006.
+[18] Stanislaw Jarecki, Aggelos Kiayias, and Hugo Krawczyk.
+Round-optimal password-protected secret sharing and T-
+PAKE in the password-only model. In Palash Sarkar and
+Tetsu Iwata, editors,ASIACRYPT 2014, Part II, volume
+8874 ofLNCS, pages 233–253. Springer, Heidelberg, De-
+cember 2014.
+[19] Stanislaw Jarecki, Aggelos Kiayias, Hugo Krawczyk, and Ji-
+ayu Xu. Highly-eﬃcient and composable password-protected
+secret sharing (or: How to protect your bitcoin wallet on-
+line). In EuroS&P, pages 276–291. IEEE, 2016.
+[20] Florian Kerschbaum, Hoon Wei Lim, and Ivan Gudymenko.
+Privacy-preserving billing for e-ticketing systems in public
+transportation. In Proceedings of the 12th ACM Workshop
+on Workshop on Privacy in the Electronic Society, WPES
+’13, pages 143–154, New York, NY, USA, 2013. ACM.
+[21] Zhuotao Liu, Yushan Liu, Philipp Winter, Prateek Mittal,
+and Yih-Chun Hu. Torpolice: Towards enforcing service-
+deﬁned access policies for anonymous communication in
+the tor network. In25th IEEE International Conference on
+Network Protocols, ICNP 2017, pages 1–10, 2017.
+[22] Peter Lofgren and Nicholas Hopper. BNymble: More anony-
+mous blacklisting at almost no cost (a short paper). In
+George Danezis, editor,FC 2011, volume 7035 ofLNCS,
+pages 268–275. Springer, Heidelberg, February / March
+2012.
+[23] Dimitrios Papadopoulos, Duane Wessels, Shumon Huque,
+Moni Naor, Jan Včelák, Leonid Reyzin, and Sharon Gold-
+berg. Making NSEC5 practical for DNSSEC. Cryp-
+tology ePrint Archive, Report 2017/099, 2017. http:
+//eprint.iacr.org/2017/099.
+[24] David Pointcheval and Jacques Stern. Provably secure blind
+signature schemes. In Kwangjo Kim and Tsutomu Mat-
+sumoto, editors,ASIACRYPT’96, volume 1163 ofLNCS,
+pages 252–265. Springer, Heidelberg, November 1996.
+[25] Markus Rückert. Lattice-based blind signatures. In Masayuki
+Abe, editor,ASIACRYPT 2010, volume 6477 ofLNCS,
+pages 413–430. Springer, Heidelberg, December 2010.
+[26] Ahmad-Reza Sadeghi, Ivan Visconti, and Christian Wachs-
+mann. User privacy in transport systems based on RFID
+e-tickets. Proceedings of the 1st International Workshop on
+Privacy in Location-Based Applications (PilBA), 2008.
+[27] Claus-Peter Schnorr. Eﬃcient identiﬁcation and signatures
+for smart cards. In Gilles Brassard, editor,CRYPTO’89,
+volume 435 ofLNCS, pages 239–252. Springer, Heidelberg,
+August 1990.
+[28] Claus-Peter Schnorr and Markus Jakobsson. Security of
+signed ElGamal encryption. In Tatsuaki Okamoto, editor,
+ASIACRYPT 2000, volume 1976 ofLNCS, pages 73–89.
+Springer, Heidelberg, December 2000.
+[29] Tor. List of services blocking Tor, 2017. https:
+//trac.torproject.org/projects/tor/wiki/org/doc/
+ListOfServicesBlockingTor. Accessed Sep 2017.

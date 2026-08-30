@@ -1,0 +1,3216 @@
+Anonymous Tokens with Private Metadata Bit
+Ben Kreuter 1, Tancrède Lepoint 1, Michele Orrù 234 , and Mariana Raykova 1
+1 Google, New York, USA
+2 École Normale Supérieure, CNRS, PSL University, Paris, France,
+3 Inria, Paris, France
+4 Recurse Center, New York, USA
+{benkreuter,tancrede,marianar}@google.com
+michele.orru@ens.psl.eu
+April 21, 2022
+Abstract. We present a cryptographic construction for anonymous tokens with private metadata bit,
+called PMBTokens. This primitive enables an issuer to provide a user with a lightweight, single-use
+anonymous trust token that can embed a single private bit, which is accessible only to the party who
+holds the secret authority key and is private with respect to anyone else. Our construction generalizes
+and extends the functionality of Privacy Pass (PETS’18) with this private metadata bit capability. It
+is based on the DDH and CTDH assumptions in the random oracle model and provides unforgeability,
+unlinkability, and privacy for the metadata bit. Both Privacy Pass and PMBTokens rely on non-
+interactive zero-knowledge proofs (NIZKs). We present new techniques to remove the need for NIZKs,
+while still achieving unlinkability. We implement our constructions and we report their eﬀiciency costs.
+1 Introduction
+The need to propagate trust signals while protecting anonymity has motivated cryptographic con-
+structions for anonymous credentials [ Cha82, CL01]. While we have constructions that support
+complex statements, this comes with computation and communication costs. On the other hand,
+some practical uses require very simple functionality from the anonymous credential, while hav-
+ing very strict eﬀiciency requirements. One such example is the setting of Privacy Pass [ DGS+18].
+Privacy Pass was designed as a tool for content delivery networks (CDNs), which need a way to dis-
+tinguish honest from malicious content requests, so as to block illegitimate traﬀic that could drain
+network resources causing a denial of service (DoS). Previous solutions leveraged IP reputation to
+assess the reputation of users. While helpful in many cases, IP reputation may also lead to a high
+rate of false positives because of shared IP use. In particular, this is the case for users of privacy
+tools, such as VPNs, Tor, or I2P. Privacy Pass [ DGS+18] proposes a solution for this problem, using
+anonymous tokens as a mechanism to prove trustworthiness of the requests without compromising
+on user privacy. Since CDNs need to potentially handle millions of requests per second, eﬀiciency
+of the cryptographic construction is of extreme importance.
+In this paper, we consider anonymous tokens that can convey two trust signals, in such a
+way that the user cannot distinguish which of the two signals is embedded in her tokens. This
+extension is motivated by the fact that in a system relying on anonymous trust tokens, malicious
+users be identified as a threat if the issuer stops providing them with tokens. In a real-world
+system relying on anonymous tokens without private metadata bit, if the issuer stops providing
+malicious users with tokens, the attacker will know that they have been detected as malicious.
+In fact, this information could serve as an incentive to corrupt more users, or to train machine
+
+learning models that detect which malicious behavior goes un-noticed. Being able to pass on the
+information whether a user is on an allow or disallow list, and consume it in appropriate ways at
+redeption time, mitigates such behavior. There has been recent interest in primitives that provide
+such functionality in standardization bodies such as the IETF and W3C. This includes a recent
+draft proposal for a Trust Token API submitted by Google at the W3C, which calls for a secret
+metadata bit functionality. 5 Also an IETF working group 6 is discussing standardization of the core
+protocol of Privacy Pass used by Cloudflare 7 together with extensions including private metadata
+bit.
+In this work, we consider an anonymous token primitive that provides the following functionality:
+a user and an issuer interact and, as a result of this interaction, the user obtains a token with a
+private metadata bit (PMB) embedded in it. The private metadata bit can be read from a token
+using the secret key held by the issuer, at redemption time. Each token is one-time use, which
+enables the issuer to update the trust assigned to each user without requiring a complex revocation
+process, by just adjusting the number of tokens that can be issued at once and the frequency
+of serving new token requests. Anonymous token schemes offer the following security properties:
+unforgeability, unlinkability, and privacy of the metadata bit. Unforgeability guarantees that nobody
+but the issuer can generate new valid tokens. Unlinkability guarantees that the tokens that were
+issued with the same private metadata bit are indistinguishable to the issuer when redeemed.
+Privacy of the metadata bit states that no party that does not have the secret key can distinguish
+any two tokens, including tokens issued with different metadata bits.
+Our goal is to construct a primitive which achieves the above properties, and has competitive
+eﬀiciency introducing minimal overhead over Privacy Pass.
+1.1 Our Contributions
+Our work includes the following contributions. We formalize the security properties of the primitive
+of anonymous tokens with private metadata bit. We present a new construction for this primitive,
+called PMBToken, which extends Privacy Pass (PP) to support private metadata bit, while main-
+taining competitive eﬀiciency. Further, we introduce new techniques that allow to remove the need
+for NIZK in the constructions of both Privacy Pass and PMBToken. This simplifies and optimizes
+the constructions in which the NIZK proof computation is a major bottleneck. The resulting schemes
+satisfy a weaker unlinkability notion. Finally, we implement all the above candidate constructions
+in Rust, and we summarize the performance of our schemes.
+A failed approach and its insight. The starting point of our study is Privacy Pass, which
+uses the verifiable oblivious PRF (VOPRF) primitive of Jarecki et al. [ JKK14] Fx(t) = xHt(t)
+(additively denoted). In the oblivious PRF evaluation mechanism, the user sends to the issuer
+rHt(t) for a randomly selected value r, receives back rxHt(t) from which she recovers the output
+xHt(t).8 Obliviousness is guaranteed by the blinding factor r, which makes the distribution of
+rHt(t) uniform even when knowing t. The PRF output can be verified by the user providing her
+5 See https://github.com/WICG/trust-token-api#extension-metadata and https://web.dev/trust-tokens/.
+6 See https://datatracker.ietf.org/wg/privacypass/about/.
+7 See https://blog.cloudflare.com/cloudflare-supports-privacy-pass/ .
+8 In Privacy Pass the resulting value xHt(t) is used for the derivation of a HMAC key in order to avoid credential
+hijacking(cf. Appendix D ). To simplify our presentation, we skip this step and simply assume that credentials are
+redeemed over a secure channel.
+2
+
+with a DLEQ proof, which guarantees that logHt(t)(Fx(t)) = log G X, where G is the base point and
+X := xG is published by the issuer as a public parameter for the scheme.
+There is a natural idea to upgrade the above functionality to support a private metadata bit,
+which is to have two secret keys and use each of these keys for one of the bits. However, this idea
+does not work directly; the reason for this stems from the fact that the underlying VOPRF is a
+deterministic primitive. If the issuer “signs” two tokens using two different keys, and use them to
+indicate the different private metadata bit values, then the VOPRF evaluations on the same input
+t will be the same if they are issued with the same key and will be different if used with different
+keys. Thus, if a malicious user demands multiple tokens using the same input value t (the issuer,
+by blindness, has no way of telling), she will be able to distinguish which ones were issued with the
+same metadata bit.
+New randomized tokens and private metadata. To resolve the above issue we introduce a
+construction which makes the token issuance a randomized functionality where the randomness is
+shared between the user and the issuer. We use the following function F(x,y)(t; S) = xHt(t) + yS,
+where t is the value that will be input of the user and S is the randomness of the evaluation, which
+will be determined by the two parties, more specifically S = r−1Hs(rHt(t); s) where r is the blinding
+factor chosen by the user and s is a random value chosen by the issuer. This functionality suﬀices to
+construct a new anonymized token where during the oblivious evaluation the user sends T′ = rHt(t),
+receives back from the issuer s, W′ = xT′ + yHs(T′; s), unblinds the values S = r−1Hs(T′; s) and
+W = r−1W′, and outputs (S, W ).
+The token verification checks that W = xHt(t) + yS. In order to provide verifiability, the
+issuer provides an element of the form X = xG + yH and sends a proof that X = xG + yH and
+W = xHt(t)+ yS are computed using the same secret key (x, y). This is similar to Okamoto–Schnorr
+blind signatures [Oka92], with the key difference that we redefine this as a secret key primitive which
+enables us to have a round-optimal blind evaluation algorithm.
+We apply the idea of using two different keys for each private metadata bit value to the above
+randomized construction; the resulting construction is called PMBTokens. The public parameters
+are now a pair (X0 := x0G + y0H, X1 := x1G + y1H), a token issued with a private metadata bit b
+is of the form W′ = xbHt(t) + ybS and the DLEQ proof is replaced with a DLEQOR proof stating
+that either W′ and X0, or W′ and X1, are computed using the same secret key (x0, y0) or (x1, y1).
+Removing the NIZK. Both Privacy Pass and PMBTokens employ zero-knowledge arguments
+of knowledge to achieve unlinkability. This approach guarantees that the user can verify that tokens
+are issued under the same secret key as in the issuer’s public parameters. Unlinkability follows from
+the fact that tokens issued under the same secret key are indistinguishable. In section Section 7 we
+consider a slightly weaker unlinkability guarantee for the user during token issuance, which is that
+either the token she has received is issued under the public key, or, the token is indistinguishable
+from a random value. The user cannot know in advance whether she has a token that will be
+valid at redemption; incorrectly issued tokens are indistinguishable from honestly-generated ones.
+If the issuer misbehaves, incorrectly issued tokens will be indistinguishable from random, malformed
+tokens.
+We present modifications of both Privacy Pass and PMBTokens that satisfy this version of
+unlinkability, while removing the need for DLEQ or DLEQOR proofs and improving the compu-
+3
+
+tational cost for the issuer, which is the bottleneck in systems that need to support large number
+of users that obtain tokens regularly.
+Our approach for removing the DLEQ proof from Privacy Pass borrows ideas from the construc-
+tion of a verifiable partially oblivious PRF of Jarecki et al. [ JKR18], but simplifies their construction
+which has additional complexity in order to achieve user verifiability. We use the idea to use not
+only multiplicative but also additive blinding of the user’s input in the form T′ = r(Ht(t)− ρG).
+Now, an honest evaluation of the issuer W′ = xr(Ht(t)− ρG) can be unblinded by the user by
+computing r−1W + ρX = xHt(t)− ρ(xG) + ρX = xHt(t), where X = xG is the issuer’s public key.
+On the other hand, any dishonestly computed W′ which is of the form W′ = r−1T′ + P for some
+P̸= 0 when unblinded will contain a random additive factor r−1P , thus the resulting value will be
+random. Similarly to Jarecki et al. [ JKR18], we can recover verifiability by doing another oblivious
+evaluation on the same value t and comparing the outputs, which will be equal only if the the issuer
+used the public key for both executions. We also observe that these checks can be batched for an
+arbitrary number of issued tokens by computing a random linear combination of the values Ht(ti),
+obtaining a VOPRF evaluation on that value, and comparing with the same linear combination of
+the other tokens. Thus a user can verify n tokens by running one additional token request only. We
+note further that removing the zero knowledge argument significantly simplifies the issuer work,
+which now consist only of one multiplication.
+Applying the above idea to the anonymous token construction with private metadata bit is
+more challenging since the user does not know which of the two public keys the issuer will use.
+However, the user can unblind the response from the issuer using each of the public keys and thus
+obtain one valid and one random token. This property turns out to be true if the issuer behaves
+honestly but if the issuer is malicious, he can create public keys and a response W′ such that
+the two values obtained from the unblinding with each of the public keys are correlated and this
+correlation can be used for fingerprinting the user. Thus, in our construction the user computes two
+values T′
+d = rd(Ht(t)− ρdG), for d = 0, 1, and the issuer uses one of them to compute his response
+W′ = xbT′
+b + ybS′
+b with a private bit b. The user unblinds W′ using both public keys and the scalars
+rd, ρd for d∈{ 0, 1} to obtain S0, W0, S1, W1, which she uses for the final token. The resulting token
+verifies with only one of the issuer’s keys: the key corresponding to the private metadata value.
+V erification oracle. One last wrinkle in the security proof is whether the adversary for un-
+forgeability and privacy of the metadata bit properties should have access to a verification ora-
+cle for tokens of his choice. This is not explicitly supported in the current Privacy Pass security
+proof [ DGS+18]. We provide a new proof for unforgeability of Privacy Pass in the presence of a
+verification oracle based on a different hardness assumption, the Chosen Target Gap Diﬀie-Hellman
+assumption, which is a formalization of the Chosen Target Diﬀie-Hellman in a Gap DH group, which
+was defined by Boneh et al. [ BLS01]. In the context of anonymous tokens with private metadata bit,
+we distinguish a Verify oracle which just simply checks validity of the token, and a Read oracle
+that returns the value of the private metadata bit (which could be 0, 1, or invalid, and in some
+applications, e.g. blocklisting, we can merge the states of value 0 and invalid bit). We present an
+anonymous token construction that provides unforgeability and privacy for the metadata bit even
+when the adversary has access to the Verify oracle, but we crucially require that the adversary
+does not get an oracle access that reads the private metadata bit of a token .
+4
+
+T able 1. Computation and communication costs of our constructions.
+Construction # Multiplications Communication
+user issuer (# elements)
+PP (Constr. 1 ), [ DGS+18] 6 3 2
+OSPP (Constr. 2 ) 9 6 2
+PMBT (Constr. 3 ) 15 12 2
+PPB (Constr. 4 ) 4 1 2
+PMBTB (Constr. 5 ) 12 2 3
+Eﬀiciency of our constructions. We consider the most expensive computation operation in
+the above protocols (scalar multiplication) and the largest communication overhead (the number of
+group elements transferred). We report in Table 1 the eﬀiciency of our constructions. Additionally,
+the variant of our constructions that supports a verification oracle in the PMB security game adds
+the overhead of Okamoto-Schnorr Privacy Pass to the overhead of PMBTokens. The modifications
+of the constructions that do not use DLEQ or DLEQOR proofs save work for the issuer with
+no or moderate increase in communication and increased user computation. This computation
+trade-off is beneficial for settings where the issuer handles orders of magnitude more token issuance
+requests than any particular user. We further implement our constructions in Rust, and report their
+practicals costs in Section 8 . Using a Ristretto group on Curve25519, PMBTokens issuance runs
+in 845 µs and redemption takes 235 µs, while Privacy Pass issuance runs in 303 µs and redemption
+takes 95 µs. Without the issuance NIZK, PMBTB (Constr. 5 ) introduces a small overhead over
+Privacy Pass.
+Paper Organization. We overview the hardness assumptions and the building block primitives
+we use in Section 2, and Appendices A and B. Section 3 defines our new anonymous tokens primitive
+and its security notions. We recall the Privacy Pass construction in Section 4 , and present a (ran-
+domized) Okamoto–Schnorr anonymous tokens construction in Section 5 . Next, Section 6 presents
+our construction for anonymous tokens with private metadata bit, called PMBTokens. Section 7
+proposes modifications of Privacy Pass and PMBTokens that avoid the need of zero-knowledge
+proofs. Finally, Section 8 reports on the eﬀiciency costs of our implementation.
+To simplify the presentation, we present our security proofs in Appendices E , F.1 and G to I,
+and Appendix J describes a construction where security holds even with a verification oracle.
+1.2 Related work
+Starting with the work of Chaum [ Cha82], the concept of blind signatures has been widely used as
+a tool for building anonymous credentials. Blind Schnorr and Okamoto–Schnorr signatures, which
+have been studied and analyzed in the random oracle model [ CP92, Oka92, PS00, Sch01, Sch06,
+FPS19], require three moves of interaction between the user and the issuer. Blind signatures con-
+structions that achieve one round, which is the goal for our construction, rely on more expensive
+building blocks [ FHS15, Bol03]. Partially blind signatures, for which we also have round-optimal
+constructions [ Fis06, SC12, BPV12], allow the issuer to embed some information in the signature,
+however, this information is public, unlike the private metadata bit that is the goal of our con-
+struction. The works of Boldyareva [ Bol03] and Bellare et al. [ BNPS03] achieve round optimal (one
+5
+
+round) constructions in the random oracle model under interactive assumptions. These construc-
+tions use the same blinding idea as the VOPRF [ JKK14] used by Privacy Pass, but are defined
+over groups where DDH is easy and CDH holds (or where the RSA assumptions hold), which en-
+ables public verifiability but requires larger group parameters. Other blind signature constructions
+have evolved from constructions that need a CRS [ Fis06, SC12, BFPV11] to constructions in the
+standard model [ GG14, FHS15, FHKS16], but they rely on bilinear groups. This adds complexity
+to the group instantiations for schemes and computational cost, which we aim to minimize.
+Group signatures [ CvH91, Cam97, BMW03] allow all the members of a group to sign messages,
+with the property that signatures from different signers are indistinguishable. At the same time,
+there is a master secret key that belongs to a group manager, which can be used to identify the
+signer of a message. We can view different signer keys as signing keys for the private metadata bits,
+and the master secret key as a way to read that bit value. Group blind signatures [ LR98], which
+provide also the oblivious evaluation for the signing algorithm we aim at, provide a solution for
+the anonymous token functionality with a private metadata bit. Existing blind group signatures
+constructions [LR98, Ram13, Gha13] require multiple rounds of interaction for the oblivious signing
+and communication of many group elements.
+Abdalla et al. [ ANN06] introduced a notion of blind message authentication codes (MACs),
+a secret key analog to blind signatures. They showed that this notion can exist only assuming
+a commitment of the private key, and showed how to instantiate that primitive with Chaum’s
+blind signatures [ Cha82]. Davidson et al. [ DGS+18] construct a similar private key functionality for
+anonymous tokens using a VOPRF [ JKK14]; it is called Privacy Pass and is the basis of this work.
+Everspaugh et al. [ ECS+15] introduce partially oblivious PRF, which analogously to blind
+signatures, allow the party with the secret key to determine part of the input for the PRF evaluation.
+However, this input needs to be public for verifiability. The presented partially blind PRF uses
+bilinear groups and pairings. Jarecki et al. [ JKR18] show how to obtain a threshold variant of the
+partially oblivious PRF.
+The work of Tsang et al. [ TAKS07] presents a construction for blacklistable anonymous creden-
+tials using bilinear maps, which enables the issuer to create a blacklist of identities and the user
+can only generate an authentication token if she is not blacklisted; hence the user does find out
+whether she has been blacklisted in this process.
+In keyed-verification anonymous credentials [ CMZ14], the issuer and verifier are the same party.
+They use an algebraic MAC in place of a signature scheme, where the message space is a n-tuple of
+elements in Zp (or in G). They can be used to provide an anonymous token primitive (at a slightly
+higher cost) but they’re overall meant for multi-use credentials. We are not aware of any extension
+that allows for the embedding of a private metadata bit.
+2 Preliminaries
+Notation. When sampling the value x uniformly at random from the set S, we write x←$ S.
+When sampling the value x from a probabilistic algorithm M, we write x← M. We use := to
+denote assignment. For an integer n∈ N, we denote with [n] the interval{0, . . . , n− 1}. We denote
+vectors in bold. For a vector a, we denote with ai the i-th element of a.
+The output resulting form the interaction of two (interactive) PPT algorithms A, B is denoted
+as Ja, bK←⟨ A, B⟩. If only the first party receives a value at the end of the interaction, we write
+a←⟨ A, B⟩ instead of Ja,⊥K←⟨ A, B⟩.
+6
+
+Game CTGDHGrGen,A,ℓ(λ)
+Γ := (G, p, G)← GrGen(1λ)
+x←$ Zp; X := xG
+q := 0; Q := [ ]
+(ti, Zi)i∈[ℓ+1]← ATarget,Help,Ddh(Γ, X)
+for i∈ [ℓ + 1] :
+if ti̸∈Q then return 0
+Yi :=Q[ti]
+return
+(
+q≤ ℓ and
+∀i̸= j∈ [ℓ + 1] ti̸= tj and
+∀i∈ [ℓ + 1] xYi = Zi
+)
+Oracle Target(t)
+if t∈Q then
+Y :=Q[t]
+else :
+Y←$ G
+Q[t] := Y
+return Y
+Oracle Help(Y )
+q := q + 1
+return xY
+Oracle Ddh(Y, Z )
+return (Z = x· Y )
+Fig. 1. The Chosen-target gap Diﬀie–Hellman security game.
+We assume the existence of a group generator algorithm GrGen(1λ) that, given as input the
+security parameter in unary form outputs the description Γ = ( G, p, G, H) of a group G of prime
+order p; G and H are two nothing-up-my-sleeve (NUMS) generators of G. For simplicity, we will
+assume that the prime p is of length λ.
+2.1 Security assumptions
+In Appendix A , we define the classical discrete logarithm (DLOG), decisional Diﬀie–Hellman
+(DDH), and computational Diﬀie–Hellman (CDH) assumptions. Here, we define the chosen-target
+gap Diﬀie–Hellman (CTGDH) assumption.
+Chosen-target gap Diﬀie–Hellman. The so-called chosen-target Diﬀie–Hellman (CTDH) as-
+sumption [ Bol03, HL06] states that any PPT adversary A has negligible advantage in solving CDH
+on ℓ + 1 target group elements, even when given access to a CDH helper oracle for ℓ instances.
+We formalize here its gap [OP01] flavor, in which the adversary has, in addition, access to a DDH
+oracle for arbitrary group elements. Note that the CTDH assumption was originally introduced
+by Boldyreva [ Bol03] in gap DH groups [ BLS01], that is, in groups where CDH is hard but DDH
+is assumed to be easy. In other words, the original definition of CTDH was already in groups
+where the adversary has access to a DDH oracle. Here, we introduce the chosen-target gap Diﬀie–
+Hellman assumption (CTGDH, that is, the gap version of CTDH) as a security experiment where
+the adversary is provided a challenge X∈ G, and has access to three oracles: the Target oracle,
+that given as input a string t∈{ 0, 1}∗, outputs a random group element; the Help oracle, that
+outputs the CDH of X with an arbitrary group element Y ∈ G, and the Ddh oracle, that given as
+input two group elements (Y, Z)∈ G2 returns 1 if and only if (X, Y, Z) is a Diﬀie–Hellman tuple.
+We describe the Target oracle in this cumbersome way to ease readability of the security proofs
+later.
+Formally, we say that CTGDH holds for the group generator GrGen if for any PPT adversary
+A, and any ℓ≥ 0:
+Advctgdh
+GrGen,A,ℓ(λ) := Pr
+
+CTGDHGrGen,A,ℓ(λ) = 1
+
+= negl(λ) ,
+7
+
+Game KSNDΠ,R,A,Ext(λ)
+Γ← GrGen(1λ)
+(crs, td)← Π.Setup(Γ )
+r←${0, 1}A.rl(λ); ( ϕ, π) := A(crs; r)
+w← Ext(td, r)
+return (Π.Verify(crs, ϕ, π) and R(ϕ, w) = false)
+Game ZKβ
+Π,R,A(λ)
+Γ← GrGen(1λ)
+(crs, τ)← Π.Setup(Γ )
+β′← AProve(crs)
+return β′
+Oracle Prove(ϕ, w)
+if R(ϕ, w) = false then
+return⊥
+π0← Π.Prove(crs, ϕ, w)
+π1← Π.Sim(crs, τ, ϕ)
+return πβ
+Fig. 2. Games for knowledge soundness (KSND), and zero knowledge (ZK).
+where CTGDHGrGen,A,ℓ(λ) is defined in Figure 1. Note that for ℓ = 0, the game CTGDHGrGen,A,0(λ)
+is equivalent to gap CDH. We direct the reader towards Appendix A for more information on this
+assumption, and how it relates to previous works.
+2.2 Non-interactive arguments of knowledge
+A non-interactive proof system Π for relation R consists of the following three algorithms:
+– (crs, td)← Π.Setup(Γ ), the setup algorithm that outputs a common reference string (CRS) crs
+together with some trapdoor information td.
+– π ← Π.Prove(crs, ϕ, w), a prover which takes as input some (ϕ, w)∈ R and a CRS crs, and
+outputs a proof π.
+– bool← Π.Verify(crs, ϕ, π) a verifier that, given as input a statement ϕ together with a proof π
+outputs true or false, indicating acceptance of the proof.
+The proof system Π is a non-interactive zero-knowledge (NIZK) argument of knowledge if it
+satisfies the following properties:
+Completeness. Π is complete if every correctly generated proof verifies. More formally, a proof
+system Π is complete if for any Γ∈ [GrGen(1λ)], crs∈ [Π.Setup(Γ )] and (ϕ, w)∈ R:
+Pr[ Π.Verify(crs, ϕ, Π.Prove(crs, ϕ, w))] = 1− negl(λ) .
+Knowledge soundness. A proof system Π for relation R is knowledge-sound if for any PPT adversary
+A there exists a PPT extractor Ext such that:
+Advksnd
+Π,R,A,Ext(λ) := Pr
+
+KSNDΠ,R,A,Ext(λ)
+
+= negl(λ) ,
+where KSNDΠ,R,A,Ext(λ) is defined in Figure 2 and A.rl(λ) is the randomness length of the adversary
+A. An argument of knowledge is a knowledge-sound proof system. In our proofs, for ease of notation,
+we will omit sometimes to specify explicitly that the extractor takes as input the coins of the
+adversary.
+Zero Knowledge. A proof system Π for R is zero-knowledge if no information about the witness
+is leaked by the proof, besides membership in the relation. This is formalized by specifying an
+additional PPT algorithm Π.Sim, that takes as input the trapdoor information td and a statement
+ϕ, and outputs a valid proof π indistinguishable from those generated via Π.Prove. Formally, A
+proof system Π for relation R is zero-knowledge if for any PPT adversary A:
+Advzk
+Π,R,A(λ) :=
+Pr
+
+ZK0
+Π,R,A(λ)
+
+− Pr
+
+ZK1
+Π,R,A(λ)
+ = negl(λ) ,
+where ZKβ
+Π,R,A(λ) is defined in Figure 2 .
+8
+
+Throughout this paper, we will assume the existence of the following proof systems, that we
+summarize here in Camenisch-Stadler notation [ Cam97]:
+ΠDLOG := NIZK{(x) : X = xG} (1)
+ΠDLEQ := NIZK{(x) : X = xG ∧ W = xT} (2)
+ΠDLEQ2 := NIZK{(x, y) : X = xG + yH ∧ W = xT + yS} (3)
+ΠDLOGAND2 := NIZK{(x, y) :∀i∈{ 0, 1} Xi = xiG + yiH} (4)
+ΠDLEQOR2 := NIZK{(x, y) :∃i∈{ 0, 1} Xi = xG + yH∧ W = xT + yS} (5)
+Eq. (1) and Eq. (4) are discrete logarithm proofs for one, respectively two generators. Eq. (2) and
+Eq. (3) prove discrete logarithm equality under one, respectively two generators. Finally, Eq. (5)
+proves discrete logarithm equality for one out of two group elements (in the witness, the index is
+denoted as i∈{ 0, 1}). In Appendix B , we provide a more formal description of the above relations,
+and eﬀicient instantiations with techniques for batching proofs at issuance time.
+3 Anonymous tokens
+We describe two flavors of anonymous tokens. The first flavor enables a user to obtain a token from
+an issuer; the user can later use this token as a trust signal, for one-time authentication. In the
+second flavor, the issuer has an additional input during the token issuance, a private metadata bit ,
+that is hidden within the token. The private metadata bit can later be recovered by the issuer at
+redemption time. The following definition captures both functionalities; in shaded text, we refer
+only to the anonymous token with private metadata bit.
+Anonymous token. An anonymous token scheme with private metadata bit AT consists of the
+following algorithms:
+– (crs, td)← AT.Setup(1λ), the setup algorithm that takes as input the security parameter λ in
+unary form, and returns a CRS crs and a trapdoor td.
+All the remaining algorithms take crs as their first input, but for notational clarity, we usually
+omit it from their lists of arguments.
+– (pp, sk)← AT.KeyGen(crs), the key generation algorithm that generates a private key sk along
+with a set of public parameters pp;
+– σ ←⟨ AT.User(pp, t), AT.Sign(sk, b)⟩, the token issuance protocol, that involves interactive al-
+gorithms AT.User (run by the user) with input a value t∈{ 0, 1}λ, and AT.Sign (run by the
+issuer) with input the private key sk and a bit b. At the end of the interaction, the issuer outputs
+nothing, while the user outputs σ, or⊥.
+– bool← AT.Verify(sk, t, σ), the verification algorithm that takes as input the private key sk and a
+token (t, σ). It returns a boolean indicating if the token was valid or not.
+– ind← AT.ReadBit(sk, t, σ), the metadata extraction algorithm that takes as input the private key
+sk, and a token (t, σ). It returns an indicator ind∈{⊥ , 0, 1}, which is either the private metadata
+bit, or⊥.
+Throughout the rest of this paper, we assume that AT has a one-round signing protocol initiated
+by the user. Thus, for simplicity, we split the signing algorithms ( AT.Sign and AT.User) into non-
+interactive algorithms that take as input a message, and the partial state (if any). They will return
+9
+
+Game OMUFAT,A,ℓ(λ)
+(crs, td)← AT.Setup(1λ)
+(pp, sk)← AT.KeyGen(crs)
+for b = 0, 1 : qb := 0
+(ti, σi)i∈[ℓ+1]← ASign,Verify,Read(crs, pp)
+return
+(
+∀b = 0, 1 qb≤ ℓ and
+∀i̸= j∈ [ℓ + 1] ti̸= tj and
+∀i∈ [ℓ + 1] AT.Verify(sk, ti, σi) = true and
+∃b∈{ 0, 1} : ∀i∈ [ℓ + 1] AT.ReadBit(sk, ti, σi) = b
+)
+Oracle Sign(b, msg)
+qb := qb + 1
+return AT.Sign0(sk, b, msg)
+Oracle Verify(t, σ)
+return AT.Verify(sk, t, σ)
+Oracle Read(t, σ)
+return AT.ReadBit(sk, t, σ)
+Fig. 3. One-more unforgeability game for the anonymous token scheme AT.
+the next message together with the updated state sti. Concretely, the signing protocol will be
+composed of the following (non-interactive) algorithms:
+– (usr_msg0, st0)← AT.User0(pp, t);
+– srv_msg1← AT.Sign0(sk, b , usr_msg0);
+– σ← AT.User1(st0, srv_msg1)
+We demand that anonymous token schemes satisfies correctness, unforgeability, unlinkability , and
+privacy of the metadata bit.
+Correctness. An anonymous token scheme AT is correct if any honestly-generated token verifies
+and the correct private metadata bit is retrieved successfully. That is, for any crs∈ [AT.Setup(1λ)],
+any (pp, sk)∈ [AT.KeyGen(crs)], any t∈{ 0, 1}λ, and b∈{ 0, 1}:
+Pr[ AT.Verify(sk, t,⟨AT.User(pp, t), AT.Sign(sk, b )⟩) = 1] = 1 − negl(λ), (6)
+Pr[ AT.ReadBit(sk, t,⟨AT.User(pp, t), AT.Sign(sk, b)⟩) = b] = 1− negl(λ) (7)
+Unforgeability . The first security property that we require from an anonymous token is un-
+forgeability, which guarantees that no adversary can redeem more tokens than it is allowed. This is
+formalized with a standard one-more security game where the adversary can interact with the issuer
+at most ℓ times, and at the end must output ℓ + 1 valid tokens. The adversary has also access to
+a verification oracle for tokens of its choice. In the private metadata bit variant, the adversary can
+interact with the issuer ℓ times for each private metadata bit, but should not be able to generate
+ℓ + 1 valid tokens with the same private metadata.
+Definition 1 (One-more unforgeability). An anonymous token scheme AT is one-more un-
+forgeable if for any PPT adversary A, and any ℓ≥ 0:
+Advomuf
+AT,A,ℓ(λ) := Pr
+
+OMUFAT,A,ℓ(λ) = 1
+
+= negl(λ) ,
+where OMUFAT,A,ℓ(λ) is defined in Figure 3 .
+Sometimes, a stronger security notion of unforgeability is desirable, where the adversary can win
+also by outputting (ti, σi)i∈[ℓ+1] where some ti’s are the same but the σi’s are different. The schemes
+we present were do not provide this type of security.
+10
+
+Game UNLINKAT,A,m(λ)
+(crs, td)← AT.Setup(1λ)
+(st, pp)← A(crs)
+q0 := 0; q1 := 0; Q :=∅
+(st, (msgi)i∈Q)← AUser0,User1 (st)
+ifQ =∅ then return 0
+/ /compute a challenge token
+j←$Q; Q :=Q\{ j}
+σj← AT.User1(stj, msgj)
+/ /compute and permute other tokens
+for i∈Q : σi← AT.User1(sti, msgi)
+ϕ←$SQ
+j′← A(st, (tj, σj), (tϕ(i), σϕ(i))i∈Q)
+return q0− q1≥ m and j′ = j
+Oracle User0()
+q0 := q0 + 1 / /session id
+tq0←${0, 1}λ
+(msgq0 , stq0 )← AT.User0(pp, tq0 )
+Q :=Q∪{ q0} / /open sessions
+return (q0, msgq0 )
+Oracle User1(j, msg)
+if j /∈Q then
+return ⊥
+σ← AT.User1(stj, msg)
+if σ̸=⊥ then
+Q :=Q\{ j}
+q1 := q1 + 1
+return σ
+Fig. 4. Unlinkability game for the anonymous token scheme AT. For a set X,SX denotes the symmetric group of X.
+Unlinkability . This security property is concerned with user anonymity, and guarantees that a
+malicious issuer cannot link the redemption of a token with a particular execution of the token
+issuance protocol. More precisely, in κ-unlinkability, if m tokens were issued but not yet redeemed,
+the adversary cannot link the relative issuance session of a token with probability better than κ/m,
+even after seeing the remaining m− 1 tokens in a random order.
+Definition 2 (Unlinkability). An anonymous token scheme AT is κ-unlinkable if for any PPT
+adversary A, and any m > 0:
+Advunlink
+AT,A,m(λ) := Pr
+
+UNLINKAT,A,m(λ) = 1
+
+≤ κ
+m + negl(λ) ,
+where UNLINKAT,A,m(λ) is defined in Figure 4 .
+Private metadata bit. The last security property protects the private metadata bit in the issued
+tokens.9 It guarantees that the private metadata embedded in a token is entirely hidden from anyone
+who does not possess the private key including the user. More precisely, we require that, even if the
+adversary corrupts a large number of users, it cannot guess with probability non-negligibly bigger
+than 1/2 if newly issued tokens have private metadata 0 or 1.
+Formally, this is modeled as an indistinguishability game where the adversary has access to two
+signing oracles: one where it can provide both the message to be signed and the private metadata
+bit to be used, and one where the adversary chooses only the message (the metadata bit is fixed),
+and a verification oracle for the validity of the tokens. The adversary’s goal is to guess the challenge
+private metadata bit used.
+9 Consider, e.g., the following practical scenario: the issuer is suspecting that it is targeted by a DoS attack, and
+decides to tag users that it believes are controlled by a bot using the private metadata bit. The private metadata
+bit property ensures it is diﬀicult for anyone, but the issuer, to learn how malicious traﬀic is classified.
+11
+
+Game PMBβ
+AT,A(λ)
+(crs, td)← AT.Setup(1λ)
+(pp, sk)← AT.KeyGen(crs)
+β′← ASign,Sign′,Verify(crs, pp)
+return β′
+Oracle Sign(msg)
+return AT.Sign0(sk, β, msg)
+Oracle Sign′(b, msg)
+return AT.Sign0(sk, b, msg)
+Oracle Verify(t, σ)
+return AT.Verify(sk, t, σ)
+Fig. 5. Private metadata bit game for the anonymous token scheme AT.
+Definition 3 (Private metadata bit). An anonymous token scheme AT provides private meta-
+data bit if for any PPT adversary A:
+Advpmb
+AT,A(λ) :=
+Pr
+
+PMB0
+AT,A(λ)
+
+− Pr
+
+PMB1
+AT,A(λ)
+ = negl(λ) ,
+where PMBβ
+AT,A(λ) is defined in Figure 5 .
+T oken hijacking. In our formalization, we do not consider man-in-the-middle adversaries that
+can steal tokens from honest users. This attack vector, called token hijacking, can be mitigated with
+the use of message authentication codes (MACs). Roughly speaking, instead of sending the entire
+token (t, σ) over the wire, the user can derive a symmetric key k := H(σ) to MAC a shared message
+(e.g., the resource or the URL she’s trying to access). The resulting message authentication code
+is sent together with t to the issuer (and any supplementary randomness that the user needs to
+recompute σ). We discuss in detail such concerns in Appendix D .
+4 Review: Privacy Pass
+We start by recalling, using the notation from Section 3 , the anonymous token scheme proposed
+in [ DGS+18] (under the name Privacy Pass) and built on top of the verifiable oblivious PRF
+(VOPRF) “2HashDH-NIZK” [ JKK14]. Privacy Pass uses a Schnorr proof in the issuance phase,
+that we generalize here to any NIZK. Differently from the initial proof of Goldberg et al. [ DGS+18],
+our proof takes into account the presence of a verification oracle, and the knowledge error of the
+proof system.
+Construction 1 (Privacy Pass). Let ΠDLEQ be a proof system for relation RDLEQ; let Ht be
+a random oracle {0, 1}∗ → G. The anonymous token scheme PP [DGS+18] is composed of the
+following algorithms:
+– (crs, td)← PP.Setup(1λ): invoke the group generator Γ ← GrGen(1λ) and the CRS generation
+algorithm of the underlying proof system (pcrs, ptd)← ΠDLEQ.Setup(Γ ). Return crs := ( Γ, pcrs)
+and td := ptd.
+– (X, x)← PP.KeyGen(crs): sample a uniformly random element x←$ Z∗
+p, that will constitute the
+secret key. Let X := xG be the public parameter. Return (X, x).
+– W←⟨ PP.User(X, t), PP.Sign(x)⟩: illustrated in Figure 6 .
+– bool← PP.Verify(x, t, W): return true if W = xHt(t); else, return false.
+Note that this anonymous token protocol is deterministic, i.e., there will exist a unique value W∈ G
+corresponding to a string t∈{ 0, 1}λ that verifies. This property will make diﬀicult to directly extend
+the construction to support private metadata bit.
+12
+
+PP.User(X, t) PP.Sign(x)
+PP.User0(X, t)
+r←$ Z∗
+p
+T := Ht(t)
+T ′ := r−1T
+return (T ′, (X, r, t))
+T ′
+W ′, π
+PP.Sign0(x, T ′)
+W ′ := xT ′
+π← ΠDLEQ.Prove((X, T ′, W ′), x)
+return (W ′, π)
+PP.User1((X, r, t), (W ′, π))
+if not ΠDLEQ.Verify((X, T ′, W ′), π) then
+return ⊥
+return W := rW ′
+Fig. 6. Token issuance for PP (Construction 1 ).
+Correctness. By correctness of the underlying proof system, at the end of the protocol the user
+returns⊥ only with negligible probability. If the user returns W∈ G, then W always satisfies the
+verification equation, since:
+W = rW′ = r(xT′) = xT = xHt(t).
+Security . PP satisfies both unforgeability and 1-unlinkability.
+Theorem 4. If CTGDH holds for GrGen and ΠDLEQ is a zero-knowledge proof system for relation
+RDLEQ, then PP[GrGen, ΠDLEQ] is one-more unforgeable with advantage:
+Advomuf
+PP,ℓ (λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ,RDLEQ(λ).
+The full proof can be found in Appendix E.1 , and follows directly from chosen-target gap
+Diﬀie–Hellman for GrGen, and zero-knowledge of ΠDLEQ. Consider an adversary A in the game
+OMUFPP,A(λ). To win the game, A must return ℓ+1 tokens (ti, Wi)i∈[ℓ+1] such that, for all i∈ [ℓ+1]:
+(a) xHt(ti) = Wi, (b) ∀j̸= i : tj̸= ti (8)
+During its execution, the adversary A can query at most ℓ times the signing oracle, which given
+as input T∗∈ G computes the Diﬀie–Hellman W = xT∗, and sends it together with a proof π
+that W was correctly computed; additionally, A can query the oracle Verify(t∗, W∗) that returns
+1 if W∗ = xHt(t∗), that is, if (X, Ht(t∗), W∗) is a DH tuple. Since ΠDLEQ is zero-knowledge, it is
+possible to simulate the proof π. We are thus left with the game CTGDH ( Fig. 1 ), where Verify
+can be replaced by the oracle Ddh, Ht by Target, and Sign by the oracle Help (together with
+ΠDLEQ.Sim).
+13
+
+OSPP.User(X, t) OSPP.Sign((x, y))
+OSPP.User0(X, t)
+r←$ Z∗
+p
+T := Ht(t)
+T ′ := r−1T
+return (T ′, (X, r, t, T′))
+T ′
+s, W ′, π
+OSPP.Sign0((x, y), T ′)
+s←${0, 1}λ
+S′ := Hs(T ′, s)
+W ′ := xT ′ + yS ′
+π← ΠDLEQ2.Prove((X, T ′, S′, W ′), (x, y))
+return (s, W ′, π)
+OSPP.User1((X, r, t, T′), (s, W ′, π))
+S′ := Hs(T ′, s)
+if not ΠDLEQ2.Verify((X, T ′, S′, W ′), π) then
+return ⊥
+S := rS ′
+W := rW ′
+return σ := (S, W )
+Fig. 7. Token issuance for OSPP (Construction 2 ).
+Theorem 5. Let GrGen be a group generator algorithm. If ΠDLEQ is a knowledge-sound proof system
+for relation RDLEQ, then PP[GrGen, ΠDLEQ] is 1-unlinkable.
+We remark that the i-th message sent by PP.User0 is T′
+i = r−1Ti, for a uniformly random
+ri∈ Z∗
+p. Therefore, T′
+i contains no information about Ti or ti. Additionally, by knowledge soundness
+of ΠDLEQ, it is possible to extract the witness x∈ Zp used to compute the signatures. With it, the
+user can compute Wi herself, without ever using the responses from the issuer. It follows that the
+view of the adversary is limited to random group elements and PP is 1-unlinkable, as long as the
+proof system is knowledge-sound.
+5 Okamoto–Schnorr Privacy Pass
+In this section, we describe a novel anonymous token scheme that generalizes PP (Section 4 ) and
+allows for randomized tokens, which will be an important property when we extend the construction
+to support private metadata bit ( Section 6 and Appendix J ). Roughly speaking, while in PP we
+issue tokens (and DLEQ proofs) using one generator G of G, in this construction we will issue tokens
+under two generators (G, H), in a similar way to Okamoto–Schnorr [ Oka92] signatures. Similarly
+to Okamoto–Schnorr, it is important here that the discrete logarithm of H base G is unknown.
+Fixing y = 0 in the protocol below, we obtain PP (cf. Section 4 ).
+14
+
+Construction 2 (Okamoto–Schnorr Privacy Pass). Let GrGen be a group generator al-
+gorithm; let ΠDLEQ2 be a proof system for relation RDLEQ2; let Ht, Hs be two random oracles
+{0, 1}∗→ G. We construct an anonymous token scheme OSPP defined by the following algorithms:
+– (crs, td)← OSPP.Setup(1λ): invoke the group generator Γ← GrGen(1λ) and the CRS generation
+algorithm of the underlying proof system (pcrs, ptd)← ΠDLEQ2.Setup(Γ ). Return crs := (Γ, pcrs)
+and td := ptd.
+– (X, (x, y))← OSPP.KeyGen(crs): sample the secret key (x, y)←$ (Z∗
+p)2. Let X := xG + yH be
+the public parameter. Return (X, (x, y)).
+– σ←⟨ OSPP.User(X, t), OSPP.Sign((x, y))⟩: illustrated in Figure 7 .
+– bool← OSPP.Verify((x, y), t, σ): read (S, W ) := σ. Return true if W = xHt(t) + yS; else, return
+false.
+Correctness. By correctness of the underlying proof system, the protocol aborts only with neg-
+ligible probability. If the user returns σ := ( S, W )∈ G2, then σ always satisfies the verification
+equation, since
+W = rW′ = r(xT′ + yS′) = xT + yS = xHt(t) + yS.
+Security . OSPP satisfies both unforgeability and 1-unlinkability.
+Theorem 6. If CTGDH holds for GrGen, and ΠDLEQ2 is a zero-knowledge proof system for relation
+RDLEQ2, then OSPP[GrGen, ΠDLEQ2] is one-more unforgeable with advantage:
+Advomuf
+OSPP,ℓ(λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ2,RDLEQ2(λ).
+The proof of unforgeability is essentially the same argument of the previous section, with a
+slightly more careful analysis to deal with the additional element s∈{ 0, 1}λ. The reduction for
+CTGDH receives a challenge A∈ G, that is now embedded in the public parameters as X =
+A + yH for some y←$ Zp; the signing oracle computes W′ = Help(T′) + yS′, and the read oracle
+Ddh(W−yS). The tokens returned by the adversary can be converted in CDH solutions computing
+Wi− ySi, for all i∈ [ℓ + 1]. The full proof can be found in Appendix F.1 .
+Theorem 7. If DDH holds for GrGen and ΠDLEQ2 is an argument of knowledge for relation RDLEQ2,
+then OSPP[GrGen, ΠDLEQ2] is 1-unlinkable.
+Similarly to the previous proof, we first notice that in the i-th message, T′
+i contains no infor-
+mation about t; additionally, by knowledge soundness of the proof system, Wi must be computed
+with the same witness (x, y) satisfying X = xG + yH (if there exists (x′, y′)̸= ( x, y), then it is
+possible to construct an adversary for discrete log for GrGen). The core difference now is that we
+use the same blinding factor r both on S′ and W′. The proof hence proceeds in two steps: first,
+W := rW′ is computed as W := xT + yS with the extracted witness, and next S := rS′ is re-
+placed by S←$ G. This last step can be reduced to DDH: if the adversary manages to distinguish
+(T′, T = rT′, S′, S = rS′) from (T′, T = rT′, S′, U) for U←$ G, then it is possible to construct an
+adversary B for game DDHβ
+GrGen,B(λ).
+15
+
+PMBT.User(X, t) PMBT.Sign((x, y), b)
+PMBT.User0(X, t)
+r←$ Z∗
+p
+T := Ht(t)
+T ′ := r−1T
+return (T ′, (X, r, t, T′))
+T ′
+s, W ′, π
+PMBT.Sign0((x, y), b, T ′)
+s←${0, 1}λ
+S′ := Hs(T ′, s)
+W ′ := xbT ′ + ybS′
+π← ΠDLEQOR2.Prove((X, T ′, S′, W ′), (xb, yb))
+return (s, W ′, π)
+PMBT.User1((X, r, t, T′), (s, W ′, π))
+S′ := Hs(T ′, s)
+if not ΠDLEQOR2.Verify((X, T ′, S ′, W ′), π) then
+return ⊥
+S := rS ′
+W := rW ′
+return σ := (S, W )
+Fig. 8. Token issuance for PMBT (Construction 3 ).
+6 Private metadata bit tokens
+In this section, we present PMBTokens, an extension of the anonymous token construction from
+Section 5 that supports a private metadata bit. The high-level idea is that we use two different
+secret keys, one for each private metadata bit. In order to hide which bit is associated with the
+token, we will use OR proofs (i.e., ΠDLEQOR2 of Eq. (5) ).
+Construction 3 (PMBT okens). Let GrGen be a group generator algorithm; let ΠDLEQOR2 be a
+proof system for relation RDLEQOR2; let Ht, Hs be two random oracles {0, 1}∗→ G. We construct
+an anonymous token scheme PMBT defined by the following algorithms:
+– (crs, td) ← PMBT.Setup(1λ): invoke the group generator Γ ← GrGen(1λ) and the CRS gen-
+eration algorithm of the underlying proof system (pcrs, ptd) ← ΠDLEQOR2.Setup(Γ ). Return
+crs := (Γ, pcrs) and td := ptd.
+– (X, (x, y))← PMBT.KeyGen(crs): let (x, y)←$ (Z∗
+p)2× (Z∗
+p)2 be the secret key. Define the public
+parameters as:
+X :=
+2
+4X0
+X1
+3
+5 :=
+2
+4x0G + y0H
+x1G + y1H
+3
+5 ;
+restart if X0 = X1. Return (X, (x, y)).
+16
+
+– σ←⟨ PMBT.User(pp, t), PMBT.Sign(sk, b)⟩: illustrated in Figure 8 .
+– bool← PMBT.Verify((x, y), t, σ): return true.
+– ind← PMBT.ReadBit((x, y), t, σ): read (S, W ) := σ. Then:
+(a) if W = x0Ht(t) + y0S and W̸= x1Ht(t) + y1S, return 0;
+(b) if W̸= x0Ht(t) + y0S and W = x1Ht(t) + y1S, return 1;
+(c) else, return⊥.
+Our construction does not provide a (meaningful) implementation of Verify, but only a ReadBit
+functionality. We elaborate this point in Section 6.1; this construction can be combined with OSPP
+to provide an actual verification procedure (described in Appendix J ).
+Correctness. Validity of honestly-generated tokens (cf. Equation (6) ) holds perfectly because
+PMBT.Verify always returns true; we focus here on proving that the bit embedded is read correctly
+with overwhelming probability ( Equation (7) ). By correctness of the underlying proof system, the
+protocol aborts only with negligible probability. If the user returns (S, W )∈ G2, then there exists
+b∈{ 0, 1} such that:
+W = rW′ = r(xbT′ + ybS′) = xbT + xbS = xbHt(t) + ybS.
+The probability that the above equation holds for both b = 0 and b = 1 (in which case, PMBT.ReadBit
+returns⊥), is statistically negligible. In fact, if:
+W = x0Ht(t) + y0S = x1Ht(t) + y1S,
+then we have two possibilities:
+(a) y0 = y1, which in turn implies that x0Ht(t) = x1Ht(t). Because x0̸= x1 (by construction of
+PMBT.KeyGen), this happens only if Ht(t) is the identity element. This event happens with
+probability 1/p;
+(b) y0̸= y1, which in turn means that:
+Ht(t) = x0− x1
+y0− y1
+S.
+However, the left-hand side of the equation is distributed uniformly at random in G and
+independently from the terms on the right-hand side. This event happens with probability
+1/p.
+Security . In Appendix G , we prove the one-more unforgeability and 2-unlinkability of PMBT.
+Theorem 8. If CTGDH holds for GrGen and ΠDLEQ2 is a zero-knowledge proof system for relation
+RDLEQ2, then PMBT[GrGen, ΠDLEQ2] is one-more unforgeable with advantage:
+Advomuf
+PMBT,ℓ(λ)≤ 2Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ2,RDLEQ(λ).
+The proof is available in Appendix G.1 . Consider an adversary A in the game OMUFPMBT,A(λ).
+A wins the game if it returns ℓ + 1 tokens (ti, (Si, Wi))i∈[ℓ+1] such that there exists a b∈{ 0, 1}
+satisfying:
+(a)∀i∈ [ℓ + 1] : xbHt(ti) + ybSi = Wi, (b) ∀j̸= i : tj̸= ti. (9)
+17
+
+During its execution, A can query ℓ + 1 times the signing oracle for b = 0, and ℓ + 1 times for b = 1.
+We claim (in a similar way to Eq. (8) ), that A can be used to construct an adversary B that solves
+CTGDH. We embed the CTGDH challenge A∈ G in one of the two keys: we sample b∗←${0, 1}, and
+set Xb∗ := A + yb∗H, where yb∗←$ Zp. We construct X1−b∗ following the key generation algorithm.
+Queries by A to the oracle Sign are responded in the following way: if the adversary demands
+issuance for hidden metadata b∗, we use the Help oracle to return W′ = Help(t, T′) + yb∗S′;
+otherwise B just follows the signing protocol and computes W′ using (x1−b∗, y1−b∗). The zero-
+knowledge proof is simulated. Queries to the oracle Read can still be answered by B with the help
+of the oracle Ddh available in the game CTGDHGrGen,B,ℓ(λ). Queries to Verify are trivially dealt
+with, by answering true. If at the end of its execution A presents forgeries for the bit b = b∗,
+then by winning condition (a) (cf. Eq. (9) ), for all i∈ [ℓ + 1], (Wi− yb∗Si) is the CDH of the
+challenge A with Ht(ti), which we replace with the CTGDH oracle Target thus presenting ℓ + 1
+CDH solutions for the challenge A∈ G. If the guess b∗ was not correct, then B outputs⊥, and we
+consider the game lost. It follows that B wins the game CTGDHGrGen,B,ℓ(λ) half the time that A
+wins OMUFPMBT,A,ℓ(λ).
+Theorem 9. If DDH holds for GrGen and ΠDLEQOR2 is a zero-knowledge proof system for relation
+RDLEQOR2, then PMBT[GrGen, ΠDLEQOR2] is 2-unlinkable.
+The key idea is that adversary can now embed different private metadata bits at issuance time,
+at most halving the anonymity set. We use the knowledge extractor to partition the sessions in two
+buckets: U0, those associated to the bit 0, and U1, those with bit 1. We sample a biased b∈{ 0, 1}
+(depending on the distribution of the private metadata bit in the tokens) and select two sessions
+coming from the same bucket Ub. The probability of success of the adversary will be upper bounded
+by 2/m + negl(λ).
+Theorem 10. If DDH holds for the group generator GrGen, and ΠDLEQOR2 is a zero-knowledge
+proof system for relation RDLEQOR2 then PMBT[GrGen, ΠDLEQOR2] provides private metadata bit
+with advantage:
+Advpmb
+PMBT(λ)≤ O(q2)
+2λ + 2Advddh
+GrGen(λ) + 2Advzk
+ΠDLEQOR2,RDLEQOR2(λ),
+where q is the number of queries the adversary makes to Hs or Sign.
+The proof is done by means of a hybrid argument, where the first hybrid is PMB0
+A,PMBT(λ)
+and the last hybrid is PMB1
+A,PMBT(λ). In the first hybrid, instead of generating the proof using
+the prover ΠDLEQOR2.Prove in the Sign′ oracle, we use the zero-knowledge simulator ΠDLEQOR2.Sim.
+The advantage in distinguishing is trivially Advzk
+ΠDLEQOR2,RDLEQOR2,B(λ). Then, instead of computing
+the signature as W′ = x0T′ + y0S′, it computes W′ := x0T′ + y′S′, for some y′←$ Zp sampled after
+the key generation phase. This hybrid can be shown indistinguishable from the previous one under
+DDH assumption: (X− x0G, S′, W′− x0T′)∈ G is in fact a DDH triple in the previous hybrid, and
+a random triple now. Using random self-reducibility of DDH we can answer all queries to Sign′
+using a single DDH challenge. At this point, we remark that W′ is distributed uniformly at random
+(because y′S′ is so) and we can therefore swap x0 with x1. A final sequence of hybrid replaces y′
+with y1 (again indistinguishable from DDH) and then the simulator with the honest prover.
+18
+
+6.1 Enabling token verification
+The anonymous token scheme PMBT (Construction 3 ) does not provide a meaningful verification
+algorithm, as it always output true. We note that, given two tokens (t0, (S0, W0)) and (t1, (S1, W1)),
+if t0 = t1, then
+ 
+t∗ = t0 = t1, (S∗ = 2 S0− S1, W∗ = 2 W0− W1)
+
+is a triple of random elements
+satisfying W∗ = xbH(t∗) + ybS∗ only if the same metadata bit b was used. Henceforth, having a
+verification oracle that checks for the above relation allows an adversary in the game PMBβ
+PMBT,A(λ)
+to check if two tokens corresponding to the same t were issued with the same private metadata bit.
+Instead, we propose to enable such a functionality by combining the PMBT scheme with OSPP,
+into one token that has two parts: a token that has no private metadata and can be used for
+validity verification, and a second token, which provides a private metadata bit. It is important
+that these two parts could not be separated (they will depend on the same Ht(t), S values) and
+used independently for the purpose of reading the metadata bit. We present in details the design
+combining Constrs. 2 and 3 in Appendix J .
+Jumping ahead, we can also instantiate this design by combining Constructions 4 and 5 that
+do not use NIZK during issuance. In the later case the unlinkability will degrade to 6-unlinkability
+since the issuer can cause each of the two token to be invalid independently.
+7 Removing the NIZKs during issuance
+In this section, we present a general technique for removing the NIZK sent at issuance time in the
+previous schemes, and replace it with a proof of possession sent only once. We present a formal
+analysis of it for PP and PMBT (Constructions 1 and 3). We recall that the role of the NIZK is to
+provide unlinkability for the user, as they can check that the tokens received are consistent with
+the issuer’s public parameters. In particular they prevent the issuer from fingerprinting users by
+using a unique key per user. We consider a weaker notion of unlinkability, which guarantees that
+the user either receives a valid token, or a completely random value (unpredictable by the issuer).
+This implies that the issuer can distinguish valid tokens from invalid tokens since the user cannot
+verify herself whether they have a valid token or not. In other words, the issuer can partition the
+users into two sets: one that receives valid tokens, and one that receives invalid tokens. The issuer
+will be able to identify which of these sets a user belongs to, at redemption time. For a more careful
+analysis on how this affect the success probability of the adversary in the unlinkability game, we
+refer the reader to Theorems 14 and 22..
+In practice, because invalid tokens from a malicious issuers will be uniformly distributed, if all
+clients periodically attempt to redeem a random token, the anonymity set won’t change. In fact,
+since the tokens resulting from the interaction with a malicious issuer are perfectly indistinguishable
+from tokens transmitted by other users, pragmatically we can achieve the same level of anonymity
+of the previous protocols.
+7.1 PP without issuance NIZK
+We start with our new construction for the functionality of Privacy Pass. The change that we
+make is that the user blinds her token hash Ht(t) using both multiplicative and additive blinding.
+The additive part can be removed during the unblinding if the issuer used the correct secret key.
+Otherwise, the generated token (t, W )∈{ 0, 1}λ× G will be invalid and distributed uniformly at
+random.
+19
+
+PPB.User((X, π), t) PPB.Sign(x)
+PPB.User0((X, π), t)
+/ /Check once: ΠDLOG.Verify(X, π)
+r, ρ←$ Z∗
+p
+T := Ht(t)
+T ′ := r−1· (T− ρG)
+return (T ′, (X, r, ρ, t, T′))
+T ′
+W ′
+PPB.Sign0(x, T ′)
+W ′ := xT ′
+return W ′
+PPB.User1((X, r, ρ, t, T′), W ′)
+W := rW ′ + ρX
+return W
+Fig. 9. Token issuance for PPB (Construction 4 ).
+Construction 4 (Privacy Pass without issuance NIZK). Let GrGen be a group generator
+algorithm; let ΠDLOG be a proof system for relation RDLOG; let Ht be a random oracle {0, 1}∗→ G.
+We construct an anonymous token scheme PPB defined by the following algorithms:
+– (crs, td)← PPB.Setup(1λ): invoke the group generator Γ← GrGen(1λ) and the CRS generation
+algorithm of the underlying proof system (pcrs, ptd)← ΠDLOG.Setup(Γ ). Return crs := ( Γ, pcrs)
+and td := ptd.
+– ((X, π), x)← PPB.KeyGen(crs): sample the secret key x←$ Z∗
+p. Define π← ΠDLOG.Prove(pcrs, X, x).
+Return the public parameters (X, π), and the secret key x.
+– W←⟨ PPB.User((X, π), t), PPB.Sign(x)⟩: illustrated in Figure 9 .
+– bool← PPB.Verify(x, t, W): return true if W = xHt(t); else, return false.
+Correctness. By correctness of ΠDLOG, at the end of the protocol the user returns ⊥ only with
+negligible probability. If the user returns W∈ G, then W always satisfies the verification equation,
+since:
+W = rW′ + ρX
+= rxr−1(T− ρG) + ρX
+= xT− ρ(xG) + ρX
+= xT.
+Security . PPB satisfies unforgeability and 2-unlinkability.
+Theorem 11. If CTGDH holds for GrGen, and ΠDLEQ is a zero-knowledge proof system for relation
+ΠDLOG, then PPB is one-more unforgeable with advantage:
+Advomuf
+PPB,ℓ(λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLOG,RDLOG(λ).
+20
+
+The proof can be found in Appendix H.1 . Intuitively, unforgeability must hold because the
+issuer is sending strictly less information than in PP. The adversary A in game OMUFPPB,A(λ)
+takes as input the pair (X, π), where X∈ G is the CTGDH challenge, and π is a DLOG proof.
+By zero-knowledge of ΠDLOG, the proof can be simulated; the adversary is now asked to return
+ℓ + 1 pairs (ti, Wi), all different, such that Wi is the CDH of (X, Ht(ti)). During its execution, the
+adversary has at disposal the random oracle Ht (which behaves exactly as the Target oracle), the
+Verify oracle, which given as input (Y, W )∈ G2 returns 1 if (X, Y, W ) is a DH tuple (just as the
+Ddh oracle in the game for CTGDH), and the Sign oracle, which computes at most ℓ times the
+CDH with an arbitrary group element (just as the Help oracle in the game for CTGDH).
+Theorem 12. Let GrGen be a group generator. If ΠDLOG is a knowledge-sound proof system for
+relation RDLOG, then PPB is 2-unlinkable with advantage:
+Advunlink
+PPB,m(λ)≤ 2
+m + Advksnd
+ΠDLOG,RDLOG(λ).
+First of all, we note that by knowledge soundness of ΠDLOG, for any adversary A that produces
+th public parameters (X, π) with X ∈ G, it is possible to extract a witness x∈ Zp such that
+xG = X, except with negligible probability Advksnd
+ΠDLOG,RDLOG,A(λ). We use this witness to partition
+the sessions in two sets, U0 where W is correctly computed, and U1 where W isn’t. In the latter
+case, we remark that because the additive blinding ρ∈ Zp is sampled uniformly at random, in U1 all
+tokens are distributed uniformly at random. In a similar way to Theorem 7 , we select two sessions
+k and j from the same Ub (for a b∈{ 0, 1} that sampled at random, following the distribution of
+the open sessions) and swap them. If k and j are in U0, unlinkability follows the same reasoning
+used for proving unlinkability of PP. If k and j are in U1, then both tokens are uniformly random
+elements in G independent from the elements used at issuance time.
+User V erifiability
+The protocol presented in the previous section does not enable the user to verify that she has
+received valid token at the end of an execution. We can enable such verifiability for any number
+of tokens at the cost of one additional issuance interaction between the user and the issuer. In
+particular, let (ti, Wi)i∈[m] be m tokens that the user has been issued. She sends a token issuance
+request T′ = P
+i∈[m] ciHt(ti) where ci←$ Zp for i ∈ [m]. Let W be the issuer’s response after
+unblinding, then the user checks that W =P
+i∈[m] ciWi.
+If the issuer was honest, then Wi = xHt(ti) and
+W = x
+ X
+i∈[m]
+ciHt(t)
+!
+=
+X
+i∈[m]
+ci(xHt(ti)) =
+X
+i∈[m]
+ciWi .
+Next, we argue that if W =P
+i∈[m] ciWi, then the issuer could be cheating on any of the m token
+executions only with negligible probability. We will prove this by induction on m. Let m = 1, then
+we have W = c1W1 and at the same time W1̸= xHt(t1). By the unlinkability argument above we
+know that W1 and hence c1W1 are uniformly distributed. Hence, the adversary has only negligible
+probability to guess the value W .
+Now, let us assume that the statement holds for m≤ k and we will be prove it for m = k + 1.
+We have W =P
+i∈[m] ciWi and at the same time there exists an index j such that Wj̸= xHt(tj). If
+21
+
+there is an index k such that Wk = xHt(tk), then W− xHt(tk) =P
+i∈[m]\{k} ciWi and j∈ [m]\{k},
+which contradicts the induction assumption. Therefore, it must be the case that Wi ̸= xHt(ti)
+for any i∈ [m]. However, by the arguments in the unlinkability proof, we know that all Wi’s,
+and hence P
+i∈[m] ciWi, will be distributed uniformly at random. Hence, the adversary has only
+negligible probability in guessing the value of W , which concludes the inductive step.
+7.2 PMBT without issuance NIZK
+The challenge to generalizing the construction of the previous section to the setting of private
+metadata is that the user should not find out what metadata bit value the issuer used and hence
+which public key it should use when unblinding. Our solution will be to have the user run the
+unblinding with both keys where only one of the resulting values will be a valid token under
+the corresponding key for the bit value while the other unblinded value will be completely random.
+When we do this we need to be careful that the issuer who also generates the public keys should not
+be able to make the two unblinded values correlated, which would open an avenue for fingerprinting.
+To guarantee that the unblinded value with the public key that does not correspond to the
+embedded private metadata bit is random and hence it is independent of the other unblinded
+value, even in the case when the issuer is misbehaving, we will need to have that the user generate
+two independent blinded values which it sends in its first message. The issuer will be using only
+one of the received blinded tokens to sign and embed his metadata bit, however, the user will be
+unblinding the message coming from the issuer using two independent sets of blinding parameters,
+which would thwart the issuer from embedding correlations.
+Construction 5 (PMBT okens without issuance NIZK). Let GrGen be a group generator
+algorithm; let ΠDLOGAND2 be a proof system for the relation RDLOGAND2; let Ht, Hs be two random
+oracles{0, 1}∗→ G. We construct an anonymous token scheme PMBTB defined by the following
+algorithms:
+– (crs, td)← PMBTB.Setup(1λ): invoke the group generator Γ← GrGen(1λ) and the CRS genera-
+tion algorithm (pcrs, ptd)← ΠDLOGAND2.Setup(Γ ). Return crs := (Γ, pcrs) and td := ptd.
+– ((X, π), (x, y))← PMBTB.KeyGen(1λ): let (x, y)←$ (Z∗
+p)2× (Z∗
+p)2 be the secret key. Define:
+X :=
+2
+4X0
+X1
+3
+5 :=
+2
+4x0G + y0H
+x1G + y1H
+3
+5 ,
+and let π← ΠDLOGAND2.Prove(pcrs, X, (x, y)). The public parameters are (X, π). Return ((X, π), (x, y)).
+– σ←⟨ PMBTB.User((X, π), t), PMBTB.Sign((x, y))⟩: illustrated in Figure 10 .
+– bool← PMBTB.Verify((x, y), t, σ): return true.
+– ind← PMBTB.ReadBit((x, y), t, σ): read σ as (S0, S1, W0, W1)∈ G4. Then,
+(a) if W0 = x0Ht(t) + y0S0 and W1̸= x1Ht(t) + y1S1, return 0;
+(b) if W0̸= x0Ht(t) + y0S0 and W1 = x1Ht(t) + y1S1, return 1;
+(c) else, return⊥.
+22
+
+PMBTB.User((X, π), t) PMBTB.Sign((x, y), b)
+PMBTB.User0((X, π), t)
+/ /Check once: ΠDLOGAND2.Verify(X, π)
+T := Ht(t)
+for d = 0, 1 :
+rd, ρd←$ Z∗
+p
+T ′
+d := r−1
+d · (T− ρdG)
+return
+(
+(T ′
+0, T ′
+1), ((rd, ρd, T ′
+d)d∈{0,1}, t)
+)
+T ′
+0, T ′
+1
+s, W ′
+PMBTB.Sign0((x, y, b), (T ′
+0, T ′
+1))
+s←${0, 1}λ
+S′
+b := Hs(T ′
+b, s)
+W ′ := xbT ′
+b + ybS′
+b
+return (s, W ′)
+PMBTB.User1(
+(
+(rd, ρd, T ′
+d)d∈[2], t
+)
+, (s, W ′))
+for d = 0, 1 :
+Sd := rdHs(T ′
+d, s) + ρdH
+Wd := rdW ′ + ρdXd
+return σ := (S0, S1, W0, W1)
+Fig. 10. Token issuance for PMBTB (Construction 5 ).
+Correctness. Honestly-generated tokens are always valid, because the verification algorithm
+PMBTB.Verify always outputs true. We thus focus on Equation (7) . By correctness of the un-
+derlying proof system, the protocol aborts only with negligible probability. If the user returns a
+tuple (S0, S1, W0, W1)∈ G4, then there exists b∈{ 0, 1} such that:
+Wb = rbW′ + ρbXb = rb(xbT′
+b + ybS′
+b) + ρbXb
+= rbxb(r−1
+b (T− ρbG)) + ybrbHs(T′
+b, s) + ρbXb
+= xbT + ybrbHs(T′
+b, s) + ρbXb− ρb(xbG)
+= xbT + ybrbHs(T′
+b, s) + ρbybH
+= xbT + yb(rbHs(T′
+b, s) + ρbH)
+= xbT + ybSb.
+The probability that the above holds for both b = 0 and b = 1 (in which case, PMBTB.ReadBit
+returns⊥) is statistically negligible. In fact, if:
+W0 = x0Ht(t) + y0S0 = x1Ht(t) + y1S1 = W1,
+we have two possible cases:
+(a) x0 = x1, which in turn implies that:
+S0 = y1
+y0
+S1.
+23
+
+However, because S0 is distributed uniformly at random in G, this happens with probability
+1/p.
+(b) x0̸= x1, which in turn implies that:
+Ht(t) = 1
+x1− x0
+(y0S0− y1S1),
+which happens with probability 1/p.
+Security . We provide the proofs for the security properties of the construction in Appendix I .
+Theorem 13. If CTGDH holds for the group generator algorithm GrGen and ΠDLOGAND2 is a zero-
+knowledge proof system for RDLOGAND2, then PMBTB[GrGen, ΠDLOGAND2] is one-more unforgeable
+with advantage:
+Advomuf
+PMBTB,ℓ(λ)≤ 2Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLOGAND2,RDLOGAND2(λ).
+Inuitively, unforgeability follows a similar reasoning of Theorem 8 (unforgeability of PMBT)
+except that here, at issuance time, we are sending strictly less information to the user, since we
+removed the NIZK at issuance time. The proof of knowledge of the discrete log, published at the
+beginning within the public parameters, can be simulated by zero knowledge.
+Theorem 14. If DDH holds for the group generator GrGen and ΠDLOGAND2 is a knowledge-sound
+proof system for relation RDLOGAND2, then PMBTB[GrGen, ΠDLOGAND2] is 3-unlinkabile.
+A PPT adversary in the game UNLINKPMBTB,A(λ) can now: compute W′ using (x0, y0), using
+(x1, y1), or yet another key. Specifically in the latter case, the token σ will be distributed at random
+independently from W′. In the full version, we prove that now the adversary can partition the set
+of open sessions at most in 3, and that therefore the advantage in the game UNLINKPMBTB,A(λ)≤
+3/m + negl(λ).
+Theorem 15. If DDH holds for the group generator GrGen and ΠDLOGAND2 is a zero-knowledge
+proof system for relation RDLOGAND2, then PMBTB[GrGen, ΠDLOGAND2] provides private metadata
+bit with advantage:
+Advpmb
+PMBTB(λ)≤ O(q2)
+2λ + 2Advddh
+GrGen(λ) + 4Advzk
+ΠDLOGAND2,RDLOGAND2(λ),
+where q is the number of queries the adversary makes either to Hs or Sign.
+As for unforgeability, the proof follows a similar reasoning to the case of PMBT. We notice that
+now the issuer is sending strictly less information during signing, and that the zero-knowledge proof
+π can be simulated.
+8 Implementation
+We implemented our construction in pure Rust (stable, version 1.41.0), using the Ristretto group 10
+on the top of Curve25519 [ Ber06], as provided by curve25519-dalek11. The second generator
+10 https://datatracker.ietf.org/doc/draft-hdevalence-cfrg-ristretto/
+11 https://dalek.rs/
+24
+
+T able 2. Benchmarks for our constructions.
+Constructions DLEQ/DLEQOR User Issuer
+Prove Verify Token Gen. Unblinding Key Gen. Signing Redemption
+PP [DGS+18] 212 µs 181 µs 111 µs 286 µs 84 µs 303 µs 95 µs
+PMBT 576 µs 666 µs 135 µs 844 µs 234 µs 845 µs 235 µs
+PPB – – 197 µs 164 µs 190 µs 87 µs 95 µs
+PMBTB – – 368 µs 678 µs 512 µs 155 µs 247 µs
+H∈ G is chosen by hashing into the group the public generator G. Hashing into the group is done
+with a Elligator 2 map [ Tib14] with SHA-512. Using rust-wasm12, we were able to compile the
+Rust implementation into WebAssembly, and generate blinded tokens from JavaScript in Chromium
+(version 79.0.3945.130). Our implementation is not copyrighted and is released in the public
+domain.13
+We benchmarked our own implementation on a single thread of an Intel(R) Xeon(R) CPU
+E5-2650 v4 2.20GHz , running Ubuntu 18.04.3 LTS (kernel version 4.15.0). They are summarized
+in Table 2. As expected, Constructions 4 and 5 feature very fast issuance time at a slight increase
+in the user computation. Our results are between ten and one thousand faster than the previous
+implementation proposed in [ DGS+18] due to the different choice 14 of elliptic curve (NIST P-256)
+as well as the programming language used.
+Acknowledgments
+The authors thank Fabrice Benhamouda, Dan Boneh, Charlie Harrison, Michael Kleber, Hugo
+Krawczyk, Steven Valdez, and Moti Yung for helpful discussions. We thank Serge Vaudenay for
+pointing out minor errors and typos in the CMBT construction in the revisions of 2021-01-13,
+compared to the original version. A part this work was completed while Michele Orrù was an intern
+at Google and at Web3 Foundation.
+References
+ABR01. Michel Abdalla, Mihir Bellare, and Phillip Rogaway. The oracle diﬀie-hellman assumptions and an analysis
+of DHIES. In CT-RSA, volume 2020 of LNCS, pages 143–158. Springer, 2001.
+ANN06. Michel Abdalla, Chanathip Namprempre, and Gregory Neven. On the (im)possibility of blind message
+authentication codes. In CT-RSA 2006 , 2006.
+Ber06. Daniel J. Bernstein. Curve25519: New Diﬀie-Hellman speed records. pages 207–228, 2006.
+Ber14. David Bernhard. Zero-knowledge proofs in theory and practice . PhD thesis, University of Bristol, 2014.
+BFPV11. Olivier Blazy, Georg Fuchsbauer, David Pointcheval, and Damien Vergnaud. Signatures on randomizable
+ciphertexts. In Public Key Cryptography , volume 6571 of LNCS, pages 403–422. Springer, 2011.
+BG04. Daniel R. L. Brown and Robert P. Gallant. The static diﬀie-hellman problem. IACR Cryptology ePrint
+Archive, 2004:306, 2004.
+BLS01. Dan Boneh, Ben Lynn, and Hovav Shacham. Short signatures from the weil pairing. In ASIACRYPT,
+volume 2248 of LNCS, pages 514–532. Springer, 2001.
+12 https://rustwasm.github.io/
+13 https://github.com/mmaker/anonymous-tokens
+14 We comment on the choice of curve and its security in Appendix C .
+25
+
+BMW03. Mihir Bellare, Daniele Micciancio, and Bogdan Warinschi. Foundations of group signatures: Formal def-
+initions, simplified requirements, and a construction based on general assumptions. In EUROCRYPT,
+volume 2656 of LNCS, pages 614–629. Springer, 2003.
+BNPS03. Mihir Bellare, Chanathip Namprempre, David Pointcheval, and Michael Semanko. The one-more-rsa-
+inversion problems and the security of chaum’s blind signature scheme. J. Cryptology , 16(3):185–215,
+2003.
+Bol03. Alexandra Boldyreva. Threshold signatures, multisignatures and blind signatures based on the gap-
+diﬀie-hellman-group signature scheme. In Public Key Cryptography , volume 2567 of LNCS, pages 31–46.
+Springer, 2003.
+BP02. Mihir Bellare and Adriana Palacio. GQ and schnorr identification schemes: Proofs of security against
+impersonation under active and concurrent attacks. In CRYPTO, volume 2442 of LNCS, pages 162–177.
+Springer, 2002.
+BPV12. Olivier Blazy, David Pointcheval, and Damien Vergnaud. Compact round-optimal partially-blind signa-
+tures. In SCN, volume 7485 of LNCS, pages 95–112. Springer, 2012.
+CA89. David Chaum and Hans Van Antwerpen. Undeniable signatures. In CRYPTO, volume 435 of LNCS,
+pages 212–216. Springer, 1989.
+Cam97. Jan Camenisch. Eﬀicient and generalized group signatures. In EUROCRYPT, volume 1233 of LNCS,
+pages 465–479. Springer, 1997.
+CDS94. Ronald Cramer, Ivan Damgård, and Berry Schoenmakers. Proofs of partial knowledge and simplified
+design of witness hiding protocols. In CRYPTO, volume 839 of LNCS, pages 174–187. Springer, 1994.
+Cha82. David Chaum. Blind signatures for untraceable payments. In CRYPTO, pages 199–203. Plenum Press,
+New York, 1982.
+Cha90. David Chaum. Zero-knowledge undeniable signatures. In EUROCRYPT, volume 473 of LNCS, pages
+458–464. Springer, 1990.
+Che06. Jung Hee Cheon. Security analysis of the strong diﬀie-hellman problem. In EUROCRYPT, volume 4004
+of LNCS, pages 1–11. Springer, 2006.
+CHM+19. Alessandro Chiesa, Yuncong Hu, Mary Maller, Pratyush Mishra, Noah Vesely, and Nicholas Ward. Marlin:
+Preprocessing zksnarks with universal and updatable srs. Cryptology ePrint Archive, Report 2019/1047,
+2019.
+CKS09. David Cash, Eike Kiltz, and Victor Shoup. The twin diﬀie–hellman problem and applications. J. Cryp-
+tology, 22(4):470–504, 2009.
+CL01. Jan Camenisch and Anna Lysyanskaya. An eﬀicient system for non-transferable anonymous credentials
+with optional anonymity revocation. In EUROCRYPT, volume 2045 of LNCS, pages 93–118. Springer,
+2001.
+CMZ14. Melissa Chase, Sarah Meiklejohn, and Greg Zaverucha. Algebraic MACs and keyed-verification anonymous
+credentials. pages 1205–1216, 2014.
+CP92. David Chaum and Torben P. Pedersen. Wallet databases with observers. In CRYPTO, volume 740 of
+LNCS, pages 89–105. Springer, 1992.
+CvH91. David Chaum and Eugène van Heyst. Group signatures. In Advances in Cryptology — EUROCRYPT
+’91, 1991.
+DGS+18. Alex Davidson, Ian Goldberg, Nick Sullivan, George Tankersley, and Filippo Valsorda. Privacy pass:
+Bypassing internet challenges anonymously. PoPETs, 2018(3):164–180, 2018.
+ECS+15. Adam Everspaugh, Rahul Chatterjee, Samuel Scott, Ari Juels, and Thomas Ristenpart. The pythia PRF
+service. In USENIX Security Symposium , pages 547–562. USENIX Association, 2015.
+FHKS16. Georg Fuchsbauer, Christian Hanser, Chethan Kamath, and Daniel Slamanig. Practical round-optimal
+blind signatures in the standard model from weaker assumptions. In SCN, volume 9841 of LNCS, pages
+391–408. Springer, 2016.
+FHS15. Georg Fuchsbauer, Christian Hanser, and Daniel Slamanig. Practical round-optimal blind signatures in
+the standard model. In CRYPTO (2), volume 9216 of LNCS, pages 233–253. Springer, 2015.
+Fis06. Marc Fischlin. Round-optimal composable blind signatures in the common reference string model. In
+CRYPTO, volume 4117 of LNCS, pages 60–77. Springer, 2006.
+FPS19. Georg Fuchsbauer, Antoine Plouviez, and Yannick Seurin. Blind schnorr signatures in the algebraic group
+model. Cryptology ePrint Archive, Report 2019/877, 2019.
+GG14. Sanjam Garg and Divya Gupta. Eﬀicient round optimal blind signatures. In EUROCRYPT, volume 8441
+of LNCS, pages 477–495. Springer, 2014.
+Gha13. Essam Ghadafi. Formalizing group blind signatures and practical constructions without random oracles.
+In ACISP, volume 7959 of LNCS, pages 330–346. Springer, 2013.
+26
+
+Hen14. Ryan Henry. Eﬀicient zero-knowledge proofs and applications. 2014.
+HL06. Javier Herranz and Fabien Laguillaumie. Blind ring signatures secure under the chosen-target-cdh as-
+sumption. In ISC, volume 4176 of LNCS, pages 117–130. Springer, 2006.
+JKK14. Stanislaw Jarecki, Aggelos Kiayias, and Hugo Krawczyk. Round-optimal password-protected secret sharing
+and T-PAKE in the password-only model. In ASIACRYPT (2), volume 8874 of LNCS, pages 233–253.
+Springer, 2014.
+JKR18. Stanislaw Jarecki, Hugo Krawczyk, and Jason K. Resch. Threshold partially-oblivious prfs with applica-
+tions to key management. IACR Cryptology ePrint Archive , 2018:733, 2018.
+JKX18. Stanislaw Jarecki, Hugo Krawczyk, and Jiayu Xu. OPAQUE: an asymmetric PAKE protocol secure against
+pre-computation attacks. In EUROCRYPT (3), volume 10822 of LNCS, pages 456–486. Springer, 2018.
+JL10. Stanislaw Jarecki and Xiaomin Liu. Fast secure computation of set intersection. In SCN, volume 6280 of
+LNCS, pages 418–435. Springer, 2010.
+KM08. Neal Koblitz and Alfred Menezes. Another look at non-standard discrete log and diﬀie–hellman problems.
+J. Mathematical Cryptology , 2(4):311–326, 2008.
+LQ04. Benoît Libert and Jean-Jacques Quisquater. The exact security of an identity based signature and its
+applications. IACR Cryptology ePrint Archive , 2004:102, 2004.
+LR98. Anna Lysyanskaya and Zulfikar Ramzan. Group blind digital signatures: A scalable solution to electronic
+cash. In Financial Cryptography, 1998.
+Oka92. Tatsuaki Okamoto. Provably secure and practical identification schemes and corresponding signature
+schemes. In CRYPTO, volume 740 of LNCS, pages 31–53. Springer, 1992.
+OP01. Tatsuaki Okamoto and David Pointcheval. The gap-problems: A new class of problems for the security
+of cryptographic schemes. In Public Key Cryptography , volume 1992 of LNCS, pages 104–118. Springer,
+2001.
+PS00. David Pointcheval and Jacques Stern. Security arguments for digital signatures and blind signatures.
+Journal of Cryptology , 13:361–396, 2000.
+Ram13. Zulfikar Ramzan. Group blind digital signatures : theory and applications, 2013. https://dspace.mit.
+edu/bitstream/handle/1721.1/80561/43557700-MIT.pdf?sequence=2&isAllowed=y.
+SC12. Jae Hong Seo and Jung Hee Cheon. Beyond the limitation of prime-order bilinear groups, and round
+optimal blind signatures. In TCC, volume 7194 of LNCS, pages 133–150. Springer, 2012.
+Sch01. Claus Peter Schnorr. Security of blind discrete log signatures against interactive attacks. In Sihan Qing,
+Tatsuaki Okamoto, and Jianying Zhou, editors, Information and Communications Security , 2001.
+Sch06. Claus Peter Schnorr. Enhancing the security of perfect blind dl-signatures. Information Sciences ,
+176(10):1305 – 1320, 2006.
+TAKS07. Patrick P. Tsang, Man Ho Au, Apu Kapadia, and Sean W. Smith. Blacklistable anonymous credentials:
+blocking misbehaving users without ttps. In ACM Conference on Computer and Communications Security ,
+pages 72–81. ACM, 2007.
+Tib14. Mehdi Tibouchi. Elligator squared: Uniform points on elliptic curves of prime order as uniform random
+strings. In Financial Cryptography, volume 8437 of LNCS, pages 139–156. Springer, 2014.
+TPY+19. Kurt Thomas, Jennifer Pullman, Kevin Yeo, Ananth Raghunathan, Patrick Gage Kelley, Luca Invernizzi,
+Borbala Benko, Tadek Pietraszek, Sarvar Patel, Dan Boneh, and Elie Bursztein. Protecting accounts from
+credential stuﬀing with password breach alerting. In USENIX Security Symposium , pages 1556–1571.
+USENIX Association, 2019.
+27
+
+A Security assumptions
+We recall here the classical discrete logarithm, decisional Diﬀie–Hellman, and computational Diﬀie–
+Hellman assumptions that we will use throughout the paper. Then, we discuss the chosen-target
+Diﬀie-Hellman, and justify our choice of introducing its gap variant, CTGDH, for assessing the
+security of the anonymous tokens proposed.
+A.1 DL, DDH, CDH
+Discrete logarithm. The discrete logarithm assumption for a group generator GrGen states
+that given a tuple of elements (G, H) where G←$ G and X←$ G, any PPT adversary has negligible
+advantage in returning x∈ Zp such that X = xG. More formally, we say that DLOG holds for the
+group generator GrGen if for any PPT adversary A:
+Advdlog
+GrGen,A(λ) := Pr
+
+DLOGGrGen,A(λ) = 1
+
+= negl(λ) ,
+where DLOGGrGen,A(λ) is defined in Figure 11 .
+Decisional Diﬀie–Hellman. The decisional Diﬀie–Hellman (DDH) assumption for a group gen-
+erator GrGen states that given a tuple of elements (P, A := aP, B := bP ) where P←$ G, and
+a, b←$ Zp, any PPT adversary has negligible advantage in distinguishing C←$ G from the Diﬀie–
+Hellman C = abP . More formally, we say that DDH holds for the group generator GrGen if for any
+PPT adversary A:
+Advddh
+GrGen,A(λ) :=
+Pr
+
+DDH0
+GrGen,A(λ) = 1
+
+− Pr
+
+DDH1
+GrGen,A(λ) = 1
+
+is negligible in λ, where DDHβ
+GrGen,A(λ) is defined in Figure 11 .
+Computational Diﬀie–Hellman. The computational Diﬀie–Hellman (CDH) assumption for a
+group generator GrGen states that given a tuple of elements (P, A := aP, B := bP ) where P←$ G,
+and a, b←$ Zp, any PPT adversary has negligible advantage in returning C = abP . More formally,
+we say that CDH holds for the group generator GrGen if for any PPT adversary A:
+Advcdh
+GrGen,A(λ) := Pr
+
+CDHGrGen,A(λ) = 1
+
+= negl(λ) ,
+where CDHGrGen,A(λ) is defined in Figure 11 .
+A.2 Chosen-target Diﬀie–Hellman
+The CTDH assumption [ Bol03] has proven itself very useful for a range of applications: password-
+authenticated key exchanges [ JKX18], signatures [ LQ04], and private-set intersection [ JL10]. One
+can also find it called in the literature as one-more Diﬀie–Hellman (OMDH) assumption [ BP02,
+BNPS03], both in the “chosen-target” flavor (where the adversary can chose the ℓ + 1 subset of
+challenges to solve) and the “known-target” flavor (where the adversary must solve a fixed set
+of ℓ + 1 challenges). Known-target one-more Diﬀie–Hellman is equivalent to chosen-target Diﬀie–
+Hellman [ KM08].
+28
+
+Game DLOGGrGen,A(λ)
+Γ := (G, p, G)← GrGen(1λ)
+x←$ Zp; X := xG
+y← A(Γ, X)
+return (y = x)
+Game DDHβ
+GrGen,A(λ)
+Γ, := (G, p, G)← GrGen(1λ)
+P←$ G
+a←$ Zp; A := aP
+b←$ Zp; B := bP
+C0 := abP ; C1←$ G
+b′← A(Γ, P, A, B, Cβ)
+return b′
+Game CDHGrGen,A(λ)
+Γ := (G, p, G)← GrGen(1λ)
+P←$ G
+a←$ Zp; A := aP
+b←$ Zp; B := bP
+C← A(Γ, P, A, B)
+return (C = abP )
+Fig. 11. The games for discrete logarithm, decisional Diﬀie–Hellman, and computational Diﬀie–Hellman.
+Game CTDHGrGen,A,ℓ(λ)
+Γ := (G, p, G)← GrGen(1λ)
+x←$ Zp; X := xG
+q := 0; Q = [ ]
+(ti, Zi)i∈[ℓ+1]← ATarget,Help(Γ, X)
+for i∈ [ℓ + 1] :
+if ti̸∈Q then return 0
+Yi :=Q[ti]
+return
+(
+q < ℓ and
+∀i̸= j∈ [ℓ + 1] ti̸= tj and
+∀i∈ [ℓ + 1] x· Yi = Zi
+)
+Oracle Target(ti)
+if∃(ti, Yi) to T then
+return Yi
+else
+Yi←$ G∗
+append (ti, Yi) to T
+return Yi
+Oracle Help(Y )
+q := q + 1
+return xY
+Fig. 12. The Chosen-Target Diﬀie–Hellman assumption.
+Definition 16 (Chosen-target Diﬀie–Hellman). The chosen-target gap Diﬀie–Hellman as-
+sumption for the group generator GrGen states that for any PPT adversary A, and any ℓ, A has
+negligible advantage in solving CDH on ℓ + 1 target group elements, even if A is given access to a
+CDH oracle for ℓ instances. More formally, for any PPT adversary A, any ℓ > 0:
+Advctdh
+GrGen,A,ℓ(λ) := Pr
+
+CTDHGrGen,A,ℓ(λ) = 1
+
+≤ negl(λ) ,
+where CTDHGrGen,A,ℓ(λ) is defined in Figure 12 .
+A.3 Equivalence of CTDH and OMD
+Privacy Pass, the construction introduced in [ DGS+18], is proved unforgeable under one-more
+decryption security of Elgamal. One-more decryption security states that it is diﬀicult for any PPT
+adversary A to decrypt ℓ + 1 Elgamal ciphertexts of random messages, even when given access to
+an oracle for ℓ Elgamal encryptions.
+Elgamal (denoted Elg) is a public-key cryptosystem based on a group generator algorithm
+GrGen. Elgamal achieves semantic security if DDH holds, i.e., if Advddh
+GrGen,A(λ) is negligible. The key
+generation algorithm Elg.KeyGen(Γ ) outputs a pair (sk, pk) := ( x, X := xG) where x←$ Zp. The
+encryption algorithm Elg.Enc(M ) outputs a ciphertext (C := cG, D := cX + M ) where c←$ Zp.
+29
+
+Game OMDElg[GrGen],A,ℓ(λ)
+Γ← GrGen(1λ)
+(x, X)← Elg.KeyGen(Γ )
+for i∈ [ℓ + 1] :
+Mi←$ G
+ci← Elg.Enc(X, Mi)
+/ /Dec(c∗) = Elg.Dec(x, c∗), at most ℓ times
+(M ∗
+i )i∈[ℓ+1] = ADec(X, c0, . . . , cℓ)
+return (∀i∈ [ℓ + 1] : M ∗
+i = Mi)
+Adversary B(Γ, X) for CTDHGrGen,B,ℓ(λ)
+for i∈ [ℓ + 1] :
+Yi← Target(i); Ri←$ G
+ci := (Ci, Di) := (Yi, Yi + Ri)
+/ /Dec(i) := Yi + Ri− Help(Yi)
+(M0, . . . , Mℓ)← ADec(X, c0, . . . , cℓ)
+for i∈ [ℓ + 1] :
+Zi := Yi + Ri− Mi
+return (Zi)i∈[ℓ+1]
+Fig. 13. Game for one-more decryption (left) and reduction to chosen-target Diﬀie–Hellman (right).
+The decryption algorithm Elg.Dec(x, (C, D)) takes as input the secret key and the ciphertext, and
+otuputs the message M = D− xC.
+Theorem 17. CTDH holds for GrGen if and only if Elg[GrGen] has one-more decryption security.
+More precisely, for all ℓ > 0:
+Advctdh
+GrGen,ℓ(λ) = Advomd
+GrGen,ℓ(λ).
+Proof. Let ℓ∈ N. We start by proving that OMD =⇒ CTDH. Let A be a PPT adversary for
+OMDElg[GrGen],A,ℓ(λ). We use it to construct an adversary B for the game CTDHGrGen,A,ℓ(λ). The
+adversary B receives as input a group description Γ and a group element X∈ G. Additionally, it
+has access to two oracles: a Target oracle and a Help oracle. It start by querying the Target
+oracle ℓ+1 times on i∈ [ℓ+1], thus receiving Target(i) = Yi∈ G. It samples uniformly at random
+Ri←$ G for all i∈ [ℓ + 1] and invokes A(X, (Ci, Di)ℓ
+i), where (Ci, Di) := ( Yi, Yi + Ri). During its
+execution, the adversary A may ask for ℓ decryption queries. We answer to those queries returning
+Mi := ( Yi + Ri)− Zi where Zi := Help(Yi). At the end of its execution, the adversary B returns
+ℓ + 1 decryption (M0, . . . , Mℓ)∈ Gℓ+1. The adversary B returns (i, Zi := Yi + Ri− Mi) for each
+i∈ [ℓ + 1].
+The distribution of each ciphertext is uniform over G2, exactly as in the game OMDElg[GrGen],A,ℓ(λ)
+(because each message is uniformly random in G). Decryption queries are responded exactly in the
+same way (subtracting off the CDH of the randomness Yi with the public key X). Furthermore, if
+the adversary wins the game OMDElg[GrGen],A,ℓ(λ), it must be the case that it returned Mi for all
+i∈ [ℓ + 1] such that:
+Mi = Elg.Dec(x, (Ci, Di)) =⇒ Zi := (Yi + Ri)− Mi = CDH(X, Yi)
+The adversary B wins the game CTDHGrGen,B,ℓ(λ) every time that the adversary A wins the
+game OMDElg[GrGen],A,ℓ(λ), therefore for all PPT adversaries A:
+Advctdh
+GrGen,A,ℓ(λ)≥ Advomd
+GrGen,B,ℓ(λ).
+We now prove the reverse implication, that is, CTDH =⇒ OMD. Let A be a PPT adversary for
+CTDHGrGen,A,ℓ(λ). We use it to construct an adversary B for OMDElg[GrGen],A,ℓ(λ).
+The adversary B receives as input a group description Γ together with a group element X =
+xG∈ G (for some secret x∈ Zp) and a sequence of ℓ+1 ciphertexts c0, . . . , cℓ such that ci = (Ci, Di)
+for all i∈ [ℓ + 1]. B starts off by selecting a random into map µ :{0, 1}λ→ Zp. Then, it invokes
+the adversary A on (Γ, X), overriding random oracle queries in the following way:
+30
+
+− for any query of the form Target(t), the adversary B returns Y =Pℓ
+j=0 aµ(t)jCi;
+− for any query of the form Help(C), the adversary B samples D←$ G, and queries the decryption
+oracle Dec((C, D)), thus obtaining M = Elg.Dec(x, (C, D)) = R−CDH(X, Y ). It returns R−M =
+CDH(X, Y ).
+At the and of its execution, the adversary A returned ℓ + 1 pairs (ti, Zi). By winning condition of
+CTDHGrGen,A,ℓ(λ), for each i∈ [ℓ + 1], Zi satisfies:
+x·
+2
+6664
+Y0
+...
+Yℓ
+3
+7775 = x·
+2
+6666664
+a0·µ(t0) ··· aℓ·µ(t0)
+a0·µ(t1) ··· aℓ·µ(t1)
+... . . . ...
+a0·µ(tℓ) ··· aℓ·µ(tℓ)
+3
+7777775
+2
+6664
+C0
+...
+Cℓ
+3
+7775 =
+h
+Z0 ··· Zℓ
+i
+.
+The matrix A := [ ajµ(ti)]i,j is a Vandermonde matrix. The second winning condition states that
+ti̸= tj for all i, j∈ [ℓ+1], i̸= j. Therefore, aµ(ti)̸= aµ(tj ). Therefore, A is invertible for all i̸= j. Let
+A′ be the inverse of A; then, Z′
+i =P
+j a′
+i,jZi = CDH(X, Ci). The adversary B returns Mi := Di− Zi,
+for all i∈ [ℓ + 1].
+The replies to the Help oracle are identical to the ones in CTDHGrGen,B,ℓ(λ). The replies to the
+Target oracle follow the uniform distribution in G too, since µ is a random injective map hidden
+from the view of the adversary.
+It follows that the adversary B wins the game OMDHElg[GrGen],B,ℓ(λ) every time that the adver-
+sary A wins the game CTDHGrGen,A,ℓ(λ), therefore for all PPT adversaries A:
+Advctdh
+GrGen,A,ℓ(λ)≤ Advomd
+GrGen,B,ℓ(λ).
+⊓ ⊔
+A.4 The gap variant of CTDH
+Recall that we formalize the notion of chosen-target gap Diﬀie–Hellman (CTGDH) problem in
+Section 2.1 , the gap problem equivalent to the CTDH problem. Indeed, the chosen-target DH
+problem was originally introduced by Boldyreva [ Bol03] in Gap DH groups [ BLS01], that is in
+groups where CDH is hard but DDH is assumed to be easy. In other words, the original definition
+of CTDH was proposed in groups where the adversary has access to a DDH oracle that reveals if
+a tuple is a valid DDH tuple, while our definition of CTDH in Appendix A.2 did not ask for the
+group G to be a Gap DH group.
+This formalization is not merely an artifact of the proof. Indeed, when a user is redeeming
+anonymous tokens, it is likely that her behavior will change depending on whether this token was
+valid or not. In other words, when deploying anonymous tokens, an adversary is likely to be able to
+learn if a token of their choice satisfies the verification equation. This specific behavior is not unique
+to our anonymous tokens primitive. In particular, a similar issue arised many times in the literature:
+when proving the CCA security of the (hashed) El Gamal encryption scheme [ ABR01, CKS09],
+the unforgeability of Chaum’s undeniable signature scheme [ CA89, Cha90, OP01], unforgeability of
+blind signatures [ BLS01], and UC-security of the 2Hash-DH VOPRF [ JKK14]. All these schemes
+are proved under a gap problem [ OP01], i.e., a computational problem that gives oracle access to
+31
+
+the underlying decision problem. 15 For example, [ OP01] defines the Gap DH problem, which given
+a triple (P, aP, bP ), ask to find the element abP with the help of a Decision Diﬀie–Hellman oracle
+(which answers whether (X, Y, Z) is a valid DH triple).
+B NIZK instantiations
+Throughout this work, we assumed the existence of a non-interactive, knowledge-sound and zero-
+knowledge proof system. We described our anonymous tokens protocols in a modular way, so that
+any knowledge-sound and zero-knowledge proof system can be used (e.g. SNARKs, Groth-Sahai
+proofs, Σ-protocols). Here, we propose a simple and eﬀicient instantiation of them in the random
+oracle model. Equations (1) to (5) define proof systems for the following relations:
+RDLOG :={(X, x)∈ G× Zp : X = xG} ; (10)
+RDLOGAND2 :=
+
+(X, (x, y))∈ G2× (Z2
+p× Z2
+p) : ∀i∈{ 0, 1} Xi = xiG + yiH
+	
+; (11)
+RDLEQ :=
+8
+<
+:((X, T, W ), x)∈ G3× Zp :
+2
+4X
+W
+3
+5 = x
+2
+4G
+T
+3
+5
+9
+=
+; ; (12)
+RDLEQ2 :=
+8
+<
+:((X, T, S, W ), (x, y))∈ G4× Z2
+p :
+2
+4X
+W
+3
+5 = x
+2
+4G
+T
+3
+5 + y
+2
+4H
+S
+3
+5
+9
+=
+; ; (13)
+RDLEQOR2 :=
+8
+>>><
+>>>:
+((X, T, S, W ), (b, x, y))∈ G5× ([2]× Zp× Zp) :2
+4Xb
+W
+3
+5 = x
+2
+4G
+T
+3
+5 + y
+2
+4H
+S
+3
+5
+9
+>>>=
+>>>;
+. (14)
+All above relations are (implicitly) parameterized in the group description Γ , and can be seen as
+facilities of relationships indexed by Γ∈ [GrGen(1λ)].
+Σ-protocols are interactive, special sound, and special honest-verifier zero-knowledge. They
+be turned into non-interactive zero-knowledge arguments using the Fiat-Shamir transform in the
+random oracle model. In Bernhard’s PhD thesis [ Ber14] it is claimed that the Fiat–Shamir trans-
+formation of a Σ-protocol is simulation extractable, a soundness property that even stronger than
+knowledge soundness.
+Theorem 18 ([Ber14, Thm. 5.14]). Let Σ be a Σ-protocol. If the challenge space is exponen-
+tial, and the verification equation is a group morphism on the response, the strong Fiat-Shamir
+transformation FS[Σ] of Σ is simulation-sound extractable.
+In Figure 14 we present a protocol for relation RDLEQOR2 (Eq. (14)), which can be easily adapted
+to be a proof system also for relations ( 10) to ( 12). The setup algorithm generates the group de-
+scription Γ← GrGen(1λ), The proving algorithm ( Fig. 14 , left) proceeds simulating the transcripts
+for all i∈ [2], i̸= b, and choosing the challenges uniformly at random, constrained that their
+sum is the challenge provided by Hc. The verification algorithm ( Fig. 14 , right) checks the validity
+of all transcripts, and that the sum of the challeges P
+i ci = c is the hash of the commitments
+Hc(X, T, S, W, K0, K1).
+15 We follow the name usage of [ OP01, BLS01, JKK14], but the Gap DH problem is also known under the name of
+strong Diﬀie–Hellman problem [ ABR01, CKS09].
+32
+
+ΣDLEQOR2.Prove((X, T, S, W ), (b, xb, yb))
+(k0, k1)←$ Z2
+p
+Kb := k0· (G; T ) + k1· (H; S)
+for i∈ [n], i ̸= b
+ci, ui, vi←$ Zp
+Ki := ui· (G; T ) + vi· (H; S)− ci· (Xi; W )
+c := Hc(Γ, (X, T, S, W ), K0, . . . ,Kn)
+cb := c− ∑
+i̸=b ci
+ub := k0 + cbxb
+vb := k1 + cbyb
+return (c, u, v)
+ΣDLEQOR2.Verify((X, S, T, W ), (c, u, v))
+∀i∈ [n] : Ki := ui(G; T ) + vi· (H; S)− ci(Xi; W )
+c := ∑
+i ci
+return c = Hc(Γ, (X, T, S, W ), K0, . . . ,Kn)
+Fig. 14. The protocol ΣDLEQOR2.
+The protocol has special soundness by standard OR-composition of sigma protocols [ CDS94]:
+from two transcripts (c, u, v) and (c′, u′, v′) verifying simultaneously, some b∈ [2] such that cb̸= c′
+b
+it is possible to extract a witness (xb, yb) by computing xb := ( ub− u′
+b)/(cb− c′
+b) and yb := ( vb−
+v′
+b)/(cb− c′
+b).
+The protocol is also zero-knowledge: the simulator simply produces valid transcripts for all i∈ [2]
+by selecting ci, ui, vi←$ Zp, and computing Ki := ui(G; T )+ vi(H; S)−ci(Xi, W ). Then, it computes
+c := Pn
+i ci and programs the random oracle to reply with c when queried on (Γ, X, T, S, W, K0,
+K1). The simulator aborts if such a query was already made, which since Ki are all distributed
+randomly happens with probability at most q(λ)/pn, where q(λ) is an upper-bound on the number
+of queries of the adversary to Hc.
+B.1 Batching proofs
+The proof can be batched via the same technique of Henry [ Hen14]: it is possible to prove knowledge
+of a witness (b, x, y) for m different statements (X, Tj, Sj, Wj)m
+j=0 with a single proof.
+Theorem 19. If DLOG holds for the group generator GrGen, then the proof system ΣDLEQOR2[GrGen]
+is a zero-knowledge argument of knowledge for relation RDLEQOR2.
+Proof (Knowledge soundness). Knowledge soundness for the batched protocol follows from knowl-
+edge soundness of the underlying ΣDLEQOR2 proof system, plus a negligible statistical error. By
+soundness of the underlying proof system we have that, except with a negligible extraction er-
+ror, if Σbatched
+DLEQOR2.Verify(Γ, X, T , S, W , π) = true, then it is possible to extract (b, x, y) such that 
+(X, T , S, W ), (b, x, y)
+
+∈ RDLEQOR2. In other words, there exists an PPT extractor that outputs
+b, x, y such that Xb = xG + yH and W = xT + yS. The values T , S, and W are a random linear
+combination of the elements (Ti, Si, Wi)m−1
+i=0 . We prove by induction on m that the probability
+that there exists any i∈ [m] such that the (batched) protocol verifies and Wi ̸= xTi + ySi is
+at most 2(m + 1)/p = negl (λ). Logically, it will follow that, except with negligible probability,
+(b, x, y)∈ [n]× Zp× Zp is a valid witness for the statement (X, Ti, Si, Wi), for each i∈ [m].
+If m = 1, then W = xT +yS can be written as e0W0 = e0(xT0 +yS0). Therefore, W0 = xT0 +yS0
+iff e0̸= 0 , which happens with probability 1/p < 3/p. Let us denote with Pr[ Em ] the probability
+33
+
+Σbatched
+DLEQOR2.Prove((X, T, S, W), (x, y))
+e0, . . . , em := He(Γ, X, T, S, W)
+T := ∑m
+j ejTj
+S := ∑m
+j ejSj
+W := ∑m
+m ejWj
+return DLEQOR.Prove((X, T , S, W ), (x, y))
+Σbatched
+DLEQOR2.Verify((X, T, S, W), π)
+e0, . . . , em := He(Γ, X, T, S, W)
+T := ∑m
+j ejTj
+S := ∑m
+j ejSj
+W := ∑m
+m ejWj
+return DLEQOR.Verify((X, T , S, W ), π)
+Fig. 15. Batching ΠDLEQOR2.
+that the (batched) verification equation is satisfied, but the witness is invalid for at least one of the
+m statements. Note that for the case Pr[ Em+1 ] there are two possibilities: either Wm = xTm +ySm,
+in which case we are left with the equation of the inductive step:
+m−1X
+j
+ejWj =
+0
+@x
+m−1X
+j
+ejTj + y
+m−1X
+j
+ejSj
+1
+A ,
+Alternatively, if Wm̸= xTm + ySm, then either the coeﬀicient em is zero or also the other statement
+must be invalid. It follows that:
+Pr[ Em+1 ]≤ Pr[ Em ] + 1
+p (1− Pr[ Em ]) + p− 1
+p Pr[ Em ] .
+(In fact, if em = 0 we fall in the inductive case; and the probability that the verification equation
+is invalid is at least 1− Pr [Em ].) It follows that Pr [Em+1 ]≤ 2 Pr [Em ]− 2/p Pr [Em ] + 1 /p≤
+2 Pr[Em ] + 1/p≤ 2(m + 1)/p. Thus:
+Advksnd
+DLEQORbatched(m, λ)≤ Advksnd
+DLEQORsimple(λ) + 2(m + 1)
+p .
+⊓ ⊔
+C Choice of curve
+Because our constructions rely on the presence of a so-called static DH oracle, special care must
+be taken when choosing the group, as in fact stronger cryptanalytic attacks are at disposal for
+the adversary. These are Brown-Gallant [ BG04] and Cheon’s attack [ Che06], as already studied
+independently by Taylor Campbell 16 in the context of Privacy Pass, by Thomas et al. [ TPY+19]
+in the context of OPRFs, and by Chiesa et al. [ CHM+19] in the context of SNARKs. Both attacks
+exploit the smoothness of p±1, where p is the order of the group; if p±1 is smooth, such as in the case
+of NISTP224, the security drops to O(288.5) for O(247) queries [ TPY+19]. In the case of Ristretto,
+p− 1 is not smooth. p− 1 attacks have best complexity O(
+p
+p/d +
+√
+d) and demand a number
+of sequential queries proportional to max(d, p/d), where d is a divisor of p± 1. This concretely
+provides a best attack of complexity O(2124). The case p + 1 has instead complexity O(
+p
+p/d + d),
+and requires a similar number of oracle queries. In this case, for Ristretto the security drops to
+16 https://mailarchive.ietf.org/arch/msg/cfrg/YDVS5Trpr6suig_VCFEOH6SOn8Q
+34
+
+Game HIJACKAT,A(λ)
+Q := [ ]
+(crs, td)← AT.Setup(1λ)
+(pp, sk)← AT.KeyGen(crs)
+(t, R, ¯σ)← AToken(pp)
+return (t, R)̸∈Q and AT.Bind(crs, sk, t, R, ¯σ)
+Oracle Token(b, t, R)
+σ←⟨ AT.User(pp, t), AT.Sign(sk, b)⟩
+¯σ := AT.Spend(pp, t, R, σ)
+append (t, R) toQ
+return ¯σ
+Fig. 16. Token hijacking game.
+O(294) with O(264) sequential queries. Therefore, due to the large number of sequential queries
+needed to mount the attack, even for adversaries with close proximity, this attack can be mitigated
+with appropriate key rotation mechanisms.
+D Token Hijacking
+Let us now consider a stronger attacker, a man-in-the middle capable of intercepting messages
+between the user and the issuer at redemption time. Despite such an attacker cannot forge or de-
+anonymize an user, it is capable of hijacking user tokens sent for redemption, and spend them on
+another resource than initially destined for. This attack model is not covered in our definitions,
+since we assume that the communication between the user and the issuer always to happen over a
+secure channel. We discuss in this section how it is possible to cover also the above scenario.
+We model attack vector of a token hijacker as a security experiment where the adversary inter-
+acts with with an oracle and request request a token for a specified resource identifier R∈{ 0, 1}∗
+(e.g. a ), a private metadata bit b∈ [2], and randomness t∈{ 0, 1}λ. After interacting an arbitrary
+number of times with this oracle, the adversary must return a valid token (t, ¯σ) bound to a resource
+R that was never queried by the oracle. More formally, we introduce two new procedures: AT.Bind,
+that cryptographically binds a token with a specified resource, and AT.Spend that allows to verify
+(spend) a token on the selected resource. More formally, we say that an anonymous token AT is
+secure against hijacking if, for all PPT adversaries A:
+Advhijack
+AT,A (λ) :=
+Pr
+
+HIJACKAT,A(λ)
+ = negl(λ) .
+Informally, this can be achieved with the help of a MAC: the user hashes W into a MAC
+key Hk(W ) and signs the resource R with this new key. On the other hand, the issuer uses the
+randomness t (along with any additional information, such as S) and the secret key x to com-
+pute the same shared key Hk(W ). More concretely, in the case of Privacy Pass ( Section 4 ) we set
+PP.Bind(pp, t, R, σ) := MAC.Sign(Hk(σ), t, R) and PP.Spend(crs, sk, t, R, ¯σ) := MAC.Ver(Hk(xHt(t)), t,
+R).
+Theorem 20. If MAC is an existentially-unforgeable message authentication code, and PP is a
+one-more unforgeable anonymous token, then PP prevents token hijacking.
+Proof. The proof proceeds by means of a hybrid argument:
+Hyb0 This is the game HIJACKPP,A(λ). The adversary wins if it manages to redeem a token ¯σ for
+a resource R that was not previously redeemed. That is, the adversary wins if it outputs a
+tuple (R, t, ¯σ) such that MAC.Ver(k, t, R) = true with k = Hk(x· Ht(t)) and (t, R)̸∈Q .
+35
+
+Hyb1 In this hybrid, we abort if the adversary never made a query to the random oracle Hk of
+the form W = x· Ht(t) during its execution. For any PPT adversary A making at most
+q(λ) = poly (λ) queries to the random oracle Hk, this hybrid is indistinguishable from the
+previous one. Therefore:
+q(λ)
+p ≤
+AdvHyb1
+PP,A(λ)− AdvHyb0
+PP,A(λ)
+ .
+Hyb2 We retrieve the query W∈ G associated to the MAC key k = Hk(W ) of the forgery, and we
+run the verification equation of the anonymous token PP.Ver(p, t, W). If it returns false, we
+terminate the game immediately and the adversary wins.
+If the output of a PPT adversary A in the hybrid Hyb1 is distinguishable from the one in
+Hyb2, then it is possible to build an adversary B that wins the game UNFMAC,B(λ) with
+non-negligible probability.
+At this point, the adversary wins only if it outputs a token (t, ¯σ) for a resource R and there exists
+a query to the random oracle Hk for W∈ G such that (t, W ) was not previously produced by the
+oracle Token. This is exactly the one-more unforgeability experiment for PP. It follows that:
+Advhijack
+PP,A (λ)≤ q(λ)
+p + Advomuf
+PP,A(λ).
+⊓ ⊔
+E Security proofs for Privacy Pass ( PP)
+E.1 Unforgeability
+The one-more unforgeability security notion from Privacy Pass [ DGS+18] did not provide the
+adversary with a Verify oracle. One-more unforgeability without verification oracle is proven
+under the one-more decryption of El Gamal problem, which we prove to be equivalent to the
+chosen-target Diﬀie–Hellman problem in Appendix A.3 . We therefore prove the following corollary:
+Theorem 4. If CTGDH holds for GrGen and ΠDLEQ is a zero-knowledge proof system for relation
+RDLEQ, then PP[GrGen, ΠDLEQ] is one-more unforgeable with advantage:
+Advomuf
+PP,ℓ (λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ,RDLEQ(λ).
+Proof (sketch). The proof follows directly from the proof of Theorem 6 . We detail highlight here
+the differences:
+– In the hybrid, the proof system is with respect to the proof system ΠDLEQ instead of ΠDLEQ2.
+– In the reduction to chosen-target gap Diﬀie–Hellman, B sets the public parameters as A∈ G,
+and answers the signing queries with whatever Help answers and the simulated proof. At the
+end of the game, it outputs whatever A outputs.
+It follows that that:
+Advomuf
+PP,ℓ (λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ,RDLEQ(λ).
+⊓ ⊔
+36
+
+E.2 Unlinkability
+In [ DGS+18], the Privacy Pass protocol is proved to be unconditionally unlinkable (up to the
+soundness error of the proof system).
+Theorem 5. Let GrGen be a group generator algorithm. If ΠDLEQ is a knowledge-sound proof system
+for relation RDLEQ, then PP[GrGen, ΠDLEQ] is 1-unlinkable.
+Proof. Consider an hybrid game Hyb in which we use the knowledge extractor to recover the
+(unique) witness x, and always compute W as xT = xHt(t). This hybrid is indistinguishable from
+the original game by the knowledge soundness of the proof system:
+q0· Advksnd
+ΠDLEQ,RDLEQ,B,Ext(λ)≥
+Advhyb
+PP,A(λ)− Pr
+
+UNLINKPP,A(λ) = 1
+ ,
+where q0 is the total number of calls to PP.User1.
+Now, consider a second hybrid in which we program the random oracle so that T′ is drawn
+uniformly at random and Ht(t) := rT′. The distribution is unchanged, and it holds that T′ and
+(t, W ) are independent. Therefore
+Pr
+
+UNLINKPP,A(λ) = 1
+
+≤ 1
+m + q0· Advksnd
+ΠDLEQ,RDLEQ,B,Ext(λ)
+which concludes the proof. ⊓ ⊔
+F Security proofs for OSPP
+F.1 Unforgeability
+Theorem 6. If CTGDH holds for GrGen, and ΠDLEQ2 is a zero-knowledge proof system for relation
+RDLEQ2, then OSPP[GrGen, ΠDLEQ2] is one-more unforgeable with advantage:
+Advomuf
+OSPP,ℓ(λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ2,RDLEQ2(λ).
+Proof. We prove this lemma using a hybrid argument. First, we replace the proving algorithm
+ΠDLEQ2.Prove by the zero-knowledge simulator ΠDLEQ2.Sim, and then show a direct reduction to
+the chosen-target gap Diﬀie–Helman. Let ℓ∈ N.
+Hyb0 This is the game OMUFAT,A,ℓ(λ). The adversary is provided with X∈ G, and has access to
+the signing oracle Sign, the verification oracle Verify, and the random oracles Hs (used for
+the response of the issuer), Ht (used for blinding the message by the user). At the end of its
+execution, it must output ℓ + 1 valid tokens.
+Hyb1 This hybrid replaces the way zero-knowledge proofs are generated when answering signing
+oracles: instead of using the proving algorithm ΠDLEQ2.Prove, we use the zero-knowledge sim-
+ulator ΠDLEQ2.Sim for all signing queries. If there exists a PPT adversary A whose advantage
+is different between the two games, then it is possible to construct an adversary for zero-
+knowledge of the underlying proof system. Consider the following PPT adversary B for the
+game ZKβ
+ΠDLEQ2,RDLEQ2,B(λ). B takes as input (Γ, pcrs) and generates the public parameter X
+following OSPP.KeyGen. It then invokes the adversary A on X, and for any signing query,
+it generates the proofs π’s the Prove oracle. At the end of the execution, A returns ℓ + 1
+37
+
+tokens. If A wins the game, then B outputs 1, otherwise it outputs 0. It follows that, for any
+PPT adversary A, the advantage in distinguishing the two hybrids is at most the advantage
+of zero-knowledge, i.e.:
+Advzk
+ΠDLEQ2,RDLEQ2,B(λ)≥
+AdvHyb0
+AT,A,ℓ(λ)− AdvHyb1
+AT,A,ℓ(λ)
+ .
+At this point, we prove that if there is a PPT adversary A that has non-negligible advantage
+AdvHyb1
+AT,A,ℓ(λ), then we can construct a PPT adversary B that has non-negligible advantage in the
+chosen-target gap Diﬀie–Hellman game CTGDHGrGen,B,ℓ(λ). B receives as input the group descrip-
+tion Γ and a challenge A∈ G as input. It runs (pcrs, ptd)← ΠDLEQ2.Setup(Γ ), then samples y← Z∗
+p,
+and computes X := A + yH . Then, it invokes the adversary A(crs, X), where crs := (Γ, pcrs). Note
+that X is distributed as in Hyb1. The adversary B responds to the queries that A makes to the
+oracles Ht, Sign, and Verify in the following way:
+– to any query to the oracle Ht(t), the adversary B invokes the oracle Target(t) and returns
+whatever it returns;
+– to any query to the oracle Sign(T′), B samples s←${0, 1}λ and defines S′ := Hs(T′, s). Then it
+invokes the oracle Z := Help(T′), defines W′ = Z + yS′, and simulates the proof π. Finally, it
+returns (s, W′, π);
+– to any query to the oracle Verify(t, (S, W )), B sets T := Ht(t) and invokes the oracle Ddh(T, W−
+yS), and returns whatever it returns.
+(The random oracle Hs is left unchanged.) First, note that the distributions of Ht, Sign, and
+Verify are identical to the ones of Hyb1. At the end of the execution, A returns ℓ + 1 tuples
+(ti, (Si, Wi))∈{ 0, 1}λ× G2, and B finally returns (ti, (Wi− ySi))i∈[ℓ+1].
+We claim that B wins the game CTGDHGrGen,B,ℓ(λ) every time that A wins Hyb1: by the winning
+condition in Hyb1, A won if and only if all ti are different and Wi = xTarget(ti) + ySi where x is
+the unique element of Zp such that A = xG. Furthermore, by the winning condition, A only called
+the signing oracle Sign at most ℓ times (and thus Help was called at most ℓ times). Therefore:
+Advomuf
+OSPP,ℓ(λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ2,RDLEQ2(λ).
+and this concludes the proof. ⊓ ⊔
+F.2 Unlinkability
+In this section, we prove that OSPP is 1-unlinkable (cf. Definition 2 ), that is, that the probability
+that an adversary can guess which of m tokens has not been redeemed yet is upper-bounded by
+1/m + negl(λ).
+Theorem 7. If DDH holds for GrGen and ΠDLEQ2 is an argument of knowledge for relation RDLEQ2,
+then OSPP[GrGen, ΠDLEQ2] is 1-unlinkable.
+Proof. The theorem trivially holds for m = 1. Let m > 1. We prove the theorem via a sequence of
+hybrids, summarized in Figure 17 .
+Hyb0 This hybrid is the game UNLINKOSPP,A,m(λ), where the adversary is given as a challenge the
+j-th token.
+38
+
+Game UNLINKOSPP,A,m(λ) in Hyb0, Hyb2, Hyb3, Hyb5
+Γ := (G, p, G, H)← GrGen(1λ)
+(pcrs, ptd)← ΠDLEQ2.Setup(Γ )
+(st, X)← A((Γ, pcrs))
+q0 := 0; q1 := 0; Q :=∅(
+st, (si, W ′
+i , πi)i∈Q
+)
+← AUser0,User1 (st)
+ifQ =∅ then return 0
+j←$Q; Q :=Q\{ j}
+σj← OSPP.User1(stj, (sj, W ′
+j , πj))
+ifQ =∅ then return 0
+k←$Q; Q :=Q\{ k}
+σk← OSPP.User1(stk, (sk, W ′
+k, πk))
+for i∈Q : σi← OSPP.User1(sti, (si, W ′
+i , πi))
+if not (xi, yi) = ( xk, yk) then abort
+Wj := xkHt(tj) + ykSj
+if ΠDLEQ2.Verify(pcrs, (X, T ′
+j , S′
+j, W ′
+j ), πj) then
+σj := (tj, (Sj, Wj))
+Wk := xkHt(tk) + ykSk
+if ΠDLEQ2.Verify(pcrs, (X, T ′
+k, S′
+k, W ′
+k), πk) then
+σk := (tk, (Sk, Wk))
+ϕ←S Q
+j′← A(st, (tj, σj), (tϕ(i), σϕ(i))i∈Q)
+j′← A(st, (tj, σj), (tk, σk), (tϕ(i), σϕ(i))i∈Q)
+return q0− q1≥ m and j′ = j
+Oracle User0 in Hyb1, Hyb8, Hyb9
+q0 := q0 + 1
+tq0←${0, 1}λ
+if Ht(tq0 ) was queried then abort
+(T ′
+q0 , stq0 )← OSPP.User0(X, tq0 )
+rq0←$ Z∗
+p
+Tq0 := Ht(tq0 ); T ′
+q0 := r−1
+q0 · Tq0
+T ′
+q0←$ G; Tq0 := Ht(tq0 ) := rq0 T ′
+q0
+stq0 := (pp, rq0 , tq0 , T ′
+q0 )
+Q :=Q∪{ q0}
+return (q0, T ′
+q0 )
+Oracle User1(i, (si, W ′
+i , πi)) in Hyb0, Hyb4, Hyb6, Hyb7
+if i /∈Q then return ⊥
+/ /Below: σi← OSPP.User1(sti, (si, W ′
+i , πi))
+(X, ri, ti, T ′
+i ) := sti
+S′
+i := Hs(T ′
+i , si)
+if not ΠDLEQ2.Verify(pcrs, (X, T ′
+i , S′
+i, W ′
+i ), πi) then
+return ⊥
+Si := riS′
+i; Si←$ G
+if not RDLEQ2((x, y), (X, T ′
+i , S′
+i, W ′
+i )) then abort
+(x′, y′)← Exti(ptd, (X, T ′
+i , S′
+i, W ′
+i ), π)
+W := rW ′; W := xHt(t) + yS
+σi := (Si, Wi)
+if σi̸=⊥ then
+Q :=Q\{ i}; q1 := q1 + 1
+return σi
+Fig. 17. Summary of hybrid changes for proof of unlinkability of OSPP in Theorem 7 . We recall that SX denotes the
+symmetric group of X, i.e., the group of all permutations of X.
+Hyb1 We unroll OSPP.User0 inside the oracle User0. This hybrid is perfectly indistinguishable
+from Hyb0.
+Hyb2 In this hybrid, we return 0 if the set Q is empty after having removed j (that is, if Q ={j}).
+This hybrid is perfectly indistinguishable from Hyb1, since if|Q| = 1 = q0−1−q1, the winning
+condition q0− q1≥ m cannot be satisfied.
+Hyb3 We now sample another element k fromQ, and shuffle the others. The distribution is the
+same as in the previous hybrid.
+Hyb4 We now use the knowledge extractor, using a sequence of hybrids, to recover the witness.
+This hybrid is indistinguishable from the previous by the knowledge soundness of the proof
+system. Hence, we have:
+q0· Advksnd
+ΠDLEQ2,RDLEQ2,B,Ext(λ)≥
+AdvHyb3
+OSPP,A(λ)− AdvHyb4
+OSPP,A(λ)
+ ,
+where q0 is the total number of calls to OSPP.User1.
+39
+
+Hyb5 This hybrid aborts if the extracted witnesses at positions j and k differ, and then sets Wj :=
+xkHt(tj) + ykSj and Wk := xjHt(tk) + yjSk (which does not change the distributions).
+If the game aborts at this step, by soundness of the proof system we would have that X =
+xjG + yjH = xkG + ykH and thus (yk− yj)/(xj− xk) is the discrete log of H base G. (If the
+two witnesses are different, it must be that xj̸= xk, and thus the inverse of (xj− xk) exists.)
+It is therefore possible to construct a PPT adversary B for DLOGGrGen,B(λ): the adversary B
+obtains a group description Γ := ( G, p, ˜G) and a challenge ˜H. It sets G := ˜G and H := ˜H
+and runs exactly as per Hyb4. It extracts the two witnesses (xj, yj), and (xk, yk) and returns
+(yk− yj)/(xj− xk). The adversary wins every time that Hyb5 aborts.
+Hyb6 In this hybrid, instead of computing all the W ’s by unblinding the elements W′’s provided
+by the adversary, we compute it ourselves using the (valid) extracted witnesses (x, y). The
+distribution is left unchanged.
+Hyb7 This hybrid proceeds exactly as the previous one, except now all S’s are sampled uniformly
+at random from G.
+If there exists a PPT adversary A for which the outcome of the two hybrids is different, then
+it is possible to construct a distinguisher B for DDHβ
+GrGen,B(λ) by exploiting the random self-
+reducibility property of DDH. The adversary B takes as input the group description together
+with a tuple (P, A := aP, B := bP, C)∈ G4 where a, b←$ Zp and has to distinguish C := abP
+(the case β = 0 ) from a uniformly distributed element over G (the case β = 1 ). B runs
+the game as per Hyb6, except in OSPP.User0, instead of sampling T′
+q0 uniformly at random
+from G, B sets them as T′
+q0 := γq0P where γq0←$ Zp. Instead of computing Tq0 := rq0T′
+q0, B
+sets Tq0 := γq0αq0A + γq0α′
+q0P = ( αq0a + α′
+q0)γq0P = ( αq0a + α′
+q0)T′
+q0, i.e. implicitly setting
+rq0 := αq0a + α′
+q0. For every query Hs(T′
+q0, s), the adversary B samples βq0,s, β′
+q0,s uniformly
+at random and programs Hs(T′
+q0, s) := γq0βq0,sB + γq0β′
+q0,sP = ( βq0,sb + β′
+q0,s)γq0P . Finally,
+when computing S at index i, B sets Si := αiβi,siγiC + αiβ′
+i,siγiA + α′
+iβi,siγiB + α′
+iβ′
+i,siγiP . If
+C is uniformly random then Si is uniformly distributed as well, and therefore its distribution
+didn’t change from Hyb7. If C = abP , then:
+Si = αiβi,siγi(abP ) + αiβ′
+i,siγi(aP ) + α′
+iβi,siγi(bP ) + α′
+iβ′
+i,siγiP
+= αiβi,siab(γiP ) + αiaβ′
+i,si(γiP ) + α′
+ibβi,si(γiP ) + α′
+iβ′
+i,si(γiP )
+= (αia + α′
+i)(βi,sib + β′
+i,si)(γiP ) ,
+which results in the distribution of Hyb6. Therefore, it follows that the advantage in distin-
+guishing the two hybrids is:
+Advddh
+GrGen,B(λ)≥
+AdvHyb7
+OSPP,A(λ)− AdvHyb6
+OSPP,A(λ)
+ ,
+for any PPT adversary A.
+Hyb8 This hybrid aborts if the adversary has already queried Ht(tq0) before running OSPP.User0.
+This happens with negligible probability:
+q0
+2λ≥
+AdvHyb8
+OSPP,A(λ)− AdvHyb7
+OSPP,A(λ)
+ .
+Hyb9 In this hybrid, we program the random oracle so that T′
+q0 is sampled uniformly at random, and
+we program the random oracle so that Tq0 = Ht(tq0) := rq0T′
+q0. The distribution is unchanged.
+40
+
+Hyb10 In the previous hybrid, rj and rk are only used in order to compute Tj and Tk. Therefore,
+they look completely random to the adversary, and so do Sj and Sk. In this hybrid, we can
+therefore swap the indices j and k without the adversary noticing. This hybrid is perfectly
+indistinguishable from Hyb5.
+Now, it is suﬀicient to bound the probability of success adversary in Hyb10. Since the index
+that the adversary needs to guess j is independent of the challenge it receives, we conclude that
+AdvHyb10
+OSPP,A(λ)≤ 1/(q0− q1). Therefore:
+Pr
+
+UNLINKOSPP,A,m(λ) = 1
+
+≤ 1
+m + q0· Advksnd
+ΠDLEQ2,RDLEQ2,A(λ) + Advdlog
+GrGen,A(λ) + Advddh
+GrGen,A(λ) + q0
+2λ
+which completes the proof. ⊓ ⊔
+G Security proofs for PMBT
+G.1 Unforgeability
+We prove the following theorem using a hybrid argument. The key difference to OSPP (cf. Ap-
+pendix F.1 ) is that, during the reduction to CTGDH, B will draw a bit b∈ {0, 1} which will
+correspond to its guess on which bit A will succeed for the one-more unforgeability game, and
+correctly create tokens for the bit 1− b.
+Theorem 8. If CTGDH holds for GrGen and ΠDLEQ2 is a zero-knowledge proof system for relation
+RDLEQ2, then PMBT[GrGen, ΠDLEQ2] is one-more unforgeable with advantage:
+Advomuf
+PMBT,ℓ(λ)≤ 2Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ2,RDLEQ(λ).
+Proof. We prove this theorem using a hybrid argument, similar to the proof of Theorem 6 . First,
+we replace the proving algorithm ΠDLEQOR2.Prove by the zero-knowledge simulator ΠDLEQOR2.Sim
+(which defines an hybrid Hyb1), and then show a direct reduction to the chosen-target gap Diﬀie–
+Helman problem.
+Let ℓ be an integer. We will prove that if there is a PPT adversary A that has non-negligible
+advantage in the hybrid with simulated proofs, then we can construct a PPT adversary B that has
+non-negligible advantage in the game CTGDHGrGen,B,ℓ(λ).
+Assuming the existence of A, we construct B as follows. First, B draws a bit b∈{ 0, 1} which
+will correspond to its guess on which bit A will succeed for the one-more unforgeability game.
+B receives the group description and A∈ G as input, samples yb, xb, y1−b← Zp invertible, and
+computes Xb := A + ybH and X1−b := x1−bG + y1−bH. With overwhelming probability it holds
+that X0̸= X1. Then, it sets X := ( X0, X1) and it runs A(X). Note that X is distributed as in
+the previous hybrid Hyb1. The adversary B responds to the oracles Ht, Sign, and Read using the
+oracles Target, Help, and Ddh (cf. Figure 1 ), in the following way:
+– to any query to the oracle Ht(t), the adversary B invokes the oracle Target(t) and returns
+whatever it returns;
+– to any query to the signing oracles Sign′(ˆb, T′) and Sign(T′), the adversary B proceeds as follows:
+• it samples s←${0, 1}λ and defines S′ := Hs(T′, s);
+• if ˆb = 1 − b, it computes W′ = x1−bT′ + y1−bS′; else (i.e., ˆb = b), it invokes the oracle
+Z := Help(T′) and sets W′ = Z + ybS′;
+41
+
+• finally, returns (s, W′, π), where the proof π is simulated.
+– to any query of the form Read(t, (S, W )), B (who knows the secrets yb, x1−b, and y1−b) lets
+X := W− ybS, and defines boolb := Ddh(t, X) and bool1−b := ( W = x1−bHt(t) + y1−bS). It
+returns⊥ if boolb = bool1−b, or then 1 if bool1, or then 0 if bool0.
+All other random oracle queries are left unchanged. First, note that the distributions of Ht, Sign,
+Sign′, and Read are identical to the ones of Hyb1. At the end of the execution, A returns ℓ + 1
+tuples (ti, (Si, Wi))∈{ 0, 1}λ× G2. If the ℓ + 1 forgeries are valid w.r.t. the bit b (that is, B correctly
+guessed the bit of the forgery at the beginning), it returns (ti, Wi−ybSi)i∈[ℓ+1]. Otherwise, it returns
+⊥. It follows that the adversary B wins the game CTGDHGrGen,B,ℓ(λ) every time that A wins and
+produced a forgery on b (sampled unif. at random from {0, 1}). This shows that:
+Advomuf
+PMBT,ℓ(λ)≤ 2Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLEQ2,RDLEQ2(λ),
+and this concludes the proof.
+G.2 Unlinkability
+We prove that PMBT is 2-unlinkable instead of 1-unlinkable (cf. Definition 2 ), which means that
+the probability that an adversary can guess which of m tokens not redeemed yet is upper-bounded
+by 2/m + negl(λ). Indeed, they key idea is that the adversary can now embed different private
+metadata bits, at most halving its search space.
+Theorem 9. If DDH holds for GrGen and ΠDLEQOR2 is a zero-knowledge proof system for relation
+RDLEQOR2, then PMBT[GrGen, ΠDLEQOR2] is 2-unlinkable.
+Proof. The theorem trivially holds for m = 1 , 2. Let m > 2. The theorem can be proved by a
+sequence of hybrids similar to those of the proof of Theorem 7 . Since the user algorithms are the
+same (besides the DLOEQOR instead of DLEQ proof) as in Construction 2 , we explicit the key
+difference in the reduction below, and refer to Fig. 17 and the proof of Theorem 7 for the rest of
+the proof.
+The key idea is as follows. We will first extract all the witnesses from the proofs πi, i∈ U , and
+hence we will be able to partition the set U in two: the indices with a witness starting with the
+bit 0 and the indices with a witness starting with the bit 1. We will then sample a biased bit b
+depending on the probability |U1|/|U|, then sample j, k in Ub and perform the same steps as in
+the proof of Theorem 7 , which proves that the adversary can only guess j with probability 1/|Ub|.
+Hence, the probability of success p of the adversary will be upper bounded by
+p =
+X
+b′=0,1
+Ub′̸=∅
+Pr[b′ = b]· 1
+|Ub′| + negl(λ) =
+X
+b′=0,1
+Ub′̸=∅
+|Ub′|
+|U| · 1
+|Ub′| + negl(λ)
+=
+X
+b′=0,1
+Ub′̸=∅
+|Ub′|
+k0− k1
+· 1
+|Ub′| + negl(λ)≤ 2
+k0− k1
++ negl(λ)≤ 2
+m + negl(λ) .
+G.3 Privacy of the metadata bit
+Theorem 10. If DDH holds for the group generator GrGen, and ΠDLEQOR2 is a zero-knowledge
+proof system for relation RDLEQOR2 then PMBT[GrGen, ΠDLEQOR2] provides private metadata bit
+42
+
+Oracle Sign′(ˆb, T ′) in Hyb0, Hyb1, Hyb2
+s←${0, 1}λ
+if Hs(T ′, s) was queried then abort
+S′ := H(T ′, s)
+W ′ := xˆbT ′ + yˆbS′
+π← ΠDLEQOR2.Prove(pcrs, (X0, X1, T ′, S′, W ′), (xˆb, yˆb))
+π← ΠDLEQOR2.Sim(ptd, (X0, X1, T ′, S′, W ′))
+return (s, W ′, π)
+Oracle Sign′(ˆb, T ′) in Hyb4(λ), Hyb5(λ), Hyb6(λ)
+s←${0, 1}λ
+if Hs(T ′, s) was queried then abort
+S′ := H(T ′, s)
+W ′ := xˆbT ′ + yˆbS′
+π← ΠDLEQOR2.Sim(ptd, (X0, X1, T ′, S′, W ′))
+return (s, W ′, π)
+Oracle Sign(T ′) in Hyb1(λ), Hyb2(λ), Hyb3(λ)
+s←${0, 1}λ
+if Hs(T ′, s) was queried then abort
+S′ := H(T ′, s)
+W ′ := xbT ′ + ybS′
+π← ΠDLEQOR2.Prove(pcrs, (X0, X1, T ′, S′, W ′), (xb, yb))
+π← ΠDLEQOR2.Sim(ptd, (X0, X1, T ′, S′, W ′))
+return (s, W ′, π)
+Oracle Sign(T ′) in Hyb4(λ), Hyb5(λ), Hyb6(λ)
+s←${0, 1}λ
+if Hs(T ′, s) was queried then abort
+S′ := H(T ′, s)
+W ′ := xbT ′ + ybS′
+y′←$ Z∗
+p; W ′ := xbT ′ + y′S′
+W ′ := x1−bT ′ + y′S′
+W ′ := x1−bT ′ + y1−bS′
+π← ΠDLEQOR2.Sim(ptd, (X0, X1, T ′, S′, W ′))
+return (s, W ′, π)
+Fig. 18. Hybrid changes for privacy of the metadata bit of PMBT in Theorem 10 .
+with advantage:
+Advpmb
+PMBT(λ)≤ O(q2)
+2λ + 2Advddh
+GrGen(λ) + 2Advzk
+ΠDLEQOR2,RDLEQOR2(λ),
+where q is the number of queries the adversary makes to Hs or Sign.
+Proof. We consider the sequence of hybrids presented in Fig. 18 that transitions from PMBb
+PMBT,A(λ)
+to PMB1−b
+PMBT,A(λ) (see Definition 3 ). We argue that each pair of consecutive hybrids are indistin-
+guishable, for any PPT adversary A. We do not explicitly write the verification oracle in the games
+since it will always return true.
+Hyb0 This is the game PMB0
+AT,A(λ). Here, the adversary is provided the public parameters X :=
+(X0, X1). The adversary has access to the signing oracle for a bit of its choosing, and a
+challenge oracle that signs new tokens with the bit b. Additionally, it has access to the random
+oracles Ht, Hs, Hc. At the end of its execution, A outputs a bit b′; if b = b′, the adversary won.
+Hyb1 This hybrid replaces the way zero-knowledge proofs are generated in Sign and Sign′: in-
+stead of using the proving algorithm ΠDLEQOR2.Prove, we use the zero-knowledge simulator
+ΠDLEQOR2.Sim.
+If there exists a PPT adversary A whose output is different between the two games, then it is
+possible to construct a distinguisher for the zero-knowledge proof system ΠDLEQOR2: consider
+the PPT adversary B for the game ZKβ
+ΠDLEQOR2,RDLEQOR2,B(λ) (cf. Fig. 2 ) that, given as input
+the CRS pcrs, runs (X, (x, y))← PMBT.KeyGen((Γ, pcrs)) and then invokes the adversary
+43
+
+A((Γ, pcrs), X). All random oracles queries are performed exactly as per Hyb2, except for sign-
+ing queries. For each query to Sign and Sign′, after generating the values s, S′, and W′ as per
+Hyb0, the proof π is generated via the proving oracle: π← Prove((X, T′, S′, W′), (ˆb, xˆb, yˆb)),
+where ˆb∈{ 0, 1} is specified within the signing oracle ( ˆb = b in Sign). At the end of its
+execution, A returns a guess b′; B outputs b′.
+If the Prove oracle outputs proofs via ΠDLEQOR2.Prove, the game is identical to Hyb0. If
+Prove outputs proofs via ΠDLEQOR2.Sim, the game is identical to Hyb1. It follows that,
+for any PPT adversary A, the advantage in distinguishing the two hybrids is at most the
+advantage of zero-knowledge in ΠDLEQOR2 with adversary B, that is:
+Advzk
+ΠDLEQOR2,RDLEQOR2,B(λ)≥
+AdvHyb1
+PMBT,A(λ)− AdvHyb0
+PMBT,A(λ)
+ .
+Hyb2 If, during any of the signing queries, the oracle Hs has already received a query of the form
+(T′, s), we abort. Clearly, the output of the two hybrids is distinguishable only in the case
+of a collision on the choice of s∈{ 0, 1}λ between the signing oracles, or via a direct query
+to Hs. For a PPT adversary A making at most q = poly (λ) queries to any of the oracles Hs,
+Sign, or Sign′, the probability that the game aborts is at most (q− 1)(q− 2)/2λ. In fact,
+for the second query (to Sign or Sign′), we have chance 1/p of hitting the string s selected
+during the first query, and so on: the i-th query has chance (i− 1)/p of selecting a s that has
+been previously used. It follows that:
+(q− 1)(q− 2)
+2λ ≥
+AdvHyb2
+PMBT,A(λ)− AdvHyb1
+PMBT,A(λ)
+
+Hyb3 We now change the way W′ is computed: during the key generation, we sample an additional
+element y′←$ Zp, and for any query to the random oracle Sign we construct W′ as xbT′ +y′S′
+instead of xbT′ + ybS′. The proof π gets simulated as before.
+We prove that if, by contradiction, the two games are distinguishable, then there exists an
+adversary B for the game DDHβ
+B,GrGen(λ) that wins every time the output of the two hybrids
+is different. The adversary B receives as input a DDH tuple (P, A := aP, B := bP, C)∈ G4
+such that C = abP in the case DDH0
+B,GrGen(λ) and C←$ G in the case DDH1
+B,GrGen(λ). Given
+a single challenge (P, A, B, C), B can exploit the random self-reducibility property of DDH
+to construct q random instances of the DDH challenge: for any i≤ q the adversary B can
+select αi, βi←$ Zp and construct the challenge:
+(P, A, β iB + αiP, β iC + αiB)
+The adversary B proceeds as per Hyb2, embedding the challenge in the public key and oracle
+replies. It fixes H := P , and instead of generating Xb := xbG + ybH, it constructs it as
+Xb := xbG + A. Then, it runs the adversary A. The adversary A will make queries to any of
+the random oracles Ht and Hs, that are answered as before. We replace queries to the signing
+oracles in the following way:
+– for any query Sign, sample s←${0, 1}λ and check for collisions w.r.t. previous queries
+to Hs as per Hyb2. Then, we sample α, β←$ Zp and we program the random oracle on
+Hs(T′, s) = S′ to reply with (βiB + αiP ), for some αi, βi←$ Zp. Then, B computes W′ :=
+xbT′ + βiC + αiA and produces the proof π using the simulator. B returns (s, W′, π)
+44
+
+– for any query Sign′ with ˆb = b, after sampling s←${0, 1}λ, we program the random oracle
+on H(T′, s) = S′ to reply with αiH for some αi←$ Zp. B computes W′ := xbT′ + αiA, and
+simulates the proof. It returns (s, W′, π).
+– any query to Sign′ with ˆb = 1− b is handled exactly as per the previous hybrid.
+At the end of A’s execution, B returns whatever guess A returned. We note that if the challenge
+C is provided according to DDH0
+A,GrGen(λ), B behaves exactly as per Hyb2; if the challenge
+C is provided according to DDH1
+A,GrGen(λ), B behaves exactly as per Hyb3. Additionally, if
+the simulator fails to simulate this statement as it’s not in the language, then B also wins
+the game DDHβ
+A,GrGen(λ). Therefore, every time that A’s output is different between the two
+hybrids (or every time that ΠDLEQOR2.Sim fails), B will distinguish a random tuple from a
+DDH tuple. It follows therefore that:
+Advddh
+GrGen,B(λ)≥
+AdvHyb3
+PMBT,A(λ)− AdvHyb2
+PMBT,A(λ)
+
+Hyb4 In this game, we remark that W′ := xbT′ + y′S′, and that y′←$ Zp is used only for computing
+W′. Therefore, the distribution of W′ in Hyb3 is uniform (plus a constant xbT′, i.e., uniform)
+as long as S′̸= 0 G. Therefore, we change once again the way we compute W′, swapping b
+with 1− b: in this hybrid, W′ := x1−bT′ + y′S′. For the above remarks, the two games can be
+distinguished only if S′ is the identity element, which happens with probability 1/p.
+Hyb5 In this hybrid, we remove y′ and we compute W′ using the witness 1− b. The proof for this
+hybrid follows an argument similar to the one used for the transition Hyb2→ Hyb3. Therefore,
+it follows that:
+Advddh
+GrGen,B(λ)≥
+AdvHyb5
+PMBT,A(λ)− AdvHyb4
+PMBT,A(λ)
+
+At this point we note that the oracle Sign is issuing signatures under the witness x1−b, y1−b. It is
+possible, through a sequence of hybrids, to remove the condition on the collision of s introduced
+in Hyb2 (via the same argument used for the transition Hyb1→ Hyb2), and swap back the zero-
+knowledge simulator with the prover’s algorithm ΠDLEQOR2.Prove (via the same argument used for
+the transition Hyb0→ Hyb1). Therefore, the advantage of an adversary A in winning the game
+PMBβ
+PMBT,A(λ) is:
+Advpmb
+PMBT,A(λ)≤ 2· (q− 1)(q− 2)
+2λ + 1
+2λ + 2Advddh
+GrGen(λ) + 2Advzk
+DLEQOR(λ),
+where q is the number of queries to the signing oracles or to the random oracle Hs.
+H Security proofs for PPB
+In this section, we argue one-more unforgeability and 2-unlinkability of Construction 4 .
+H.1 Unforgeability
+Theorem 21. If CTGDH holds for GrGen, and ΠDLOG is a zero-knowledge proof system for relation
+ΠDLOG, then PPB[GrGen, ΠDLOG] is one-more unforgeable with advantage:
+Advomuf
+PPB,ℓ(λ)≤ Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLOG,RDLOG(λ).
+45
+
+Game UNLINKPPB,A,m(λ) in Hyb0, Hyb1
+Γ := (G, p, G)← GrGen(1λ)
+(pcrs, ptd)← ΠDLOG.Setup(Γ )
+(st, (X, π))← A((pcrs, Γ ))
+x← Ext(ptd, π)
+if not RDLOG(X, x) then abort
+q0 := 0; q1 := 0;Q :=∅
+(st,{W ′
+i}i∈Q)← AUser0(),User1(·,·)(st)
+ifQ =∅ then return 0
+j←$Q; Q :=Q\{ j}
+σj← AT.User1(stj, W ′
+j )
+∀i∈Q , σi← AT.User1(sti, W ′
+i )
+ϕ←S Q
+j′← A(st, (tj, σj), (tϕ(i), σϕ(i))i∈Q)
+return q1− q0≥ m and j′ = j
+Oracle User0()
+q0 := q0 + 1
+tq0←${0, 1}λ
+(T ′
+q0 , stq0 )← AT.User0(pp, tq0 )
+Q :=Q∪{ q0}
+return (q0, T ′
+q0 )
+AT.User0(pp = (X, π), t)) in Hyb0, Hyb3
+r, ρ←$ Z∗
+p
+T := Ht(t)
+T ′ := r(T− ρG)
+T ′←$ G
+st := (p, r, ρ, t)
+return (T ′, st)
+Oracle User1(j, W ′)
+if j /∈Q then return ⊥
+σj← AT.User1(stj, W ′)
+Q :=Q\{ j}
+q1 := q1 + 1
+return token
+AT.User1(pp, r, ρ, t), W ′) in Hyb0, Hyb2, Hyb4
+(X, π) := pp
+σ := r−1W ′ + ρX
+P := W ′− xT ′
+σ := xHt(t) + r−1P
+if P̸= 0 then σ←$ G
+return σ
+Fig. 19. Hybrid changes for unlinkability of PPB in Theorem 22 .
+The unforgeability of the scheme follows from the unforgeability of Privacy Pass since here the
+user receives strictly less information than in the Privacy Pass construction, and the zero-knowledge
+proof sent within pp can be simulated.
+H.2 Unlinkability
+We will formally argue that the each token is either a valid token or is a uniformly distributed
+value. Indeed, note that there exists P∈ Zp such that σ′ = xT′ + P . If P = 0 and the issuer was
+honest, then σ = xHt(t). Otherwise, σ = xHt(t) +r−1P . The value T′ is uniformly distributed since
+ρ is chosen at random, and then σ is uniformly distributed since r is chosen at random.
+Theorem 22. Let GrGen be a group generator. If ΠDLOG is a knowledge-sound proof system for
+relation RDLOG, then PPB[GrGen, ΠDLEQ] is 2-unlinkabile.
+Proof. We formally argue that the each token is either a valid token or is a uniformly distributed
+value. We do this with a sequence of hybrids presented in Fig. 19 . We argue that the transitions
+between the hybrids in Fig. 19 are indistinguishable as follows:
+Let m be an integer.
+Hyb0 The first hybrid is the unlinkability game.
+Hyb1 In this hybrid, we use the knowledge extractor on the public key. Since the extractor fails
+only with negligible probability, this hybrid is indistinguishable from the previous one.
+Advksnd
+ΠDLOG,RDLOG,B(λ)≥
+AdvHyb0
+PPB,A(λ)− AdvHyb1
+PPB,A(λ)
+ .
+46
+
+Hyb2 In this hybrid we compute the value σ in AT.User1 in a different but equivalent way. First,
+note that since the challenger knows x, it can define P := W′− xT′. Then, we have
+σ = r−1W′ + ρX = r−1(xT′ + P ) + ρX
+= r−1(xr(Ht(t)− ρG) + P ) + ρX
+= xHt(t) + r−1P.
+The distribution is identical to the previous hybrid.
+Hyb3 In this hybrid, we sample T′ uniformly at random, which results in the same distributions
+since the ρ is sampled at random and is used only in the computation of this specific T′.
+Hyb4 In this hybrid, if P̸= 0 , we sample σ at random. Since r is sampled at random and is only
+used in this specific computation, the resulting distribution is the same.
+Now, we have that the tokens can be of two types (t, xHt(t)) or (t, R), where tokens of the same
+type are indistinguishable for the adversary. Let U0, U1 be the sets of tokens from each type issued
+during the unlinkability game, such that U0∪ U1 is a partition of U .
+Pr
+
+UNLINKPPB,A,m(λ)
+
+=
+X
+d=0,1
+Ud̸=∅
+Pr
+
+UNLINKPPB,A,m(λ)| j∈ Ud
+
+Pr[ j∈ Ud ]
+≤
+X
+d=0,1
+Ud̸=∅
+1
+|Ud|
+|Ud|
+|U| + negl(λ)≤
+X
+d=0,1
+Ud̸=∅
+1
+q0− q1
++ negl(λ)
+≤ 2
+m + negl(λ) .
+I Security proofs for PMBTB
+In this section, we prove that PMBTB (Construction 5 ) is one-more unforgeable, unlinkable, and
+provide privacy for the metadata bit.
+I.1 Unforgeability
+Theorem 13. If CTGDH holds for the group generator algorithm GrGen and ΠDLOGAND2 is a zero-
+knowledge proof system for RDLOGAND2, then PMBTB[GrGen, ΠDLOGAND2] is one-more unforgeable
+with advantage:
+Advomuf
+PMBTB,ℓ(λ)≤ 2Advctgdh
+GrGen,ℓ(λ) + Advzk
+ΠDLOGAND2,RDLOGAND2(λ).
+Proof. We prove this theorem using a hybrid argument. First, we replace the proving algorithm
+by the zero-knowledge simulator, and then show a reduction to the CTGDH problem. Let ℓ be an
+integer.
+Hyb0 This is the game OMUFPMBTB,A,ℓ(λ): the adversary is provided with the public parameters
+(X, π). The adversary has access to the signing oracle Sign, the token validity oracle Verify,
+the metadata extraction oracle Read, and the random oracles Hs (used for the response of
+the issuer) and Ht (user for bliding the message by the user). At the end of its execution, it
+outputs ℓ + 1 tokens for the same bit b′.
+47
+
+Hyb1 This hybrid replaces the way the zero-knowledge proof is generated: instead of using the
+proving algorithm, we use the zero-knowledge simulator.
+If there exists a PPT adversary A whose advantage is different between the two games, then
+it is possible to construct a distinguisher B for the underlying zero-knowledge of the proof sys-
+tem. The adversary simply generates the proofs via the Prove oracle in ZKβ
+ΠDLOGAND2,RDLOGAND2
+(λ)
+to generate the proofs: if β = 0 we’re in Hyb0; if β = 1 we’re in Hyb1. We have:
+Advzk
+ΠDLOGAND2,RDLOGAND2,B(λ)≥
+AdvHyb0
+PMBTB,A(λ)− AdvHyb1
+PMBTB,A(λ)
+ .
+We will now prove that if there is an adversary A that has non-negligible advantage AdvHyb1
+PMBTB,A(λ),
+then we can construct an adversary B that has non-negligible advantage in winning the chosen-
+target gap Diﬀie–Hellman game CTGDHGrGen,B,ℓ(λ).
+Assuming the existence of A, we construct B as follows. First, B guesses the bit b on which
+the adversary will succeeds. It receives the group description and A ∈ G as input, samples
+yb, x1−b, y1−b← Zp invertible, and computes Xb := A + ybH, and X1−b := x1−bG + y1−bH, and
+simulates the proof π. The public parameters are (X, π) = (( X0, X1), π). It runs A(X, π). Note that
+X is distributed as in Hyb1. We need now to specify how B answers oracle queries. The adversary
+B overrides the queries to the oracles in the following way:
+– for any query to the oracle Ht(t), the adversary B invokes the oracle Target(t) and returns
+whatever it returns;
+– for any query Sign(b′, (T′
+0, T′
+1)), it proceeds as follows.
+• If b′ = 1− b, it follows the issuance protocol described in Figure 10, i.e., it samples s←${0, 1}λ,
+define S′
+1−b := Hs(T′
+1−b, s), compute W′ = x1−bT′
+1−b + y1−bS′
+1−b. It then answers (s, W′) to A.
+• If b′ = b, it samples s←${0, 1}λ and defines S′
+b := Hs(T′
+b, s). Then it invokes the oracle
+Z := Help(T′
+b), defines W′ = Z + ybS′
+b. Finally, it returns (s, W′).
+– For any query Read(t, (S0, S1, W0, W1)), B uses the Ddh and its secret scalars yb, x1−b, y1−b∈ Zp
+to check if Ddh(t, Wb− ybSb) and if W1−b = x1−bHt(t) +y1−bSb, and answers correctly depending
+on the values of the booleans.
+All other random oracle queries are left unchanged. First, note that the distributions of Ht and
+Read are identical to the ones of Hyb1. At the end of the execution, A returns ℓ + 1 tuples
+(ti, (Si, Wi))∈{ 0, 1}λ× G2. If the ℓ + 1 forgeries are valid w.r.t the bit b (that is, B correctly
+guessed the bit of the forgery at the beginning), it returns (ti, Wi− ybSi)i∈[ℓ+1]. Otherwise, it
+returns⊥. We claim that the adversary B wins the game CTGDHGrGen,B,ℓ(λ) every time B guesses
+correctly the bit b (sampled uniformly at random) of the forgery of A. By the winning condition of
+game Hyb1, A wins if all ti are different and Wi = xTarget(ti)+ ybSi where x is the unique element
+of Zp such that A = xG (and b is the bit on which the forgery happens). By winning condition of
+unforgeability, A only called the oracle Read at most ℓ times; therefore Help was called at most
+ℓ times. Finally, this shows that:
+Advomuf
+PMBTB,A,ℓ(λ)≤ 2Advctgdh
+GrGen,A,ℓ(λ) + Advzk
+ΠDLOGAND2,RDLOGAND2,A(λ).
+and this concludes the proof.
+I.2 Unlinkability
+Theorem 14. If DDH holds for the group generator GrGen and ΠDLOGAND2 is a knowledge-sound
+proof system for relation RDLOGAND2, then PMBTB[GrGen, ΠDLOGAND2] is 3-unlinkabile.
+48
+
+Game UNLINKPMBTB,A,m(λ) in Hyb0, Hyb1
+Γ := (G, p, G, H)← GrGen(1λ)
+(st, (X, π))← A(Γ )
+(x0, y0)← Ext(π)
+if not R((x0, y0), X0) then abort
+q0 := 0; q1 := 0;Q :=∅
+(st,{W ′
+i}i∈Q)← AUser0(),User1(·,·)(st)
+ifQ =∅ then return 0
+j←$Q; Q :=Q\{ j}
+tokenj := PMBTB.User1(stj, W ′
+j )
+∀i∈Q , tokeni := PMBTB.User1(sti, W ′
+i )
+ϕ←S Q
+j′← A(st, tokenj,{tokenϕ(i)}i∈Q)
+return q0− q1≥ m and j′ = j
+PMBTB.User1((pp,{rd, ρd, T ′
+d}d=0,1, t), (s, W ′)) in Hyb0, Hyb2, Hyb3, Hyb4
+(X0, X1, π0, π1) := pp
+S0 = r−1
+0 Hs(T ′
+0, s) + ρ0H; S0←$ G; W0 := r−1
+0 W ′ + ρ0X0
+S1 = r−1
+1 Hs(T ′
+1, s) + ρ1H S 1←$ G; W1 := r−1
+1 W ′ + ρ1X1
+P0 := W ′− x0T ′
+0− y0Hs(T ′
+0, s); W0 := x0Ht(t) + y0S0 + r−1
+0 P0
+P1 := W ′− x1T ′
+1− y1Hs(T ′
+1, s); W1 := x1Ht(t) + y1S1 + r−1
+1 P1
+σ := (S0, S1, W0, W1)
+return σ
+PMBTB.User1((pp,{rd, ρd, T ′
+d}d=0,1, t), (s, W ′)) in Hyb7, Hyb8
+(X0, X1, π0, π1) := pp
+S0←$ G
+S1←$ G
+P0 := W ′− x0T ′
+0− y0Hs(T ′
+0, s); W0 := x0Ht(t) + y0S0 + r−1
+0 P0
+P1 := W ′− x1T ′
+1− y1Hs(T ′
+1, s); W1 := x1Ht(t) + y1S1 + r−1
+1 P1
+if P0̸= 0 then W0←$ G
+if P1̸= 0 then W1←$ G
+σ := (S0, S1, W0, W1)
+return σ
+Oracle User0()
+q0 := q0 + 1
+tq0←${0, 1}λ
+(T ′
+q0 , stq0 )← PMBTB.User0(pp, tq0 )
+Q :=Q∪{ q0}
+return (q0, T ′
+q0 )
+PMBTB.User0((X, π), t)) in Hyb0, Hyb5, Hyb6
+T := Ht(t)
+r0, ρ0←$ Z∗
+p
+r1, ρ1←$ Z∗
+p
+T ′
+0 := r0(T− ρ0G)
+T ′
+1 := r1(T− ρ1G)
+T ′
+0←$ G
+T ′
+1←$ G
+st := (pp,{rd, ρd}d=0,1, t)
+return ((T ′
+0, T ′
+1), st)
+Oracle User1(j, W ′)
+if j /∈Q then return ⊥
+token← PMBTB.User1(stj, W ′)
+Q :=Q\{ j}
+q1 := q1 + 1
+return token
+Fig. 20. Summary of hybrid changes for unlinkability of Construction 5 .
+Proof. We will formally argue that for an adversary (issuer) who knows the secret key sk :=
+((x0, y0), (x1, y1)), the values T′
+0, T′
+1 received during the issuance execution, the values S0, S1 from
+the signature are indistinguishable from uniformly random, and at most one of the values W0, W1∈
+G is of the form Wb = xbHt(t) + ybSb.
+We present in Fig. 20 the sequence of hybrids that transition from an honest execution on the
+user side of a token issuance to an execution where all the values in the token are random except
+the relation that allows to read out one value for the embedded private metadata bit.
+Let m be an integer.
+Hyb0 This is the execution where the adversary interacts with an honest user side for the token
+issuance.
+Hyb1 In this hybrid, we run the knowledge extractor on the public keys in the public parameters.
+This hybrid is indistinguishable from the previous since the extractor succeeds with all but
+49
+
+negligible probability.
+Advksnd
+ΠDLOGAND2,RDLOGAND2,A(λ)≥
+AdvHyb0
+PMBTB,A(λ)− AdvHyb1
+PMBTB,A(λ)
+ .
+Hyb2 In this hybrid, we compute W0 and W1 in a different but equivalent way in PMBTB.User1.
+First, note that since the challenger knows x0, y0, x1 and y1, it can define Pd := W′− xdT′
+d−
+ydHs(T′
+d, s) for d = 0, 1. Then, for d = 0, 1, we have
+Wd = r−1
+d W′ + ρdXd = r−1
+d (xdT′
+d + ydHs(T′
+d, s) + Pd) + ρXd
+= r−1
+d (xdrd(Ht(t)− ρdG) + ydHs(T′
+d, s) + Pd) + ρdXd
+= xdHt(t)− ρdxdG + ydr−1
+d Hs(T′
+d, s) + r−1
+d Pd + ρdxdG + ρdydH
+= xdHt(t) + yd
+ 
+r−1
+d Hs(T′
+d, s) + ρdH
+
++ r−1
+d Pd
+= xdHt(t) + ydSd + r−1
+d Pd.
+Hyb3 In this hybrid, we sample S0 uniformly at random. We show that if there is an adversary B
+that distinguishes Hyb2 and Hyb3, then we can construct an adversary that breaks DDH.
+Let (P, aP, bP, cP ) be a DDH challenge. We set G = P and H = aP . We will use the self-
+reducibility of DDH: for each call to PMBTB.User1, we sample γ, γ′←$ Z∗
+p and set ρ0G =
+γbP + γ′P , which is used in the computation of T′
+0 that is the only other element that
+depends on ρ0. Then, we set ρ0H = γcP + γ′aP and use it for the computation of S0. Now if
+cP = abP , then the execution coincides with Hyb2, and if cP is a random element, then the
+execution is Hyb3. Hence,
+Advddh
+GrGen,A(λ)≥
+AdvHyb2
+PMBTB,A(λ)− AdvHyb3
+PMBTB,A(λ)
+ .
+Hyb4 In this hybrid, we sample S1 uniformly at random. As before, we can show that if there is
+an adversary B that distinguishes Hyb3 and Hyb4, then we can construct an adversary that
+breaks DDH.
+Advddh
+GrGen,A(λ)≥
+AdvHyb3
+PMBTB,A(λ)− AdvHyb4
+PMBTB,A(λ)
+ .
+Hyb5 In this hybrid, we sample T′
+0 uniformly at random. Since ρ0 is sampled at random and this
+is the only place where it is used Hyb4 and Hyb5 have exactly the same distribution.
+Hyb6 In this hybrid, we make an analogous change sampling T′
+1 uniformly at random. The distri-
+bution in this hybrid is the same as in the previous since ρ1 is sampled at random and used
+only in the computation of T′
+1.
+Hyb7 If P0̸= 0, we sample W0 uniformly at random. Since r0 is sampled at random and only used
+for the computation of W0 the resulting distributions of Hyb6 and Hyb7 are the same.
+Hyb8 We analogously replace r−1
+1 P1 with a random value of P1̸= 0. As above the change does not
+change the distribution of values.
+We argue that it cannot be the case that both P0 = 0 and P1 = 0 . Indeed, if there is an
+adversary B that generated W′ such that W′ = x0T′
+0 + y0S′
+0 and W′ = x1T′
+1 + y1S′
+1, it follows that
+(r0x0− r1x1)Ht(t) + y0Hs(T′
+0, s)− y1Hs(T′
+1, s) = 0 , and the adversary needs to find a s so that the
+previous equation is true. This can only happen with negligible probability since Hs is modeled as
+a random oracle. Considering Hyb8 the view of the adversary for tokens can one of three types
+(t, S0, S1, x0Ht(t) + y0S0, W1), (t, S0, S1, W0, x1Ht(t) + y1S1), or (t, S0, S1, W0, W1)
+50
+
+where all variables S0, S1, W0, W1 are uniformly distributed. Let U1, U2, U3⊂ U be the the indices
+of tokens that are in each of these three forms. The above hybrids that tokens that have the same
+type are indistinguishable for the adversary. Therefore,
+Pr
+
+UNLINKPMBTB,A,m(λ)
+
+=
+X
+d=1,2,3
+Ud̸=∅
+Pr
+
+UNLINKPMBTB,A,m(λ)| j∈ Ud
+
+Pr[ j∈ Ud ]
+≤
+X
+d=1,2,3
+Ud̸=∅
+1
+|Ud|
+|Ud|
+|U| + negl(λ)≤
+X
+d=1,2,3
+Ud̸=∅
+1
+q0− q1
++ negl(λ)
+≤ 3
+m + negl(λ) .
+I.3 Privacy of the metadata bit
+Theorem 15. If DDH holds for the group generator GrGen and ΠDLOGAND2 is a zero-knowledge
+proof system for relation RDLOGAND2, then PMBTB[GrGen, ΠDLOGAND2] provides private metadata
+bit with advantage:
+Advpmb
+PMBTB(λ)≤ O(q2)
+2λ + 2Advddh
+GrGen(λ) + 4Advzk
+ΠDLOGAND2,RDLOGAND2(λ),
+where q is the number of queries the adversary makes either to Hs or Sign.
+Proof. We consider a sequence of hybrids (summarized in Fig. 21) that transitions from an execution
+of PMBβ
+PMBTB,A(λ) to an execution of PMB1−β
+PMBTB,A(λ) (see Definition 3). We argue that each
+pair of consecutive hybrids are indistinguishable for the adversary and thus that the advantage
+Advpmb
+PMBTB,A(λ) is negligible. We do not explicitly write the verification validity oracle in the games
+since in this construction this functionality is dummy.
+Hyb0 This is the game PMB0
+PMBTB,A(λ): here, the adversary is provided the public parameters
+pp := (X0, X1, π0, π1). The adversary has access to the signing oracle for a bit of its choosing,
+and a challenge oracle that signs new tokens with the bit b. Additionally, it has access to the
+random oracles: Ht, Hs, Hc. At the end of its execution, it outputs a bit b′.
+Hyb1 This hybrid replaces the way zero-knowledge proofs are generated: instead of using the proving
+algorithm ΠDLOGAND2.Prove, we use the zero-knowledge simulator ΠDLOGAND2.Sim.
+If there exists a PPT adversary A whose output is different between the two games, then it
+is possible to construct an adversary for the underlying zero-knowledge of the proof system:
+consider the PPT adversary B for the game ZKβ
+ΠDLOGAND2,RDLOGAND2,B(λ) that generates X0, X1
+as per PMBTB.KeyGen(1λ) and uses the Prove oracle for the statement (X0, X1). At the
+end of its execution, A (and so B) return a guess b′.
+If the Prove oracle outputs proofs via ΠDLOGAND2.Prove, the game is identical to Hyb0, else
+the game is identical to Hyb1. It follows that, for any PPT adversary A, the advantage in
+distinguishing the two hybrids is at most the advantage of zero-knowledge in ΠDLOGAND2, i.e.:
+Advzk
+ΠDLOGAND2,RDLOGAND2,A(λ)≥
+AdvHyb1
+PMBTB,A(λ)− AdvHyb0
+PMBTB,A(λ).
+
+51
+
+Oracle Sign′(ˆb, T ′) in Hyb1(λ), Hyb3(λ)
+s←${0, 1}λ
+if Hs(T ′
+ˆb, s) was queried then abort
+S′
+ˆb := H(T ′
+ˆb, s)
+W ′ := xˆbT ′
+ˆb + yˆbS′
+ˆb
+return (s, W ′)
+Oracle Sign(T ′) in Hyb1(λ), Hyb3(λ)
+s←${0, 1}λ
+if Hs(T ′
+b, s) was queried then abort
+S′
+b := H(T ′
+b, s)
+W ′ := xbT ′
+b + ybS′
+b
+return (s, W ′)
+Oracle Sign′(ˆb, T ′) in Hyb4–6(λ)
+s←${0, 1}λ
+if Hs(T ′
+ˆb, s) was queried then abort
+S′
+ˆb := H(T ′
+ˆb, s)
+W ′ := xˆbT ′
+ˆb + yˆbS′
+ˆb
+return (s, W ′)
+Oracle Sign(T ′) in Hyb4(λ), Hyb5(λ), Hyb6(λ)
+s←${0, 1}λ
+if Hs(T ′
+b, s) was queried then abort
+S′
+b := H(T ′
+b, s)
+W ′ := xbT ′
+b + ybS′
+b
+y′←$ Z∗
+p; W ′ := xbT ′
+b + y′S′
+b
+W ′ := x1−bT ′
+1−b + y′S′
+1−b
+W ′ := x1−bT ′
+1−b + y1−bS′
+1−b
+return (s, W ′)
+Fig. 21. Summary of the proof for privacy of the metadata bit of Construction 5 .
+Hyb2 We strengthen the game: if during any of the signing queries the oracle Hs already had received
+a query of the form (T′
+b, s), we abort. Clearly, the output of the two hybrids is distinguishable
+only in the case of a collision on the choice of s between the signing oracles, or a collision
+between the signing oracles themselves. For a PPT adversary A making at most q = poly (λ)
+queries to any of the oracles Hs, Sign, or Sign′, the probability that the game aborts is at
+most q(q− 1)/2p. It follows that:
+q(q− 1)
+2p ≥
+AdvHyb2
+PMBTB,A(λ)− AdvHyb1
+PMBTB,A(λ)
+
+Hyb3 We now change the way W′ is computed: at key generation phase we sample an additional ele-
+ment y′←$ Z∗
+p, and for any query to the random oracle PMBTB.Sign0(pp, sk, b,·) we construct
+W′ as xbT′
+b + y′S′
+b instead of xbT′ + ybS′
+b.
+We prove that if, by contradiction, the two games are distinguishable, then there exists
+an adversary B for the game DDHβ
+B,GrGen(λ). The adversary B wins every time the output
+of the two hybrids is different. The adversary B receives as input a DDH tuple (P, A :=
+aP, B := bP, C)∈ G4 such that C = abP in the case DDH0
+B,GrGen(λ) and C←$ G in the
+case DDH1
+B,GrGen(λ). Given a single challenge (P, A, B, C), B can exploit the random self-
+reducibility property of DDH to construct q random instances of the DDH challenge: for any
+i≤ q the adversary B can select αi, βi←$ Zp and construct the challenge:
+(P, A, β iB + αiP, β iC + αiA)
+The adversary B proceeds as per Hyb2, embedding the challenge in the public key and oracle
+replies. It fixes H := P , and instead of generating Xb := xbG + ybH, it constructs it as
+Xb := xbG + A. Then, it runs the adversary A. The adversary A will make queries to any of
+52
+
+the random oracles Ht and Hs, where B programs the RO the response to Hs as we discuss
+next. We replace queries to the signing oracles:
+– for any query to Sign(T′), we sample s←${0, 1}λ and check for collisions w.r.t. previous
+queries to Hs as per Hyb2. Then, we sample α, β←$ Zp and we program the random oracle
+on Hs(T′
+b, s) = S′
+b to reply with (βiB + αiP ), for some αi, βi←$ Zp. Then, B computes
+W′ := xbT′ + βiC + αiA. B returns (s, W′)
+– for any query to Sign′(ˆb, T′) with ˆb = b, after sampling s←${0, 1}λ, we program the
+random oracle on H(T′
+b, s) = S′
+b to reply with αiH for some αi←$ Zp. B computes W′ :=
+xbT′
+b + αiA. It returns (s, W′).
+– for any query to Sign′(ˆb, T′) with ˆb = 1− b is handled exactly as per Hyb2.
+At the end of A’s execution, B returns whatever guess A returned. We note that if the challenge
+C is provided according to DDH0
+A,GrGen(λ), B behaves exactly as per Hyb2; if the challenge
+C is provided according to DDH1
+A,GrGen(λ), B behaves exactly as per Hyb3. Therefore, every
+time that A’s output is different between the two hybrids, B will distinguish a random tuple
+from a DDH tuple. It follows therefore that:
+Advddh
+B,GrGen(λ)≥
+AdvHyb3
+PMBTB,A(λ)− AdvHyb2
+PMBTB,A(λ)
+
+Hyb4 In this game, we remark that W′ := xbT′
+b + y′S′, and that y′←$ Z∗
+p is used only for computing
+W′. Therefore, the distribution of W′ in Hyb3 is uniform (plus a constant xbT′
+b, i.e., uniform)
+as long as S′
+b̸= 0 G. Therefore, we change once again the way we compute W′, swapping b
+with 1− b: in this hybrid, W′ := x1−bT′
+1−b + y′S′
+1−b. For the above remarks, the two games can
+be distinguished only if S′
+b pr S′
+1−b is the identity element, which happens with probability
+2/p.
+Hyb5 In this hybrid, we remove y′ and we compute W′ using the witness 1− b. The proof for this
+hybrid follows an argument similar to the one used for the transition Hyb2→ Hyb3. Therefore,
+it follows that:
+Advddh
+B,GrGen(λ)≥
+AdvHyb5
+PMBTB,A(λ)− AdvHyb4
+PMBTB,A(λ)
+
+At this point we note that the oracle Sign is issuing signatures under the witness x1−b, y1−b. It is
+possible, through a sequence of hybrids, to remove the condition on the collision of s introduced
+in Hyb2 (via the same argument used for the transition Hyb1→ Hyb2), and swap back the zero-
+knowledge simulator with the prover’s algorithm ΠDLEQOR2.Prove (via the same argument used for
+the transition Hyb0→ Hyb1). Therefore, the advantage of an adversary A in winning the game
+PMBβ
+PMBTB,A(λ)
+Advpmb
+PMBTB,A(λ)≤ q(q− 1)
+2λ + 2
+2λ + 2Advddh
+GrGen(λ) + 4Advzk
+ΠDLOGAND2,RDLOGAND2(λ)
+where q is the number of queries to the signing oracles or to the random oracle Hs and the prime
+p outputted by GrGen satisfies λ =⌊log2 p⌋.
+J PMBTokens with validity verification
+In this section, we present a design for an anonymous token that provides both private metadata
+bit as well as verification validity functionality that can be queried by any party.
+53
+
+Construction 6. Let GrGen be a group generator algorithm; let ΠDLEQ2 be a proof system for
+relation RDLEQ2; let ΠDLEQOR2 be a proof system for relation RDLEQOR2; let Ht, Hs be two random
+oracles{0, 1}∗→ G. We construct an anonymous token scheme CMBT defined by the following
+algorithms:
+– (crs, td)← CMBT.Setup(1λ): invoke the group generator Γ← GrGen(1λ) and the CRS generation
+algorithm of the underlying proof system (pcrs, ptd)← ΠDLEQOR2.Setup(Γ );
+– (pp, sk)← CMBT.KeyGen(1λ): sample x0, x1, ˜x, y0, y1, ˜y uniformly at random from Zp. Define:
+X :=
+2
+4X0
+X1
+3
+5 :=
+2
+4x0G + y0H
+x1G + y1H
+3
+5 , ˜X := ˜xG + ˜yH.
+Restart if X0 = X1. Set sk := ((x0, y0), (x1, y1), (˜x, ˜y)), and pp := (X0, X1, ˜X).
+– σ←⟨ CMBT.User(pp, t), CMBT.Sign(sk, b)⟩: illustrated in Figure 22 .
+– bool← CMBT.Verify(sk, t, σ): read σ as (S, W, ˜W )∈ G3. Return true if ˜W = ˜xHt(t) + ˜yS; else,
+return false.
+– ind← CMBT.ReadBit(sk, t, σ): read σ as (S, W, ˜W ). Then:
+(a) If W = x0Ht(t) + y0S and W̸= x1Ht(t) + y1S, return 0
+(b) If W̸= x0Ht(t) + y0S and W = x1Ht(t) + y1S, return 1
+(c) Else, return⊥.
+J.1 Unforgeability
+Theorem 23. If CTGDH is hard for GrGen, ΠDLEQ2 is a knowledge-sound proof system for re-
+lation ΠDLEQ2, and ΠDLEQOR2 is a knowledge-sound proof system for relation ΠDLEQOR2, then
+CMBT[GrGen, ΠDLEQ2, ΠDLEQOR2] is one-more unforgeable.
+One-more unforgeability follows from the one-more unforgeability of Construction 3 . We can con-
+struct an adversary for Constr. 3 by interacting with an adversary for Constr. 6 in the same way
+as the reduction in the proof of Theorem 8 since the user messages in both constructions are the
+same, and the issuer’s response in Constr. 3 is a subset of the issuer’s response in Constr. 6 .
+J.2 Unlinkability
+Theorem 24. If DDH is hard for GrGen, ΠDLEQ2 is a knowledge-sound proof system for re-
+lation ΠDLEQ2, and ΠDLEQOR2 is a knowledge-sound proof system for relation ΠDLEQOR2, then
+CMBT[GrGen, ΠDLEQ2, ΠDLEQOR2] is 2-unlinkable.
+Unlinkability of this construction follows from the unlinkability of Constr. 3 . We can construct
+an adversary for Constr. 3 by interacting with an adversary for Constr. 6 in the same way as the
+reduction in the proof of Theorem 9 since the user messages in both constructions are the same,
+and the issuer’s response in Constr. 3 is a subset of the issuer’s response in Constr. 6 .
+54
+
+J.3 Privacy of metadata bit
+Theorem 25. If DDH holds for the group generator GrGen Π DLEQ2 is a knowledge-sound proof
+system for relation ΠDLEQ2, and ΠDLEQOR2 is a knowledge-sound proof system for relation ΠDLEQOR2,
+then CMBT[GrGen, ΠDLEQ2, ΠDLEQOR2] provides private metadata bit.
+Private metadata bit here follows closely the proof of Theorem 10 . The only difference is that
+we need to handle verification queries from the adversary. Since validity is checked only on the part
+of the token which is independent of the private metadata bit, the reduction can always have the
+private parameters for that part of the token and answer the validity oracle query honestly.
+55
+
+CMBT.User(pp, t) CMBT.Sign(pp, sk, b)
+CMBT.User0(pp, t)
+r←$ Z∗
+p
+T := Ht(t)
+T ′ := r−1· T
+return (T ′, (pp, r, t, T′))
+T ′
+CMBT.Sign0(pp, sk, b, T ′)
+(X0, X1, ˜X) := pp
+((x0, y0), (x1, y1), (˜x, ˜y)) := sk
+s←${0, 1}λ
+S′ := Hs(T ′, s)
+W ′ := xbT ′ + ybS′
+˜W ′ := ˜xT ′ + ˜yS ′
+π← ΠDLEQOR2.Prove((X0, X1, T ′, S′, W ′), (b, xb, yb))
+˜π← ΠDLEQ2.Prove(( ˜X, T ′, S′, ˜W ′), (˜x, ˜y))
+return (s, W ′, ˜W ′, π, ˜π)
+s, W ′, ˜W ′, π, ˜π
+CMBT.User1((pp, r, t, T′), (s, W ′, ˜W ′, π, ˜π))
+(X0, X1, ˜X) := pp
+S′ := Hs(T ′, s)
+if not ΠDLEQOR2.Verify((X0, X1, T ′, S′, W ′), π) or
+not ΠDLEQ2.Verify(( ˜X, T ′, S′, ˜W ′), ˜π) then
+return ⊥
+S := rS ′
+W := rW ′
+˜W := r ˜W ′
+σ := (S, W, ˜W )
+return σ
+Fig. 22. Token issuance for CMBT (Construction 6 ).
+56

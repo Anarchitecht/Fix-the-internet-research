@@ -1,0 +1,3380 @@
+A Fast and Simple Partially Oblivious PRF, with Applications
+Nirvan Tyagi
+Cornell University
+Sof´ ıa Celi
+Cloudﬂare
+Thomas Ristenpart
+Cornell Tech
+Nick Sullivan
+Cloudﬂare
+Stefano Tessaro
+University of Washington
+Christopher A. Wood
+Cloudﬂare
+Abstract
+We build the ﬁrst construction of a partially oblivious pseudorandom function (POPRF) that does
+not rely on bilinear pairings. Our construction can be viewed as combining elements of the 2HashDH
+OPRF of Jarecki, Kiayias, and Krawczyk with the Dodis-Yampolskiy PRF. We analyze our POPRF’s
+security in the random oracle model via reduction to a new one-more gap strong Diﬃe-Hellman inversion
+assumption. The most signiﬁcant technical challenge is establishing conﬁdence in the new assumption,
+which requires new proof techniques that enable us to show that its hardness is implied by the q-DL
+assumption in the algebraic group model.
+Our new construction is as fast as the current, standards-track OPRF 2HashDH protocol, yet provides
+a new degree of ﬂexibility useful in a variety of applications. We show how POPRFs can be used to
+prevent token hoarding attacks against Privacy Pass, reduce key management complexity in the OPAQUE
+password authenticated key exchange protocol, and ensure stronger security for password breach alerting
+services.
+1
+
+Contents
+1 Introduction 3
+2 Preliminaries 6
+2.1 Algebraic Group Model . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+2.2 Random Oracle Model . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+2.3 Non-interactive Zero Knowledge Proofs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+3 Partially Oblivious Pseudorandom F unctions 8
+4 The 3HashSDHI POPRF 12
+5 Security Analysis 14
+5.1 Pseudorandomness . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+5.2 Request Privacy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19
+6 Performance Evaluation 21
+7 Applications 21
+7.1 Privacy Pass . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 22
+7.2 Private Set Membership and Breach Alerting . . . . . . . . . . . . . . . . . . . . . . . . . . . 23
+7.3 OPAQUE . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 23
+A Security of (m,n )-OM-Gap-SDHI 27
+A.1 Simulation of ( m,n )-OM-Gap-SDHI environment . . . . . . . . . . . . . . . . . . . . . . . . 27
+A.2 Linear independence of winning elements . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 28
+B Security Proofs for 3H 35
+C Security with Restricted T ag Space 37
+D Security of 2HashDH OPRF 38
+E (Partially) Blind Signatures Preliminaries 40
+E.1 Syntax and Semantics . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 41
+E.2 Security . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 41
+F (P)OPRFs from Unique (Partially) Blind Signatures 42
+G Security of ZSS Partially Blind Signature 43
+H Uniqueness from Request Privacy 47
+I Multiplicative Blinding 48
+2
+
+1 Introduction
+An oblivious pseudorandom function (OPRF) [FIPR05, JL09] allows a client holding a private input x and
+a server holding a key sk for a PRF f to engage in a protocol to obliviously evaluatefsk on x. The client
+learns (and optionally veriﬁes) the evaluation fsk(x) while the server learns nothing. Partially-oblivious
+PRFs (POPRF), ﬁrst introduced by Everspaugh et al. in the context of the Pythia password hardening
+system [ECS +15], extend this functionality to include a public input (or metadata tag) t for the PRF
+evaluation. A client learns (and, optionally, veriﬁes) fsk(t,x ) wheret is known by both server and client; the
+private input x remains hidden.
+OPRFs are increasingly becoming a critical cryptographic tool for privacy-preserving protocols. Examples
+include one-time use anonymous credentials for spam prevention [DGS +18,HIJ +21], private set intersection
+(PSI) for checking compromised credentials [LPA+19,TPY+19], de-identiﬁed authenticated logging [HIJ+21],
+and password-authenticated key exchange [JKX18, JKK14]. In all these applications, we observe that there
+is a need to “partition” the PRF in a productive manner, i.e., allowing computation offsk(t,x ) using domain
+separation on some public valuet. OPRF blinding protocols do not support this in a secure manner, because
+the server cannot verify whatt is used within a client’s oblivious request. Most OPRF applications therefore
+use a separate key instance for each t, with an associated increase in key management complexity. POPRFs
+directly provide this functionality, but the only known POPRF [ECS +15] relies on bilinear pairings, which
+slows performance relative to the best known OPRF and also complicates deployment given the lack of
+widespread implementation support for pairings.
+In this work, we introduce a new POPRF that combines aspects of the 2HashDH OPRF of Jarecki et
+al. [JKK14], that is the de facto standard used in practice, with the Dodis-Yampolskiy (DY) veriﬁable random
+function [DY05]. Our POPRF is also closely related to a signature scheme suggested by Zhang, Safavi-
+Naini, and Susilo (ZSS) [ZSS04,ZSS03]. Our new POPRF, called 3HashSDHI, is essentially as performant as
+2HashDH and does not rely on pairings, thereby enabling support for a public input virtually for free. While
+3HashSDHI’s protocol is simple, its analysis is not, requiring a new interactive discrete log (DL) assumption
+whose security we reduce toq-DL in the algebraic group model [FKL18]. We also provide new formal security
+notions for POPRFs and (as a special case) OPRFs, which we believe will be of independent interest.
+F ormal syntax and security notions for POPRFs. We start with the latter contribution. We provide
+a new formalization for POPRFs, including syntax, semantics, and security deﬁnitions. Our formal syntax
+builds oﬀ of [ECS +15] and previous OPRF formalizations [JL09, JKK14]. In terms of security, we propose
+new property-based security deﬁnitions that cover pseudorandomness (in the face of malicious clients) as
+well as request privacy and veriﬁability (in the face of malicious servers). Our property-based security games
+avoid the ideal function based formulations inherited from 2PC and used in prior works on OPRFs; they
+also avoid the non-standard “one-more” PRF security deﬁnition of [ECS +15].
+Our pseudorandomness notion for POPRFs guarantees that the evaluation outputs look random to a
+malicious client, even when the malicious client has access to a blinded evaluation oracle. It is formalized
+with a simulation-based indistinguishability game that takes rough inspiration from the UC-style all-in-
+one OPRF security deﬁnition of [JKK14] and prior notions for partially blind signatures [AF96]. Here an
+adversary must distinguish between real evaluations of the PRF given access to a blind evaluation oracle,
+and evaluations of a random function given access to a simulated blind evaluation oracle. The simulator can
+receive random function evaluations on a limited number of points for any given public input t, where the
+limit is determined by the number of times the adversary has queried the blind evaluation oracle for that t.
+This restriction captures that only one random function evaluation is learned for each blind evaluation. Note
+that our accounting is more granular than the general “ticketing” approaches of blind UC protocols [JKK14,
+KZ08,Fis06]), due to the need of tying invocations to particular t values.
+Our next notion is request privacy which captures that nothing about a client message x should leak to
+a malicious server during an oblivious evaluation, and, moreover, the server should not be able to link an
+outputfsk(t,x ) to particular oblivious request transcripts. The latter is often referred to as a linking attack,
+and is problematic in various applications of POPRFs. Our request privacy notion comes in two ﬂavors,
+depending on whether the malicious server behaves passively or actively. The former allows us to analyze the
+privacy of schemes that do not allow veriﬁcation that a server legitimately computed the blinded evaluation
+protocol; the latter requires schemes to allow client-side veriﬁcation of the server’s response.
+Finally we formalize a notion of uniqueness. It ensures that a malicious server cannot trick clients into
+3
+
+accepting inconsistent evaluations, relative to a shareable public key associated to the secret key sk.
+The 3HashSDHI construction. The main contribution of this work is a new construction of a POPRF,
+which we call 3HashSDHI. The name refers to its use of three hashes and its reliance on the strong Diﬃe-
+Hellman inversion assumption. Its starting point is the 2HashDH construction of Jarecki et al. [JKK14],
+whose full PRF evaluation we deﬁne as2HashDH.Ev(sk,x ) = H2(x, H1(x)sk). The blinded evaluation protocol
+has the client send B = H1(x)r for random r, and the server respond with B′ =Bsk. The client can unblind
+to (B′)1/r = H1(x)sk in order to complete the evaluation of the function. Here operations are over a prime-
+order group (written multiplicatively) such as an elliptic curve. Proof of evaluation consists of a simple
+Chaum-Pedersen proof of discrete log equality [CP92] proving log g pk = logBB′ where pk = gsk is the
+server’s public key. As mentioned, 2HashDH is already in use in practice [DGS +18, TPY+19, HIJ+21] and
+is on track to become a standard [DFHSW20].
+We want a way to extend 2HashDH to allow public tags. To do so, we take inspiration from the Dodis-
+Yampolskiy PRF, whose evaluation is deﬁned as DY.Ev(sk,t ) = g1/(sk+t). Put together, the 3HashSDHI
+scheme gives a PRF evaluated as:
+3H.Ev(sk,t,x ) = H2
+(
+t,x, H1(x)1/(sk+H3(t))
+)
+.
+It can therefore be interpreted as evaluating the Dodis-Yampolskiy PRF on the public inputt over a random
+generator determined by the private input x, followed by a ﬁnal hashing step. The basic structure of
+H1(x)1/(sk+H3(t)) was also described in an attempt to build secure partially blind signatures by ZSS [ZSS03].
+Their analysis is incorrect, as we discuss further below and in Section 4.
+To perform a blind evaluation, the client hashes and blinds their private input as B = H1(x)r using a
+random scalar r and sends B to the server holding sk. The server computes and sends back to the client the
+strong Diﬃe-Hellman inversionB′ =B1/(sk+H3(t)) of the blinded element using the secret key and public hash
+of the public input t. The client can unblind by computing ( B′)1/r = H1(x)1/(sk+H3(t)) and then complete
+the evaluation by hashing appropriately. To provide veriﬁability, the server uses a Chaum-Pedersen zero-
+knowledge proof (ZKP) of discrete log equality to prove logg pk′ = logB′B where pk′ = pk·gH3(t) which can
+be easily computed from public values by the client.
+Our protocol incurs minimal overhead on top of the OPRF blind evaluation of 2HashDH, requiring only
+an extra hash computation, group operation, and scalar inversion. It makes use of the same Chaum-Pedersen
+proof for veriﬁability, which, as has been observed for 2HashDH, allows for evaluation of a batch of inputs
+whilst only constructing one Chaum-Pedersen proof [DGS +18, DFHSW20] (provided the batch is for the
+same public metadata tag t).
+We formally show request privacy against passive adversaries (without ZKP) holds based just on the ran-
+domness of the blinding, and that request privacy against malicious adversaries holds additionally assuming
+the ZKP is sound. The key technical challenge is proving the new POPRF is pseudorandom.
+As is seemingly requisite for schemes with blinded evaluation protocols, we prove the pseudorandomness
+security of our scheme with respect to a one-more gap style assumption [BNPS03,Bol03]. In fact the algebraic
+structure exposed to adversarial clients by the 3HashSDHI blinded evaluation protocol — raising an arbi-
+trary group elementY to 1/(sk + H3(t)) for adversarialt — requires new proof techniques compared to prior
+approaches. We start by introducing a new one-more gap strong Diﬃe-Hellman inversion (OM-Gap-SDHI)
+assumption, based on the perceived hardness of computing Y 1/(x+c) for any base Y and (restricted) scalars
+c. We show via a relatively straightforward proof that this assumption is suﬃcient to prove POPRF pseu-
+dorandomness for 3HashSDHI, modeling the hash functions as random oracles. Additionally, the veriﬁable
+version requires that the ZKP is zero-knowledge.
+The main diﬃculty is analyzing the security of our new computational assumption. In particular, for given
+distinct constants c1,...,c n, the assumption considers a setting with an oracle SDH returning B1/(x+ci) on
+input (B,i ). Given some additional random group elements Y1,...,Y m, it requires it to be hard to compute
+𝓁 elementsY 1/(x+ci)
+i1 ,...,Y 1/(x+ci)
+i𝓁 , for anyi∈ [n] and for distincti1,...,i 𝓁∈ [m], using fewer than𝓁 queries
+SDH(·,i ). The challenge is that we do not restrict the number of queries SDH(X,j ) for j⁄= i, and this
+could be for group elements of X that depend on ci (e.g., X is a prior output of an SDH(·,i ) query).
+Ultimately, we show in the algebraic group model (AGM) [FKL18] that the assumption reduces to one of
+the uber assumptions from Bauer, Fuchsbauer, and Loss [BFL20], and therefore, in turn, is implied by the
+q-DL assumption, where q is a bound on the number of oracle queries. This AGM analysis implies hardness
+4
+
+of the new assumption in the generic group model (GGM) [Sho97,Mau05].
+In terms of concrete security, our analyses shows that, roughly speaking, 3HashSDHI is as hard as
+breaking theq-DL problem. Actually our main AGM proof is loose by a factor that is the maximum number
+of blind evaluation queries made by an adversary. Whether this AGM analysis can be tightened is an open
+question, but we observe in the body that a slight alternative to our AGM analysis gives a tight reduction
+in the GGM. We suggest using this tighter analysis to drive parameter selection: the best known attack
+against q-DL is due to Cheon [Che06] and indicates that a 256-bit group suﬃces for 80-bit security and a
+384-bit group for 128-bit security. Importantly this matches the situation for 2HashDH, and so moving to
+3HashSDHI does not require changing group parameters to achieve the desired security levels.
+Partially-blind signatures. Our techniques provide a new approach to building partially-blind signa-
+tures [AF96]. Whereas an OPRF requires access to the private key to verify a given input, a blind signature
+protocol only requires the public key. This property is useful for a number of applications and deployment
+settings. For example, in settings where multiple instances of a veriﬁer may check the output of the OPRF,
+each instance would either (a) require access to the private key or (b) request veriﬁcation from an entity
+which holds the private key. The former may be problematic if instances that verify outputs do not mutually
+trust one another or cannot otherwise share private key material, and the latter may be problematic because
+it incurs a network performance penalty. Blind signatures avoid both problems by allowing each instance to
+use the public key for veriﬁcation.
+Blind signatures are used in one-time use anonymous credentials, and are also being proposed as a tool
+for private click measurement (PCM) in the W3C [WTKW20]. One limitation in these use cases is that the
+protocols do not admit public metadata in the signature computation. PCM, for example, would beneﬁt
+from binding additional context to signature computations [WTKW20].
+As previously mentioned, the 3HashSDHI construction is closely related to the ZSS partially blind signa-
+ture scheme [ZSS03], which uses pairings. As we explain in Section 4, the original unforgeability proof is how-
+ever incorrect. We provide the ﬁrst (correct) formal analysis of the security of ZSS using our new techniques
+in Appendices E and G. To the best of our knowledge, this result provides the most eﬃcient partially-blind
+signature supporting arbitrary public metadata; previous RSA-based constructions [AF96, AO00] require
+the set of public metadata tags to be incorporated during parameter setup, previous Schnorr-based con-
+structions [AO00, FPS20] are vulnerable in the concurrent signing setting [BLL +21], and other existing
+constructions are more heavyweight as they are tailored for the anonymous credential setting [CL04].
+Finally, we also show how any unique (partially) blind signature scheme can be used to generically
+construct a POPRF by hashing the signature using a random oracle. This is apparently a folklore result
+for OPRFs, and we are unaware of any formal treatment it. We provide one that also covers partial
+obliviousness/blindness. See Appendix F.
+Applications of our POPRF. Equipped with our new POPRF and the underlying design of 3HashSDHI,
+we return to our motivating applications and show how swapping in a POPRF for the existing OPRF can
+lead to various beneﬁts for deployments.
+One-time use anonymous credentials. Privacy Pass [DGS +18, CDFH21] is a protocol in which clients
+may be issued one-time use tokens that can later be redeemed anonymously to authenticate themselves. It
+has been proposed for use in the context of content distribution networks and web advertising, requiring
+users to authenticate with a token, and thereby reducing malicious web requests, protecting against, e.g.,
+denial-of-service attacks and fraudulent advertisement conversions. Tokens are issued to users that prove
+trustworthiness, e.g., through a CAPTCHA challenge, The protocol is being considered for standardization
+by both the IETF and the World Wide Web Consortium (W3C), and a prototype deployment is already in
+production use by Cloudﬂare, hCaptcha, and others.
+An OPRF is the core component of the protocol. Tokens are issued via an OPRF in which users
+obtain evaluations at random points, storing the point x and evaluation y. Redeeming a token simply
+involves showing the pair (x,y ), which the server can check is valid, but cannot link x back to an issuance
+due to the oblivious evaluation. The server stores a strikelist of used tokens to prevent double spending.
+Additionally, all servers perform a global double-spend check to avoid clients from exploiting the possibility
+of spending tokens more than once against distributed token checking systems. The use of an OPRF leads
+to a more eﬃcient issuance protocol than alternate approaches for keyed-veriﬁcation anonymous credentials
+5
+
+that support attributes and proofs over attributes [CMZ14,CPZ20].
+An abuse of the protocol that has been observed in its early use is individual users (or groups of users)
+gathering tokens over a long period of time and redeeming them all at once, e.g., in an attempt to overwhelm
+a website. We refer to such behavior as a hoarding attack. A conceptually easy way to mitigate the damage
+of a hoarding attack is to expire old unspent tokens after an amount of time: the way to do this with an
+OPRF is by rotating the OPRF key. But key rotations are complex, limiting their frequency: establishing
+trust in a frequently-rotating key is a challenging problem. Trustworthy keys are important in this context,
+as a server that equivocates on their public key can link token issuances and redemptions, by, for example,
+using a unique public key for each issuance. As we show, POPRFs address the issue of expiring tokens
+without the need of rotating keys by using the public metadata input to encode an expiration epoch.
+Bucketized PSI for checking compromised credentials. Password breach alerting protocols [TPY +19,
+LPA+19] allow a user to query to determine if their username, password pair ( u,pw ) has appeared in a
+dataset D of known breaches. If so, the user is vulnerable to credential stuﬃng attacks and should change
+their password. Current services for breach alerting rely on an ad hoc 2HashDH-based private-set membership
+protocol that achieves scalability via bucketization: the user sends a truncated hash H(u) of their username
+to identify a subsetB⊆D that have matching truncated username hash. A 2HashDH-based protocol is then
+performed over B: the client obliviously evaluates 2HashDH.Ev(sk,u ‖ pw) with sk held by server, and also
+obtains the OPRF outputs for all the values in the bucket B. Bucketization ensures scalability by limiting
+|B| despite|D| being on the order of billions of username, password pairs.
+One issue is that currently deployed protocols provide no cryptographic binding between the bucket
+identiﬁer H(u) and the blinded OPRF output: a malicious client can query for arbitrary usernames, not just
+ones that match H(u). Whether this is a signiﬁcant security problem in practice is not clear, but we note
+that POPRFs easily rectify it by replacing 2HashDH above with 3HashSDHI and setting t = H(u).
+Asymmetric password-authenticated key exchange. Password authenticated key exchange (PAKE) proto-
+cols [BM93] allow a client and server to establish a shared session key authenticated by a short password.
+Strong asymmetric PAKE (SaPAKE) protocols [JKX18] additionally ensure that the server can store (just)
+what amount to salted hashes of user passwords, thereby making it so that PAKEs can achieve the same
+level of security achieved by standard password-based authentication in the case of a server breach. The
+OPAQUE [JKX18] SaPAKE protocol uses an OPRF as one of its core components; it is currently being
+considered for standardization by the IETF [KLW21]. The OPRF suggested for use is 2HashDH.
+In OPAQUE the server uses a separate OPRF key for each user. We show how we can instead use our
+3HashSDHI POPRF to allow OPAQUE to work with a single master key pk; diversity across users can
+then be provided using usernames as the public input t to 3HashSDHI. We believe that this will simplify
+deployments and potentially improve their security, as discussed in the body.
+2 Preliminaries
+2.1 Algebraic Group Model
+In some of our security proofs, we consider security against algebraic adversaries which we model using
+the algebraic group model, following the treatment of [FKL18]. We call an algorithm A algebraic if for all
+group elementsZ that are output (either as ﬁnal output or as input to oracles), A additionally provides the
+representation ofZ relative to all previously received group elements. The previous received group elements
+include both original inputs to the algorithm and outputs received from calls to oracles. More speciﬁcally, if
+[X]i is the list of group elements [ X0,...,X n]∈ G thatA has received so far, then, when producing group
+elementZ,A must also provide a list [z]i = [z0,...,z n] such that Z =∏
+iXzi
+i .
+2.2 Random Oracle Model
+We will prove security using ideal primitives, modeling hash functions as random oracles. Since our schemes
+will make use of more than one hash function, it will be useful to have a general abstraction for the use
+of ideal primitives, following the treatment of [JT20]. An ideal primitive P speciﬁes algorithms P.Init and
+P.Eval. The initialization algorithm has syntax stP←$ P.Init(1λ). The stateful evaluation algorithm has
+6
+
+Game SoundA
+NiZK,R,P(λ)
+pp←$ NiZK.Setup(λ)
+stP←$ P.Init(λ)
+(x,π )←$AP(pp)
+Return
+⋀
+
+ NiZK.VerP(x,π )
+⁄∃ w : (x,w )∈R
+
+
+Game ZKA,b
+NiZK,R,S,P(λ)
+pp←$ NiZK.Setup(λ)
+stP←$ P.Init(λ)
+stS←$ S.Init(pp)
+b′←$APrim,Prove(pp)
+Return b′
+Oracle Prove(x,w )
+Require (x,w )∈R
+π1←$ NiZK.ProveP(x,w )
+π0←$ S.Prove(x :stS)
+Return πb
+Oracle Prim(x)
+y1←$ P.Eval(x :stP)
+y0←$ S.Eval(x :stS)
+Return yb
+Figure 1: Soundness (left) and zero knowledge (right) security games for non-interactive zero knowledge proof systems.
+syntax y←$ P.Eval(x : stP). We sometimes use AP as shorthand for giving algorithm A oracle access to
+P.Eval(· :stP). While, the stateful formulation of the ideal primitive is used to allow for eﬃcient instantiation
+in our security proofs, e.g., by “lazy sampling”, ideal primitives should be essentially stateless [JT20] to
+prevent contrived behavior. For example, a random oracle can be written to be stateless, but it would
+ineﬃcient to have to store a huge random table. We can combine access to multiple ideal primitives primitives
+P = P1×... × Pm as follows:
+P.Init(1λ)
+[stP,i]m
+i ←$
+[
+Pi.Init(1λ)
+]m
+i
+Return [stP,i]m
+i
+P.Eval(x : [stP,i]m
+i )
+(i,x )←x
+y←$ Pi.Eval(x :stP,i)
+Return y
+To concretize the above, we focus on random oracles. We deﬁne a random oracle that takes arbitrary
+input and produces random output from a sampling algorithm Samp. It is captured by the ideal primitive
+RO[Samp] = (RO.Init, RO.H) deﬁned as follows. When the range is clear from context, Samp may be omitted.
+RO.Init(1λ)
+T← [·]
+Return T
+RO.Eval(x :T)
+If x⁄∈T then T[x]←$ Samp()
+Return T[x]
+When clear from context and in an abuse of notation (since we will use Hi to denote a hash function as well),
+we will write P = H1×···× Hm as the ideal primitive that gives access to m random oracles, accessible by
+querying directly an oracle labeled Hi.
+Algebraic algorithms in the random oracle model. As in [FPS20], to support algebraic algorithms,
+we will require the structure of the domain and range to be speciﬁed for any random oracle RO. We assume
+an input can be eﬃciently checked to be a valid member of the domain and perform such checks implicitly
+returning⊥ if they fail. We will require that algebraic algorithms provide representations for any group
+element input, speciﬁed as part of the domain of RO. And similarly, any group element output of RO is
+included in the list of received group elements for the algebraic adversary.
+2.3 Non-interactive Zero Knowledge Proofs
+We deﬁne a non-interactive proof system NiZK over an eﬃciently computable relation R deﬁned over pairs
+(x,w ) where x is called the statement and w is called the witness. It is made up of the following algo-
+rithms. The setup algorithm produces the public parameters for execution, pp←$ NiZK.Setup(λ). The
+proving algorithm takes a witness and statement and produces a proof, π←$ NiZK.ProveP
+pp(w,x ). The veri-
+ﬁcation algorithm veriﬁes the proof for a statement, b← NiZK.VerP
+pp(x,π ). We deﬁne the following security
+properties.
+Completeness. A proof system is complete if given a true statement, a prover with a witness can convince
+the veriﬁer. We will make use of a proof system with perfect completeness. A proof system has perfect
+completeness if for all (x,w )∈R ,
+Pr
+[
+NiZK.VerP
+pp(x, NiZK.ProveP
+pp(w,x )) = 1
+]
+= 1.
+Knowledge soundness. A proof system is computationally knowledge sound if whenever a prover is able
+to produce a valid proof for a statement x, it is a true statement, i.e., there exists some witness w such that
+7
+
+ΣR.ProveH(α, (g,U,V,W ))
+r←$ Zp
+sU←gr ; sW←Vr
+c← H(g‖ U‖ V ‖ W ‖ sU ‖ sW )
+z←r−cα
+π← (z,c )
+Return π
+ΣR.VerH((g,U,V,W ),π )
+(z,c )←π
+sU←gzUc ; sW←VzWc
+Return c = H(g‖ U‖ V ‖ W ‖ sU ‖ sW )
+R = {(α), (g,U,V,W ) : U =gα∧W =Vα}
+Figure 2: Description of Chaum-Pedersen discrete log equality Sigma protocol [CP92].
+(x,w )∈R . Knowledge soundness is deﬁned by the security game SoundA
+NiZK,R,P(λ) (Figure 1) in which
+an adversary is tasked with ﬁnding a verifying statement and proof where the statement is not in R. The
+advantage of an adversary is deﬁned as Advsound
+NiZK,R,P,A(λ) = Pr[SoundA
+NiZK,R,P(λ) = 1] with respect to ideal
+primitive P.
+Zero knowledge. A proof system is computationallyzero-knowledge if a proof does not leak any information
+besides the truth of a statement. Zero knowledge is deﬁned by the security game ZKA,b
+NiZK,R,S,P(λ) (Figure 1)
+in which an adversary is tasked with distinguishing between proofs generated from a valid witness and
+simulated proofs generated without a witness. The advantage of an adversary is deﬁned as
+Advzk
+NiZK,R,S,P,A(λ) =
+⏐⏐⏐Pr[ZKA,1
+NiZK,R,S,P(λ) = 1]− Pr[ZKA,0
+NiZK,R,S,P(λ) = 1]
+⏐⏐⏐,
+with respect to simulator algorithm S and ideal primitive P.
+Fiat-Shamir heuristic for Sigma protocols. Our protocol requires a non-interactive zero knowledge
+proof for the relation including two pairs of group elements with equivalent discrete logs:
+R = {(g,U,V,W ), (α) : U =gα∧W =Vα}.
+This relation falls into a general family of relations of discrete log linear homomorphisms for which there exist
+so-called “Sigma protocols” [Cam98] to construct interactive proofs of knowledge. These can be made non-
+interactive using the Fiat-Shamir heuristic in the standard way. We denote ΣR[GGen] (shortened to ΣR for
+simplicity) as the resulting non-interactive proof system forR known as the Chaum-Pedersen protocol [CP92]
+(shown in Figure 2); it is perfectly complete, computationally sound, and perfectly zero-knowledge in the
+random oracle model. We refer readers to [BS17, Figure 19.7] for construction of a simulator SΣ, which leads
+to the following well-known result that we state for completeness:
+Theorem 1 The simulator SΣ is such that for any RO-model adversaryAzk against ZK of ΣR,
+Advzk
+ΣR,R,SΣ,RO,Azk(λ)≤qP· (qP +qH)/2λ,
+whereAzk makes at most qP and qH queries to Prove and the random oracle RO : G6→ Zp.
+3 Partially Oblivious Pseudorandom Functions
+We provide a new formalization for POPRFs, including syntax, semantics, and security. Our formalization
+builds oﬀ that from [ECS +15], but we oﬀer new security notions that cover simulation-based security as a
+PRF (in the presence of a blinded evaluation oracle), client input privacy, and veriﬁability.
+Syntax and semantics. A partially-oblivious pseudorandom function (POPRF) scheme, Fn, is a tuple of
+algorithms
+(Fn.Setup, Fn.KeyGen, Fn.Req, Fn.BlindEv, Fn.Finalize, Fn.Ev).
+The setup and key generation algorithm generate public parameters pp and a public key, secret key pair
+(pk, sk), respectively. Oblivious evaluation is carried out as an interactive protocol run between client and
+server. The protocols we consider in this work make use of only a single round of interaction, so we simplify
+the syntax of the interactive oblivious evaluation protocol into algorithms ( Fn.Req, Fn.BlindEv, Fn.Finalize)
+that work as follows:
+8
+
+(1) First, a client runs the algorithm Fn.ReqP
+pp(pk,t,x ), which takes input a public key pk, tag (or public
+input)t, and private input x, and outputs a local state st and a request message req. The message req
+is sent to a server.
+(2) A server runs algorithm Fn.BlindEvP
+pp(sk,t, req), using as input a secret key, a tag t, and the request
+message. It produces a response message rep that should be sent back to the client.
+(3) Finally, the client runs the algorithm Fn.Finalize(rep : st) and outputs a PRF evaluation or ⊥ if the
+response message is rejected, for example, due to the veriﬁcation check failing.
+The unblinded evaluation algorithm Fn.Ev is deterministic, and takes as input a public key, secret key pair
+(pk, sk), an input pair (t,x ), and outputs a PRF evaluationy. We also deﬁne sets Fn.SK, Fn.PK, Fn.T, Fn.X,
+and Fn.Out representing the secret key, public key, tag, private input, and output space, respectively. We
+deﬁne the input space Fn.In = Fn.T× Fn.X. We assume eﬃcient algorithms for sampling and membership
+queries on these sets. When it is clear from context, we drop the preﬁx Fn and subscript pp from algorithm
+names.
+For correctness, we require that Ev is a function, and that the blinded and unblinded evaluations are
+consistent. To formalize the latter: we require that for any pp output from Setup, any pk, sk output by
+KeyGen, and anyt,x , it holds that Pr[Ev(sk,t,x ) =y] = 1 where the probability is taken over choice ofy via
+the following process:
+(st, req)←$ ReqP(pk,t,x ) ; rep←$ BlindEvP(sk,t, req) ; y←$ FinalizeP(rep :st).
+Security . We introduce three new security deﬁnitions for POPRFs. We use code-based games mostly
+following the framework of Bellare and Rogaway [BR06].
+Pseudorandomness. The ﬁrst deﬁnition captures pseudorandomness, i.e., indistinguishability of the
+POPRF from a random function, even for malicious clients that have access to a blinded evaluation or-
+acle. We borrow some elements from the UC deﬁnition for standard OPRFs from [JKK14], but opt for what
+we believe to be a simpler, standalone formulation. We also extend to handle partial obliviousness, which
+has some subtleties.
+A pseudocode game appears in Figure 3. The game is parameterized by a security parameter λ, an
+adversaryA, a challenge bitb, a POPRF Fn, a simulator S = (S.Init, S.BlindEv, S.Eval), and an ideal primitive
+P. The last will be used for random oracles in our main result. A simulator is a triple of algorithms that share
+state (explicitly denoted by stS in the game). Algorithm S.Init initializes the simulator state and outputs a
+public key for the game. Algorithm S.BlindEv simulates blinded evaluation response messages while S.Eval
+simulates random oracle queries. Importantly, S.BlindEv and S.Eval can obtain Ev outputs, but they can
+only do so in a circumscribed way: the simulator has oracle access to LimEv which limits the number of
+full evaluations it can obtain to be at most the number of queries so far made by the adversary to the
+BlindEv. Importantly, this limit is per-metadata value t (indicated via the subscript): the LimEv query
+on any particular t is bound by the total number of blinded evaluation queries on that particular t. This
+follows from similar granular restrictions in the partially blind signatures literature [AF96].
+A weaker version of the game would simply cap the total number of queries to LimEv by the total
+number of queries to BlindEv. This notion is, however, too weak for applications because we would like to
+ensure that querying, say, three times on public input t1 cannot somehow help an adversary complete the
+evaluation for another public input t2⁄= t1. We note that a recent preprint [SS21] contained this weaker
+notion, couched in the context of Privacy Pass. (We discuss this paper further in Section 4.)
+We let the advantage of a POPRF adversaryA be deﬁned by
+Advpo-prf
+Fn,S,P,A,(λ) =
+⏐⏐⏐Pr
+[
+POPRFA,1
+Fn,S,P(λ)⇒ 1
+]
+− Pr
+[
+POPRFA,0
+Fn,S,P(λ)⇒ 1
+]⏐⏐⏐
+where the probability spaces are taken over the random choices made in the games and the events signify
+that the game outputs the value one.
+One could relax our deﬁnition in various ways. For example, by setting a parameter qt,max that upper
+bounds the total number of BlindEv queries on tag t over the course of the game and letting the simulator
+— at any point in the game — obtain qt,max full evaluations. This would seem to still provide qualitatively
+the same level of security, but our schemes meet the stronger notion that restricts the simulator over the
+course of the game. Another relaxation that does not preserve the same level of security would be to allow
+9
+
+Game POPRFA,b
+Fn,S,P(λ)
+RandFn←$ FnGen(Fn.In, Fn.Out)
+stP←$ P.Init(λ)
+pp←$ Fn.Setup(λ)
+(sk, pk1)←$ Fn.KeyGenP
+pp()
+(stS, pk0)←$ S.Init(pp)
+b′←$AEv,BlindEv,Prim(pp, pkb)
+Return b′
+Oracle Ev(t,x )
+y1← Fn.EvP(sk,t,x )
+y0← RandFn(t,x )
+Return yb
+Oracle LimEv(t,x )
+qt,s←qt,s + 1
+If qt,s≤qt then
+Return Ev(t,x )
+Return⊥
+Oracle BlindEv(t, req)
+qt←qt + 1
+rep1← Fn.BlindEvP(sk,t, req)
+(rep0,st S)←$ S.BlindEvLimEv(t, req :stS)
+Return repb
+Oracle Prim(x)
+y1←$ P.Eval(x :stP)
+(y0,st S)←$ S.EvalLimEv(x :stS)
+Return yb
+Figure 3: Simulation-based security deﬁnition for pseudorandomness against malicious clients, with granular ac-
+counting for metadata in queries. The LimEval oracle limits the number of evaluations the simulator can make on
+a per-metadata tag basis.
+Game POPRIV1A,b
+Fn,P(λ)
+pp←$ Fn.Setup(λ)
+(pk, sk)←$ Fn.KeyGen(pp)
+stP←$ P.Init(λ)
+b′←$ATrans,P(pp, pk, sk)
+Return b′
+Oracle Trans(t,x 0,x 1)
+(st0, req0)←$ Fn.ReqP(pk,t,x 0)
+(st1, req1)←$ Fn.ReqP(pk,t,x 1)
+rep0←$ Fn.BlindEvP(sk,t, req0)
+rep1←$ Fn.BlindEvP(sk,t, req1)
+y0← Fn.FinalizeP(rep0;st0)
+y1← Fn.FinalizeP(rep1;st1)
+τ← (reqb, repb,y 0)
+τ′← (req1−b, rep1−b,y 1)
+Return (τ,τ′)
+Game POPRIV2A,b
+Fn,P(λ)
+pp←$ Fn.Setup(λ)
+stP←$ P.Init(λ)
+i← 0
+b′←$AReq,Fin,P(pp)
+Return b′
+Oracle Req(pk,t,x 0,x 1)
+i←i + 1
+(sti,0, req0)←$ Fn.ReqP(pk,t,x 0)
+(sti,1, req1)←$ Fn.ReqP(pk,t,x 1)
+Return (reqb, req1−b)
+Oracle Fin(j, rep, rep′)
+If j >i then return⊥
+yb← Fn.FinalizeP(stj,b, rep)
+y1−b← Fn.FinalizeP(stj,1−b, rep′)
+If y0 =⊥ or y1 =⊥ then
+Return⊥
+Return (y0,y 1)
+Figure 4: Security deﬁnitions for honest-but-curious server unlinkability (left) and malicious server unlinkability
+(right).
+the simulator more queries than qt,max, for example, 2·qt,max. But this degrades the security guarantee as it
+means that in q queries to BlindEv on some t a malicious client can potentially compute up to 2q POPRF
+outputs for that tag t.
+Request privacy and unlinkability. Our second goal is to capture privacy for clients. This means not only
+that requests should hide the private input portion x, but also that request/response transcripts and output
+POPRF values should be unlinkable. We formalize two models for this goal, corresponding to the level of
+maliciousness by a misbehaving server.
+Game POPRIV1 (Figure 4, top game) captures an indistinguishability experiment in which the adver-
+sary can query to obtain full transcripts (including output) resulting from honest blinded evaluation of a
+POPRF. The transcripts are either returned properly ( b = 0) or with the request, response pairs swapped
+relative to the outputs ( b = 1). Intuitively, if the adversary cannot distinguish between these two worlds,
+then there is no way to link a POPRF output value to a particular blinded evaluation, despite the adver-
+sary knowing the secret POPRF key. This captures also input privacy security: if a request reveals some
+information about the input x this can be used to win the POPRIV1 game. We sometimes refer to this as
+request privacy against passive adversaries, because the adversary cannot interfere with the server’s proper
+execution.
+The advantage of a POPRIV1 adversaryA in the P-model is deﬁned by
+Advpo-priv1
+Fn,P,A (λ) =
+⏐⏐⏐Pr
+[
+POPRIV1A,1
+Fn,P(λ)⇒ 1
+]
+− Pr
+[
+POPRIV1A,0
+Fn,P(λ)⇒ 1
+]⏐⏐⏐
+where the probability spaces are taken over the random choices made in the games and the events signify
+10
+
+that the game outputs the value one. We say a Fn scheme is perfectly private if Advpo-priv1
+Fn,P,A (λ) = 0 for all
+adversariesA.
+POPRIV1 security does not capture malicious servers that deviate from the protocol. So, for example,
+it doesn’t rule out attacks in which the server replies with garbage to a blinded evaluation request.
+Our next game POPRIV2 allows the adversary to choose the public keys used for request generation and
+leaves to the adversary how to reply to requests. The game therefore splits transcript generation across two
+oracles, a request oracle ( Req) and ﬁnalize oracle ( Fin). The ﬁrst oracle replies with a randomly ordered
+pair of request messages based on the challenge bit, and the second oracle can be queried with adversarially
+chosen response messages. The game requires that neither y0 nor y1 is equal to ⊥ — if either is then the
+ﬁnalize oracle returns⊥. This prevents the trivial attack of corrupting one reply but not the other.
+The advantage of a POPRIV2 adversaryA in the P-model is deﬁned by
+Advpo-priv2
+Fn,P,A (λ) =
+⏐⏐⏐Pr
+[
+POPRIV2A,1
+Fn,P(λ)⇒ 1
+]
+− Pr
+[
+POPRIV2A,0
+Fn,P(λ)⇒ 1
+]⏐⏐⏐
+where the probability spaces are taken over the random choices made in the games and the events signify
+that the game outputs the value one.
+POPRIV2 is strictly stronger than POPRIV1. Looking ahead our new POPRF meets POPRIV1 when
+veriﬁcation is omitted, and POPRIV2 when veriﬁcation is required.
+Uniqueness. Lastly, we discuss an additional property that is relevant in the veriﬁable setting when
+clients want to ensure that servers honestly perform blind evaluations. This means that the output of the
+blind evaluation protocol should be consistent relative to the public key pair, i.e., consistent with the output
+of unblinded evaluation using the secret key. Our correctness deﬁnition requires this is the case for honest
+execution of the algorithms. We formalize this correctness property for malicious servers as a uniqueness
+deﬁnition POUNIQ, taking inspiration from deﬁnitions used previously for veriﬁable random functions
+(c.f., [DY05]). In short, no malicious server should be able to convince a client into accepting two diﬀerent
+outputs for the same ( pk,t,x ). We show that uniqueness is implied by correctness and POPRIV2. The
+complete deﬁnition for POUNIQ, theorem statement, and proof are deferred to Appendix H.
+Relation to partially blind signatures. POPRFs are related to two-move partially blind signatures,
+which were introduced by Abe and Fujisaki [AF96]. A partially blind signature is a tuple of algorithms
+DS = (DS.Setup, DS.KeyGen, DS.Sign, DS.Ver, DS.Req, DS.BlindSign, DS.Finalize)
+where the ﬁrst four algorithms deﬁne a standard digital signature scheme for message space consisting of pairs
+(t, m), called the public input (or tag) and private message, respectively. Signatures can also be generated via
+an interactive protocol which, like we did for POPRFs, we formalize simply as a single round trip protocol
+initiated by a client running DS.Req(pk,t, m) to generate a request message req and client state st, sending
+the former to the server which runs DS.BlindSign(sk, req) to generate and send a response rep back to the
+client, which then computes a signature via DS.Finalize(st, rep). This protocol should achieve blindness,
+which can be deﬁned similarly to our request privacy deﬁnition above for POPRFs.
+The main security property targeted is one-more unforgeability, which, roughly speaking, states that
+an adversarial client can’t generate q + 1 unique message-signature pairs ( m1,σ 1),..., (mq+1,σq+1) that all
+verify under a public key pk and public tag t even when given the ability to query a blind signing oracle
+with the only restriction being that only q queries can be made for the chosen public tag t. This intuitively
+enforces that each query to the blind signing oracle only results in one learned signature, and queries for
+a diﬀerent public tag do not help in forging a signature for the target tag. We present a complete formal
+treatment of partially blind signatures in Appendix E.
+A partially blind signature is unique if DS.Sign is deterministic and its output on ( pk,t, m) matches that
+of the interactive protocol when initiated on the same triple. A blind signature is just a partially blind
+signature with t omitted. JKK observed that one can transform unique blind signatures into OPRFs by
+hashing the signature. A similar transform exists to build a POPRF from a unique partially blind signature.
+We provide details and proof of this transform in Appendix F for both cases, with and without public input).
+(As far as we are aware there has been no formal treatment of this observation.)
+Most prior partially blind signature schemes are not unique, e.g., [AF96,AO00]. The only unique scheme
+we are aware of is due to Zhang, Safavi-Naini, and Susilo (ZSS) [ZSS03], but it relies on bilinear pairings
+and so this generic transformation will not achieve our goals for a POPRF. Moreover as mentioned in the
+introduction, the security analysis in ZSS is wrong. That said, our construction shares much of the underlying
+11
+
+structure from the ZSS one. Using our new proof techniques, we furthermore provide the ﬁrst complete proof
+of the ZSS partially blind signature scheme (see Appendix G).
+4 The 3HashSDHI POPRF
+We now turn to our main result: providing a new POPRF. Our construction combines elements of the
+2HashDH construction with a technique used by Dodis and Yampolskiy for their veriﬁable PRF; it is also
+related to a partially blind signature scheme suggested by Zhang, Safavi-Naini, and Susilo. We call our
+construction 3HashSDHI, which we often abbreviate to 3H. The name refers to its use of three hashes and
+reliance on the strong inverse Diﬃe-Hellman assumption.
+Algorithms. Our protocol relies on a group G of prime order p and with generator g. As mentioned in
+the introduction, the 3HashSDHI protocol computes a PRF output as
+3H.Ev(sk,t,x ) = H2
+(
+t,x, H1(x)1/(sk+H3(t))
+)
+where H1 :{0, 1}∗→ G, H2 :{0, 1}∗→{ 0, 1}γ2, and H3 :{0, 1}∗→{ 0, 1}γ3 are the titular hash functions.
+Note that H1 has range the group G, whereas the second and third hashes output bit strings of length γ2 and
+γ3. By default we set γ2 =λ and γ3 = 2λ. The third hash must be collision resistant for security to hold.
+Looking ahead to the security analysis, we will model the hash functions as random oracles. The setup, key
+generation, and full evaluation algorithms are shown in pseudocode below.
+3H.Setup(λ)
+(p,g, G)←$ GGen(λ)
+pp← (p,g, G)
+Return pp
+3H.KeyGenH1×H2×H3(pp)
+(p,g, G)← pp
+sk←$ Zp ; pk←gsk
+Return (pk, sk)
+3H.EvH1×H2×H3(sk,t,x )
+Y ← H1(x)1/(sk+H3(t))
+Z← H2(t,x,Y )
+Return Z
+Here, GGen denotes a group parameter generator outputting a triple ( p,g, G) consisting of a prime p, (the
+description of) a group G of order p, and a generator g of G.
+The blind evaluation protocol has a client computeH1(x) and mask the resulting group element by raising
+it to a random scalar r. The client can send the resulting blinded value B to the server, who can then raise
+B to 1/(sk + H3(t)) and return the result. The client then ﬁnalizes by raising the returned value to 1 /r in
+order to remove the blinding, followed by the ﬁnal step of computing the ﬁnal hash H2. The blinding ensures
+request privacy.
+We optionally can extend this blinded evaluation protocol to include a proof that the server properly
+exponentiated B. This is necessary to have the protocol enjoy POPRIV2 security, which is important in
+some (but not all) applications. At ﬁrst, it may not be obvious how to prove to the client that the server
+is returning B′ =B1/(sk+H3(t)) relative to the public key gsk, because the sum appears in the denominator.
+However, we can use the following trick: the server generates a standard DL proof that B = (B′)k for some
+k. The client runs veriﬁcation by explicitly reconstructing gk = pk·gH3(t) =gsk+H3(t). This means that the
+veriﬁcation procedure checks the special structure of the exponent k.
+The full protocol, including the NIZK (which uses its own hash H4), is shown in Figure 5. Here we show
+that t is sent from the client to server, though in some applications the server may receive t out-of-band.
+Execution requires just one round trip. It requires just two group exponentiations on the client side (and,
+when using the NIZK, those used for its veriﬁcation). The server uses one exponentiation plus one for the
+NIZK proof.
+Relation to partially blind signatures. 3HashSDHI is closely related to a partially blind signature
+suggested by Zhang, Safavi-Naini, and Susilo [ZSS03]. It uses groups G1, G2, GT each of order p, with
+generators g1,g 2,gT , and that come equipped with an eﬃcient-to-compute pairing e : G1× G2→ GT such
+that for any α,β ∈ Zp it holds that e(gα
+1,gβ
+2 ) =gαβ
+T . Their signature is deﬁned as
+ZSS1.Ev(sk,t,x ) = HG2(x)1/(sk+H3(t))
+where HG2 :{0, 1}∗→ G2 hashes onto the group G2 and H3 is as deﬁned above for 3HashSDHI. We use ZSS1
+to diﬀerentiate from our suggested modiﬁcations, which we call ZSS2 and discuss in Appendix G. As can
+be seen, 3HashSDHI uses essentially the same structure, combined with a ﬁnal hash but we dispense with
+12
+
+3H.ReqH1×H2×H3×H4(pk,t,x )
+r←$Zp ; B← H1(x)r
+Return ((pk,r,t,x ),B )
+3H.FinalizeH1×H2×H3×H4(B′,π ; (pk,r,t,x ))
+Y ← (B′)1/r
+Require ΣR.VerH4((g,g H3(t)· pk,B′,B ),π )
+Z← H2(t,x,Y )
+Return Z
+B,t−−−−−−−−−−−→
+B′,π←−−−−−−−−−−−
+3H.BlindEvH1×H2×H3×H4(sk,t,B )
+k← sk + H3(t)
+B′←B1/k
+π←$ ΣR.ProveH4(k, (g,gk,B′,B ))
+Return (B′,π )
+Figure 5: Blind evaluation for our 3H POPRF construction. All three algorithms have implicit input the parameters
+pp = (p,g, G) that describe the group used. The NIZK uses relation R = {(g,U,V,W ), (α) : U =gα ∧W =Vα}.
+the use of bilinear pairings using instead NIZKs to provide veriﬁability. We also comment on two aspects of
+the original security analysis of the partially blind signature scheme in [ZSS03]: (1) the analysis of one-more
+unforgeability is incorrect; and (2) it contains an incorrect claim that so-called “exponential” blinding (see
+below for discussion in the context of OPRFs) is insecure. More precisely, for (1), the claimed security proof
+relies on a lemma (stated without a proof) which says that if the scheme is secure, in terms of one-more
+unforgeability, for any ﬁxed public input, then it is secure as a partially-blind signature – such lemma does
+not appear to be provable; for (2), the claimed distinguishing test does not work, rather it identiﬁes every
+pair of signature and signing transcript as a match, regardless of whether they are associated. Our new
+techniques, in particular a variant of the new gap assumption discussed in the next section, enable a new
+proof of unforgeability for the ZSS partially blind signature, and we also provide a proof that exponential
+blinding is secure. See Appendix G for the details.
+Comparison to prior (O)PRFs. Recall that the 2HashDH OPRF is deﬁned by 2HashDH.Ev(sk,x ) =
+H2(x, H1(x)sk). On the other hand, the DY PRF [DY05] is evaluated on a message t via DY.Ev(sk,t ) =
+h1/(sk+t) for generator h. Thus, our 3HashSDHI can be seen as blending of the two approaches, basically
+deﬁning, for each x, a separate instance of the DY PRF with generator h = H1(x) and input message t. The
+way we combine them retains the simple blinding mechanism of 2HashDH to allow hiding x. Despite the
+similarity to the prior constructions, analyzing security requires new techniques (see the next section).
+2HashDH is often formulated using an alternative “multiplicative” blinding strategy as opposed to the
+“exponential” blinding presented here. Multiplicative blinding enables client-side performance improvements
+of ﬁxed-base exponentiation with precomputation over variable-base exponentiation, but has been shown to
+have some security drawbacks in the non-veriﬁed setting [JKX21]. 3HashSDHI is not compatible with the
+multiplicative blinding protocol used by 2HashDH, however Appendix I presents an alternative multiplicative
+blinding protocol [ZSS03] that enjoys the same performance beneﬁts.
+Miao et al. construct an oblivious evaluation protocol for the DY PRF [MPR +20]. Their approach
+makes use of the additive-homomorphic Camenisch-Shoup encryption scheme [CS03] and related proofs of
+discrete log representation. In contrast, 3HashSDHI uses the more eﬃcient oblivious evaluation approach
+of 2HashDH and uses the structure of DY to tie in the public metadata, meaning the more expensive DY
+oblivious evaluation techniques are avoided.
+Pythia [ECS+15] provided the ﬁrst POPRF. It uses pairing-friendly groups G1, G2, GT each of order p,
+with generators g1,g 2,gT . Then, the Pythia POPRF is deﬁned by
+Pythia.Ev(sk,t,x ) =e(HG1(t), HG2(x))sk
+where HG2 and HG2 are hash functions that map to the groups G1, G2. This construction enables blinded
+evaluation by sending B← HG2(x)r, and having the server respond with e(HG1(t)sk,B ). It also has some
+other features that were desirable in the password hardening context for which Pythia was designed, specif-
+ically, that one can have compact key rotation tokens of the form ∆ = sk′/sk. The token ∆ can be shared
+with a client to help it update previously computed POPRF values for any t,x . Compared to Pythia’s
+POPRF, 3HashSDHI avoids use of pairings. This makes it faster to compute and saves bandwidth.
+That said, the 3HashSDHI construction does not support key rotations even if one omits the ﬁnal H2
+13
+
+evaluation. To expand, consider using a (non-compact) key rotation in a way analogous to Pythia, i.e.,
+distributing to a client ∆ t1 = (sk + H3(t1))/(sk′ + H3(t1)) and ∆t2 = (sk + H3(t2))/(sk′ + H3(t2)). This
+would allow rotating (unhashed) POPRF outputs on public inputs t1 and t2 from an old key sk to a new
+key sk′. But this also trivially reveals sk and sk′, given that H3(t1) and H3(t2) are publicly computable.
+While in the applications we explore in Section 7 we do not need key rotation tokens, the question of ﬁnding
+a POPRF that avoids pairings yet supports key rotations remains open.
+We also compare to the recent attribute-based veriﬁable OPRF (AB-VOPRF) suggested by Huang et
+al. of Facebook [HIJ+21] for use with Privacy Pass. An attribute-based VOPRF is a POPRF that separates
+out an explicit algorithm for converting a secret key and attribute t (what we call a tag) into a tag-speciﬁc
+public key, secret key pair. As with other VOPRFs, there is a veriﬁable, blinded evaluation protocol by which
+a client can obtain an output on some (t,x ) pair without revealingx. Any AB-VOPRF gives a POPRF, and
+vice versa.
+The Facebook construction of an AB-VOPRF combines the 2HashDH approach with the Naor-Reingold
+PRF [NR97]. Evaluation is deﬁned by
+FB.Ev(sk,t,x ) = H1(x)a0·∏
+iat[i]
+i
+where sk =a0,a 1,...,a |t| andt[i] indicates the ith bit oft. To make this veriﬁable, the scheme must provide
+a more complex NIZK involving|t| group elements, making it expensive to transmit and verify, particularly
+in applications where a wide variety of tags t will be used. In comparison 3HashSDHI is as eﬃcient as
+2HashDH.
+Finally, a concurrent, independent work by Silde and Strand [SS21] describe what we call the 3HashSDHI
+protocol and how it could be useful for Privacy Pass and the Facebook de-identiﬁed logging application.
+They formalize a notion of anonymous token security that is more tailored to Privacy Pass style applications
+(compared to our general POPRF deﬁnitions), but this deﬁnition contains the aforementioned problem
+(see Section 3) of not performing query accounting on a per public input basis, making it too weak of a
+security notion for their applications. In addition, the security analysis relative to this notion is incomplete,
+and so the paper does not yet provide a proof even of this weaker security notion. Nevertheless, their
+work underscores the beneﬁts of the 3HashSDHI protocol in the applications they explore and our proof
+techniques (in particular, the new one-more gap SDHI assumption discussed in the next section) should
+enable improvements to their analysis.
+Extension to private metadata bit. Recall a primary application of OPRFs is in the construction of
+anonymous tokens. We have thus far been concerned with adding support for public metadata, but there are
+also settings that beneﬁt from being able to associate private metadata to tokens that can only be identiﬁed
+by the issuer. To prevent trivial linking attacks by a malicious server, it is necessary that the private metadata
+space remain small. Kreuter et al. propose a variant of Privacy Pass (based on the 2HashDH OPRF) that
+supports a single private metadata bit [KLOR20]. The high level approach is to simply maintain two keys
+and prove in zero knowledge that the token is issued under one of the two keys. However, they observe that
+a deterministic primitive (like a PRF) is insuﬃcient to achieve indistinguishability between private metadata
+bits. Therefore, the core of their construction is a new anonymous token protocol that can be considered as
+a randomized variant of 2HashDH. It is likely similar techniques can be applied to construct a randomized
+version of 3HashSDHI to support public metadata as well as a private metadata bit; we leave the details
+of such a construction to future work. Silde and Strand propose a construction along these lines, but as
+mentioned before, the security analysis is incomplete [SS21].
+5 Security Analysis
+We show formally that the 3HashSDHI PO-PRF enjoys pseudorandomness and request privacy. The former
+is the more complex analysis; we start with it.
+5.1 Pseudorandomness
+The main technical challenge is showing that 3HashSDHI meets our pseudorandomness deﬁnition, captured
+by game POPRF (Figure 3 in Section 3). We start with an overview of our proof strategy, and then state
+14
+
+our main result.
+Proof strategy . Our proof of pseudorandomness proceeds in several steps. First, we introduce a new
+discrete log (DL) type cryptographic hardness assumption: the one-more gap strong Diﬃe-Hellman inversion
+problem, denoted (m,n )-OM-Gap-SDHI for parameters m,n that we will explain. The new assumption
+is a generalization of prior one-more DL assumptions, but extended with two oracles and a more involved
+one-more winning condition which depends on the number of queries with a speciﬁc form to one of the
+oracles. We show that we can build a POPRF simulator such that, in the ROM, distinguishing between the
+real (b = 1) and ideal worlds (b = 0) reduces to breaking an instance of ( m,n )-OM-Gap-SDHI where m is
+the number of H3 queries made byA and n is the number of H1 queries.
+We also analyze the security of our new assumption, showing that, in the Algebraic Group Model
+(AGM) [FKL18] it reduces to one of the uber assumptions from Bauer, Fuchsbauer, and Loss (BFL) [BFL20].
+In turn, we can use a result from BFL to ﬁnally show that our new assumption is implied (again, in the
+AGM) by the q-DL assumption. This provides good evidence of the diﬃculty of the problem, and allows us
+to derive precise concrete security bounds.
+The one-more gap SDHI assumption. Game (m,n )-OM-Gap-SDHI is shown in Figure 7. The game
+generates a group instance and a challenge secret sk. The adversary A = (A1,A2) runs in two stages. In
+the ﬁrst stage it receives the group description p, G and outputs a sequence of n scalar values c1,...,c n.
+ImportantlyA1 does not receive g, forcing it to commit to the ci values in a way independently of the
+generator g. We assume that g is randomly chosen; this will be important in our analysis. Then, the
+second stageA2 is run on input the generator g, gsk, and a vector of m group elements gy1,...,g yn. The
+adversary is given access to two oracles. The SDH oracle returns B1/(sk+ci) for arbitrary B and one of the
+previously speciﬁed ci values. The SDDH oracle is a decision oracle that helps the adversary determine
+whether Z =Y 1/(sk+ci) for arbitrary Y,Z and one of the previously speciﬁed ci values.
+The adversary outputs a distinguished index γ indicating a cγ value, as well as a set of 𝓁 pairs (Zi,αi)∈
+G× [0..m]. The adversary wins if 𝓁 > qγ and Zi = Y 1/(sk+cγ)
+αi for all 1 ≤ i≤ 𝓁. Here qγ is the number of
+queries to the SDH with second input set to γ. Without the “one more” restriction of 𝓁>q γ, it is trivial to
+win. We deﬁne the (m,n )-OM-Gap-SDHI-advantage of an adversaryA by
+Adv(m,n)-om-gap-sdhi
+GGen,A (λ) = Pr
+[
+(m,n )-OM-Gap-SDHIA
+GGen(λ)⇒ true
+]
+.
+An adversaryA has query budget ( ⃗ q,qSDDH) for ⃗ q= [⃗ q1,...,⃗ qn] if at the end of the game A has made at
+most ⃗ qi queries to SDH with index i and has made at most qSDDH queries to SDDH.
+We note that a weakening of the assumption dispenses with the more granular per- c-value accounting,
+instead just asking that the adversary can’t come up with𝓁>q solutions for any mixture ofYi andcj values.
+This variant is much easier to analyze in the AGM, but is not suﬃcient for our analysis.
+Game q-DLA
+GGen(λ)
+(p,g, G)←$ GGen(λ)
+x←$ Zp
+x′←$A
+(
+p, G,g,
+[
+gxi]q
+i=1
+)
+Return x =x′
+Figure 6: The q-type discrete
+log security game.
+Reducing (m,n )-OM-Gap-SDHI to q-DL. In two steps, we show how to
+reduce this assumption, in the AGM, to the diﬃculty of q-DL. The latter
+involves a game q-DL (Figure 6) that generates a group instance p,g, G for
+security parameter λ, and gives an adversary g,gx,gx2
+,...,g xq
+for a random
+scalar x. The adversary must output x. We deﬁne the advantage of a q-DL-
+adversaryA to be Advq-dl
+GGen,A(λ) = Pr
+[
+q-DLA
+GGen(λ)⇒ true
+]
+.
+As a convenient middle layer, we rely on BFL’s “Uber-assumption”
+[BFL20], formalized via the game m-Uber in Figure 8. It involves a game
+where the adversary can obtain gρ(⃗ x) by querying an arbitrarily chosen m-
+variate polynomial ρ(⃗X) to an oracle Ev, for a secret vector ⃗ x←$ Zm
+p . The
+adversary wins if it outputs successfully gµ(⃗ x) for some polynomial µ(⃗X) which is independent of the
+polynomials ρ1(⃗X),...,ρ q(⃗X) queried to Ev, i.e., µ(⃗X) cannot be expressed as an aﬃne combination
+µ(⃗X) = α1ρ1(⃗X) +··· +αqρq(⃗X) +β. The adversary can also query an additional Decide oracle with
+a polynomial ρ(⃗X), as well as group elements gy1,...,g ym, and learn whether gρ(y1,...,ym) = 0 or not. We
+denote the corresponding advantage as Advm-uber
+GGen,A(λ) = Pr
+[
+m-UberA
+GGen(λ)⇒ true
+]
+.
+We are going to prove the following theorem in Appendix A. Here and subsequently we use ‘≈’ to denote
+that runtimes are equal up to small constant factors.
+15
+
+Game (m,n )-OM-Gap-SDHIA
+GGen(λ)
+(p,g, G)←$ GGen(λ)
+sk←$ Zp ; [ yi]m
+i ←$ [Zp]m
+i
+(stA, [ci]n
+i )←$A1(p, G)
+Require∀n
+i⁄=jci⁄=cj
+(γ, [Zi,αi]𝓁
+i)←$ASDH,SDDH
+2
+(
+g,g sk, [gyi]m
+i :stA
+)
+Require qγ <𝓁 ∧ ∀𝓁
+i⁄=jαi⁄=αj
+Return [Zi]𝓁
+i =
+[
+gyαi/(sk+cγ)
+]𝓁
+i
+Oracle SDH(B,i )
+Require i /∈ [1,n ]
+qi←qi + 1
+Z←B1/(sk+ci)
+Return Z
+Oracle SDDH(Y,Z,i )
+Return Z =Y 1/(sk+ci)
+Figure 7: The one-more gap strong Diﬃe-Hellman inversion security game.
+Game m-UberA
+GGen(λ)
+(p,g, G)←$ GGen(λ)
+Q←{}
+⃗ x= [xi]m
+i ←$ [Zp]m
+i
+(U,µ (⃗X))←$AEv,Decide(p, G,g )
+Return
+(
+U =gµ(⃗ x)∧Q⊥ ⊥{µ(⃗X)}
+)
+Oracle Ev(ρ(⃗X))
+Q←Q∪{ρ(⃗X)}
+Return gρ(⃗ x)
+Oracle Decide(ρ(⃗X), [Yi]n
+i )
+⃗ y= [yi]n
+i ←
+[
+loggYi
+]n
+i
+Return ρ(⃗ y)≡p 0
+Figure 8: The interactive, ﬂexible-output, polynomial uber assumption with decision oracle. Here, ⊥ ⊥denotes
+algebraic independence.
+Theorem 2 For any algebraic adversaryAsdhi of (m,n )-OM-Gap-SDHI with query budget (⃗ q= [q1,...,q n],
+qSDDH), and any GGen outputting (p,g, G), where g is a uniformly chosen element of G, we give adversary
+Auber such that
+Adv(m,n)-om-gap-sdhi
+GGen,Asdhi
+(λ)≤ (qmax + 1)· Adv(m+1)-uber
+GGen,Auber
+(λ) +q
+p,
+where q =∑n
+i qi and qmax = max{qi}n
+i . Also, Auber makes at most q queries to its polynomial evaluation
+oracle with maximum degree q + 1, and outputs a polynomial of degree at most q. Further, T (Asdhi)≈
+T (Auber).
+It is important here to note that the theorem assumes that the query budgetsqi corresponding to diﬀerent
+i’s are ﬁxed a priori, rather than being chosen adaptively.
+Combined with a basic reduction from [BFL20], this gives us the following immediate corollary.
+Corollary 3 For any algebraic adversaryAsdhi of (m,n )-OM-Gap-SDHI, with query budget(⃗ q= [q1,...,q n],
+qSDDH), and any GGen outputting (p,g, G), where g is a uniformly chosen element of G, we give adversary
+Adl such that
+Adv(m,n)-om-gap-sdhi
+GGen,Asdhi
+(λ)≤ (qmax + 1)· Adv(q+1)-dl
+GGen,Adl
+(λ) +q
+p,
+where q =∑n
+i qi and qmax = max{qi}n
+i . Further, T (Asdhi)≈T (Adl).
+The main diﬃculty of the proof of Theorem 2 in Appendix A stems from the one-more requirement𝓁>q γ
+in the winning condition, which is deﬁned in a way that depends on the speciﬁc number of queries qγ to
+SDH(·,γ ). To gain some intuition, it is convenient to think of the game in algebraic terms (and this point
+of view is also accurate when casting our proof in the AGM). 1 Speciﬁcally, let us describe exponents of the
+elements provided to A2 as formal polynomials X0 (standing for the secret key) and X1,...,X m (for the
+valuesy1,...,y m). Initially, the adversary has these polynomials available, and now a call to SDH(P,i ) can
+also be thought of as dividing some polynomial P (or more generally, a rational function) by (X0 +ci). The
+rational function P can be any aﬃne combination of the functions obtained so far, and SDH(P,i ) adds a
+new rational function to this set of available rational functions. In other words, consecutive queries induce
+1We ignore the SDDH oracle in this discussion, and it will be easy to handle in the actual proof via the Decide oracle.
+16
+
+a transcriptτ consisting of the initial functions X0,X 1,...,X m, and the functions returned by SDH. The
+goal of the adversary is to ensure that, for some γ, the span 2 of τ contains𝓁>q γ functions of the form
+Xα1
+X0 +cγ
+, ..., Xα𝓁
+X0 +cγ
+.
+An adversary cannot achieve this goal naively by querying SDH(Xαj,γ ) for j∈ [𝓁] without violating the
+query budget. Still, the key diﬃculty here is that the adversary could, after learning (say) X1/(X0 +cγ)
+make a further query that would give X1/(X0 +cγ)(X0 +cγ′) for some γ′⁄=γ. This second query would not
+count towardsqγ, and could potentially be helpful, as it does involvecγ.
+The bulk of our proof shows that arbitrary queries to SDH cannot, in fact, help the adversary. We do
+so via a careful inductive analysis which shows that the transcript τ can be rewritten in an equivalent way,
+call it τ′, without aﬀecting its span. In particular, τ′ only involves rational functions whose denominators
+have form (X0 +ci)k for some i and k, but no products involving multiple ci’s appear in the denominators.
+We leverage this structure to show that the span of such τ′ can include at most qγ rational functions of the
+form Xi
+X0+cγ
+.
+Now, given the above algebraic game cannot be won, an adversary winning the game must necessarily
+produce an output (γ, [Zi,αi]𝓁
+i) where for at least one i∈ [𝓁], we have that the polynomial Xαi/(X0 +ci) is
+not in the span of the queries to SDH. This lends itself naturally to a reduction to the Uber-assumption,
+which we describe in full in the proof.
+Reducing to (m,n )-OM-Gap-SDHI. We now turn to showing that we can reduce the pseudorandomness
+security of 3HashSDHI to our new assumption. We focus on the veriﬁable version of 3HashSDHI; an analysis
+for the non-veriﬁable version is easily derived from our analysis here. Our analysis is in the RO model; we
+model all four hash functions as ROs.
+We start by describing the simulator used in the proof. The simulator’s goal is to respond to blind
+evaluation and RO queries so that the resulting transcript of values is indistinguishable from real responses.
+Importantly, the simulator must do this without making too many calls to the full evaluate oracle for each
+BlindEval-queried public input t. Intuitively, achieving this security enforces that a malicious client can
+not exploit the blinded evaluation oracle to do more than help it compute a single POPRF output for the
+particular requested t.
+The simulator works as follows. It chooses its own secret key sk and answers the H1 and H3 queries
+with random group elements and scalars, respectively. To answer a blinded evaluation query, it runs the
+scheme’s blind evaluation algorithm Fn.BlindEv(sk,B ), except that it uses the NIZK’s simulator to generate
+the proof π (and to simulate any ideal primitive underlying the NIZK, i.e., H4). The key challenge is in
+simulating H2 queries, that which enables the adversary to “complete” a blinded evaluation. The simulator
+must arrange that the value it returns in response to H2 queries is consistent with the random value returned
+by Ev. To do so, the simulator checks whether a queried point ( t,x,Y ) is such that Y = H1(x)1/(sk+H3(t))
+and, if so, it queries LimEv(t,x ) and returns the output. Otherwise, it chooses a random point to return.
+The simulator can perform this check because it chose sk. See Figure 10 in Appendix B for the full details
+of the simulator.
+The simulation can fail should the adversary be able to query it on a point Y = H1(x)1/(sk+H3(t)) when
+the simulator cannot make another call to LimEv for that value t. This can only arise should the adversary
+query H2 on more such values t,Y than queries it so far made to BlindEv on that t. We show that an
+adversary, that can do so, can also win the (m,n )-OM-Gap-SDHI game wherem,n are the total number of
+queries involving a distinct x value and distinct t value, respectively. (We deﬁne this more precisely below.)
+This step also relies on the collision resistance of H3, which holds in the ROM.
+To formalize this, we state below a theorem using the ideal primitive model in whichP = H1×H2×H3×H4
+for random oracles overH1 :∗→ G, H2 :∗×∗× G→{ 0, 1}λ, H3 :∗→ Zp, H4 : G6→ Zp for (p, G) determined
+by GGen(λ). Here ‘∗’ denotes the set of arbitrary inputs. We deﬁne the query budget for an adversary Aprf
+in the P model to be a tuple ( m,n,q E,⃗ q,qH1,q H2,q H3,q H4) where:
+• m is the maximum number of distinct x values queried byAprf to H1 or H2;
+• n is the maximum number of distinct t values queried byAprf to BlindEv, H2, or H3;
+2By “span” we mean the set of rational functions that can be obtain by taking aﬃne combinations of the functions in τ.
+17
+
+• ⃗ q= [⃗ q1,...,⃗ qn] is a vector where each⃗ qi is the maximum number of queries byAprf to BlindEv(ti, req)
+for any req and where we t1,...,t n are the (at most) n valuesti queried in the course of the game in
+the order of when they are queried. (That is, t1 is the ﬁrst t value queried, t2 is the second, etc.) In
+words, the adversary is limited to some number n of public inputs t that it can target, and makes a
+limited number of blinded evaluation queries for each of those inputs t.
+• qE,qH1,qH2,qH3, and qH4 are the maximum number of queries made byAprf to the Ev, H1, H2, H3, and
+H4 oracles, respectively.
+Note that our query budget requirement ⃗ qdoes not restrict which valuest the adversary can use; these can
+be picked adaptively. But the number of times eacht value is queried is restricted by the order in which they
+are queried. The granular accounting of blinded evaluation queries via ⃗ qwill be important when combining
+the following theorem with Theorem 2.
+Theorem 4 LetAprf be a P-model POPRF adversary against 3H with query budget (m,n, qE, ⃗ q, qH1, qH2,
+qH3, qH4). Then we give a H4-model adversaryAzk and adversaryAsdhi such that
+Advpo-prf
+3H,S[SΣ],P,Aprf
+(λ)≤ Advzk
+ΣR,R,H4,SΣ,Azk(λ) + Adv(m,n)-om-gap-sdhi
+GGen,Asdhi
+(λ) +n2
+p ,
+where S is the simulator deﬁned in Figure 10 that makes use of NIZK simulator SΣ. AdversaryAzk makesqH4
+queries to its random oracle and Asdhi has query budget (⃗ q,qH2). Further, T (Aprf)≈T (Azk)≈T (Asdhi).
+A detailed proof is given in Appendix B. It proceeds via a sequence of games, starting with the real world
+POPRFApo-prf,1
+3H,P,S (λ) and ﬁrst transitioning to a game that replaces the NIZK π with one generated by the
+NIZK simulator SΣ. Then we change how Ev queries are handled. Instead of computing the POPRF usingsk,
+we pick a random value and add it to a table R. We also modify the handling of H2 queries to check ifR has
+been set on a relevant value and, if so, patch up H2’s response so that it maintains consistency. This does not
+change the distribution of responses to the adversary. Finally, we are in position to perform a reduction to
+(qH1,q H3)-OM-Gap-SDHI: the only diﬀerence between this game and the ideal world POPRFAprf,0
+3H,P,S[SΣ](λ)
+is when H2 needs to repair a R value more often than queries to BlindEv. This reduction step is made
+relatively simple by our new assumption, which provides the values and oracles necessary to simulate Aprf’s
+view in a straightforward way.
+We can combine the two main theorems with a standard result about the NIZK that we use (restated in
+Section 2) to give the following corollary.
+Corollary 5 LetAprf be a P-model POPRF adversary against 3H with query budget (m,n,q E,⃗ q,qH1,q H2,
+qH3, qH4) and GGen any group parameter generator outputting (p,g, G), where p is a prime g is a uniformly
+chosen element of G. Then, we give adversary Adl such that
+Advpo-prf
+3H,S[SΣ],P,Aprf
+(λ)≤ (qmax + 1)· Adv(q+1)-dl
+GGen,Adl
+(λ) +q +n2
+p + 3q2 +q(qH4 + 4) + 2
+2λ ,
+whereq =∑n
+i qi,qmax = max{qi}n
+i . Further, S is the simulator deﬁned in Figure 10 that makes use of NIZK
+simulator SΣ, and T (Aprf)≈T (Adl).
+Concrete security and parameter selection. Corollary 5 is interpreted best in the generic-group model
+(GGM) [Sho97, Mau05], as this yields an absolute bound in terms of Aprf’s resources. The advantage of a
+generic algorithmAdl running in time T (or more precisely, making T queries to the generic-group oracle)
+against (q + 1)-DL in a group of order p is Adv(q+1)-dl
+GGen,Adl
+(λ)≤ (T +q + 2)2(q + 1)/(p− 1) (see, e.g., [BFL20]
+for a proof). This advantage is multiplied by qmax to obtain the dominating term in our ﬁnal bound.
+We conjecture however that the bound is somewhat pessimistic, and that the factor qmax is an artifact of
+the proof. In fact, as we discuss below, a diﬀerent interpretation of our proof ﬂow, which is particularly
+meaningful in the GGM, avoids this factor altogether. This improved bound omitting qmax is also essentially
+tight, since Cheon’s attack [Che06] extracts 3 the secret key from q BlindEval queries in time
+√
+p/q, as
+long as q divides p− 1 or p + 1.
+3Deﬁnex = (sk + H3(t))−1 for some ﬁxed t. Then, the attacker can just obtain, via consecutive iterative queries, the values
+gx,gx2
+,...,g xq
+, and then recover x via Cheon’s attack. Finally, sk =x−1 − H3(t).
+18
+
+Cheon’s attack can therefore guide parameter selection, as is also done for 2HashDH deployments. For
+example, a 256-bit group may be suﬃcient to achieve security for upT = 280, as this would still accommodate
+up toq≈ 296 blind evaluations without violating our bounds. In contrast, to ensure security up to T = 2128,
+moving to a 384-bit curve appears necessary. The conclusion being that our choice of parameters is consistent
+with that for 2HashDH, meaning we achieve the same group operation performance while adding public
+inputs.
+We also note that our reduction to the uber assumption requires the generator to be uniformly chosen.
+We cannot envision any security issues when the generator is instead ﬁxed, and the need for uniformly chosen
+generators is likely just an artifact of our proof technique.
+Tighter GGM bound. We only sketch the main idea behind the tighter GGM proof, as it is the result
+of a minor modiﬁcation of our AGM proof ﬂow. First, note that the ( qmax + 1) factor in Corollary 5 is
+inherited from Theorem 2 and is due to our inability to eﬃciently ﬁnd, within the adversary Auber, a good
+index j∈ [𝓁] that leads to a break of the uber-assumption. Therefore, we are left with guessing. However,
+an alternative is to ﬁnd such j by computing all 𝓁 possible polynomials µ(⃗X), and outputting the one which
+is independent from those input to Ev. Unfortunately, this is computationally expensive, and requires time
+at least Ω(q2
+max). In other words, we could make the proof tight with respect to advantage while losing
+tightness with respect to time complexity. While in our proof ﬂow this needs to be taken into account, in the
+GGM only the number of group operations matters (i.e., the number of oracle calls), whereas “additional”
+running time is for free. Thus, if Aprf makes T queries to its GGM oracles, our proof ﬂow yields (with the
+proposed modiﬁcation) an adversary Adl with roughly the same number of GGM queries and advantage
+against (q + 1)-DL.
+5.2 Request Privacy
+We now turn to request privacy, which is simpler to analyze. Intuitively, 3HashSDHI client requests leak
+no information because the blinding makes them independent of other requests and ﬁnalized outputs. The
+following theorem formalizes this for the case of POPRIV1 for the non-veriﬁable version of 3HashSDHI.
+Theorem 6 For any POPRIV1 adversaryApo-priv1 against 3H (without client veriﬁcation) we have that
+Advpo-priv1
+3H,Apo-priv1
+(λ) = 0.
+Note that the theorem makes no assumptions about the hash functions or group, instead privacy derives
+directly from the information-theoretic blinding.
+Proof: Let G be the same as game POPRIV1A,b
+3H,P(λ) except that we replace ( reqd, repd) = ( H1(xd)rd,
+H1(xd)rd·sk) with (reqd, repd) = (grd,grd·sk) ford∈{ 0, 1} and wherer0,r 1 are the random exponents chosen
+in the two invocations of 3H.Req. Observe that in game G the values returned by Req are independent of
+the challenge bit b. Then we have that
+Pr
+[
+POPRIV1A,1
+3H,P(λ)⇒ 1
+]
+= Pr [ G⇒ 1 ] = Pr
+[
+POPRIV1A,0
+3H,P(λ)⇒ 1
+]
+.
+■
+Non-veriﬁable PO-PRFs, including the non-veriﬁable version of 3HashSDHI, cannot achieve our stronger
+notion of malicious request privacy. The attack is straightforward since the adversary can simply replace
+one of the two responses with garbage, and determine the challenge bit. In detail for the case of 3H,
+adversaryApo-priv2 can pick sk∈ G arbitrarily, let pk = gsk, and then query Req(pk,t,x 0,x 1) for some
+arbitrary t,x 0,x 1. It obtains back from the oracle req, req′, and then parses req as a pair ( B,t ). It then
+queries Fin(B1/(sk+H3(t)),g ) to get back reply (y0,y 1). It checks if y0 = H2(H3(x0)1/(sk+H3(t))) and returns 0
+if so. Otherwise it returns one. This adversary wins with probability 1.
+The veriﬁable version of 3HashSDHI achieves our stronger notion of malicious request privacy, due to the
+ZKP forcing the malicious server to respond honestly to blinded requests (relative to the public key being
+used). The following theorem formalizes this, where we model the hash used by the ZKP as a random oracle,
+and all other hashes as standard model.
+19
+
+Theorem 7 LetApo-priv2 be a POPRIV2 adversary in the P-model against 3H that makes at most q queries
+to Fin. We give in the proof below a SoundA
+NiZK,R,H4 adversaryBsound such that
+Advpo-priv2
+3H,P,Apo-priv2
+(λ)≤ 4q· Advsound
+NiZK,R,H4,Bsound(λ)).
+Further,T (Bsound)≈T (Apo-priv2).
+Proof: Consider game POPRIV2Apo-priv2,1
+3H,P (λ). We consider the event that, in the course of the game, a
+Fin(j, (B′
+1,π 1), (B′
+2,π 2)) query is made such that either
+1. B′
+1⁄=B1/(sk+H3(tj)
+j,b but ΣR.VerH4((g,g H3(tj)· pkj,B′
+1,Bj,b),π 1) = 1; or
+2. B′
+2⁄=B1/(sk+H3(tj)
+j,1−b but ΣR.VerH4((g,g H3(tj)· pkj,B′
+2,Bj,1−b),π 2) = 1.
+Here pkj,tj are the values queried to the jth call to Req and we let skj = dlogg pkj. Recall that here
+R ={(g,U,V,W ), (α) : U =gα∧W =Vα}, and veriﬁcation is therefore checking, in case (1), that
+B′
+2 =BH3(tj)+skj
+j,b ⇔ (B′
+2)1/(skj+H3(tj)) =Bj,b
+and a similar equality for case (2). So if this event occurs, this means the adversary has violated the soundness
+of the ZKP: only a single value α = skj + H3(tj) can be the witness for R.
+To formally reduce to ZKP soundness, ﬁrst let game G0 be the same as POPRIV2Apo-priv2
+3H,P,b (λ) but the bit b
+is chosen at random from {0, 1}. Let “G0⇒b” be the event in game G0 that the game returns the value b.
+(We use this event notation for subsequent games analogously.) Further we let G0 bad be the same as G0
+except that within each Fin it ﬁrst computes skj = dlogg pkj and checks if conditions (1) and (2) hold.
+If either does not, then it sets a ﬂag bad. Clearly G0 bad is not computationally eﬃcient; our reduction
+will avoid this computationally ineﬃcient step. Finally we let G1 be the same as game G0 except that all
+Fin(j, rep, rep′) queries are handled by ﬁrst replacing rep and rep′ with the correct values, i.e., rep←Bskj
+j,b
+and rep′←Bskj
+j,1−b where skj← dlogg(pkj). Notice that G0 bad and G1 are identical until the ﬁrst query, if
+any, that sets the ﬂag bad. We have that
+Advpo-priv2
+3H,P,Apo-priv2
+(λ) = 2· Pr [ G0⇒b ]− 1.
+and that
+Pr [ G0⇒b ] = Pr [ G0bad⇒b ]≤ Pr [ G1⇒b ] + Pr [ G0bad sets bad ] ,
+where the inequality comes from the fact that G0 bad and G1 are identical-until- bad and application of the
+fundamental lemma of game playing [BR06]. We now bound the probability that Pr[G0 bad sets bad ] via
+reduction to the soundness of the ZKP.
+AdversaryBsound works as follows. First, it randomly chooses a number q∗∈ [1, 2q] to serve as its guess
+for which ZKP π will be forged by the adversary. Here q is the maximum number of Fin queries made
+byApo-priv2; each such query includes two proofs. Then Bsound runs G0, stopping when Apo-priv2 has
+made j =⌈q∗/2⌉ queries to Fin. At this point, Bsound stops outputting ((g,g H3(tj)pkj,B′
+1,Bj,b),π 1) if q∗ is
+odd and ((g,g H3(tj)pkj,B′
+2,Bj,1−b),π 2) otherwise. AdversaryBsound avoids computing skj; it simply guesses
+which of the proofs would have caused bad to be set to true, had skj been computed and the conditions (1)
+and (2) been checked. A standard argument yields that
+Pr [ G0bad sets bad ]≤ 2q· Advsound
+NiZK,R,P,Bsound(λ).
+To ﬁnish the proof, we can observe that G1 always correctly computes responses, and a similar argument as
+we used for POPRIV1 gives that the transcript observed byApo-priv2 is independent of the challenge bit b,
+and so Pr[G1⇒b] = 1/2. Combining all the above yields the advantage statement in the theorem.
+■
+20
+
+Scheme L (B) T (B) KeyGen KeyVerify Req BlindEv Finalize Ev
+2HashDH 16 1 0 0 73 222 392 77
+2HashDH 16 8 0 0 75 229 404 79
+2HashDH 16 64 0 0 84 256 447 89
+3HashSDHI 16 1 0 0 85 369 527 125
+3HashSDHI 16 8 0 0 76 334 477 112
+3HashSDHI 16 64 0 0 75 328 471 110
+Pythia 16 1 168 0 849 4068 6070 2871
+Pythia 16 8 180 0 831 4099 6092 2881
+Pythia 16 64 171 0 809 3922 5849 2768
+ABVOPRF 16 1 294 292 74 517 684 370
+ABVOPRF 16 8 1910 2386 76 2135 2789 1981
+ABVOPRF 16 64 15053 19196 80 15305 19702 15163
+Table 1: Average operation time for various POPRF protocols. All times are measured in µs, and a zero time
+represents some value much less than a single microsecond.
+6 Performance Evaluation
+We implemented 3HashSDHI to measure the computational cost of the protocol in comparison to related
+protocols, including the baseline 2HashDH VOPRF from [DFHSW20], Pythia [ECS +15], and the recent
+attribute-based VOPRF (ABVOPRF) from Facebook [HIJ+21]. Each protocol was implemented in a minimal
+fashion, e.g., by omitting domain separating hash function invocations, in order to emphasize the cost of core
+public key operations. Our implementations use the ristretto255 group [dVGT+20] where prime-order groups
+are required, and the bn256 curve for Pythia, where pairing-friendly curves are required. We implemented
+each protocol in Go using the CIRCL experimental cryptographic library [FHK19] andbn256 package. These
+benchmarks were evaluated on a machine with a 2.6 GHz 6-Core Intel Core i7 CPU and 32 GB RAM running
+macOS 10.15.7. Below we report on the average time over 1000 measurements of each operation.
+Our benchmarks proﬁle the functions needed to conﬁgure a client for the protocol, including the KeyGen
+and KeyVerify (for ABVOPRF), as well as the functions used to carry out the protocol, including Req,
+BlindEv, and Finalize. We also proﬁled the FullEvaluation routine to compare the cost of the blinding and
+proof veriﬁcation operations in the protocol. For each protocol scheme, we keep the input size ( L) ﬁxed but
+vary the metadata size (T ) in bytes. The results of our analysis are given in Table 1.
+We comment on two key results in this data. First, the diﬀerence between the baseline VOPRF protocol
+and POPRF protocol are minuscule (as a function of metadata size). In particular, the POPRF introduces
+approximately a 25% overhead (in terms of µs to compute), though this is likely negligible at scale. Second,
+there is nearly an order of magnitude diﬀerence between the POPRF and the ABVOPRF as a function of
+metadata size. This is primarily due to the online KeyGen process and its resulting linear cost in proof
+evaluation. This suggests that the POPRF construction scales better in the presence of arbitrary-size tag
+values.
+Some of the protocols included allow certain operations to be computed oﬄine, thereby improving online
+protocol performance. For example, if the tag value is known in advance, 3HashSDHI can pre-compute
+the private key used in the BlindEv call. Likewise, in the ABVOPRF protocol, the key generation and
+veriﬁcation operations can be computed oﬄine and clients can cache the results. Table 2 summarizes the
+cost of operations, discounting precomputation costs. Note that although the performance of the ABVOPRF
+construction improves, it still introduces substantially more overhead than the 3HashSDHI construction.
+7 Applications
+POPRFs provide a new degree of ﬂexibility that we observe to be useful in a variety of applications. Essen-
+tially anywhere an OPRF is used we see opportunity for POPRFs to provide potential beneﬁts in terms of
+increasing deployment ﬂexibility, reducing key management challenges, and/or improving security. Here we
+21
+
+Scheme T (B) Request Evaluate Finalize Ev
+2HashDH 1 73 223 392 77
+2HashDH 8 75 231 403 79
+2HashDH 64 83 255 447 89
+3HashDH 1 84 367 526 124
+3HashDH 8 76 332 478 112
+3HashDH 64 76 328 472 110
+Pythia 1 847 3913 6074 2832
+Pythia 8 824 3935 6085 2840
+Pythia 64 806 3764 5843 2715
+ABVOPRF 1 74 224 685 77
+ABVOPRF 8 76 228 2790 79
+ABVOPRF 64 75 230 19721 80
+Table 2: Average times for performance, excluding precomputation cost. All times are measured in µs.
+brieﬂy discuss three previously mentioned motivating applications: anonymous one-time-use tokens, pass-
+word breach alerting, and password-based authenticated key exchange.
+7.1 Privacy Pass
+Privacy Pass [DGS+18,CDFH21] is a protocol in which users are allowed to receive one-time-use anonymous
+tokens, using an issuance protocol, that can later be used to anonymously authenticate themselves using a
+redemption protocol. It is often used in the context of fraud prevention online: tokens are issued to users
+that pass integrity challenges (e.g., CAPTCHA).
+The primary component underlying Privacy Pass is a veriﬁable OPRF (VOPRF). Current implemen-
+tations use 2HashDH [JKK14]. The issuance protocol has a client request VOPRF output for a random
+input x under a Privacy Pass server held VOPRF secret key sk. The client must verify that the received
+token y = 2HashDH.Ev(sk,x ) is correct relative to the server’s public key pk. A token ( x,y ) can then be
+redeemed by sending to the server ( x, MACy(data)) where MAC is a message authentication code such as
+HMAC and data is some application-speciﬁc bit string (called the binding data in [DGS +18]). The server
+can recompute y and then use it to check the MAC value.
+The core security properties achieved by Privacy Pass are unlinkability and unforgeability. Unlinkability
+derives from the request privacy properties of the VOPRF, which ensures that a malicious server learns
+nothing about a client’s inputx nor can they link (x,y ) to a particular issuance query. Unforgeability derives
+from the pseudorandomness security of the VOPRF: given the ability to obtain q tokens, the adversary can
+at most compute q outputs of the VOPRF.
+However, one abuse of Privacy Pass not prevented by the current design is what we refer to as a hoarding
+attack, also called a farming attack [DGS+18]. A malicious user (or group of users) can gather a large number
+of tokens by running the token issuance protocol as many times as possible over some period of time. Later,
+the malicious user can redeem all the gathered tokens at once in an eﬀort to render the provided service
+unavailable in a (D)DoS attack (by, for example, overwhelming a website with expensive requests).
+One potential defense against hoarding attacks is to force periodic rotation of the VOPRF secret key,
+such as once per week. But this is clumsy because it requires clients to verify that key rotations are made
+legitimately: a server that rotates too often can violate unlinkability. In the limit, a malicious server could
+pick a separate pk for each client issuance, thereby completely violating unlinkability. Forcing clients to use
+gossip protocols (to verify that the same public keys are used) or using public ledgers to record public keys
+for monitoring purposes require further complicating infrastructure. Furthermore, keys are often stored and
+need to be deleted from secure storage locations (e.g., trusted hardware) and replaced with new ones. This
+process is prone to failure and can lead to potential leaks.
+Use of a veriﬁable POPRF provides a simpler, more elegant solution. Tokens can be bound to a public
+input t that lets the server and client agree upon a scope for token issuance. In this case, one replaces
+22
+
+the Privacy Pass’ 2HashDH.Ev(sk,x ) with DY.Ev(sk,t,x ) in both the issuance and redemption phases. One
+could use as t a coarse timestamp, such as the current day or week at which an issuance occurred, and then
+redemption could enforce a policy about the staleness of tokens, forcing them to be redeemed within some
+time period. Alternatively, one could imagine using t to bind issuance and redemption to the client’s general
+network location, e.g., it’s autonomous system number (ASN).
+We note that all these hoarding mitigations reduce the anonymity set of a redemption to only the clients
+issued tokens under t. This is true also for the key rotation approach, reducing the anonymity set to clients
+that were issued tokens under the particular public key. Some loss of privacy is fundamental to restricted
+token use, and choosing how to make use of t requires care and further work to identify best practices.
+Nevertheless, POPRFs provide a degree of ﬂexibility that easily allows a variety of choices.
+7.2 Private Set Membership and Breach Alerting
+One widely deployed use of OPRFs is for password breach alerting (also called compromised credential
+checking) [TPY+19,Hun]. These use an OPRF-based bucketized private set membership protocol [TPY +19,
+LPA+19] that works as follows. The server generates a long-lived 2HashDH secret key sk and computes
+yu,pw = 2HashDH.Ev(sk,u,pw ) for each username, password pair (u,pw )∈D. Here D is a breach database
+of known-compromised pairs. Then, to perform a lookup for ( u∗,pw∗), the client sends a truncated hash of
+the username that forms a bucket identiﬁer β = H(u∗), as well as a blind evaluation request for the client’s
+username, password pair ( u∗,pw∗) that they want to check. The server computes the OPRF response
+and sends it back along with the bucket B ={yu,pw| H(u) = β} of values that have matching truncated
+username hash. The client ﬁnishes computing y∗ = 2HashDH.Ev(sk,u∗,pw∗) and checks if y∗∈ B. If so,
+their credential is known to be compromised; otherwise, it is not.
+In the currently deployed protocols, there is no way to enforce that the client’s query indicates the correct
+bucket identiﬁerB. Instead, they could query for b′ = H(u′) foru′⁄=u∗ and complete the protocol execution
+checking for values in some other bucket. Whether this opens up password breach alerting services to abuse
+is not clear.
+Nevertheless, we observe that replacing the OPRF with a POPRF provides a simple way to cryptograph-
+ically bind the buckets to particular bucket identiﬁers, by setting t = β. One could similarly do so using
+per-bucket secret keys skβ for a standard OPRF, but this would complicate key management.
+7.3 OPAQUE
+As mentioned in the introduction, OPAQUE [JKX18] is a strong aPAKE protocol (SaPAKE) that provides
+password-based mutual authentication in a client-server setting without having to rely on Public Key Infras-
+tructure (PKI). It provides security against pre-computation attacks upon server compromise, and increases
+the protection against oﬄine dictionary attacks, as an attacker will have to perform an exhaustive per-user
+attack upon server’s data compromise. OPAQUE is a protocol also amenable to a multi-server distributed
+implementation where an oﬄine dictionary attack is only possible if a threshold of servers is compromised.
+OPAQUE can be thought of as a protocol that works as a “compiler” by transforming a suitable AKE
+protocol (resistant to key compromise impersonation attacks and forward secrecy) into a secure aPAKE
+protocol using an OPRF. Current implementations use 2HashDH. It consists of two phases: an oﬄine
+registration phase and an online authenticated key exchange phase.
+The purpose of the oﬄine phase is to register a user’s account using their unique user identity and
+their password. The user identity could be a username or email address. To do so, the user opaquely
+registers its password without the server ever knowing it. The client and server obliviously compute rwd =
+2HashDH.Ev(sku,x ), where x is the user’s password and sku is a server’s random, per-user generated OPRF
+secret key. The output of this functionality, rwd, is used to encrypt its AKE private key. The resulting
+ciphertext is stored on the server-side alongside with other user’s credentials, such as its corresponding user
+id. The server will store, as well, the per-user OPRF key sku used to generate rwd.
+To perform online authentication, the client and server obliviously recompute rwd, enabling the client to
+recover their AKE private key by decrypting the ciphertext (sent back to the client during the OPRF ﬂows),
+and complete a (now password-authenticated) AKE exchange.
+23
+
+A complexity for deployment of OPAQUE is that the server has to maintain and keep a consistent view
+of the per-user OPRF keys and associated AKE private key ciphertexts. Implementation vulnerabilities may
+arise should servers incorrectly use the same OPRF key across multiple users, allowing potentially for cross-
+user attacks that allow logging in as the wrong user. Implementations are also likely to store the per-user
+OPAQUE secret keys in the same user database alongside other per-user data, meaning that compromises
+that allow exﬁltrating the database (e.g., SQL injection) will reveal all information needed to brute-force
+recover passwords.
+One potential approach instead would be to, again, replace the per-user OPRF key sku with a POPRF
+with global sk and use the user identity as t. This would allow protecting sk by storing it in a separate
+hardened crypto service (similar to deployment models used in password hardening, see [ECS+15]) only once.
+One potential complication is that performing periodic key rotations for sk would be more challenging, since
+it would require somehow either resetting all users passwords (not reasonable in most contexts by asking
+users to reset) or rolling clients to new keys as they login by maintaining old sk for some period of time. In
+contrast, the per-user sku approach can selectively rotate OPRF keys for each user as needed.
+Acknowledgments
+The authors would like to thank Tjerand Silde and Martin Strand for discussions about their preprint.
+References
+[AF96] Masayuki Abe and Eiichiro Fujisaki. How to date blind signatures. In ASIACRYPT, volume
+1163 of Lecture Notes in Computer Science , pages 244–251. Springer, 1996.
+[AO00] Masayuki Abe and Tatsuaki Okamoto. Provably secure partially blind signatures. In CRYPTO,
+volume 1880 of Lecture Notes in Computer Science , pages 271–286. Springer, 2000.
+[BFL20] Balthazar Bauer, Georg Fuchsbauer, and Julian Loss. A classiﬁcation of computational as-
+sumptions in the algebraic group model. In CRYPTO (2), volume 12171 of Lecture Notes in
+Computer Science, pages 121–151. Springer, 2020.
+[BFP21] Balthazar Bauer, Georg Fuchsbauer, and Antoine Plouviez. The one-more discrete logarithm
+assumption in the generic group model. IACR Cryptol. ePrint Arch. , 2021:866, 2021.
+[BLL+21] Fabrice Benhamouda, Tancr` ede Lepoint, Julian Loss, Michele Orr` u, and Mariana Raykova. On
+the (in)security of ROS. In EUROCRYPT (1), volume 12696 of Lecture Notes in Computer
+Science, pages 33–53. Springer, 2021.
+[BM93] Steven Bellovin and Michael Merritt. Augmented encrypted key exchange: a password based
+protocol secure against dictionary attacks and password ﬁle compromise. In CCS, pages 244–
+250. ACM, 1993.
+[BNPS03] Mihir Bellare, Chanathip Namprempre, David Pointcheval, and Michael Semanko. The one-
+more-rsa-inversion problems and the security of chaum’s blind signature scheme. J. Cryptol.,
+16(3):185–215, 2003.
+[Bol03] Alexandra Boldyreva. Threshold signatures, multisignatures and blind signatures based on the
+gap-diﬃe-hellman-group signature scheme. In Public Key Cryptography, volume 2567 of Lecture
+Notes in Computer Science , pages 31–46. Springer, 2003.
+[BR06] Mihir Bellare and Phillip Rogaway. The security of triple encryption and a framework for
+code-based game-playing proofs. In EUROCRYPT, volume 4004 of Lecture Notes in Computer
+Science, pages 409–426. Springer, 2006.
+[BS17] Dan Boneh and Victor Shoup. A Graduate Course in Applied Cryptography. 2017. Version 0.4.
+24
+
+[Cam98] Jan Camenisch. Group signature schemes and payment systems based on the discrete logarithm
+problem. PhD thesis, ETH Zurich, Z¨ urich, Switzerland, 1998.
+[CDFH21] Soﬁa Celi, Alex Davidson, and Armando Faz-Hernndez. Privacy Pass Protocol Speciﬁcation.
+Internet-Draft draft-ietf-privacypass-protocol-00, Internet Engineering Task Force, January
+2021. Work in Progress.
+[Che06] Jung Hee Cheon. Security analysis of the strong diﬃe-hellman problem. In EUROCRYPT,
+volume 4004 of Lecture Notes in Computer Science , pages 1–11. Springer, 2006.
+[CL04] Jan Camenisch and Anna Lysyanskaya. Signature schemes and anonymous credentials from
+bilinear maps. In CRYPTO, volume 3152 of Lecture Notes in Computer Science , pages 56–72.
+Springer, 2004.
+[CMZ14] Melissa Chase, Sarah Meiklejohn, and Greg Zaverucha. Algebraic macs and keyed-veriﬁcation
+anonymous credentials. In CCS, pages 1205–1216. ACM, 2014.
+[CP92] David Chaum and Torben P. Pedersen. Wallet databases with observers. In CRYPTO, volume
+740 of Lecture Notes in Computer Science , pages 89–105. Springer, 1992.
+[CPZ20] Melissa Chase, Trevor Perrin, and Greg Zaverucha. The signal private group system and
+anonymous credentials supporting eﬃcient veriﬁable encryption. In CCS, pages 1445–1459.
+ACM, 2020.
+[CS03] Jan Camenisch and Victor Shoup. Practical veriﬁable encryption and decryption of discrete
+logarithms. In CRYPTO, volume 2729 of Lecture Notes in Computer Science , pages 126–144.
+Springer, 2003.
+[DFHSW20] Alex Davidson, Armando Faz-Hernndez, Nick Sullivan, and Christopher A. Wood. Oblivious
+Pseudorandom Functions (OPRFs) using Prime-Order Groups. Internet-Draft draft-irtf-cfrg-
+voprf-05, Internet Engineering Task Force, November 2020. Work in Progress.
+[DGS+18] Alex Davidson, Ian Goldberg, Nick Sullivan, George Tankersley, and Filippo Valsorda. Privacy
+pass: Bypassing internet challenges anonymously.Proc. Priv. Enhancing Technol., 2018(3):164–
+180, 2018.
+[dVGT+20] Henry de Valence, Jack Grigg, George Tankersley, Filippo Valsorda, Isis Lovecruft, and Mike
+Hamburg. The ristretto255 and decaf448 Groups. Internet-Draft draft-irtf-cfrg-ristretto255-
+decaf448-00, Internet Engineering Task Force, October 2020. Work in Progress.
+[DY05] Yevgeniy Dodis and Aleksandr Yampolskiy. A veriﬁable random function with short proofs and
+keys. In Public Key Cryptography , volume 3386 of Lecture Notes in Computer Science , pages
+416–431. Springer, 2005.
+[ECS+15] Adam Everspaugh, Rahul Chatterjee, Samuel Scott, Ari Juels, and Thomas Ristenpart. The
+pythia PRF service. In 24th USENIX Security Symposium (USENIX Security 15) , pages 547–
+562. USENIX Association, 2015.
+[FHK19] Armando Faz-Hernndez and Kris Kwiatkowski. Introducing CIRCL: An Advanced Crypto-
+graphic Library. Cloudﬂare, June 2019. https://github.com/cloudflare/circl.
+[FIPR05] Michael J. Freedman, Yuval Ishai, Benny Pinkas, and Omer Reingold. Keyword search and
+oblivious pseudorandom functions. In TCC, volume 3378 of Lecture Notes in Computer Science,
+pages 303–324. Springer, 2005.
+[Fis06] Marc Fischlin. Round-optimal composable blind signatures in the common reference string
+model. In CRYPTO, volume 4117 of Lecture Notes in Computer Science, pages 60–77. Springer,
+2006.
+25
+
+[FKL18] Georg Fuchsbauer, Eike Kiltz, and Julian Loss. The algebraic group model and its applications.
+In CRYPTO (2), volume 10992 of Lecture Notes in Computer Science , pages 33–62. Springer,
+2018.
+[FPS20] Georg Fuchsbauer, Antoine Plouviez, and Yannick Seurin. Blind schnorr signatures and signed
+elgamal encryption in the algebraic group model. InEUROCRYPT (2), volume 12106 ofLecture
+Notes in Computer Science , pages 63–95. Springer, 2020.
+[HIJ+21] Sharon Huang, Subodh Iyengar, Sundar Jeyaraman, Shiv Kushwah, Chen-Kuei Lee, Zutian
+Luo, Payman Mohassel, Ananth Raghunathan, Shaahid Shaikh, Yen-Chieh Sung, and Albert
+Zhang. PrivateStats: De-Identiﬁed Authenticated Logging at Scale, January 2021.
+[HKL19] Eduard Hauck, Eike Kiltz, and Julian Loss. A modular treatment of blind signatures from
+identiﬁcation schemes. In EUROCRYPT (3), volume 11478 of Lecture Notes in Computer
+Science, pages 345–375. Springer, 2019.
+[Hun] Troy Hunt. Have i been pwned. https://haveibeenpwned.com/.
+[JKK14] Stanislaw Jarecki, Aggelos Kiayias, and Hugo Krawczyk. Round-optimal password-protected
+secret sharing and T-PAKE in the password-only model. In ASIACRYPT (2), volume 8874 of
+Lecture Notes in Computer Science , pages 233–253. Springer, 2014.
+[JKX18] Stanislaw Jarecki, Hugo Krawczyk, and Jiayu Xu. OPAQUE: an asymmetric PAKE protocol
+secure against pre-computation attacks. In EUROCRYPT (3), volume 10822 of Lecture Notes
+in Computer Science , pages 456–486. Springer, 2018.
+[JKX21] Stanislaw Jarecki, Hugo Krawczyk, and Jiayu Xu. On the (in)security of the diﬃe-hellman
+oblivious PRF with multiplicative blinding. In Public Key Cryptography (2) , volume 12711 of
+Lecture Notes in Computer Science , pages 380–409. Springer, 2021.
+[JL09] Stanislaw Jarecki and Xiaomin Liu. Eﬃcient oblivious pseudorandom function with applications
+to adaptive OT and secure computation of set intersection. In TCC, volume 5444 of Lecture
+Notes in Computer Science , pages 577–594. Springer, 2009.
+[JT20] Joseph Jaeger and Nirvan Tyagi. Handling adaptive compromise for practical encryption
+schemes. In CRYPTO (1), volume 12170 of Lecture Notes in Computer Science , pages 3–32.
+Springer, 2020.
+[KLOR20] Ben Kreuter, Tancr` ede Lepoint, Michele Orr` u, and Mariana Raykova. Anonymous tokens with
+private metadata bit. In CRYPTO (1), volume 12170 of Lecture Notes in Computer Science ,
+pages 308–336. Springer, 2020.
+[KLW21] Hugo Krawczyk, Kevin Lewi, and Christopher A. Wood. The OPAQUE Asymmetric PAKE
+Protocol. Internet-Draft draft-irtf-cfrg-opaque-02, Internet Engineering Task Force, February
+2021. Work in Progress.
+[KZ08] Aggelos Kiayias and Hong-Sheng Zhou. Equivocal blind signatures and adaptive uc-security.
+In TCC, volume 4948 of Lecture Notes in Computer Science , pages 340–355. Springer, 2008.
+[LPA+19] Lucy Li, Bijeeta Pal, Junade Ali, Nick Sullivan, Rahul Chatterjee, and Thomas Ristenpart.
+Protocols for checking compromised credentials. In CCS, pages 1387–1403. ACM, 2019.
+[Mau05] Ueli M. Maurer. Abstract models of computation in cryptography. In Nigel P. Smart, editor,
+Cryptography and Coding, 10th IMA International Conference, Cirencester, UK, December 19-
+21, 2005, Proceedings, volume 3796 of Lecture Notes in Computer Science, pages 1–12. Springer,
+2005.
+[MPR+20] Peihan Miao, Sarvar Patel, Mariana Raykova, Karn Seth, and Moti Yung. Two-sided malicious
+security for private intersection-sum with cardinality. InCRYPTO (3), volume 12172 of Lecture
+Notes in Computer Science , pages 3–33. Springer, 2020.
+26
+
+[NR97] Moni Naor and Omer Reingold. Number-theoretic constructions of eﬃcient pseudo-random
+functions. In FOCS, pages 458–467. IEEE Computer Society, 1997.
+[Sho97] Victor Shoup. Lower bounds for discrete logarithms and related problems. In Walter Fumy,
+editor, EUROCRYPT, volume 1233 of Lecture Notes in Computer Science , pages 256–266.
+Springer, 1997.
+[SS21] Tjerand Silde and Martin Strand. Anonymous tokens with public metadata and applications
+to private contact tracing. IACR Cryptol. ePrint Arch. , 2021:203, 2021.
+[TPY+19] Kurt Thomas, Jennifer Pullman, Kevin Yeo, Ananth Raghunathan, Patrick Gage Kelley, Luca
+Invernizzi, Borbala Benko, Tadek Pietraszek, Sarvar Patel, Dan Boneh, and Elie Bursztein.
+Protecting accounts from credential stuﬃng with password breach alerting. InUSENIX Security
+Symposium, pages 1556–1571. USENIX Association, 2019.
+[WTKW20] John Wilander, Erik Taubeneck, Andrew Knox, and Chris Wood. Consider using blinded
+signatures for fraud prevention - Private Click Measurement, 2020. https://github.com/
+privacycg/private-click-measurement/issues/41.
+[ZSS03] Fangguo Zhang, Reihaneh Safavi-Naini, and Willy Susilo. Eﬃcient veriﬁably encrypted sig-
+nature and partially blind signature from bilinear pairings. In INDOCRYPT, volume 2904 of
+Lecture Notes in Computer Science , pages 191–204. Springer, 2003.
+[ZSS04] Fangguo Zhang, Reihaneh Safavi-Naini, and Willy Susilo. An eﬃcient signature scheme from
+bilinear pairings and its applications. In Public Key Cryptography , volume 2947 of Lecture
+Notes in Computer Science , pages 277–290. Springer, 2004.
+A Security of (m, n)-OM-Gap-SDHI
+Proof of Of Theorem 2: This proof proceeds in two parts. (1) First, we present Auber and argue that
+it almost perfectly simulates the (m,n )-OM-Gap-SDHI game forAsdhi, up to a small statistical diﬀerence.
+(2) Second, we argue that ifAsdhi outputs a set of values that wins the (m,n )-OM-Gap-SDHI game, it must
+be that at least one of those values has a non-trivial representation in the exponent that wins the m-Uber
+game.
+A.1 Simulation of (m, n)-OM-Gap-SDHI environment
+We construct adversaryAuber as shown in Figure 9. The adversary ﬁrst constructs a polynomial G(⃗X)←∏n
+i (X0 +ci)qi from the chosen c values in the ﬁrst stage of Asdhi. The adversary receives an evaluation
+ˆg =gG(⃗ x) from its Ev oracle that it will pass as the generator in its simulation to the second stage of Asdhi.
+The public key ˆgx0 is simulated by evaluating X0·G(⃗X); and the m challenge points will each be simulated
+with additional variables Xi for i∈ [1,m ] by evaluating polynomial Xi·G(⃗X).
+To simulate the SDH oracle on input (Y,i ), ﬁrst assume that Auber knows the polynomial P (⃗X) such that
+Y = gP(⃗ x). We will show shortly how Auber can compute P (⃗X) from the algebraic representation of Y .
+Given P (⃗X),Auber simulates by computing the polynomial P (⃗X)/(X0 +ci) and returning its evaluation.
+Now to compute P (⃗X),Auber takes the algebraic representation of Y in terms of elements given to Asdhi.
+The elements given toAsdhi are the initial elements plus the elements output from previous queries to SDH.
+The polynomial exponents of all of these elements are known toAuber, so they can be combined via the linear
+combination indicated by the algebraic representation to compute P (⃗X). Furthermore, P (⃗X)/(X0 +ci) will
+always be computable due to the construction of G(⃗X) including qi factors of (X0 +ci) where qi is the
+maximum number of queries forci to SDH. All initial elements have the polynomial G(⃗X) as a factor of the
+exponent, and while subsequent elements returned from SDH divide out diﬀerent factors of (X0 +cj), they
+27
+
+AdversaryAEv,Decide
+uber (p, G,g )
+(stA, [ci]n
+i )←$A1(p, G)
+G(⃗X)←∏n
+i (X0 +ci)qi
+ˆg← Ev(G(⃗X)) ; ˆX← Ev(X0·G(⃗X))
+[ ˆA]m
+i=1← [Ev(Xi·G(⃗X))]m
+i=1
+(γ, [Zi,αi]𝓁
+i)←$ASDH,SDDH
+2 (ˆg, ˆX, [ ˆA]m
+i :stA)
+j←$ N𝓁 ; µ(⃗X) =Xαj (X0 +cγ)qγ−1∏n
+i⁄=γ(X0 +ci)qi
+Return (Zj,µ (⃗X))
+Oracle SDH(Y,i )
+Compute P(⃗X) :Y =gP(⃗ x) from representation of Y
+Z← Ev(P(⃗X)/(X0 +ci))
+Return Z
+Oracle SDDH(Y,Z,i )
+P(A1,A 2,A 3)← (A1 +ci)·A3−A2
+Return Decide(P(A1,A 2,A 3), [ ˆX,Y,Z ])
+Figure 9: Adversary Auber in the security proof of (m,n )-OM-Gap-SDHI.
+never exhaust a factor ( X0 +cj) unless the maximum number of queries for that index has been reached.
+Lastly,Auber simulates SDDH by passing the query on to its own Decide oracle.
+As long as the maximum query counts that Auber uses to create G(⃗X) are abided by, the environment for
+Asdhi is almost perfectly simulated, as we argue below. Moreover,Auber selects an output ofAsdhi at random
+and returns it along with its polynomial representation.
+Concretely, let π0 be the probability that at least one of the values in the output of Asdhi has a non-trivial
+representation in the exponent that wins the m-Uber game in the original game ( m,n )-OM-Gap-SDHI.
+Let π1 be the probability that the same happens within the simulation of Auber. Then, we argue that
+π0−π1≤ q
+p .
+This can be seen as follows: The only diﬀerence between the simulation and the original game is that the
+former uses (ˆg, ˆX), where ˆg = gG(x) and ˆX = gx·G(x) for a x←$ Zp and a polynomial G(X) of degree q,
+instead of (g,gx) in the latter, where g is a random generator. In particular, π0−π1 is upper bounded by
+the statistical distance between (y·G(x),y·x·G(x)) and (y,y·x), where (x,y )←$ Z2
+p. Now, let S⊆ Z2
+p be
+the set pairs (x,y ) such that G(x)⁄= 0. For any (z1,z 2)∈ Z2
+p, and (x,y )←$S, we now have
+Pr [ (y,y·x) = (z1,z 2) ] = Pr [ (y,z 1·x) = (z1,z 2) ]
+= Pr [ (y·G(x),z 1·x) = (z1,z 2) ] = Pr [ (y·G(x),y·x·G(x)) = (z1,z 2) ] .
+Therefore, the statistical distance is upper bounded by the probability that ( x,y )←$ Zp is in S, which in
+turn is the probability that G(x) = 0. The latter is at most q/p by the Schwartz-Zippel Lemma.
+In conclusion, the advantage ofAuber is
+Adv(m+1)-uber
+GGen,Auber
+(λ)≥ π1
+𝓁 ≥ π1
+qmax + 1≥ π0
+qmax + 1− q
+p(qmax + 1) ,
+because, without loss of generality, we can assume that 𝓁≤ qmax + 1. Below, we are going to prove that
+Adv(m,n)-om-gap-sdhi
+GGen,Asdhi
+(λ) =π0, which concludes the proof.
+A.2 Linear independence of winning elements
+Next, we argue that one of the strong Diﬃe-Hellman values output by a winning Asdhi corresponds to a
+group element with a non-trivial polynomial in the exponent, i.e., a polynomial that is linearly independent
+from all queried polynomials. Our ultimate goal will be to claim that if the adversary produces 𝓁 winning
+group elements for a value cγ having only queried SDH qγ < 𝓁 times, then one of the winning elements
+must have a non-trivial (linearly-independent) polynomial exponent from all group elements given to the
+adversary during initialization and as output from SDH.
+We will ﬁnd that it is easy to argue the linear independence of the initial group elements and winning
+elements. The main challenge we will face is reasoning about elements output from SDH. In previous
+28
+
+formulations of one-more assumptions [Bol03], the number of winning elements was required to be greater
+than the number of queries to the “one-more” oracle. In these cases, the typical proof strategy is show linear
+independence of the set of winning elements and initial elements – since this set is strictly larger than the set
+of query elements and initial elements, it must be that at least one winning element is linearly independent
+of the set of query elements and initial elements. However, this strategy will not work for OM-Gap-SDHI,
+which simply requires the number of winning elements to be greater than the number of queries for the
+chosen winning cγ.
+Intuitively, we would like to say that elements returned from SDH for other cj⁄=γ will not be helpful in
+constructing a winning element for cγ. If this is the case, then we can conclude by arguing that a set of
+qγ <𝓁 elements cannot construct a set of 𝓁 linearly-independent winning elements.
+Unfortunately, it is not immediately clear this is the case, as elements that were previously output for queries
+to cγ may be passed back in to SDH under a diﬀerent cj. This leads to the possibility that many elements
+returned from SDH (>q γ) may have a “dependence” oncγ. The main step in our proof shows that whenever
+a query to SDH on ci is made, the output element can be refactored as an element that only depends on
+the queried ci, regardless of whether the input element includes previous outputs from SDH dependent on
+other cj⁄=i.
+Rewriting transcript to separate ci dependence in SDH queries. First, we consider the polynomial
+exponent representation of group elements output from SDH given only queries to a single index ci. We will
+notate the exponent in its quotient form (note that the simulation multiplies all polynomial exponents by a
+least common multiple to remove quotients). We denote by τi the ith output from SDH in which the input
+may be a linear combination of any previousτj<i and initial valuesX1,...,X m, where we denote coeﬃcients
+with a. In the below we denote Yi as arbitrary linear combinations of the formal variables X0,X 1,...,X m
+along with a constant. Without loss of generality, we will denote ci =c1.
+τ1 = Y1
+X0 +c1
+(binary string representation: 1)
+τ2 =Y2 +a2,1τ1
+X0 +c1
+= a2,1Y1
+(X0 +c1)2 + Y2
+X0 +c1
+(11, 10)
+τ3 =Y3 +a3,2τ2 +a3,1τ1
+X0 +c1
+= a3,2a2,1Y1
+(X0 +c1)3 + a3,2Y2
+(X0 +c1)2 + a3,1Y1
+(X0 +c1)2 + Y3
+X0 +c1
+(111, 110, 101, 100)
+τ4 =Y4 +a4,3τ3 +a4,2τ2 +a4,1τ1
+X0 +c1
+= a4,3a3,2a2,1Y1
+(X0 +c1)4 + a4,3a3,2Y2
+(X0 +c1)3 + a4,3a3,1Y1
+(X0 +c1)3 + a4,3Y3
+(X0 +c1)2 (1111, 1110, 1101, 1100)
++ a4,2a2,1Y1
+(X0 +c1)3 + a4,2Y2
+(X0 +c1)2 + a4,1Y1
+(X0 +c1)2 + Y4
+X0 +c1
+(1011, 1010, 1001, 1000)
+We observe that each term in τi can be interpreted interpreted uniquely as mapping from a binary string.
+This leads us to the following closed form expression. We deﬁne ω(s) to take a positive integer s and
+return the list of indices at which the binary string representation of s has a 1. For example, 6 = 110 has
+ω(6) = [3, 2] (we use 1-indexing and reverse the list to make the expression below easier to parse). We deﬁne
+the mapping of positive integer s to term in τi as Ω(s) (deﬁned below). The coeﬃcients for the term are
+determined by the locations of the 1-bits in the binary string and the power of the denominator is determined
+by the number of 1-bits in the string. The Yj value is determined by the least signiﬁcant 1-bit set in the
+string. Intuitively, the locations of the 1-bits correspond to which queries to SDH the term has been passed
+29
+
+(and repassed) into.
+Ω(s) =
+
+
+
+Ylg(s)+1
+X0 +c1
+if∃i s.t. s = 2i
+Yω(s)|ω(s)|·∏|ω(s)|−1
+k=1 aω(s)k,ω(s)k+1
+(X0 +c1)|ω(s)| o.w.
+(1)
+Then, we observe that the terms included in τi correspond to the terms for binary strings 2i−1 to 2i− 1. We
+get the following expression for τi based on the above interpretation:
+τi =
+Yi +∑i−1
+j=1ai,jτj
+X0 +c1
+=
+2i−1∑
+s=2i−1
+Ω(s) (2)
+The above form follows from an induction argument on the form of all τj<i. Multiplying τj byai,j/(X0 +c1)
+corresponds exactly to transforming all Ω(s′) fors′∈ [2j−1, 2j−1] to Ω(s) fors∈ [2i−1 +2j−1, 2i−1 +2j−1].
+Summing up the terms performing this transformation on all τj<i corresponds to all s∈ [2i−1 + 1, 2i− 1],
+and the ﬁnal term corresponding to s = 2i−1 is added separately.
+Lastly, we rearrange the terms of τi grouping them byYj which will be useful later on:
+τi =
+2i−1∑
+s=2i−1
+Ω(s)
+= Ω(2i−1) +
+i−1∑
+j=1
+2i−j−1∑
+s=2i−j−1
+Ω(2j∗s + 2j−1)
+= Yi
+X0 +c1
++
+i−1∑
+j=1
+2i−j−1∑
+s=2i−j−1
+Yj·∏|ω(2j∗s+2j−1)|−1
+k=1 aω(2j∗s+2j−1)k,ω(2j∗s+2j−1)k+1
+(X0 +c1)|ω(2j∗s+2j−1)| (3)
+Next, we consider a query made to a diﬀerent cj⁄=1, following a transcript of m queries τ = [τi]m
+i=1 made to
+c1. Without loss of generality, we will denote cj =c2. This (m + 1)th query output takes the following form:
+ˆτm+1 =Ym+1 +∑m
+i=1am+1,iτi
+X0 +c2
+The above is the same asτm+1 (Equation 2) except the numerator is divided by (X0+c2) instead of (X0+c1).
+Thus, we can rewrite using the same binary string notation (again, grouped by Yj):
+ˆτm+1 =Ym+1 +∑m
+i=1am+1,iτi
+X0 +c2
+= X0 +c1
+X0 +c2
+·τm+1
+= X0 +c1
+X0 +c2
+
+
+2i−1∑
+s=2i−1
+Ω(s)
+
+
+= X0 +c1
+X0 +c2
+
+Ω(2i−1) +
+i−1∑
+j=1
+2i−j−1∑
+s=2i−j−1
+Ω(2j∗s + 2j−1)
+
+
+= Ym+1
+X0 +c2
++
+m∑
+j=1
+2m−j+1−1∑
+s=2m−j
+Yj·∏|ω(2j∗s+2j−1)|−1
+k=1 aω(2j∗s+2j−1)k,ω(2j∗s+2j−1)k+1
+(X0 +c1)|ω(2j∗s+2j−1)|−1(X0 +c2)
+30
+
+The query output ˆτm+1 is a sum of terms with mixed ( X0 +c1) and (X0 +c2) factors in the denominator.
+We will show that ˆτm+1 to τ′
+m+1 of the form:
+τ′
+m+1 =Ym+1 +∑m
+i=1biYi
+X0 +c2
+, (4)
+for some set of coeﬃcients b1,...,b m, such that the span of the query outputs is preserved:
+Claim 8 We provide [bi]m
+i=1 to construct τ′
+m+1 (Equation 4) such that
+Span([τ1,...,τ m, ˆτm+1]) = Span([τ1,...,τ m,τ′
+m+1]).
+Proof of Claim: We choose [bi]m
+i=1 such that ˆτm+1∈ Span([τ1,...,τ m,τ′
+m+1]). This is suﬃcient to complete
+the claim that the two spans are equivalent. We solve the following system of equations:
+ˆτm+1 =αm+1τ′
+m+1 +
+m∑
+i=1
+αiτi
+=
+m+1∑
+i=1
+βi
+Yi
+X0 +c2
++
+m∑
+i=1
+αiτi (5)
+for unknowns α1,...,α m+1,b 1,...,b m, or equivalently, when reformulated, for unknowns α1,...,α m, β1,
+..., βm+1, where βm+1 =αm+1 and βi⁄=m+1 =αm+1bi. Now consider the expanded Equation 5:
+Ym+1
+X0 +c2
++
+m∑
+j=1
+2m−j+1−1∑
+s=2m−j
+Yj·∏|ω(2j∗s+2j−1)|−1
+k=1 aω(2j∗s+2j−1)k,ω(2j∗s+2j−1)k+1
+(X0 +c1)|ω(2j∗s+2j−1)|−1(X0 +c2)
+=
+m+1∑
+i=1
+βi
+Yi
+X0 +c2
++
+m∑
+i=1
+αi
+
+ Yi
+X0 +c1
++
+i−1∑
+j=1
+2i−j−1∑
+s=2i−j−1
+Yj·∏|ω(2j∗s+2j−1)|−1
+k=1 aω(2j∗s+2j−1)k,ω(2j∗s+2j−1)k+1
+(X0 +c1)|ω(2j∗s+2j−1)|
+
+
+One approach for solving this equation is by solving each of the partial equations, equating the coeﬃcients
+for a particularYi. The partial equation for Ym+1 is trivial and is easily solvable by setting βm+1 = 1:
+Ym+1
+X0 +c2
+=βm+1
+Ym+1
+X0 +c2
+The other partial equations for 1≤i≤m are more complex. We refer to the partial equation for Yi asPEi,
+and it is deﬁned as follows:
+2m−i+1−1∑
+s=2m−i
+Yi·∏|ω(2i∗s+2i−1)|−1
+k=1 aω(2i∗s+2i−1)k,ω(2i∗s+2i−1)k+1
+(X0 +c1)|ω(2i∗s+2i−1)|−1(X0 +c2)
+= βiYi
+X0 +c2
++ αiYi
+X0 +c1
++
+m∑
+j=i+1
+2j−i−1∑
+s=2j−i−1
+Yi·αj·∏|ω(2i∗s+2i−1)|−1
+k=1 aω(2i∗s+2i−1)k,ω(2i∗s+2i−1)k+1
+(X0 +c1)|ω(2i∗s+2i−1)|
+Note that Yi can be canceled out in PEi. We next show that there exists (and that we can solve for) a
+satisfying assignment of variables [αi]m
+i=1 and [βi]m+1
+i=1 for Equation 5 through a strong induction argument
+on the satisﬁability of the partial equations.
+Induction hypothesis. H(i): There exists a satisfying assignment of variables [ αj]m
+j=i and [βj]m+1
+j=i for the
+system of equations PEm,PE m−1,...,PE i.
+Note thatH(1) implies that Equation 5 is satisﬁable. We proceed by proving the base case, H(m), and then
+proving the induction step showing that H(i + 1)⇒H(i).
+31
+
+Base case. We proveH(m). Consider PEm:
+βm
+X0 +c2
++ αm
+X0 +c1
+= am+1,m
+(X0 +c1)(X0 +c2)
+We solvePEm as follows:
+βm(X0 +c1) +αm(X0 +c2) =am+1,m
+βm +αm = 0
+βmc1 +αmc2 =am+1,m
+βm = am+1,m
+c1−c2
+αm = am+1,m
+c2−c1
+Induction step. We prove H(i + 1)⇒ H(i). Consider the left hand side of PEi. It contains terms for
+(m + 1)-length binary strings, where * is a wildcard for either 0/1:
+1‖ *m−i‖ 1‖ 0i−1
+Now consider the left hand side of PEj for j >i. It contains terms for the following binary strings:
+1‖ *m−j‖ 1‖ 0j−i‖ 0i−1
+We observe that if we ﬂip the ith least signiﬁcant bit of the binary strings from PEj, we obtain a subset of
+binary strings from PEi. In fact, if we do this for all PEj for m≥j >i, we obtain all binary strings from
+PEi except for 1‖ 0m−i‖ 1‖ 0i−1.
+A similar cancellation occurs on the right hand side of the equations. The right hand side of PEi contains
+terms for the m-length binary strings:
+*m−i‖ 1‖ 0i−1
+And the right hand side of PEj for m≥j >i contains terms for the m-length binary strings:
+*m−j‖ 1‖ 0j−i‖ 0i−1
+Again, we observe that if we ﬂip theith least signiﬁcant bit of binary strings for allPEj, we obtain all binary
+strings from PEi except for 0m−i‖ 1‖ 0i−1.
+This leads us to the following approach. We sum up all PEj for m ≥ j > i, transforming each one
+appropriately to “ﬂip the ith bit” of all represented binary strings. This sum can then be subtracted
+from PEi to cancel out all terms on the left hand side of the equation except for the term corresponding to
+1‖ 0m−i‖ 1‖ 0i−1, and most terms on the right hand side of the equation except for the term corresponding
+to 0m−i‖ 1‖ 0i−1 and a set of terms βu(X0 +c1)m−i+1 in each PEu that does not correspond to a binary
+string.
+We create the summed equation:
+m∑
+j=i+1
+aj,i
+X0 +c1
+·PEj (6)
+The following equation is what remains after taking the diﬀerence of PEi and summed Equation 6:
+am+1,i
+(X0 +c1)(X0 +c2) = αi
+X0 +c1
++ βi
+X0 +c2
++
+m∑
+j=i+1
+βjaj,i
+(X0 +c1)(X0 +c2)
+32
+
+By induction hypothesis H(i + 1), we have that there exists a satisfying assignment for βj for j >i. We ﬁx
+those variables, then solve the above equation for αi and βi:
+βi(X0 +c1) +αi(X0 +c2) =am+1,i−
+m∑
+j=i+1
+βjaj,i
+βi +αi = 0
+βic1 +αic2 =am+1,i−
+m∑
+j=i+1
+βjaj,i
+βi =
+am+1,i−∑m
+j=i+1βjaj,i
+c1−c2
+αi =
+am+1,i−∑m
+j=i+1βjaj,i
+c2−c1
+This concludes proof of the induction hypothesis and of the claim.
+Generalizing transcript rewrite to all ci. Next, we argue that the above claim, which holds for a
+transcript of queries to c1 followed by one query to c2, generalizes to a transcript that makes queries to
+arbitrary diﬀerent ci values. We assume the transcript up until this point is made up of elements that are
+“separated by cj”, i.e., each only have powers of a single (X0 +cj) in the denominator. Given this, we show
+that a new query to any cv (taking in a linear combination of all previous elements of the transcript) can
+be rewritten so that it too only depends on powers of ( X0 +cv), such that the span of the full transcript is
+preserved.
+As such, we assume the transcript has elements of the following form, where a transcript element τi,j is the
+ith query to cj (following from Equation 2 and 3). Element τi,j depends only on previous τ1,j,...,τ i−1,j and
+all only have powers of (X0 +cj) in the denominator:
+τi,j =Yi,j +∑i−1
+u=1au,jτu,j
+X0 +cj
+= Yi,j
+X0 +cj
++
+i−1∑
+u=1
+2i−u−1∑
+s=2i−u−1
+Yu,j·∏|ω(2u∗s+2u−1)|−1
+k=1 aω(2u∗s+2u−1)k,ω(2u∗s+2u−1)k+1
+(X0 +cj)|ω(2u∗s+2u−1)| (7)
+A new query to cv will have the following output form, where qj denotes the number of queries that have
+been made to cj:
+τ′
+qv+1,v =
+Y′
+qv+1,v +∑n
+j=1
+∑qj
+i=1a′
+qv+1,v,i,jτi,j
+X0 +cv
+We show that we can replace this output with τqv+1,v of the following form which matches the form from
+Equation 7:
+τqv+1,v =
+Y′
+qv+1,v +∑n
+j=1
+j⁄=v
+∑qj
+i=1bi,jYi,j +∑qv
+i=1a′
+qv+1,v,i,vτi,v
+X0 +cv
+=Yqv+1,v +∑qv
+i=1ai,vτi,v
+X0 +cv
+whereYqv+1,v =Y′
+qv+1,v +
+n∑
+j=1
+j⁄=v
+qj∑
+i=1
+bi,jYi,j
+ai,v =a′
+qv+1,v,i,v
+33
+
+We want that the span of the new transcript is preserved by replacing the new output with the rewritten
+output, and thus we prove the following:
+Claim 9 We provide
+[
+[bi]qj
+i=1
+]n
+j=1 to construct τqv+1,v such that
+Span
+([[
+[τi,j]qj
+i=1
+]n
+j=1,τ′
+qv+1,v
+])
+= Span
+([[
+[τi,j]qj
+i=1
+]n
+j=1,τqv+1,v
+])
+Proof of Claim: We prove the claim by providing αi,j and bi,j values such that:
+τ′
+qv+1,v =αqv+1,vτqv+1,v +
+n∑
+j=1
+qj∑
+i=1
+αi,jτi,j
+This is implied by our previous claim which shows that for each j⁄=v, we can ﬁnd αi,j and bi,j such that:
+qj∑
+i=1
+aqv+1,v,i,jτi,j
+X0 +cv
+=αqv+1,v
+( qj∑
+i=1
+bi,jYi,j
+X0 +cv
+)
++
+qj∑
+i=1
+αi,jτi,j
+This concludes the argument that any new query output can be rewritten to be in the form of Equation 7
+in which it only has powers of the queried cv in the denominator, while preserving the span of the query
+output transcript.
+Using rewritten transcript to show non-trivial winning element. We will continue to use the
+quotient notation, however, recall that in the simulation of the adversary’s environment (Section A.1), the
+rational fractions are multiplied by a least common multiple, ∏n
+i=1(X0 +ci)qi. The notions of independence
+we show for polynomial rational fractions hold true for the the polynomials once multiplied by the LCM as
+well.
+The adversary is given initial group elements which we represent as polynomial rational fractions as follows:
+ˆg↦→ 1, ˆX↦→ X0, [Ai]m
+i=1↦→ [Xi]m
+i=1. It is evident that these polynomials are linearly-independent as they
+each include a diﬀerent formal variable (with exception of ˆg which is the only element with a constant).
+The adversary will also receive group elements from the SDH oracle. We will denote the polynomial rational
+fraction outputs of the q =∑n
+i=1qi queries to SDH as [τ′
+i]q
+i=1.
+Lastly, the adversary will output a set of 𝓁 winning group elements for a selected γ, [Zi,αi]𝓁
+i, where 𝓁>q γ.
+These elements are represented by the following polynomial rational fractions:
+[ Xαi
+X0+cγ
+]𝓁
+i=1
+. These 𝓁 elements
+are linearly-independent as they each include a diﬀerent formal variable.
+We argue that at least one element from [Xαi/(X0 +cγ)]𝓁
+i=1 is linearly independent from the initial elements
+and SDH elements given to the adversary. If so, then Auber wins if it guesses correctly and the proof is
+complete. In other words, we want that:
+∃i∈ [1,𝓁 ] : Xαi
+X0 +cγ
+⁄∈ Span(
+[
+1, [Xi]m
+i=0, [τ′
+i]q
+i=1
+]
+)
+We use Claim 9 to rewrite the transcript τ′ into a new transcript τ that contains elements [[τi,j]qj
+i=1]n
+j=1 of
+form deﬁned in Equation 7. The transcript τ is built element by element by repeatedly applying Claim 9 to
+the next query in τ′. Ultimately we have that:
+Span([τ′
+i]q
+i=1) = Span(
+[
+[τi,j]qj
+i=1
+]n
+j=1)
+Span(
+[
+1, [Xi]m
+i=0, [τ′
+i]q
+i=1
+]
+) = Span(
+[
+1, [Xi]m
+i=0,
+[
+[τi,j]qj
+i=1
+]n
+j=1
+]
+)
+So instead we will show
+∃i∈ [1,𝓁 ] : Xαi
+X0 +cγ
+⁄∈ Span(
+[
+1, [Xi]m
+i=0,
+[
+[τi,j]qj
+i=1
+]n
+j=1
+]
+)
+34
+
+Next, consider a linear combination of the above that results in a winning element Xα/(X0 +cγ) with linear
+combination coeﬃcients r,si,ti,j:
+r· 1 +
+m∑
+i=0
+siXi +
+n∑
+j=1
+qj∑
+i=1
+ti,jτi,j = Xα
+X0 +cγ
+r· 1 +
+m∑
+i=0
+siXi +
+n∑
+j=1
+j⁄=γ
+qj∑
+i=1
+ti,jτi,j = Xα
+X0 +cγ
+−
+qγ∑
+i=1
+ti,γτi,γ (8)
+Now if we multiply both side of the above Equation 8 by the LCM expression ∏n
+i=1(X0 +ci)qi, the quotients
+are removed and we have an equation of two polynomials. By the structure of τi,j from Equation 7, we have
+that none of theτi,j forj⁄=γ have a (X0 +cγ) term in the denominator. Thus, the left hand side polynomial
+has a factor of (X0 +cγ)qγ.
+On the right hand side, because every τi,γ term has (X0 +cγ) in the denominator, ( X0 +cγ)qγ does not
+divide the right hand side polynomial. This implies that the two polynomials cannot be equal unless they
+are the zero polynomial, which is only possible if r, [si]m
+i=1 coeﬃcients are equal to 0.
+Thus, if Xα/(X0 +cγ)∈ Span(
+[
+1, [Xi]m
+i=0,
+[
+[τi,j]qj
+i=1
+]n
+j=1
+]
+), then it must be:
+qγ∑
+i=1
+ti,γτi,γ = Xα
+X0 +cγ
+However, since there are only qγ <𝓁 [τi,γ]qγ
+i=1 terms, they can at most generate a qγ-dimension space. Since
+the 𝓁 winning elements are linearly-independent and generate a 𝓁-dimension space, it is not possible that
+they can all be generated from a linear combination of [ τi,γ]qγ
+i=1. This concludes the proof.
+B Security Proofs for 3H
+For ease of reference, we restate the theorem here:
+Theorem 4 LetAprf be a P-model POPRF adversary against 3H with query budget (m,n, qE, ⃗ q, qH1, qH2,
+qH3, qH4). Then we give a H4-model adversaryAzk and adversaryAsdhi such that
+Advpo-prf
+3H,S[SΣ],P,Aprf
+(λ)≤ Advzk
+ΣR,R,H4,SΣ,Azk(λ) + Adv(m,n)-om-gap-sdhi
+GGen,Asdhi
+(λ) +n2
+p ,
+where S is the simulator deﬁned in Figure 10 that makes use of NIZK simulator SΣ. AdversaryAzk makesqH4
+queries to its random oracle and Asdhi has query budget (⃗ q,qH2). Further, T (Aprf)≈T (Azk)≈T (Asdhi).
+Proof: We bound the advantage of Aprf by bounding the advantage of each of a series of game hops. We
+deﬁne G0 = POPRFApo-prf,1
+3H,P,S (λ) and intermediate games G 1, G2, G3, G4, G5 to gradually transform the view
+of the adversary until G5 = POPRFApo-prf,0
+3H,P,S (λ). The most important games, G2−G4 are shown in Figure 11).
+There we use tables R1,R 2,R 3,R 4 for RO simulation, and we restrict collisions in R3 (as described below)
+by sampling from Zp without replacement, which we do by deﬁning Zp\R3 to be the set of points in Zp
+that do not appear in any entries of R3.
+The advantage bound follows from the following claims which we will justify:
+(1) |Pr[G0 = 1]− Pr[G1 = 1]|≤ n(n−1)
+2p
+(2) |Pr[G1 = 1]− Pr[G2 = 1]| = Advzk
+ΣR,R,RO4,Azk(λ)
+(3) |Pr[G2 = 1]− Pr[G3 = 1]| = 0
+(4) |Pr[G3 = 1]− Pr[G4 = 1]|≤ Adv
+(qH1,qH3)-om-gap-sdhi
+GGen,Asdhi
+(λ)
+35
+
+S.Init(λ,pp )
+R1← [·] ; R2← [·] ; R3← [·]
+sk←$ Zp
+stΣ←$ SΣ.Init(pp)
+stS← (pp, sk,R 1,R 2,R 3,st Σ)
+Return (stS,g sk)
+S.BlindEvLimEv(t, req : (pp, sk,R 1,R 2,R 3,st Σ))
+h←$ S.HLimEv
+3 (t :stS)
+B← req ; B′←B1/(sk+h)
+π←$ SΣ.Prove((g,g sk+h,B′,B ) :stΣ)
+Return (B′,π )
+S.HLimEv
+1 (x : (pp, sk,R 1,R 2,R 3,st Σ))
+If x⁄∈R1 then R1[x]←$ G
+Return R1[x]
+S.HLimEv
+2 (t,x,Y : (pp, sk,R 1,R 2,R 3,st Σ))
+If t⁄∈R3 then R3[x]←$ Zp
+If x⁄∈R1 then R1[x]←$ G
+If (t,x,Y )⁄∈R2 then
+If Y =R1[x]1/(sk+R3[t]) then R2[t,x,Y ]← LimEv(t,x )
+Else R2[t,x,Y ]←${0, 1}λ
+Return R2[t,x,Y ]
+S.HLimEv
+3 (x : (pp, sk,R 1,R 2,R 3,st Σ))
+If x⁄∈R3 then R3[x]←$ Zp
+Return R3[x]
+S.HLimEv
+4 (x : (pp, sk,R 1,R 2,R 3,st Σ))
+Return SΣ.H(x :stΣ)
+Figure 10: Simulator S[SΣ] for PRF security of 3H where SΣ is the zero knowledge simulator for ΣR.
+(5) |Pr[G4 = 1]− Pr[G5 = 1]|≤ n(n−1)
+2p
+Claim 1: We ﬁrst transition to a game G 1 in which we disallow collisions in the output of RO3, i.e., we
+replace sampling from Zp for new range values with sampling without replacement from Zp. Recall that at
+most n unique t values are queried by Aprf in the course of the game, and so a standard birthday analysis
+establishes the claim’s upper bound of n(n− 1)/2p.
+Claim 2: In G2, the proof generated in BlindEv is simulated along with the corresponding random oracle
+RO4. Since this is the only change between G 1 and G2, we can equate the distinguishing advantage between
+the two games to that of the zero-knowledge security game of ΣR. We construct Azk that runs G 1 and
+generates proofs using its Prove oracle and responds to queries to RO4 using its own Prim oracle.
+Claim 3: In G 3, the Ev oracle generates outputs independently from the random oracles and stores its
+choices in table R. For consistency, it must be that for t,x and Y = R1[x]1/(sk+R3[t]), the random output
+stored in R is the same as the one stored in R2 for responding to RO2 queries of (t,x,Y ). G 3 checks if this
+is the case in RO2, and if (t,x,Y ) are of the above form, it repairs R and R2 to be consistent. Thus, from
+the adversary’s perspective, there is no change between G 2 and G3.
+Claim 4: In G4, the repair between R andR2 in RO2 only occurs if there have been more calls to BlindEv
+on t than calls of valid ( t,x,Y ) tuples to RO2. Otherwise, a bad ﬂag is set and the oracle returns ⊥ to
+the adversary. This matches the functionality of S in POPRFApo-prf,0
+3H,P,S (λ) since the simulator is restricted to
+not run LimEv on t more than calls made to BlindEv on t. By an identical-until-bad argument via the
+fundamental lemma of game playing [BR06],
+|Pr[G3 = 1]− Pr[G4 = 1]|≤ Pr[bad = 1]
+where bad = 1 is the event that bad is sent in game G 4. We bound the probability of this event by the
+advantage of an adversaryAsdhi, i.e., if bad is set,Asdhi wins the (m,n )-OM-Gap-SDHI game.
+AdversaryAsdhi = (A1,A2) (shown in Figure 12) runs G4 with the help of the (m,n )-OM-Gap-SDHI game.
+The [Yi]m
+i group elements are used for the values returned by RO1. (This is often called “programming”
+RO1.) The n values [c]n
+i from Zp output by A1 for use in the strong Diﬃe-Hellman queries are used for
+the return values from RO3. By assumption on the query budget for Aprf, the number of Yi values and the
+number of ci values are suﬃcient for simulating the queries made by Aprf. And since both of these sets of
+values are chosen at random, they have the same distribution as the random oracle responses in G 4. Queries
+to BlindEv are answered by computing the strong Diﬃe-Hellman evaluation with the appropriate ci value
+using SDH. Note that Asdhi has query budget ⃗ qbecause by assumption Aprf queries at most ⃗ q1 times to
+36
+
+Games G2 , G3 , G4
+R1← [·] ; R2← [·] ; R3← [·]
+R← [·]
+i∗← 0 ; j∗← 0 ; bad← 0
+pp←$ 3H.Setup(λ)
+sk←$ Zp ; pk←gsk
+stΣ←$ SΣ.Init(pp)
+b′←$AP,Ev,BlindEv
+prf (pp, pk)
+Return b′
+Oracle Ev(t,x )
+If t⁄∈R3 then R3[t]←$ Zp\R3
+If x⁄∈R1 then R1[x]←$ G
+Y ←R1[x]1/(sk+R3[t])
+If (t,x,Y )⁄∈R2 then R2[t,x,Y ]←${0, 1}λ
+Z←R2[t,x,Y ]
+If (t,x )⁄∈R then
+R[t,x ]←${0, 1}λ
+Z←R[t,x ]
+Return Z
+Oracle BlindEv(t, req)
+If t⁄∈R3 then R3[t]←$ Zp\R3
+B← req ; B′←B1/(sk+R3[t])
+jt←jt + 1
+π←$ SΣ.Prove((g,g sk+h,B′,B ) :stΣ)
+Return (B′,π )
+Oracle H1(x)
+If x⁄∈R1 then R1[x]←$ G
+Return R1[x]
+Oracle H2(t,x,Y )
+If t⁄∈R3 then R3[t]←$ Zp\R3
+If x⁄∈R1 then R1[x]←$ G
+If (t,x,Y )⁄∈R2 then
+R2[t,x,Y ]←${0, 1}λ
+If Y =R1[x]1/(sk+R3[t]) then
+it←it + 1
+If it >jt then bad← 1 ; Return ⊥
+If (t,x )⁄∈R then R[t,x ]←${0, 1}λ
+R2[t,x,Y ]←R[t,x ]
+Else R2[t,x,Y ]←${0, 1}λ
+Return R2[t,x,Y ]
+Oracle H3(x)
+If x⁄∈R3 then R3[x]←$ Zp\R3
+Return R3[x]
+Oracle H4(x)
+Return SΣ.H(x :stΣ)
+Figure 11: The key game transitions used in pseudorandomness security for 3H. Greyed highlighted statements are
+only included in G 2, blue highlighted statements in G 3 and G4, and boxed statements only in G 4.
+BlindEv on the ﬁrst value t1 queried in the course of the game, at most ⃗ q2 times for the second value t2
+queried in the course of the game, and so on.
+In RO2, the form of ( t,x,Y ) is checked using SDDH to determine if a repair between R and R2 needs to
+be performed. However, before the repair is done, if there have been more valid ( t,x,Y ) tuples queried to
+Prim2 than queries to BlindEv,Asdhi then halts execution of Aprf and concludes by outputting (γ, ˆZ[γ]).
+In this case, the adversary has found “one more” valid strong Diﬃe-Hellman tuple (one corresponding to
+each valid (t,x,Y ) tuple since Y = Y 1/(sk+cj)
+i for some Yi,cj) than calls made to SDH. The adversary
+therefore wins the (m,n )-OM-Gap-SDHI game.
+Claim 5: The ﬁnal game transition restores the possibility of collisions to RO3, and a birthday analysis gives
+the upper bound on this transition.
+■
+C Security with Restricted Tag Space
+Corollary 10 For any adversaryAprf against the partially-oblivious pseudorandomness of3H with restricted
+tag space of size |T|, we give adversariesAzk andAsdhi such that
+Advpo-prf
+3H,P,S[SΣ],Aprf
+(λ)≤ Advzk
+ΣR,R,RO4,SΣ,Azk(λ) + Adv
+(qH1,|T|)-om-gap-sdhi
+GGen,Asdhi
+(λ),
+where S is the simulator deﬁned in Figure 10, the ideal primitive P = RO1× RO2× RO3× RO4 for random
+oracles over RO1 :∗→ G, RO2 :∗×∗× G→{ 0, 1}λ, RO3 :∗→ Zp, RO4 : G6→ Zp for (p, G) determined
+by GGen(λ). The running time T (Aprf)≈T (Azk)≈T (Asdhi) andAprf makes at most qH1 queries to RO1.
+Proof: The proof follows the same as above except only queries to Prim3 that fall within the tag space T
+need to be programmed with a strong Diﬃe-Hellman constant c; otherwise, a random value can be sampled.
+37
+
+A1(p, G)
+C←∅
+Fori = 1 to n:
+ci←$ Zp\C ; C←C∪{ci}
+stA← (p, G, [ci]n
+i )
+Return (stA, [ci]n
+i )
+ASDH,SDDH
+2 (g, pk, [Yi]m
+i : (p, G, [ci]n
+i )
+i← 1 ; j∗← 0 ; 𝓁← 1
+K← [·] ; ˆZ← [·] ; γ←⊥
+R1← [·] ; R2← [·] ; R3← [·] ; R← [·]
+pp← (p,g, G)
+stΣ←$ SΣ.Init(pp)
+b′←$AP,Ev,BlindEv
+prf (pp, pk)
+Return (γ, ˆZ[γ])
+Oracle Ev(t,x )
+If (t,x )⁄∈R then R[t,x ]←${0, 1}λ
+Z←R[t,x ]
+Return Z
+Oracle BlindEv(t, req)
+If t⁄∈R3 then R3[t]←𝓁 ; 𝓁←𝓁 + 1
+jt←jt + 1
+B← req
+B′← SDH(B,R 3[t])
+π←$ SΣ.Prove((g,X ·g
+cR3[t],B′,B ) :stΣ)
+Return (B′,π )
+Oracle H1(x)
+If x⁄∈R1 then
+R1[x]←Yi
+K[x]←i ; i←i + 1
+Return R1[x]
+Oracle H2(t,x,Y )
+If t⁄∈R3 then
+R3[t]←𝓁 ; 𝓁←𝓁 + 1
+If x⁄∈R1 then
+R1[x]←Yi
+K[x]←i ; i←i + 1
+If (t,x,Y )⁄∈R2 then
+If SDDH(Y,R 1[x],R 3[t]) then
+ˆZ[R3[t]]← ˆZ[R3[t]]‖ (Y,K [x])
+If| ˆZ[R3[t]]|>jt then
+γ←R3[t] ; abort Aprf
+If x⁄∈R then R[x]←${0, 1}λ
+R2[t,x,Y ]←R[x]
+Else R2[t,x,Y ]←${0, 1}λ
+Return R2[t,x,Y ]
+Oracle H3(x)
+If x⁄∈R3 then
+R3[x]←𝓁 ; 𝓁←𝓁 + 1
+Return cR3[x]
+Oracle H4(x)
+Return SΣ.H(x :stΣ)
+Figure 12: Adversary Asdhi = (A1, A2) used in POPRF security proof of 3H.
+D Security of 2HashDH OPRF
+In this section, we demonstrate the extensibility of our security deﬁnitions by proving the security of the
+2HashDH OPRF [JKK14]. The only previous proof of security for 2HashDH is with respect to the UC
+deﬁnition provided by Jarecki et al. [JKK14]. The construction 2HashDH is given in Figure 13. The security
+proofs for 2HashDH follow closely to the proofs of 3H. As such, we provide only proof sketches for 2HashDH
+referring heavily to the detailed proofs in Appendix B and Section 5.
+Pseudorandomness. First, we prove pseudorandomness of the 2HashDH OPRF with respect to a variant
+of POPRF given in Figure 3 for the OPRF setting, which we name OPRF. The security game OPRF is
+the same as POPRF except the public tag inputs to the oracles and algorithms are removed to ﬁt the OPRF
+setting and only a single query counter is maintained for tracking blind evaluation and limited evaluation
+oracle queries, rather than a separate query counter for each public tag. We let the advantage of a OPRF
+adversaryA be deﬁned by
+Advoprf
+Fn,S,P,A,(λ) =
+⏐⏐⏐Pr
+[
+OPRFA,1
+Fn,S,P(λ)⇒ 1
+]
+− Pr
+[
+OPRFA,0
+Fn,S,P(λ)⇒ 1
+]⏐⏐⏐ .
+We will reduce the pseudorandomness security of 2HashDH to the security against the so-called one-more
+gap computational Diﬃe-Hellman assumption [JKK14, Bol03] (with pseudocode given in Figure 14). Here,
+an adversary receives m + 1 group elements, gx = X, [gyi = Yi]m
+i=1, and is tasked with computing q + 1
+computational Diﬃe-Hellman values of the form Zi =gx·yi, where q is the number of queries the adversary
+makes to a helper oracle CDH(·) that returns the CDH value of the input element with X. The adversary
+also is given access to a gap oracle to answer the decisional Diﬃe-Hellman question on arbitrary inputs.
+The non-gap version of this assumption was recently shown secure in the generic group model [BFP21],
+however the same approach and bounds hold even when the gap oracle is included [BFL20]. We deﬁne the
+m-OM-Gap-CDH-advantage of an adversaryA by
+Advm-om-gap-cdh
+GGen,A (λ) = Pr
+[
+m-OM-Gap-CDHA
+GGen(λ)⇒ true
+]
+.
+We state below a theorem using the ideal primitive model in which P = H1× H2× H3 for random oracles
+38
+
+2HashDH.Setup(λ)
+(p,g, G)←$ GGen(λ)
+pp← (p,g, G)
+Return pp
+2HashDH.KeyGenH1×H2×H3(pp)
+(p,g, G)← pp ; z←$ Zp
+sk←z ; pk←gz
+Return (sk, pk)
+2HashDH.EvH1×H2×H3(pp, sk,x )
+Y ← H1(x)sk
+Z← H2(x,Y )
+Return Z
+2HashDH.ReqH1×H2×H3(pk,x )
+r←$Zp ; B← H1(x)r
+Return ((pk,r,x ),B )
+2HashDH.FinalizeH1×H2×H3(B′,π ; (pk,r,x ))
+Y ← (B′)1/r
+Require ΣR.VerH3((g, pk,B,B ′),π )
+Z← H2(x,Y )
+Return Z
+B−−−−−−−→
+B′,π←−−−−−−−
+2HashDH.BlindEvH1×H2×H3(sk,B )
+B′←Bsk
+π←$ ΣR.ProveH3(sk, (g,g sk,B,B ′))
+Return (B′,π )
+Figure 13: The 2HashDH OPRF construction of [JKK14]. Algorithms have implicit input the parameters pp =
+(p,g, G) that describe the group used. The NIZK uses relation R = {(g,U,V,W ), (α) : U =gα ∧W =Vα}.
+Game m-OM-Gap-CDHA
+GGen(λ)
+(p,g, G)←$ GGen(λ)
+q← 0
+x←$ Zp ; [ yi]m
+i ←$ [Zp]m
+i
+[Zi,αi]𝓁
+i←$ACDH,DDH(
+p, G,g,g x, [gyi]m
+i
+)
+Require q <𝓁∧ ∀𝓁
+i⁄=jαi⁄=αj
+Return [Zi]𝓁
+i = [gx·yi]𝓁
+i
+Oracle CDH(Y )
+q←q + 1
+Z←Yx
+Return Z
+Oracle DDH(h,A,B,C )
+a← logh(A)
+b← logh(B)
+c← logh(C)
+Return c≡p ab
+Figure 14: The one-more gap computational Diﬃe-Hellman security game.
+over H1 :∗→ G, H2 :∗× G→{ 0, 1}λ, H3 : G6→ Zp for (p, G) determined by GGen(λ).
+Theorem 11 LetAprf be a P-model OPRF adversary against 2HashDH. Then we give a H3-model adversary
+Azk and adversaryAcdh such that
+Advoprf
+2HashDH,S[SΣ],P,Aprf
+(λ)≤ Advzk
+ΣR,R,H3,SΣ,Azk(λ) + Adv
+(qH1+qH2)-om-gap-cdh
+GGen,Acdh
+(λ),
+where S is the simulator deﬁned in Figure 15 that makes use of NIZK simulator SΣ, and qH1, qH2, qH3 are
+the number of queries Aprf makes to its respective ideal primitives. Adversary Azk makes qH3 queries to its
+random oracle andAcdh makes qB queries to its CDH oracle. Further, T (Aprf)≈T (Azk)≈T (Acdh).
+Proof: The follows closely to the proof of pseudorandomness for 3H in Appendix B. We skip game hops
+G0→ G1 and G 4→ G5 that deal with disallowing and restoring collisions in the random oracle used for
+public tags. The 2HashDH construction does not use that random oracle, and thus the birthday bound terms
+from the 3H analysis do not appear.
+The ﬁrst game hop is instead G1→ G2 (of Appendix B) which transitions to a game that replaces the NIZK
+generated in BlindEv with one generated by the NIZK simulator SΣ.
+The second game hop follows G 2→ G3 (of Appendix B) in which we modify the handling of H2 queries to
+check if the table R from Ev has been set on a relevant value and, if so, patch up H2’s response to maintain
+consistency. This does not change the distribution of responses to the adversary so there is no distinguishing
+advantage.
+Lastly, the ﬁnal game hop follows G3→ G4 (of Appendix B) by only repairing H2’s response if there has been
+more queries to BlindEv than repairs required. The only diﬀerence between this game and the ideal world
+is when more repairs occur than queries to BlindEv. We show an adversary against the OM-Gap-CDH
+assumption with advantage greater than or equal to the distinguishing advantage between these two games.
+The views of the games are simulated using the initial values to program H1, the CDH oracle in BlindEv,
+and the DDH oracle to check for repairs in H2.
+39
+
+S.InitEv(λ, pp)
+R1← [·] ; R2← [·]
+stΣ←$ SΣ.Init(λ, pp)
+stS← (pp,⊥,R 1,R 2,st Σ)
+Return stS
+S.KeyGenEv(: (pp, sk,R 1,R 2,st Σ))
+(g,p, G)←pp ; sk←$ Zp
+Return gsk
+S.BlindEvEv(req : (pp, sk,R 1,R 2,st Σ))
+B← req ; B′←Bsk
+π←$ SΣ.Prove((g,g sk,B,B ′) :stΣ)
+Return (B′,π )
+S.EvalEv(x : (pp, sk,R 1,R 2,st Σ))
+(i,x )←x
+y←$ S.Evali(x :stS)
+Return y
+S.EvalEv
+1 (x : (pp, sk,R 1,R 2,st Σ))
+(g,p, G)←pp
+If x⁄∈R1 then R1[x]←$ G
+Return R1[x]
+S.EvalEv
+2 (x,Y : (pp, sk,R 1,R 2,st Σ))
+If x⁄∈R1 then R1[x]←$ G
+If (x,Y )⁄∈R2 then
+If Y =R1[x]sk then R2[x,Y ]← Ev(x)
+Else R2[x,Y ]←${0, 1}λ
+Return R2[x,Y ]
+S.EvalEv
+3 (x : (pp, sk,R 1,R 2,st Σ))
+Return SΣ.Eval(x :stΣ)
+Figure 15: Simulator S[SΣ] for OPRF security of 2HashDH where SΣ is the zero knowledge simulator for ΣR.
+Request Privacy . Next, we provide theorems for the two notions of request privacy (with and without
+proofs of correct blind evaluation) for 2HashDH. We again deﬁne analogues of POPRIV1 and POPRIV2
+(see Figure 4) for the OPRF setting, which we refer to as OPRIV1 and OPRIV2. The games are identical
+except the public metadata tag is removed as input to oracles and algorithms. The advantage of a OPRIV1
+adversaryA in the P-model is deﬁned by
+Advopriv1
+Fn,P,A(λ) =
+⏐⏐⏐Pr
+[
+POPRIV1A,1
+Fn,P(λ)⇒ 1
+]
+− Pr
+[
+POPRIV1A,0
+Fn,P(λ)⇒ 1
+]⏐⏐⏐ ,
+and the advantage of a OPRIV2 adversaryA deﬁned by
+Advopriv2
+Fn,P,A(λ) =
+⏐⏐⏐Pr
+[
+POPRIV2A,1
+Fn,P(λ)⇒ 1
+]
+− Pr
+[
+POPRIV2A,0
+Fn,P(λ)⇒ 1
+]⏐⏐⏐ .
+We provide the following theorems without proof as they follow directly from the proofs given in Section 5.
+Theorem 12 For any OPRIV1 adversaryAopriv1 against 2HashDH (without client veriﬁcation) we have
+that Advopriv1
+2HashDH,Apo-priv1
+(λ) = 0.
+Theorem 13 LetAopriv2 be a OPRIV2 adversary in the P-model against 2HashDH that makes at most q
+queries to Fin. We give an adversary Bsound such that
+Advopriv2
+2HashDH,P,Aopriv2
+(λ)≤ 4q· Advsound
+NiZK,R,H3,Bsound(λ)).
+Further,T (Bsound)≈T (Aopriv2).
+E (Partially) Blind Signatures Preliminaries
+In this section, we deﬁne the syntax, semantics, and security properties of partially blind digital signatures.
+As in our deﬁnitions for POPRFs, the formalism we present here supports the public metadata input of
+“partially” blind digital signatures, but can be easily adapted for the simpler blind digital signature setting
+without public metadata. Also as in our treatment of POPRFs, we simplify our handling of the interactive
+blind signing protocol by restricting our attention to a single round of interaction. This approach diﬀers
+from related deﬁnitions [HKL19] for “three-move” blind signatures capturing Schnorr-type schemes; the
+constructions we consider in this work are only “two-move” and hence we beneﬁt from shedding the extra
+deﬁnitional complexity.
+40
+
+E.1 Syntax and Semantics
+A partially blind digital signature scheme, DS, is a tuple of algorithms
+(DS.Setup, DS.KeyGen, DS.Sign, DS.Ver, DS.Req, DS.BlindSign, DS.Finalize)
+The setup and key generation algorithm generate public parameters pp and a public key, secret key pair
+(pk, sk), respectively. Blind signing is carried out as an interactive protocol run between client and server:
+(1) First, a client runs the algorithm DS.ReqP
+pp(pk,t, m), which takes input a public key pk, tag (or public
+input) t, and message m, and outputs a local state st and a request message req. The message req is
+sent to a server.
+(2) A server runs algorithm DS.BlindSignP
+pp(sk,t, req), using as input a secret key, a tag t, and the request
+message. It produces a response message rep that should be sent back to the client.
+(3) Finally, the client runs the algorithm DS.Finalize(rep :st) and outputs an unblinded signature σ on the
+message-tag pair (t, m) or ⊥ if the response message is rejected, for example, due to the veriﬁcation
+check failing.
+The unblinded signing algorithm DS.Sign is randomized, and takes as input a secret key sk, an input pair
+(t, m), and outputs a signature σ. The veriﬁcation algorithm DS.Ver takes as input a public key pk, an input
+pair (t, m), and a signature σ, and outputs 1 if the signature is valid and 0 otherwise. We also deﬁne sets
+DS.SK, DS.PK, DS.T, DS.M, and DS.Σ representing the secret key, public key, tag, message, and signature
+space, respectively. DS is called unique if there exists only a single valid signature σ for input (t,x ).
+For correctness, we require that both the unblinded signing algorithm and interactive blind signing
+protocol produce valid signatures. To formalize the latter: we require that for pp output from Setup, any
+pk, sk output by KeyGen, and any t, m, it holds that Pr[ Ver(pk,t, m,σ ) = 1] = 1 where the probability is
+taken over choice of σ via the following process:
+(st, req)←$ ReqP(pk,t, m) ; rep←$ BlindSignP(sk,t, req) ; σ←$ FinalizeP(rep :st).
+E.2 Security
+We introduce two new deﬁnitions of security for partially blind digital signatures, tailored for the case of
+one round blind signing. Our deﬁnitions match closely to those introduced for the POPRF setting. We use
+code-based games mostly following the framework of Bellare and Rogaway [BR06].
+One-more unforgeability . The ﬁrst deﬁnition captures unforgeability, ensuring that it is not possible
+for malicious clients to forge signatures even when given access to a blinded signing oracle. We give a
+pseudocode game in Figure 16. The adversary is tasked with producing q + 1 distinct message-signature
+tuples [( mi,σi)]q+1
+i=1 that all verify under a given public key pk and adversary-chosen public tag t′. The
+adversary is given access to a blinded signing oracles for pk but wins only if they query the oracle q times or
+less on the chosen tag t′. This intuitively enforces that each query to the blind signing oracle only results in
+one learned signature, and queries for a diﬀerent public tag do not help in forging a signature for the target
+tag. We let the advantage of a OM-Unf adversaryA be deﬁned by
+Advom-unf
+DS,P,A(λ) = Pr
+[
+OM-UnfA
+DS,P(λ)⇒ true
+]
+.
+Blindness. The second deﬁnition captures message privacy of a client in the face of a malicious server.
+We give a pseudocode game in Figure 17. The game is the exact analogue of the request privacy against
+malicious adversary game POPRIV2 (see Section 3) for POPRFs adapted for blind signature syntax. The
+adversary is given access to a request oracle and ﬁnalize oracle representing client behavior. The request
+oracle takes an adversary-chosen public key, public tag, and pair of messages, and outputs a randomly
+ordered pair of client request messages (for the input messages) based on a challenge bit. The ﬁnalize oracle
+takes an adversary-chosen pair of response messages, and outputs the produced signatures (in the original
+order). To prevent trivial attacks of corrupting one response, the oracle requires that both signatures ﬁnalize
+without error, i.e. do not equal ⊥.
+41
+
+Game OM-UnfA
+DS,P(λ)
+stP←$ P.Init(λ)
+pp←$ DS.Setup(λ)
+(sk, pk)←$ DS.KeyGenP
+pp()
+(t′, [mi,σi]𝓁
+i)←$ABlindSign,P(pp, pk)
+Requireqt′ <𝓁 ∧ ∀𝓁
+i⁄=j (mi,σi)⁄= (mj,σj)
+Return⋀𝓁
+i DS.Ver(pk,t′, mi,σi)
+Oracle BlindSign(t, req)
+qt←qt + 1
+rep← DS.BlindSignP(sk,t, req)
+Return rep
+Figure 16: One-more unforgeability security game for partially blind signatures. The query counters qt are initialized
+to 0 for all t ∈ DS.T.
+Game BlindA,b
+Fn,P(λ)
+i← 0
+stP←$ P.Init(λ)
+pp←$ DS.Setup(λ)
+b′←$AReq,Fin,P(pp)
+Return b′
+Oracle Req(pk,t, m0, m1)
+i←i + 1
+(sti,0, req0)←$ DS.ReqP(pk,t, m0)
+(sti,1, req1)←$ DS.ReqP(pk,t, m1)
+Return (reqb, req1−b)
+Oracle Fin(j, rep, rep′)
+If j >i then return⊥
+σb←$ DS.FinalizeP(stj,b, rep)
+σ1−b←$ Fn.FinalizeP(stj,1−b, rep′)
+If σ0 =⊥ or σ1 =⊥ then
+Return⊥
+Return (σ0,σ 1)
+Figure 17: Security deﬁnition for blindness of message in partially blind signatures.
+The advantage of a Blind adversaryA is deﬁned by
+Advblind
+DS,P,A(λ) =
+⏐⏐⏐Pr
+[
+BlindA,1
+DS,P(λ)⇒ 1
+]
+− Pr
+[
+BlindA,0
+DS,P(λ)⇒ 1
+]⏐⏐⏐ .
+F (P)OPRFs from Unique (Partially) Blind Signatures
+In this section, we provide proof for the folklore transform of a unique partially blind signature (resp. blind
+signature) to a POPRF (resp. OPRF) in the random oracle model. The transform, observed by Jarecki
+et al. [JKK14], simply consists of hashing the signature to create the PRF output. We call this transform
+HSig[DS] where if DS uses ideal primitive P, HSig uses ideal primitive P× H where H is a random oracle over
+H : DS.T× DS.M× DS.Σ→{ 0, 1}λ. The pseudocode is given in Figure 18.
+Pseudorandomness. We prove the following theorem:
+Theorem 14 LetAprf be a (P× H)-model POPRF adversary against HSig[DS]. Then we give a P-model
+adversaryAom-unf such that
+Advpo-prf
+HSig[DS],S[DS],P×H,Aprf
+(λ)≤ Advom-unf
+DS,P,Aom-unf(λ),
+where S is the simulator deﬁned in Figure 19. If qB,t is the number of queries Aprf makes to its blind
+evaluation oracle for tag t, adversaryAom-unf makesqB,t queries to its blind signing oracle for tag t. Further,
+T (Aprf)≈T (Aom-unf).
+Proof: We bound the advantage of Aprf by bounding the advantage of a series of game hops. We deﬁne
+G0 = POPRFAprf,1
+HSig,P×H,S(λ). In the ﬁrst game hop to G 1, we replace the proper evaluation and call to H
+in Ev with a separate random table. In H, we check if the inputs form a valid signature, and if so ensure
+that the hash table R is consistent with the random table from Ev. Because of this repair, the view of the
+adversary remains the same, and there is no distinguishing advantage between G 0 and G1. This is the case
+because the partially blind signature is unique – there is only ever one repair for a ( t,x ) input pair.
+In G2, we track the number of calls to BlindEv for each tag and the number of repairs for each tag that
+occur in H. If the number of repairs for a tag ever exceeds the number of BlindEv calls, then a bad ﬂag is
+set. In G 2, the game is aborted if the ﬂag is set, while G 1 repairs and continues. By an identical-until-bad
+argument via the fundamental lemma of game playing [BR06], the distinguishing advantage between G1 and
+42
+
+HSig.Setup(λ)
+Return DS.Setup(λ)
+HSig.ReqP×H(pk,t,x )
+(req,st DS)←$ DS.ReqP(pk,t,x )
+st← (t,x,st DS)
+Return (req,st )
+HSig.KeyGenP×H(pp)
+Return DS.KeyGenP(pp)
+HSig.FinalizeP×H(rep;st)
+(t,x,st DS)←st
+σ←$ DS.FinalizeP(rep;stDS)
+Return H(t,x,σ )
+HSig.BlindEvP×H(sk,t, req)
+Return
+DS.BlindSignP(sk,t, req)
+HSig.EvP×H(sk,t,x )
+σ←$ DS.SignP(sk,t,x )
+Return H(t,x,σ )
+Figure 18: The generic HSig[DS] transform to construct a POPRF from any partially blind signature scheme DS.
+S.Init(λ,pp )
+R← [·]
+stP←$ P.Init(λ)
+(sk, pk)←$ DS.KeyGen(pp)
+stS← (pp, pk, sk,R,st P)
+Return (stS, pk)
+S.BlindEvLimEv(t, req : (pp, pk, sk,R,st P))
+Return DS.BlindSignP(sk,t, req)
+S.PLimEv(x : (pp, pk, sk,R,st P))
+Return P.Eval(x :stP)
+S.HLimEv(t,x,σ : (pp, pk, sk,R,st P))
+If (t,x,σ )⁄∈R then
+If DS.Ver(pk,t,x,σ ) then R[t,x,σ ]← LimEv(t,x )
+Else R[t,x,Y ]←${0, 1}λ
+Return R[t,x,Y ]
+Figure 19: Simulator S[DS] for PRF security of HSig[DS].
+G2 is bounded by the probability the bad ﬂag is set. Furthermore, G 2 = POPRFAprf,0
+HSig,P×H,S(λ), since its
+abort in H corresponds to the simulator calling LimEv without any budget. Thus, we conclude the proof by
+constructing an adversary for the one-more unforgeability game that wins whenever the bad ﬂag is set.
+The unforgeability adversaryAom-unf simulates the BlindEv oracle using its own BlindSign oracle.Aom-unf
+stores the sets of all (t,x,σ ) valid triples that are passed in to H keyed by the public tag t. If the number of
+valid triples for a tag exceeds the number of calls to BlindEv for a tag, i.e., the case where the bad ﬂag is
+set,Aom-unf returns the valid (x,σ ) message-signature pairs along with the given tag to win the game.
+Request privacy . We prove the following theorem:
+Theorem 15 LetApo-priv2 be a (P× H)-model POPRIV2 adversary against HSig[DS]. Then we give a
+P-model adversaryAblind such that
+Advpo-priv2
+HSig[DS],P×H,Apo-priv2
+(λ)≤ Advblind
+DS,P,Ablind(λ),
+whereAblind makes the same number of queries to its respective request and ﬁnalize oracles as Apo-priv2 and
+T (Apo-priv2)≈T (Ablind).
+Proof:Ablind is a wrapper adversary around the blindness security game that simulates Apo-priv2’s envi-
+ronment perfectly. Ablind simply forwardsApo-priv2’s oracle queries to Req and Fin to its own respective
+queries, and in the case of Fin performs the ﬁnal hash, before forwarding the response back to Apo-priv2.
+G Security of ZSS Partially Blind Signature
+In this section, we provide the ﬁrst complete security proof for the ZSS partially blind signature scheme [ZSS03].
+Our 3HashSDHI POPRF construction follows closely the ZSS partially blind signature scheme, but diﬀers
+in one signiﬁcant way. 3HashSDHI uses a NIZK to prove correctness of the blind evaluation, while ZSS
+uses a pairing veriﬁcation check (which also gives it its public veriﬁability property). We show the one-more
+unforgeability of ZSS is implied by our new one-more gap SDHI assumption, however, we must amend the
+(m,n )-OM-Gap-SDHI assumption for the bilinear pairing group setting including the extra group elements
+needed for veriﬁcation. To be complete, we show that the amended assumption is secure with respect to a
+similarly generalized uber assumption for the bilinear pairing setting [BFL20].
+There are two other small changes we make to original ZSS construction. For clarity, we refer to the
+original construction by ZSS1 and our modiﬁed version as ZSS2. First, we replace the multiplicative blinding
+43
+
+ZSS2.Setup(λ)
+(p, G1, G2, GT,g 1,g 2,e,φ,ψ )← BGGen(λ)
+pp← (p, G1, G2, GT,g 1,g 2,e,φ,ψ )
+Return pp
+ZSS2.SignH1×H2pp (sk,t, m)
+σ← H1(m)1/(sk+H2(t))
+Return σ
+ZSS2.KeyGenH1×H2pp ()
+z←$ Zp
+sk←z ; pk←gz
+1
+Return (sk, pk)
+ZSS2.VerH1×H2pp (pk,t, m,σ )
+Return
+(
+e
+(
+gH2(t)
+1 pk,σ
+)
+=e(g1, H1(m))
+)
+ZSS2.ReqH1×H2pp (pk,t, m)
+r←$Zp ; B← H1(m)r
+Return ((pk,r,t, m),B )
+ZSS2.FinalizeH1×H2pp (B′,π ; (pk,r,t, m))
+σ← (B′)1/r
+If not ZSS2.VerH1×H2(pk,t, m,σ ) return⊥
+Return σ
+B− −−−−−−−− →
+B′
+← −−−−−−−− −
+ZSS2.BlindSignH1×H2pp (sk,t,B )
+k← sk + H2(t)
+B′←B1/k
+Return B′
+Figure 20: The ZSS2 partially blind signature construction, a minor modiﬁcation to the construction from [ZSS03].
+Algorithms have implicit input the parameters pp = (p, G1, G2, GT,g 1,g 2,e ) that describe the groups used. Hash
+function H1 has range G2 and H2 has range Zp.
+Game (m,n )-OM-Gap-SDHIA
+BGGen(λ)
+(p, G1, G2, GT,g 1,g 2,e,φ,ψ )← BGGen(λ)
+sk←$ Zp ; [ yi]m
+i ←$ [Zp]m
+i
+(stA, [ci]n
+i )←$A1(p, G)
+Require∀n
+i⁄=jci⁄=cj
+(γ, [Zi,αi,βi]𝓁
+i)←$ASDH,SDDH
+2
+(
+g1,g 2,g sk
+1,g sk
+2,
+[
+g
+yi
+1 ,g
+yi
+2
+]m
+i :stA
+)
+Require qγ <𝓁 ∧ ∀𝓁
+i⁄=jαi⁄=αj ∧ ∀𝓁
+iβi∈ [1, 2]
+Return [Zi]𝓁
+i =
+[
+g
+yαi/(sk+cγ)
+βi
+]𝓁
+i
+Oracle SDH(B,i,j )
+Require i∈ [1,n ]
+Require B∈ Gj
+qi←qi + 1
+Z←B1/(sk+ci)
+Return Z
+Oracle SDDH(Y,Z,i,j )
+Require Y,Z ∈ Gj
+Return Z =Y 1/(sk+ci)
+Figure 21: The one-more gap strong Diﬃe-Hellman inversion security game adapted for bilinear groups.
+approach with exponential blinding (consistent with 3HashSDHI) which is both simpler and has security
+beneﬁts in the non-veriﬁcation case [JKX21]. ZSS incorrectly claim that the blindness property is not
+satisﬁed under the exponential blinding approach, as we explain below where we discuss blindness.
+Nevertheless, the multiplicative blinding approach of ZSS is still interesting as it enables a client-side
+performance improvements of ﬁxed-base exponentiation with precomputation over variable-base exponenti-
+ation [JKX21]. We present this alternate blinding approach that can be applied to both 3HashSDHI and
+ZSS in Appendix I. The second diﬀerence is that we change the signature structure to not include the public
+tag in the ﬁrst hash input. This change doesn’t aﬀect the security of the signature and allows for the blind
+signing process to be initiated by the client before the public tag is known (allowing for server-chosen public
+tags). The construction is given in pseudocode as ZSS2 in Figure 20.
+Bilinear pairing groups. We follow the notation of [BFL20]. (1) Groups G1, G2, GT are cyclic groups
+of prime order p. (2) Group element g1 is a generator of G1, g2 is a generator of G2. (3) Pairing function
+e : G1× G2→ GT is a computable map with the following properties: Bilinearity:∀ u∈ G1, v∈ G2, and
+a,b ∈ Z, e(ua,vb) = e(u,v )ab, and Non-degeneracy: e(g1,g 2)⁄= 1. (4) φ is an isomorphism φ : G1→ G2,
+and ψ is an isomorphism ψ : G2→ G1. We assume an eﬃcient setup algorithm that on input security
+parameter λ, generates a bilinear group, (p, G1, G2, GT,g 1,g 2,e,φ,ψ )← BGGen(1λ), where|p| =λ. If there
+exist eﬃciently computable isomorphisms φ : G1→ G2 and ψ : G2→ G1, the bilinear group is called Type
+1; it is called Type 2 if there is no eﬃciently computable isomorphismφ, and called Type 3 if there is neither
+φ nor ψ. In the AGM, group element representations including elements computed from isomorphisms are
+explicitly indicated along with the representation of the element passed into the isomorphism.
+We also extend the ( m,n )-OM-Gap-SDHI assumption for bilinear pairing groups in the game given
+in Figure 21. The game is identical as before except the adversary is given group elements in both G1
+44
+
+Game m-UberA
+BGGen(λ)
+(p, G1, G2, GT,g 1,g 2,e,φ,ψ )← BGGen(λ)
+Q1←{} ; Q2←{}
+⃗ x= [xi]m
+i ←$ [Zp]m
+i
+(j,U,µ (⃗X))←$AEv,Decide(p, G1, G2, GT,g 1,g 2,e,φ,ψ )
+Return
+(
+U =gµ(⃗ x)
+j ∧ (Q1∪Q2)⊥ ⊥{µ(⃗X)}
+)
+Oracle Ev(j,ρ (⃗X))
+Require i∈ [1, 2]
+Qj←Qj∪{ρ(⃗X)}
+Return gρ(⃗ x)
+j
+Oracle Decide(j,ρ (⃗X), [Yi]n
+i )
+⃗ y= [yi]n
+i ←
+[
+loggj Yi
+]n
+i
+Return ρ(⃗ y)≡p 0
+Figure 22: The interactive, ﬂexible-output, polynomial uber assumption with decision oracle adapted for bilinear
+groups.
+and G2 for sk and yi. The SDH and SDDH oracles are also parameterized by an input j ∈ [1, 2] to
+determine which group the oracle query takes place over. We provide a corollary that the bilinear-version
+(m,n )-OM-Gap-SDHI is implied by a bilinear-version m-Uber assumption [BFL20], which in turn has
+been shown to be implied by a bilinear-version q-DL assumption (both reductions make use of the AGM).
+The pseudocode games describing these assumptions are given in Figure 22 and Figure 23, respectively.
+The uber assumption allows the adversary to specify a group in which to receive an evaluation and tracks
+the polynomial queries made to each group. The winning condition is stated in the most general way
+(for Type 1 bilinear groups), in which the winning polynomial must be independent from queries made
+to both groups; relaxed winning conditions can be formulated for Type 2 and 3 bilinear groups in which
+depending on the group of the winning element, the winning polynomial must be independent from only
+one query set (see [BFL20] for details). However, the general formulation is suﬃcient for proving security of
+(m,n )-OM-Gap-SDHI regardless of the underlying bilinear group type.
+Game q-DLA
+BGGen(λ)
+(p, G1, G2, GT,g 1,g 2,e,φ,ψ )← BGGen(λ)
+x←$ Zp
+x′←$A
+(
+p, G1, G2, GT,g 1,g 2,e,φ,ψ,
+[
+gxi
+1 ,gxi
+2
+]q
+i=1
+)
+Return x =x′
+Figure 23: The q-type discrete log security game.
+We provide the following corollaries for the security of
+the bilinear version of (m,n )-OM-Gap-SDHI. We reuse the
+query budget notation from Section 5.
+Corollary 16 For any algebraic adversary Asdhi of
+(m,n )-OM-Gap-SDHI with query budget (⃗ q= [q1,...,q n],
+qSDDH), and any BGGen outputting (p,g 1,g 2, G1, G2), where
+g1 and g2 are uniformly chosen elements of G1 and G2, we
+give adversaryAuber such that
+Adv(m,n)-om-gap-sdhi
+BGGen,Asdhi
+(λ)≤ (qmax + 1)· Adv(m+1)-uber
+BGGen,Auber
+(λ) +q
+p,
+where q =∑n
+i qi and qmax = max{qi}n
+i . Also, Auber makes at most q queries to its polynomial evaluation
+oracle with maximum degree q + 1, and outputs a polynomial of degree at most q. Further, T (Asdhi)≈
+T (Auber).
+Again, when combined with a basic reduction from [BFL20], this gives us the following immediate corol-
+lary.
+Corollary 17 For any algebraic adversaryAsdhi of (m,n )-OM-Gap-SDHI, with query budget(⃗ q= [q1,...,q n],
+qSDDH), and any BGGen outputting (p,g 1,g 2, G1, G2), where g1 and g2 are uniformly chosen elements of G1
+and G2, we give adversaryAdl such that
+Adv(m,n)-om-gap-sdhi
+BGGen,Asdhi
+(λ)≤ (qmax + 1)· Adv(q+1)-dl
+BGGen,Adl
+(λ) +q
+p,
+where q =∑n
+i qi and qmax = max{qi}n
+i . Further, T (Asdhi)≈T (Adl).
+These corollaries mirror exactly the results from Section 5. The proof of Corollary 16 follows the same
+approach as the proof in Appendix A; the polynomial independence argument is not aﬀected by the which
+group the evaluations are given in (and for Type 1 bilinear groups, it is irrelevant).
+One-more unforgeability . We provide the following theorem for the one-more unforgeability of ZSS2.
+A similar result can be stated for ZSS1, and its proof would be almost identical. Here, the ideal model
+P = H1× H2 consists of random oracles H1 :∗→ G2 and H2 :∗→ Zp for (p, G2) determined by BGGen(λ).
+45
+
+Game G
+i← 0 ; R′
+1← [·]
+R1← [·] ; R2← [·]
+pp←$ ZSS2.Setup(λ)
+b′←$AReq,Fin,P(pp)
+Return b′
+Oracle Req(pk,t, m0, m1)
+i←i + 1
+ti←t ; pki← pk
+mi,0← m0 ; mi,1← m1
+ri,0←$ Zp ; req0←g
+ri,0
+2
+ri,1←$ Zp ; req1←g
+ri,1
+2
+Return (reqb, req1−b)
+Oracle Fin(j, rep, rep′)
+If j >i then return⊥
+If not e
+(
+g
+H2(ti)
+1 pki, (rep)1/ri,b
+)
+=e(g1,g 2) then
+Return⊥
+If not e
+(
+g
+H2(ti)
+1 pki, (rep′)1/ri,1−b
+)
+=e(g1,g 2) then
+Return⊥
+σb← (rep)R′
+1[mi,b]/ri,b
+σ1−b← (rep′)R′
+1[mi,1−b]/ri,1−b
+Return (σ0,σ 1)
+Oracle H1(m)
+If m⁄∈R1 then
+h←$ Zp
+R1[m]←gh
+2
+R′
+1[m]←h
+Return R1[m]
+Oracle H2(t)
+If t⁄∈R2 then
+R2[t]←$ Zp
+Return R2[t]
+Figure 24: Game transition used in blindness security proof of ZSS2 in Theorem 19. Algorithms have implicit input
+pp = (p, G1, G2, GT,g 1,g 2,e ).
+Theorem 18 LetAom-unf be a P-model one-more unforgeability adversary against ZSS1. Then we give an
+adversaryAsdhi such that
+Advom-unf
+ZSS2,P,Aom-unf(λ)≤ Adv
+(qH1,qt)-om-gap-sdhi
+BGGen,Asdhi
+(λ) +q2
+t
+p ,
+where qH1 is the maximum distinct queries Aom-unf makes to H1 and qt is the maximum distinct t queries
+Aom-unf makes to H2 and BlindSign. Further, T (Aom-unf)≈T (Asdhi).
+Proof: We deﬁne G0 = OM-UnfAom-unf
+ZSS2,P (λ). We ﬁrst transition to a game G 1 in which we disallow collisions
+in the output of H2, i.e., we replace sampling fromZp for new range values with sampling without replacement
+from Zp. Recall that at most qt unique t values are queried byAom-unf in the course of the game, and so a
+standard birthday analysis establishes an upper bound of qt(qt− 1)/2p.
+We build adversaryAsdhi to simulate exactly Aom-unf’s environment in G 1. Adversary Asdhi simulates the
+ideal primitives by using its input values gyi
+2 as random outputs of H1 and randomly chosen unique cj values
+as outputs of H2. AdversaryAsdhi simulates BlindSign by looking up (or programming) the appropriate cj
+and forwarding a query to its SDH oracle, returning the result. When Aom-unf returns,Asdhi matches the
+returned messages to its programmed outputs in H1, and returns the signatures along with appropriate gyi
+2
+index, specifying group j = 2. Whenever Aom-unf wins G1, then Asdhi also wins (qH1,qt)-OM-Gap-SDHI
+because if the signatures are valid, then so will be the SDHI checks.
+Blindness. ZSS describe a possible linking attack against exponential blinding [ZSS03, Footnote 1]. Adapted
+to our version of the scheme and notation, their claimed attack checks if e(σ,B ) = e(B′, H1(m)), and if
+so concludes that B,B′ is the partially blinded protocol transcript used to generate σ. (Note, that this
+computation is only possible for type 1 pairings, or type 2 pairings if one uses the map ψ.) However, this
+check always passes for any B,B′ (with B′ = B1/(sk+H2(t))), regardless of whether the transcript B,B′ is
+associated with the signature σ.
+Instead, we provide the following theorem for the blindness of ZSS2, which uses exponential blinding.
+Theorem 19 For any Blind adversaryAblind in the P-model against ZSS2, we have that
+Advblind
+ZSS2,P,Ablind(λ) = 0.
+Proof:
+We transition to a game G shown in Figure 24 in which the requests output from Req are swapped from
+reqd = H1(md)rd to reqd = grd
+2 for d∈{ 0, 1}. Observe that the outputs of Req are now independent of
+challenge bit b. Fin is also changed. In the original game, Fin outputs valid signatures if the responses
+given by the adversary are equal to rep = req1/(sk+H2(t)) where pk = gsk
+1 ; this is conﬁrmed by the pairing
+veriﬁcation equation. Otherwise the output is⊥. In G, the same pairing check is made to see if the adversary
+responded in the correct manner. If pairing check succeeds, then a valid signature is created and returned
+46
+
+Game POUNIQA
+Fn,P(λ)
+q← 0 ; R← [·]
+pp←$ Fn.Setup(λ)
+stP←$ P.Init(λ)
+(i,j, repi, repj)←$AReq,P(pp)
+Require 1≤i≤j≤q
+(sti, pki,ti,xi)←R[i]
+(stj, pkj,tj,xj)←R[j]
+yi← Fn.FinalizeP(repi :sti)
+yj← Fn.FinalizeP(repj :stj)
+If yi =⊥ or yj =⊥ then
+Return 0
+Return ((pki,ti,xi) = (pkj,tj,xj))∧ (yi⁄=yj)
+Oracle Req(pk, sk,t,x )
+Require Fn.Wellformed(pk, sk)
+(st, req)← Fn.ReqP(pk,t,x )
+q←q + 1
+R[q]← (st, pk,t,x )
+Return req
+Figure 25: Security deﬁnition for uniqueness of PO-PRF outputs despite a malicious server. The highlighted code is
+included for simplicity to address rogue key attacks using the knowledge of secret key model [Bol03].
+by simulating H1 and using the discrete log of the programmed hash outputs. Importantly, the output valid
+signatures, do not include the blinding factor rd and are thus, independent of the challenge bit and the
+outputs from Req. Therefore, the outputs of G are distributed identically to the blind security game, and
+since they do not depend on the challenge bit, the adversary can have no advantage.
+H Uniqueness from Request Privacy
+We formalize uniqueness via gamePOUNIQ shown in Figure 25. It is parameterized by a security parameter
+λ, a PO-PRF scheme Fn, an adversaryA, and an ideal primitive P. The adversary can query a request oracle
+Req to generate honest requests for adversary-chosen public key, public input t and private input x. The
+adversary ﬁnishes by outputting a pair of numbers indicating one or two queries to Req, as well as two
+response messages repi, repj. The adversary wins if the triple pk,t,x are the same for both queries but the
+client can be tricked into outputting distinct y values. We let the advantage of a POUNIQ adversaryA be
+deﬁned by
+Advpo-uniq
+Fn,A,P (λ) = Pr
+[
+POUNIQA
+Fn,P(λ)⇒ 1
+]
+where the probability space is taken over the random choices made in the game.
+Looking ahead, our proof of uniqueness will depend on our correctness property. However, our correctness
+property is stated to hold for wellformed public key pairs, while uniqueness captures a malicious adversary
+that may use a rogue public key. To bridge this gap, we require the adversary to prove knowledge of secret
+keys. For simplicity, we model this by asking the adversary to provide the secret key as input to the request
+oracle, shown highlighted in Figure 25, following the knowledge of secret key model [Bol03]. This model can
+be instantiated by including extractable proofs of knowledge of secret keys, from which the secret key can
+be extracted and the proof may proceed in the KOSK model. In the game pseudocode, we use a wellformed
+predicate to capture this check, i.e., for a discrete log public key X and secret key x, checks X =gx.
+The next theorem captures that POUNIQ security is implied by POPRIV2 security.
+Theorem 20 LetA be a POUNIQ adversary against a PO-PRF scheme Fn. Then we give a POPRIV2
+adversaryB such that
+Advpo-uniq
+Fn,A,P (λ)≤ Advpo-priv2
+Fn,B,P (λ),
+whereB makes the same number of queries to its respective request oracle as A, makes at most 2 queries to
+its ﬁnalize oracle, and T (A)≈T (B).
+Proof: The reduction works as follows given a POUNIQ adversaryA. Adversary B (given in pseudocode
+in Figure 26) on input pp runsA on input pp. Upon receiving a request query Req(pk,t,x ), adversaryB
+makes oracle call Req(pk,t,x,x ) to its own request oracle. Adversary B receives back two request messages
+47
+
+AdversaryBReq,Fin,P(pp)
+q← 0 ; R← [·]
+stP←$ P.Init(λ)
+(i,j, repi,0, repj,0)←$ASimReq,P(pp)
+Require 1≤i≤j≤q
+(pki, ski,ti,xi, reqi,1)←R[i]
+(pkj, skj,tj,xj, reqj,1)←R[j]
+repi,1←$ Fn.BlindEvP(ski,ti, reqi,1)
+repj,1←$ Fn.BlindEvP(skj,tj, reqj,1)
+(yi,0,yi,1)← Fin(i, repi,0, repi,1)
+(yj,0,yj,1)← Fin(j, repj,0, repj,1)
+y← Fn.EvP(ski,ti,xi)
+If yi,0⁄=yi,1 then return yi,0 ==y
+Return yj,0 ==y
+Oracle SimReq(pk, sk,t,x )
+Require Fn.Wellformed(pk, sk)
+(req0, req1)←$ Req(pk,t,x,x )
+q←q + 1
+R[q]← (pk, sk,t,x, req1)
+Return req0
+Figure 26: Adversary B against POPRIV2 used in uniqueness security proof.
+3H.ReqH1×H2×H3×H4(pk,t,x )
+r←$Zp ; B← H1(x)·
+(
+gH3(t)pk
+)r
+Return ((pk,r,t,x ),B )
+3H.FinalizeH1×H2×H3×H4(B′,π ; (pk,r,t,x ))
+Y ←B′/gr
+Require ΣR.VerH4((g,g H3(t)·pk,B′,B ),π )
+Z← H2(t,x,Y )
+Return Z
+B−−−−−−−−−→
+B′
+←−−−−−−−−−
+3H.BlindEvH1×H2×H3×H4(sk,t,B )
+k← sk + H3(t)
+B′←B1/k
+π←$ ΣR.ProveH4(k, (g,gk,B′,B ))
+Return (B′,π )
+Figure 27: An alternative multiplicative blinding protocol [ZSS03] that provides client-side performance bene-
+ﬁts [JKX21].
+req0, req1 and returns req0 toA.B also stores the pk, sk,t,x, req1 associated with the query. Recall the sk
+is known due to the knowledge of secret key model. This perfectly simulates A’s request oracle.
+WhenA returns (i,j, repi,0, repj,0), B retrieves pki, ski, ti, xi, reqi,1 and pkj, skj, tj, xj, reqj,1. We
+consider the case whereA wins uniqueness game. In this case, ( pki, ski,ti,xi) = (pkj, skj,tj,xj) so we drop
+the subscripts.
+B calls Fin by responding to reqi,0 with theA-provided repi,0 and responding to reqi,1 with a repi,1 generated
+honestly. By the correctness property, we know that the value returned from the honest ﬂow with repi,1
+is equal to y = Fn.Ev(sk,t,x ). If Fin returns two diﬀerent values, then by matching which position y is
+returned reveals the challenge bit and allows B to win the game.
+If Fin returns two identical values, then we repeat the above for thej query. IfA wins the uniqueness game,
+then we know that Fin will not return identical values for the j query, so the challenge bit will be revealed,
+andB wins the game. Thus, B outputs the correct challenge bit in the POPRIV2 game wheneverA wins
+POUNIQ.
+I Multiplicative Blinding
+In this section we present an alternate client-side blinding approach applying a blinding factor using group
+multiplication rather than group exponentiation. This approach was originally proposed by ZSS [ZSS03].
+We show that it is a secure blinding alternative for both the 3HashSDHI POPRF and for the ZSS partially
+blind signature. The multiplicative blind evaluation protocol is given for 3HashSDHI in Figure 27. It can
+be adapted for ZSS by including pk2 =gsk
+2 as a second component of the public key to be used for blinding.
+The multiplicative blinding proofs for 3H and ZSS1 follow symmetrically as those for Theorem 7 and
+Theorem 19. To create a request for multiplicative blinding that is independent of challenge bit b, we
+construct the request as B←g·
+(
+gH3(t)pk
+)r
+. This gives the following corollaries:
+48
+
+Corollary 21 LetApo-priv2 be a POPRIV2 adversary in the P-model against 3H with multiplicative blind-
+ing that makes at most q queries to Fin. We give in the proof below a SoundA
+NiZK,R,H4 adversaryBsound
+such that
+Advpo-priv2
+3H,P,Apo-priv2
+(λ)≤ 4q· Advsound
+NiZK,R,H4,Bsound(λ)).
+Further,T (Bsound)≈T (Apo-priv2).
+Corollary 22 For any Blind adversaryAblind in the P-model against ZSS1 with multiplicative blinding,
+we have that Advblind
+ZSS1,P,Ablind(λ) = 0.
+49

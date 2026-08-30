@@ -1,0 +1,811 @@
+Measuring NAT64 Usage in the Wild
+Elizabeth Boswell1 , Stephen McQuistin 2 , Colin Perkins 3 , and Stephen
+Strowes4
+1 University of Glasgow e.boswell.2@research.gla.ac.uk
+2 University of St Andrews sm@smcquistin.uk
+3 University of Glasgow csp@csperkins.org
+4 Fastly sds@fastly.com
+Abstract NAT64 is an IPv6 transition mechanism that enables IPv6-
+only hosts to access the IPv4 Internet. Understanding the deployment of
+NAT64, and its performance impact, is crucial to the success of the IPv6
+transition, by encouraging IPv6-only deployments. We develop a set of
+tests for detecting NAT64 and apply them to the RIPE Atlas testbed,
+finding 224 probes, in 43 networks, that can use NAT64 to access the
+IPv4 Internet. Using 34 dual stack probes, that have both NAT64 and
+native IPv4 access, to compare performance, we find that NAT64 paths
+are, on average, 23.13% longer, with 17.47% higher round-trip times.
+Keywords: NAT64; IPv6; RIPE Atlas
+1 Introduction
+With the IPv4 address space being depleted [14], and IPv6 adoption continuing
+to grow [4], there is an increased need for transition mechanisms to allow IPv4
+and IPv6 hosts to seamlessly communicate. Understanding the impact of these
+transition mechanisms is important, both to support short-term IPv6 adoption
+and to encourage longer-term IPv6-only deployments.
+One transition mechanism is NAT64 [10]. Together with DNS64 [11], it
+defines a way to embed IPv4 addresses within IPv6 addresses, enabling net-
+work address translation between IPv6 and IPv4 so that IPv6-only devices can
+access the IPv4-only Internet. Successful NAT64 deployments must be located
+so they don’t become performance bottlenecks or lead to paths that are longer,
+and have higher latency, than native IPv4 paths. If NAT64 significantly impacts
+performance, this will discourage IPv6-only deployments, slowing adoption.
+In this paper, we conduct a preliminary study of NAT64 devices in the
+Internet. We develop a set of tests to detect NAT64 and apply them on RIPE
+Atlas to find probes that can use NAT64 to access the IPv4 Internet. We char-
+acterise the location of these probes and their NAT64 devices, and compare
+characteristics of NAT64-based and native IPv4 paths.
+While several studies have explored NAT64 performance using small test
+networks (e.g., [9], [7], [16]), ours is one of the first large-scale studies of the
+arXiv:2402.14632v1  [cs.NI]  22 Feb 2024
+
+2 E. Boswell et al.
+DNS64
+NAT64: 198.51.100.41Client:  2001:DB8::8:800:200C:417A Server: www.example.net
+203.0.113.22
+1) AAAA for www.example.net?
+2) Pref64::203.0.113.22
+3) IPv6 Packet
+From: 2001:DB8::8:800:200C:417A
+To: Pref64::203.0.113.22
+4) IPv4 Packet
+From: 198.51.100.41
+To: 203.0.113.22
+Figure 1. Address translation using DNS64 and NAT64.
+behaviour of NAT64 deployment in the wild, alongside [6]5. Specifically, we make
+the following contributions:
+– We develop a set of tests for detecting NAT64 ( §3);
+– We apply those tests on RIPE Atlas to detect RIPE Atlas probes situated
+behind NAT64 middleboxes, finding 224 such probes, in 43 networks ( §4),
+and categorise the types of deployments ( §5).
+– We compare IPv4 and NAT64 translated paths, finding that, on average,
+NAT64 paths are 23.13% longer with 17.47% higher round-trip times ( §6).
+By studying NAT64 performance in the wild, we demonstrate some limitations
+of current deployments and provide a basis for further study.
+2 Motivation
+As the Internet transitions from IPv4 to IPv6, a number of mechanisms have
+been defined to allow IPv4 and IPv6 hosts to communicate [14]. These include
+NAT64 [10], a network address translation mechanism that allows IPv6-only
+hosts to access the IPv4 Internet, and the associated extensions to DNS, known
+as DNS64, that synthesise AAAA records for names representing IPv4-only hosts.
+Figure 1 shows how address translation is performed using DNS64 and NAT64.
+An IPv6 host sends a DNS AAAA query to the DNS64 resolver, for a domain name
+that only has an IPv4 address. The DNS64 resolver synthesises a AAAA record
+containing an IPv6 address that encodes the IPv4 address of the target host. The
+IPv6 address is either made up of the standard NAT64 prefix, 64:ff9b::/96,
+or a different custom prefix, followed by the IPv4 address, usually in the least
+significant 32 bits of the IPv6 address [8].
+Packets sent to that synthesised address by the IPv6 host are routed to the
+NAT64, which extracts the IPv4 address, translates the packet to IPv4, and
+sends it on to the IPv4 host. Replies from the IPv4 host are similarly translated
+back into IPv6. NAT64 devices can be set up by ISPs [2], public providers (e.g.,
+as listed at https://nat64.xyz), or individual users [5].
+Several small-scale studies have measured the performance impact of NAT64
+[7,16,9]. These characterise the translation overhead, and the performance of
+different types of NAT, but in a testbed environment. Accordingly, they do not
+necessarily reflect real-world use in the Internet. Like [6], we study the beha-
+viour of NAT64 in the wild, with comparative evaluation using the RIPE Atlas
+platform.
+In the following, we first develop a set of tests that allow us to detect the
+presence of a NAT64 on the network path. We apply these tests to over 6,400
+5 This work was not yet available to us at the time of writing.
+
+Measuring NAT64 Usage in the Wild 3
+RIPE Atlas probes, to identify probes that are using NAT64, potentially in
+combination with DNS64, and characterise these deployments. Finally, we run
+UDP traceroute from these probes to measure the path length and latency
+impact of the NAT64 deployments.
+While traceroute measurements do not directly reflect the performance
+of real-world applications, they can reveal some impediments to traffic. Further,
+traceroute provides a fine-grained view of variation in path characteristics such
+as latency and number of hops. This allows us to measure the relative impact
+that the introduction of NAT64 has on these characteristics. Further application
+performance issues are out of scope for this paper.
+Relation to 464XLAT . DNS64 and NAT64 assist the IPv6 transition in the
+common case where an application resolves a service name via a AAAA DNS
+lookup, but the service they are resolving has only published an A record. They
+do not address cases where the host sends directly to an IPv4 address without
+a DNS lookup (e.g., if it received the address via some out-of-band means).
+464XLAT [12] is an IPv6 transition mechanism that is intended to provide
+compatibility for such cases. It specifies use of a customer-side NAT46 (“CLAT”)
+for IPv4-to-IPv6 translation in addition to the provider-side NAT64. 464XLAT
+thus translates IPv4 packets twice: the CLAT translates them from IPv4 to
+IPv6 on the host, for transit over the provider network, then the provider-side
+NAT64 translates them back to IPv4 for onwards delivery to their destination.
+DNS64 is not strictly required in a 464XLAT deployment, but it is typical: IPv6
+address synthesis will reduce the number of address family translations required
+to support application traffic. Thus, DNS64 and NAT64 may be standalone from
+a 464XLAT environment, or may be components of a 464XLAT deployment.
+464XLAT is most typically deployed in cellular networks, but guidelines for
+deployment in other network types are available [13].
+As we discuss in §3, it is possible to systematically discover DNS64 and
+NAT64 deployments. We have no equivalent mechanism to detect the existence
+of a CLAT since the translation provided by the CLAT hides IPv6 addresses
+on the path. We therefore limit our results to measuring NAT64 and DNS64
+deployment, and do not further consider 464XLAT. RIPE Atlas probes do not
+implement an on-device CLAT, though it may be possible that a CLAT is im-
+plemented elsewhere in a network [13].
+Applicability. We use RIPE Atlas as a measurement platform, giving wide
+coverage in residential and operator networks but limited visibility into mobile
+networks. The use of a wireless testbed platform, such as was previously provided
+by MONROE, would give broader visibility into such networks but, to the best
+of our knowledge, no such testbed is available at the time of writing.
+3 Detecting NAT64 Devices
+We develop and use four tests to detect and characterise NAT64 devices: two
+tests of DNS behaviour and two ping tests, described in Figure 2 and below.
+These categorise probes into two groups: (i) those with a working NAT64 and
+
+4 E. Boswell et al.
+DNS test 1: ipv4only.arpa.
+DNS test 2: time-c-b.nist.gov
+custom prefix ping testcustom prefix ping test (all
+probes in same AS)standard prefix ping test
+NAT64-only NAT64+DNS64
+standard prefix ping test
+pass pass
+pass
+pass pass
+pass (custom prefix) pass (std. prefix)fail
+fail
+Figure 2. NAT64 detection tests and result groups.
+DNS64 resolver (NAT64+DNS64); and (ii) those with working NAT64 that lack
+access to a DNS64 resolver to synthesise AAAA records for IPv4-only names
+(NAT64-only). The four tests are as follows:
+– DNS Test 1 uses the NAT64 prefix discovery procedure described in RFC
+7050 [15]. Hosts send a DNS AAAA query for the ipv4only.arpa. name. This
+is a special-use domain name that only resolves to IPv4, so where DNS64 is
+in use hosts will receive a synthetic AAAA record in response. IPv6 only hosts
+without DNS64 will receive NXDOMAIN.
+– DNS Test 2 is similar to DNS Test 1, but with a request for a different IPv4-
+only name (time-c-b.nist.gov.). This test is needed because we found that
+some hosts have access to a DNS64 resolver that can correctly synthesise a
+AAAA record for ipv4only.arpa., and hence pass DNS Test 1, but that fail
+to synthesise AAAA records for other IPv4-only names.
+– The Standard Prefix ping Test involves sending ping requests to the
+address of a widely available IPv4-only host ( 91.201.7.243; RIPE Atlas
+anchor probe #6771), encoded into IPv6 as 64:ff9b::5bc9:7f3 using the
+standard NAT64 prefix. This test is used to confirm that hosts receiving the
+standard prefix from DNS64 can ping addresses in that prefix.
+– The Custom Prefix ping Test is used when DNS Test 1 returns a AAAA
+record using a non-standard NAT64 prefix (i.e., not 64:ff9b::/96). The
+custom prefix is used to encode the same IPv4 address as in the Standard
+Prefix ping Test (i.e., 91.201.7.243), which is then used as the target of an
+IPv6 ping request to confirm that the NAT64 works.
+All probes perform the Standard Prefix ping Test, regardless of whether they
+pass any DNS tests. This allows us to find probes that can ping standard prefix
+addresses but didn’t receive the prefix from DNS64. The Custom Prefix ping
+Test is applied to probes within the same IPv6 AS as a probe that received
+a non-standard prefix. These additional tests detect probes that use a DNS
+resolver that is unaware of any available NAT64 device (e.g., probes configured
+to use a public DNS resolver instead of the operator provided resolver). Together,
+these four tests allow for the detection of a range of NAT64 and DNS64 setups,
+including the use of custom prefixes and NAT64 without DNS64.
+
+Measuring NAT64 Usage in the Wild 5
+4 NAT64 Usage in RIPE Atlas
+We ran the tests described in §3 on RIPE Atlas with the goal of understanding
+use of NAT64 in the wild. Tests were run over a period of several weeks in
+December 2022 and January 2023, with 6154 probes participating in the tests.
+Table 1 summarises the results, showing the number of probes that consist-
+ently pass or fail the tests, and those that give inconsistent results from repeated
+runs of the same test. We observe that most RIPE Atlas probes fail all the tests
+and do not access the IPv4 Internet via NAT64, however 255 probes pass one or
+more of the three primary tests and so may have NAT64-based access.
+T able 1. Number of probes that passed/failed the DNS tests and the Standard Prefix
+ping Test. Note that some probes pass multiple tests. Probes that presented different
+results to repeated tests are marked “Inconclusive”.
+T est F ailed Passed Inconclusive
+DNS Test 1 5938 (96.5%) 201 (3.3%) 15 (0.2%)
+DNS Test 2 6107 (99.2%) 42 (0.7%) 5 (0.1%)
+Standard Prefix ping test 6080 (98.8%) 66 (1.1%) 8 (0.1%)
+Additionally, 765 probes either received a non-standard NAT64 prefix for
+DNS Test 1 or were located in the same AS as a probe that received a non-
+standard prefix, and so also performed the Custom Prefix ping Test.
+Probes with working NAT64 and DNS64 . Probes that pass the DNS tests
+and have reachability via the NAT64 have the most functional NAT64 environ-
+ment of all the probes. As shown in Table 1, 201 probes pass DNS Test 1 and 42
+probes pass DNS Test 2. Of these, 36 probes passed both DNS tests and can be
+considered to have fully working DNS64. 18 of these probes (50%) consistently
+passed the appropriate ping test. These probes have a fully functional NAT64
+and DNS64 setup and comprise the NAT64+DNS64 group from Figure 2. This
+set contains six IPv6-only and 12 dual-stack probes.
+Probes with working NAT64 but not DNS64 . Some probes are not con-
+figured with a DNS64 but are able to reach a NAT64 device: 326 probes failed
+one or both DNS tests, but passed one of the ping tests. These probes can reach
+a NAT64 device, but have, at best, semi-functional DNS64. 120 of these probes
+were only able to ping targets via public NAT64 providers, they were excluded
+from this analysis. The remaining 206 probes, which were able to ping targets
+via a non-public NAT64, comprise the NAT64-only group in Figure 2. Of these,
+52 were able to ping hosts using the standard NAT64 prefix, while 160 used a
+custom prefix. 6 probes could ping via both types of prefixes.
+A probe may be categorised as NAT64-only if it is configured to use DNS
+resolvers without a DNS64 function. For example, a probe could be explicitly
+configured to use a public DNS service rather than its ISP’s DNS. We checked
+for NAT64-only probes using public resolvers, 6 and found that 56 probes in this
+6 https://github.com/trickest/resolvers/blob/main/resolvers-trusted.txt,
+plus IPv4 and IPv6 resolvers provided by Google, Cloudflare, Quad9 and OpenDNS
+
+6 E. Boswell et al.
+3352
+12322
+15954
+33915
+577
+2107
+3209
+5089
+13036
+15435
+9145
+2027
+no AS
+21928
+other
+IPv4 ASN
+0
+25
+50
+75
+100
+125
+NAT64-only probes
+NAT64+DNS64 probes
+15954
+205100
+2107
+no AS
+2027
+21928
+other
+6939
+IPv6 ASN
+Figure 3. ASes of the probes. “Other” denotes ASes with two or fewer probes.
+set use a public DNS resolver (though they might also use the ISP resolver).
+Excluding these probes and the NAT64-only probes that passed any DNS tests,
+139 probes are likely not intended to use the NAT64.
+Probes that pass DNS Test 1 without working NAT64 . We found 162
+probes that passed DNS Test 1, indicating that they should be able to use
+NAT64 according to the discovery procedure in RFC 7050 [15], but that failed
+DNS Test 2 and both ping tests, indicating that they do not have functioning
+NAT64. These probes likely have a misconfigured DNS resolver (152 of the 162
+such probes are in AS 12322, “ Free SAS”, suggesting a localised problem).
+We note that probes may pass DNS Test 1 and fail DNS Test 2, but still
+have a functioning NAT64. Some DNS64 resolvers only respond to requests for
+ipv4only.arpa. to provide the NAT64 prefix and require hosts to synthesise
+their own IPv6 addresses [3].
+Summary. Although RIPE Atlas probes that make use of NAT64 are rare, we
+find evidence of some usage, with various DNS64 and NAT64 configurations. We
+identify 224 probes that are potentially behind a NAT64. 18 of these have a fully
+functional NAT64 and DNS64 setup, and 206 probes can reach a NAT64 but
+don’t use DNS64, of which 139 probes appear to be able to reach the NAT64
+by accident. It is not enough to rely on the standard NAT64 prefix discovery,
+as defined by RFC 7050 [15], and we have shown that our tests ( §3) provide a
+more comprehensive approach.
+5 Classifying NAT64 Networks
+Probes with reachability to NAT64 middleboxes are located in multiple networks.
+Figure 3 shows the ASNs of probes using NAT64; we find probes in 43 IPv6
+networks and 143 IPv4 networks. Most IPv4 ASes host only one or two NAT64
+probes. The most common IPv6 AS is AS 6939 (Hurricane Electric), hosting
+145 probes. However, as discussed in § 6, only one of these probes is able to
+traceroute to IPv4 hosts via the NAT64, suggesting that this is a private NAT64
+deployment which blocks outside traceroutes. Only 15 probes are not in any
+IPv4 AS, so most of these probes can use NAT64 and connect to native IPv4.
+
+Measuring NAT64 Usage in the Wild 7
+T able 2. Categorisation of probe IPv6 ASes.
+Category ASNs Probes
+Other ISP (business ISP, tier 2 AS, cloud provider, etc) (OI) 7 153
+Residential ISP (RI) 18 41
+Hobbyist network (run by individuals) (H) 12 14
+Academic and research backbone (A) 2 5
+Other (O) 2 4
+Unknown (U) 2 3
+We use public information (e.g., websites of Internet service providers) to
+categorise the IPv6 ASes that the probes are in. The results are shown in Table 2.
+Out of 43 IPv6 ASes, 18 (41.9%) are residential ISPs; this suggests that NAT64
+deployments are uncommon in fixed-line home networks, and are more common
+in alternative types of networks.
+We use two tests to determine whether NAT64s are provided by the ISP,
+or are deployed in the local network. In Test 1 we use the DNS test data ( §3)
+to determine if the default resolver of an AS is a DNS64. If two probes in an
+AS query the same DNS64, it is likely provided by the ISP. Such an ISP likely
+provides a NAT64 as well. The DNS tests use the probes’ default resolvers,
+so they expose the configuration of the probes’ networks. A probe can’t use a
+DNS64 “by accident”, while this can happen in the ping tests.
+For every NAT64+DNS64 probe, we analysed the results of the DNS tests for
+all probes in the same AS. If any other probe used the resolver with which the
+NAT64+DNS64 probe passed the DNS tests, we assume that this AS contains
+an ISP setup. Two such networks were found: AS 2027 (MilkyWan, a residential
+ISP) and AS 64475 (Freifunk Frankfurt, a public Internet infrastructure project).
+This test can over and underestimate the number of ISP setups. An overestim-
+ate can occur if several probes are deployed in a local network with a custom
+NAT64. To mitigate this, we compared the network prefixes of the probes using
+the DNS64s, which were different. An underestimate can occur if the AS only
+contains one probe, if only one probe uses the default ISP resolver, or if there are
+several ISP resolvers. 3 of the 14 ASes with NAT64+DNS64 probes contain only
+one probe that participated in the DNS tests, so they could contain undetected
+ISP deployments. However, eight of the ASes contain 10 or more probes.
+Another possible ISP NAT64 setup is in AS 21928 (T-Mobile). Several probes
+in this network passed the DNS test some of the time, querying link-local ad-
+dresses which return similar NAT64 prefixes. T-Mobile could be running several
+DNS64s and NAT64s for redundancy, preventing this setup from being detected.
+In Test 2, we use the round-trip time to the NAT64 to detect custom setups.
+A custom (local) setup will likely have a lower RTT to the NAT64 than an ISP
+setup. This test is based on the traceroute data ( §6). The RTT to the NAT64
+is taken to be the RTT to the first hop that begins with the NAT64 prefix.
+Looking for probes with an RTT < 2ms to the NAT, we found five probes (2ms
+was chosen as an estimate of the RTT to a home gateway). Three of these probes
+
+8 E. Boswell et al.
+only public 
+resolver
+28
+  
+  
+AS with 
+DNS64
+24
+ISP
+DNS64
+3
+home setup
+3
+public 
+NAT64
+2
+remote 
+NAT64
+7
+no TR through 
+NAT
+131
+17 1
+ 3
+1
+1
+unknown
+54
+2
+Figure 4. Probe categorisation. The size of the circles is not proportional.
+are very likely custom setups (based on public information or contact with the
+owner). The fourth probe is in AS 2027, which, based on Test 1, likely has an ISP
+setup. We suspect the probe is owned by the network operator and located close
+to the ISP NAT64, as it is tagged “Datacentre” and “Core” on RIPE Atlas. We
+could not verify whether the fifth probe (ID 11149) is a custom setup. While this
+test detects some likely home setups, the RTT alone is not a complete indicator
+of the type of setup.
+Probe categorisation. To summarise, the probes that were found can be cat-
+egorised as depicted in Figure 4. Of the 224 probes:
+– 3 likely use an ISP-provided DNS64 (ISP DNS64), while 24 probes are in
+an AS providing such a DNS64 (AS with DNS64; including T-Mobile);
+– 3 probes are likely home setups (based on contact with the owner or public
+information);
+– 28 probes in NAT64-only only use a public (non-DNS64) resolver and might
+be NAT64+DNS64 probes if they used their network’s configured resolver;
+– 2 probes in NAT64+DNS64 use a public NAT64/DNS64 service;
+– 7 probes can traceroute through a NAT64 in another AS (remote NAT64);
+– 131 probes can’t to traceroute to a NAT64 prefix that they can ping (no
+TR through NAT);
+– 54 probes are uncategorised (unknown).
+Summary. NAT64s are present in a variety of IPv4 and IPv6 ASes. Analysing
+the types of IPv6 ASes, we find that only 41.9% are domestic ISPs, indicating
+that NAT64s are more commonly deployed on other types of networks. We find
+three ASes with a likely ISP-provided NAT64s, and three probes that are likely
+home setups. Categorising NAT64 deployments is challenging due to a lack of
+publicly available information.
+6 IPv4 and NAT64 Path Characterisation
+Having identified RIPE Atlas probes that use NAT64+DNS64 or NAT64-only,
+we next perform NAT64 and IPv4 traceroute from the dual stack probes to
+known IPv4 targets. We characterise differences in reachability and latency.
+Methodology. Out of 205 dual-stack RIPE Atlas probes with NAT64, 183 re-
+mained online and available for preliminary measurements (9 NAT64+DNS64
+
+Measuring NAT64 Usage in the Wild 9
+probes, 14 NAT64-only). We performed traceroute from these probes to 18 IPv4-
+only targets: seven IPv4-only NTP servers 7 and 11 RIPE Atlas anchors which
+were IPv4-only at the time of the experiment. 8 The targets were chosen due to
+their geographic spread. The IPv6 address of each target was synthesised locally
+using the prefixes obtained from the NAT64 detection tests ( §3).
+Preliminary traceroutes . Initally we performed single Paris traceroute [1]
+measurements. We sent three UDP probe packets for each hop, but to reduce
+complexity, only the first detected address for each hop was analysed. For every
+assigned and functional NAT64 prefix on the identified dual stack probes, we
+ran a traceroute to the targets listed above with the aim of generating one nat-
+ive IPv4 and one NAT64 path for each probe/prefix/target combination (most
+probes can only use a single NAT64 prefix; all probes with multiple NAT64
+prefixes are in AS 21928 T-Mobile).
+Our initial result set contains 3565 pairs of IPv4 and NAT64 paths from the
+probes to the targets, but a number of paths were not suitable for analysis. Of
+note, 2320 of the traceroutes to synthesised IPv6 addresses don’t contain any
+hops starting with the NAT64 prefix. Most of these paths target a NAT64 prefix
+in AS 6939 (Hurricane Electric). As these probes were able to ping addresses
+with this prefix, it is likely that these NAT64 devices don’t respond with ICMPv6
+Time Exceeded messages when the hop limit is reached at the NAT64, and don’t
+translate ICMPv4 Time Exceeded responses from hosts beyond the NAT64,
+making the data for the paths unusable. A further 15 pairs of paths were excluded
+for other anomalies. Excluding these paths, the preliminary measurement set
+contains 1230 pairs of paths, starting from 54 probes to 18 destinations.
+Recurring traceroutes. Of the 54 probes with usable results in the prelim-
+inary measurements, 37 probes were still available when the second round of
+measurements was conducted. Traceroutes were performed once per hour over
+a span of 41 hours, to 14 of the 18 targets - four of the Anchor probes used in
+the preliminary measurements were disconnected at this time 9. Each hour, each
+probe performed one IPv4 traceroute per IPv4 target, and one IPv6 traceroute
+for each combination of translated IPv4 target address and prefix.
+Five of these probes failed to perform traceroutes to all 14 targets during
+one measurement run, this data was removed. The 41st measurement run was
+removed for the other probes. Six targets did not respond to any traceroutes,
+traceroutes to these targets were excluded. Pairs of IPv4 and NAT64 paths from
+the same probe to the same target, where the NAT64 path did not contain a hop
+starting with the NAT64 prefix (1076 pairs) were removed as well. Thus these
+measurements resulted in a set of 15564 pairs of IPv4 and NAT64 traceroutes,
+performed by 34 probes. Of these probes, 28 are in the set NAT64-only, 6 are
+NAT64+DNS64 probes. There are 27 probes that use one NAT64 prefix, two
+7 We used the IPv4 NTP servers: dodo.mcc.ac.uk, d.st1.ntp.br, time-c-b.nist.gov,
+ntp1.nog.net.za, ntp1.st.keio.ac.jp, time-b-g.nist.gov, and ntp2.urz.uni-heidelberg.de
+8 IDs 6771, 6994, 6678, 6827, 6688, 6356, 6366, 6138, 6712, 6299, and 6711.
+9 One target was no longer IPv4-only at the time of these measurements, but trace-
+routes were performed to its IPv4 address
+
+10 E. Boswell et al.
+Probe IPv6 
+AS
+NAT64 AS
+Local
+NAT64
+All
+different
+(0/34)
+NAT 
+in v6 AS
+(3/34)
+Probe IPv4
+ AS
+Diff.
+NAT AS
+(7/34)
+NAT 
+in v4 AS
+(0/34)
+All Equal
+(24/34)
+All different
+(0/34)
+All different
+(0/34)
+remote NAT64
+Figure 5. NAT64 and probe locations (shaded: local NAT64, unshaded: remote).
+probes use two prefixes, two probes use three prefixes, and three probes use four
+prefixes. This measurement set is used as the basis for the following analysis.
+NAT64 locations. We group paths by the AS that the NAT64 is in, relative to
+the AS(es) of the probe. The AS of the NAT64 is taken as the AS of the prefix
+used (if non-standard and announced), or otherwise it is taken as the AS of the
+final hop in the path that doesn ’tuse the NAT64 prefix. If this process yields a
+different AS for different paths to the same NAT64, the AS corresponding to the
+hop that is furthest away from a probe is chosen. If the AS can’t be determined,
+then the NAT64 is assumed to be within the same IPv6 AS as the probe.
+Figure 5 shows the possible NAT64 and probe locations. In most cases
+(24/34), the probe’s IPv4 and IPv6 ASes and the AS of the NAT64 are the
+same. We consider the NAT64s in the all equal and NAT in v6 AS categories to
+be local NAT64s: they are likely provided by the probe’s ISP, or set up in its local
+network. All other categories are considered remote NAT64s, as the path leaves
+the local AS to reach the NAT64. These include public NAT64 services and other
+NAT64s that are accessible from outside the AS, e.g. due to a misconfiguration.
+There are 27 probes with a local NAT64 (shaded area in Figure 5), and seven
+probes with a remote NAT64 (white area in Figure 5). Of the probes with a local
+NAT64, 23/27 are NAT64-only, compared to 5/7 probes with a remote NAT.
+One of the five NAT64-only probes with a remote NAT64 can use a NAT64 with
+the standard prefix, but is likely not intended to it: the probe the uses ISP-
+provided resolver and did not pass either of the DNS tests. Since the NAT64 is
+not in its local AS, the packets are routed to another AS with a NAT64. This
+AS is likely the default destination for all packets, and it contains a NAT64 that
+doesn’t check the source address of packets before translating them. This is a
+minor security concern, as it can be used to hide the source AS of the packets.
+Impact of NAT64 on traceroute . We first investigate the effect that NAT64
+has on traceroute itself, in terms of reachability, and the number of missing hops.
+The overall success rate (i.e., proportion of traceroutes that reach the target
+address, even if it isn’t the final hop in the traceroute) across all IPv4 paths is
+87.94%, compared to 87.07% for the paths via NAT64. There are 13519 pairs
+of IPv4 and NAT64 paths from the same probe to the same target that both
+reached the destination (86.86% of pairs). 12.03% of unsuccessful IPv4 paths
+and 0.00% of unsuccessful NAT64 paths reached the target AS. While paths via
+NAT64 are somewhat less successful than native IPv4 – with a difference of 0.87
+percentage points – success rates don’t differ much between groups.
+
+Measuring NAT64 Usage in the Wild 11
+0 20 40 60 80
+% missing hops
+0
+500
+1000
+1500
+2000
+2500Frequency
+IPv4
+NAT64
+Figure 6. Distribution of missing hops in successful pairs of IPv4 and NAT64 paths
+If a hop does not respond to probe packets, then that hop is missing from
+the traceroute. Figure 6 shows the distribution of percentages of missing hops
+in paths where the IPv4 path and the equivalent path via NAT64 reached the
+destination. Paths via the NAT64s have more missing hops: the mean percentage
+of missing hops for the IPv4 paths is 16.52% (SD 11.92, median 16.67%), via
+the NAT64 it is 38.06% (SD 14.50, median 36.84%). A possible explanation for
+the greater number of missing hops via NAT64 is that the NAT64s filter out
+ICMP response packets. However, this is unlikely: all of the paths considered
+here contain at least one hop with a NAT64 prefix. It is more likely that the
+missing hops are due to specific routers filtering ICMP responses on these paths.
+To determine how often the same hops are missing in similar traceroutes,
+we compared the NAT64 traceroutes for the two most successful targets in
+two measurement periods. We considered all the runs of missing hops that
+are preceded and followed by the same hops in both traceroutes. For example,
+if traceroute one contains [address 1, missing hop, missing hop, address
+2], and traceroute two also contains address 1 and address 2 , then we check if
+traceroute 2 also contains the exact sequence of hops (i.e., address 1 followed by
+two missing hops, followed by address 2). In the runs of missing hops identified
+using this method, on average 89.50% also occurred in the second traceroute (me-
+dian 100.00%, SD 16.46%). This provides some evidence that the missing hops
+are not due to random failure, but rather caused by specific hops not responding
+to these traceroutes.
+Impact of NAT64 on path length and latency . To analyse NAT64’s impact
+on path length and latency, we consider the 13519 pairs of paths where both the
+IPv4 path and the corresponding NAT64 path reached the destination.
+First, we compare the path length (in IP hops) between IPv4 and NAT64
+paths. We consider the path length in hops and not the number of ASes traversed,
+because the high number of missing hops in the NAT64 paths makes it impossible
+to accurately determine the number of ASes, and because using the number of
+IP hops provides a finer grained view of possible detours added by using NAT64.
+The average path length across all IPv4 paths is 17.72 hops (SD 5.25, median
+17.00), the average NAT64 path length is 20.99 hops (SD 6.10, median 21.00). As
+expected, given the potential detours introduced by NAT64, the NAT64 paths
+are about three hops longer. The average length difference for paths with a
+remote NAT64 is 2.21 hops, for paths with a local NAT64 it is 3.45. This is
+
+12 E. Boswell et al.
+caused by the probe in AS 15751, which appears to have a router on the path
+that is manipulating the probing packet’s TTL, resulting in traceroutes that
+reach the destination in very few hops. Excluding this probe, the paths with a
+remote NAT64 have an average length difference of 5.08 hops. Some of the NAT64
+prefixes with the largest length difference are of the form 2607:7700:0:x :0:y ,
+used by T-Mobile US. These paths have an average length difference of 4.38
+hops; the average difference of other paths is 2.49 hops.
+Taking the RTT as measured by traceroute to the first hop matching the
+target, and averaging across all successful UDP probe packets, we find that the
+mean RTT across all IPv4 paths is 160.82 ms (SD 91.61, median 169.80 ms),
+the mean NAT64 RTT is 184.55 ms (SD 105.59, median 193.51 ms). While the
+difference is small, the NAT64 paths have a larger mean RTT. Local NAT64
+paths have a higher average RTT difference (27.56 ms) than the remote NAT64
+paths (1.22 ms), due to the high RTTs of paths using the T-Mobile prefixes
+(2607:7700:0:x:0:y). Excluding these the local NAT64 paths have a average RTT
+difference of 1.34 ms. We also find a moderate correlation between RTT difference
+and path length difference (Pearson correlation coefficient 0.29).
+Summary. NAT64 has a moderate impact on path length and RTT, increasing
+the average number of hops by 23.13% (3.27 hops), and increasing the average
+RTT by 17.47% (23.74ms). There is a moderate correlation between differences
+in path length and RTT (Pearson correlation coefficient 0.29).
+7 Related Work
+Parallel work by Hsu et al. [6] also uses RIPE Atlas to study NAT64 deployments.
+It differs from our work by not using traceroute, and not focusing on path char-
+acteristics such as RTT, number of IP hops, or number of missing hops. Instead,
+they perform additional ping, DNS and HTTP(S) measurements, and also study
+the behaviour of public resolvers. They find a similarly low number of NAT64
+probes on RIPE Atlas, deployed in a variety of networks 10.
+Small-scale studies have evaluated the performance of NAT64 implementa-
+tions. Lencse and R´ ep´ as [7] compared the performance of NAT64 implement-
+ations in TAYGA and PF under load on a small test network, showing that
+both degrade gracefully, but that PF has better performance. Llanto and Yu [9]
+compare the performance of NAT44, NAT64 (TAYGA) and native IPv6 on a
+small test network and compare NAT44 and NAT64 on a larger university net-
+work, showing that while NAT64 and NAT44 had similar performance, the per-
+formance of IPv6 was better than NAT64. Tsetse et al. [16] used a small test
+deployment to quantify the translation overhead of the IVI translator, a trans-
+lator similar to NAT64 used by CERTNET [18]. These studies are very different
+from the measurements done in this paper, as they are small-scale, fine grained
+measurements of particular NAT64 implementations, performed in a controlled
+environment. Our work studies the behaviour of NAT64s on the public Internet,
+10 This work was not yet available to us at the time of writing.
+
+Measuring NAT64 Usage in the Wild 13
+and thus does not distinguish between NAT64 implementations. While the num-
+ber of NAT64s found is relatively small, this work still provides an insight into
+the prevalence of NAT64, and the behaviour of a number of real-world deploy-
+ments.
+De Vries et al. [17] use RIPE Atlas to explore the difference between the
+forward and reverse traceroute paths. This is similar to our study, because it is
+also a large-scale traceroute measurement study investigating path similarities.
+8 Conclusions
+We developed tests for identifying NAT64, and applied them to RIPE Atlas to
+study NAT64 usage in the wild. We found that, while RIPE Atlas has around
+12,000 probes, NAT64 usage is rare with only 255 probes able to use NAT64
+to access the IPv4 Internet, and only 18 having a fully functional NAT64 and
+DNS64 setup. Importantly, it is not sufficient to rely on the standard NAT64
+prefix discovery procedure [15]; our tests (§3) are more effective. Having identified
+NAT64 use ( §4), we performed traceroute from dual-stack NAT64 probes to
+compare IPv4 and NAT64 paths (§6). On average, the NAT64 paths were 23.13%
+longer, had 17.47% higher RTT, and lower traceroute visibility. NAT64 is a
+workable substitute to native IPv4, but impacts latency and reachability.
+References
+1. Augustin, B., Cuvellier, X., Orgogozo, B., Viger, F., Friedman, T., Latapy, M.,
+Magnien, C., Teixeira, R.: Avoiding traceroute anomalies with Paris traceroute.
+In: Proceedings of the 6th ACM SIGCOMM conference on Internet measurement.
+pp. 153–158. IMC ’06, Association for Computing Machinery, New York, NY, USA
+(Oct 2006). https://doi.org/10.1145/1177080.1177100, https://dl.acm.org/
+doi/10.1145/1177080.1177100
+2. Chen, G., Cao, Z., Xie, C., Binet, D.: NAT64 Deployment Options and
+Experience. Request for Comments RFC 7269, Internet Engineering Task Force
+(Jun 2014). https://doi.org/10.17487/RFC7269, https://datatracker.ietf.
+org/doc/rfc7269, num Pages: 22
+3. Cheshire, S., Schinazi, D.: Special Use Domain Name ’ipv4only.arpa’. Request
+for Comments RFC 8880, Internet Engineering Task Force (Aug 2020). https://
+doi.org/10.17487/RFC8880, https://datatracker.ietf.org/doc/rfc8880, num
+Pages: 17
+4. Google: IPv6 adoption statistics. https://www.google.com/intl/en/ipv6/
+statistics.html (May 2023)
+5. Hendriks, L.: Going IPv6-only at home. https://ripe72.ripe.net/archives/
+video/228/ (May 2016)
+6. Hsu, A., Li, F., Pearce, P., Gasser, O.: A First Look At NAT64 Deployment In-The-
+Wild (Jan 2024). https://doi.org/10.48550/arXiv.2311.04181, http://arxiv.
+org/abs/2311.04181, arXiv:2311.04181 [cs]
+7. Lencse, G., R´ ep´ as, S.: Performance analysis and comparison of the TAYGA and
+of the PF NAT64 implementations. In: 2013 36th International Conference on
+Telecommunications and Signal Processing (TSP). pp. 71–76 (Jul 2013). https:
+//doi.org/10.1109/TSP.2013.6613894
+
+14 E. Boswell et al.
+8. Li, X., Boucadair, M., Huitema, C., Bagnulo, M., Bao, C.: IPv6 Addressing
+of IPv4/IPv6 Translators. Request for Comments RFC 6052, Internet
+Engineering Task Force (Oct 2010). https://doi.org/10.17487/RFC6052, https:
+//datatracker.ietf.org/doc/rfc6052, num Pages: 18
+9. Llanto, K.J.O., Yu, W.E.S.: Performance of NAT64 versus NAT44 in the Context of
+IPv6 Migration. In: Proceedings of the International MultiConference of Engineers
+and Computer Scientists. vol. 1, p. 8 (2012)
+10. Matthews, P., Beijnum, I.v., Bagnulo, M.: Stateful NAT64: Network Address and
+Protocol Translation from IPv6 Clients to IPv4 Servers. Request for Comments
+RFC 6146, Internet Engineering Task Force (Apr 2011). https://doi.org/10.
+17487/RFC6146, https://datatracker.ietf.org/doc/rfc6146, num Pages: 45
+11. Matthews, P., Sullivan, A., Beijnum, I.v., Bagnulo, M.: DNS64: DNS Extensions
+for Network Address Translation from IPv6 Clients to IPv4 Servers. Request for
+Comments RFC 6147, Internet Engineering Task Force (Apr 2011). https://
+doi.org/10.17487/RFC6147, https://datatracker.ietf.org/doc/rfc6147, num
+Pages: 32
+12. Mawatari, M., Kawashima, M., Byrne, C.: 464XLAT: Combination of Stateful and
+Stateless Translation. Request for Comments RFC 6877, Internet Engineering Task
+Force (Apr 2013). https://doi.org/10.17487/RFC6877, https://datatracker.
+ietf.org/doc/rfc6877, num Pages: 14
+13. Palet Martinez, J.: Additional Deployment Guidelines for NAT64/464XLAT
+in Operator and Enterprise Networks. Request for Comments RFC 8683,
+Internet Engineering Task Force (Nov 2019), https://datatracker.ietf.org/
+doc/rfc8683
+14. Richter, P., Allman, M., Bush, R., Paxson, V.: A Primer on IPv4 Scarcity.
+ACM SIGCOMM Computer Communication Review 45(2), 21–31 (Apr
+2015). https://doi.org/10.1145/2766330.2766335, https://dl.acm.org/doi/
+10.1145/2766330.2766335
+15. Savolainen, T., Korhonen, J., Wing, D.: Discovery of the IPv6 Prefix Used for IPv6
+Address Synthesis. Request for Comments RFC 7050, Internet Engineering Task
+Force (Nov 2013). https://doi.org/10.17487/RFC7050, https://datatracker.
+ietf.org/doc/rfc7050, num Pages: 22
+16. Tsetse, A.K., Wijesinha, A.L., Karne, R.K., Loukili, A.: Measuring the IPv4-IPV6
+IVI translation overhead. In: Proceedings of the 2012 ACM Research in Applied
+Computation Symposium. pp. 186–190. RACS ’12, Association for Computing
+Machinery, New York, NY, USA (Oct 2012).https://doi.org/10.1145/2401603.
+2401646, https://doi.org/10.1145/2401603.2401646
+17. de Vries, W., Santanna, J.J., Sperotto, A., Pras, A.: How Asymmetric Is the
+Internet? In: Latr´ e, S., Charalambides, M., Fran¸ cois, J., Schmitt, C., Stiller, B.
+(eds.) Intelligent Mechanisms for Network Configuration and Security. pp. 113–
+125. Lecture Notes in Computer Science, Springer International Publishing, Cham
+(2015). https://doi.org/10.1007/978-3-319-20034-7_12
+18. Wu, J., Zhang, H., Li, X., Chen, M., Bao, C.: The China Education and
+Research Network (CERNET) IVI Translation Design and Deployment for the
+IPv4/IPv6 Coexistence and Transition. Request for Comments RFC 6219, Internet
+Engineering Task Force (May 2011).https://doi.org/10.17487/RFC6219, https:
+//datatracker.ietf.org/doc/rfc6219, num Pages: 22
+
+Measuring NAT64 Usage in the Wild 15
+64:ff9b:: (21928)
+64:ff9b:: (13030)
+64:ff9b:: (57809)
+2607:7700:0:2d:0:1::
+64:ff9b:: (12611)
+64:ff9b:: (31349)
+64:ff9b:: (6939)
+64:ff9b:: (15954)
+64:ff9b:: (211722)
+64:ff9b:: (25596)
+64:ff9b:: (43950)
+2607:7700:0:9:0:2::
+64:ff9b:: (2027)
+64:ff9b:: (205100)
+64:ff9b:: (2107)
+2607:7700:0:4:0:2::
+64:ff9b:: (201723)
+2607:7700:0:27:0:1::
+2607:7700:0:18:0:1::
+NAT64 prefix
+(local NAT)
+NAT64 - IPv4 path length
+−20 −10 0 10 20
+←  NAT64 shorter ∙ IPv4 shorter →     
+64:ff9b:: (15751)
+64:ff9b:: (12322)
+2001:470:703e:acfb:1::
+64:ff9b:: (208069)
+64:ff9b:: (212972)
+2001:67c:2960:6464::
+64:ff9b:: (208261)
+NAT64 prefix
+(remote NAT)
+Figure 7. Difference in NAT64 and IPv4 path lengths by NAT64 prefix and probe AS.
+A Ethics
+This work does not raise any ethical issues. We identify and characterise the use
+of NAT64 by probes on a public measurement platform (RIPE Atlas). We gen-
+erate a relatively small volume of traceroute measurement traffic towards NTP
+servers, which are publicly listed, and RIPE Atlas anchors, which are architected
+as measurement targets.
+B Additional data tables & figures
+T able 3. Percent success rate for groups of probes/NAT64s.
+Set IPv4 success IPv6 success
+NAT64-only 87.94 86.92
+NAT64+DNS64 87.92 88.07
+Local NAT64 88.01 86.99
+Remote NAT64 87.50 87.50
+
+16 E. Boswell et al.
+T able 4.ASes of the NAT64-only and NAT64+DNS64 probes. Count of users is based
+on https://stats.labs.apnic.net/aspop. Some holder names are shortened; category la-
+bels are as in Table 2.
+ASN Holder name Category Users (est.) # probes
+6939 Hurricane Electric OI 793668 145
+21928 T-Mobile US RI 19377903 14
+2027 MilkyWan Association RI 479 9
+2107 ARNES-NET - ARNES A 11923 4
+205100 F3 Netze e.V. O 4148 3
+15954 Tecnocratica Centro de Datos, S.L. OI — 3
+133481 AIS Fibre RI 5598723 2
+15751 Meteor Mobile Communications Limited RI 286273 2
+203528 Fabrizzio Jose Petrucci H — 2
+201723 R. van der Meijden H — 2
+43950 SPILSBY-AS - Terence Froy trading as ”Spilsby I... U — 2
+7713 PT Telekomunikasi Indonesia RI 31773744 1
+3320 Deutsche Telekom AG RI 24767366 1
+3209 Vodafone GmbH RI 17566119 1
+12322 Free SAS RI 7223746 1
+1136 KPN B.V. RI 5763278 1
+45629 JasTel Network International Gateway RI 5404250 1
+2527 Sony Network Communications RI 3925106 1
+6568 EntelNet RI 2594067 1
+34779 T-2, d.o.o. RI 266187 1
+1916 Rede Nacional de Ensino e Pesquisa A 68162 1
+4800 LINTASARTA-AS-AP PT Aplikanusa Lintasarta OI 42633 1
+25596 Cambrium IT Services B.V. OI 27970 1
+12611 RKOM RI 24572 1
+57809 SERVEURCOM - UNYC SAS OI 19850 1
+13030 Init7 (Switzerland) Ltd. RI 15863 1
+31349 a-net Liberec s.r.o. RI 15719 1
+206238 Freedom Internet BV RI 13410 1
+25660 CTC U 1698 1
+29670 Individual Network Berlin e.V. RI — 1
+211579 Laura Hausmann H — 1
+212037 Marc Provost H — 1
+203062 Alexandre Roux H — 1
+213204 Marvin Gaube H — 1
+208069 Cecile Morange H — 1
+213318 None H — 1
+208261 Pomme Telecom SASU H — 1
+212972 Nicolas VUILLERMET H — 1
+62538 IPFAIL H — 1
+204345 Timothy Stallard H — 1
+64475 Freifunk Frankfurt am Main e.V. O — 1
+56381 level66.network UG OI — 1
+211722 Nullroute ry OI — 1
+
+Measuring NAT64 Usage in the Wild 17
+0 25 50 75 100
+Anchor 6299 (197.239.73.59)
+Anchor 6366 (195.130.61.208)
+Anchor 6678 (200.61.6.78)
+Anchor 6827 (143.205.170.32)
+Anchor 6994 (94.207.43.2)
+dodo.mcc.ac.uk (130.88.202.49)
+ntp1.nog.net.za (102.222.102.153)
+ntp2.urz.uni-heidelberg.de (129.206.119.11)T arget
+IPv4 reached dest
+IPv4 reached AS
+NAT64 reached dest
+Figure 8. % of paths that reached the destination or destination AS, by target.

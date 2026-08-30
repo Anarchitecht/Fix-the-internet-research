@@ -1,0 +1,3564 @@
+Auditable Continuous Group Key Agreement
+Easwar Vivek Mangipudi Maddie Gorman Sasha Levinshteyn
+Hoth Labs
+{easwarmangipudi, maddie.b.gorman, sashaplevinshteyn}@gmail.com
+Abstract
+Continuous group key agreement (CGKA), the cryptographic
+core of Messaging Layer Security (MLS, RFC 9420), pro-
+vides key management for large end-to-end encrypted group
+chats. It refreshes the group’s keys as members join and leave,
+but offers no way for a designated auditor to recover past
+epoch keys, and no way tocheckthat such recovery remains
+possible. Regulated deployments in finance, healthcare, and
+government therefore resort to plaintext server logging, aban-
+doning end-to-end encryption entirely. Simply adding a key
+escrow admits asilent escrow failure: the group accepts an
+epoch whose escrow holds unrecoverable material, with no
+visible anomaly until a later audit.
+Addressing this, we introduceauditable CGKA(Au-
+CGKA), an MLS-shaped protocol in which every admitted
+epoch carries a proof. The proof binds that epoch’s key mate-
+rial to a well-defined secret recoverable by a threshold auditor
+committee. Every member checks that binding against the
+epoch secret it derives and refuses the commit if the two dis-
+agree, soauditabilityguarantees that the secret of every epoch
+an honest member accepts is threshold-recoverable. We give
+a post-quantum protocol, ΠA, realizing this property with
+STARK proofs. The committer escrows the epoch secret to
+an auditor committee, and the escrow ciphertext is a STARK-
+friendly encryption of Shamir shares. Its well-formedness is
+proven in-circuit at MLS commit time.
+We prototype Au-CGKA in Rust with the proofs on a zero-
+knowledge, post-quantum custom multi-stage STARK. On an
+Apple M5 Pro, an auditability proof takes 1.38 s with proof-
+size 15.31 MB and verifies in 0.17 s, at every group size; the
+relation it proves is independent of the group size. The proof
+is checked at admission and then discarded, so it costs band-
+width on the commit and nothing in storage; the only persis-
+tent overhead is the fixed-size escrow. Adaptive post-quantum
+security holds in the secure-erasure model with straight-line
+reductions in the quantum random-oracle model, and car-
+ries to the implemented backend under a stated assumption;
+privacy and escrow soundness follow as game-based guaran-
+tees.
+1 Introduction
+End-to-end encrypted (E2EE) group messaging is now stan-
+dardized. The Messaging Layer Security protocol (MLS,
+RFC 9420) [7] is designed for group chats of up to tens of
+thousands of members. Those members hold a shared se-
+cret key end-to-end, so that only current members can read
+the chat’s traffic. The group advances inepochs: when the
+membership or keys change, one membercommits, deriving
+fresh key material for the next epoch. This continual rekeying
+is carried out by TreeKEM (Tree-based Key Encapsulation
+Mechanism), thecontinuous group key agreement(CGKA)
+at the core of MLS [28]. It provides two properties that a
+single long-lived key cannot:forward secrecy(FS), so that
+compromising today’s key does not expose past epochs, and
+post-compromise security(PCS), so that the group heals once
+a compromised member rekeys. §3 and Appendix A.1 recall
+the mechanics we rely on.
+One class of deployments cannot use MLS as it stands.
+Record-keeping rules in finance (SEC Rule 17a-4 [79],
+FINRA Rule 4511 [38], MiFID II [36]), healthcare (HIPAA
+Security Rule audit controls [78]), and government (Fed-
+eral Records Act [77], NARA electronic-records require-
+ments [62]) require that an authorized party be able to re-
+construct communications after the fact. This is precisely
+the recoverability that end-to-end encryption is designed to
+deny. Organizations under these mandates have two options
+today: disable E2EE and log plaintext at a server, exposing
+every message to a single breach; or augment the protocol
+with ad hoc, unverified key escrow, whose correct operation
+is neither observable nor verifiable.
+The second option admits asilent escrow failure. Escrow’s
+premise is that each commit message also seals the epoch’s
+secret for the authorized party. MLS, however, gives no way
+to check that this sealed ciphertext holds thesamesecret the
+commit used to derive the group’s keys. A malicious or faulty
+committer can therefore post a commit message that verifies
+for every member (the keys agree and MLS’s confirmation tag
+passes) while the escrow holds unrecoverable material, with
+
+no visible anomaly. The fault surfaces only when an auditor
+attempts decryption, often years later. By then, the epoch is
+unrecoverable.
+This paper makes recoverability acryptographic invariant
+of the key agreement: checked at commit-message admission
+and private against every party but a threshold of auditors, in
+the post-quantum setting. We give a construction and its post-
+quantum security analysis. We call the resulting primitive
+auditable CGKA(Au-CGKA).
+The construction escrows the epoch’s root secret ese, from
+which the epoch’s keys are derived, and publishes a commit-
+ment croot to it. The proof establishes that the escrow shares
+a preimage of the published croot, and every member checks
+that preimage against the epoch secret it derives when it ad-
+mits the commit, so a mis-escrow is refused by the group. The
+tie between the escrow and the epoch is therefore established
+at admission, by the parties that already hold the secret, and
+needs no in-circuit key schedule.
+Closing the silent-escrow gap at commit time has two
+costs. The commit message must prove that the escrow holds
+thesamesecret from which the group derived the epoch’s
+keys. Encoded directly, that requirement must cover the entire
+TreeKEM update path and the SHA-512 [64]/HKDF [51]
+key schedule of MLS. That schedule comprises tens of
+hash compressions per commit, each at ∼105 constraints.
+A monolithic per-commit proof over that schedule is there-
+fore too slow for a per-commit client operation, and classi-
+cal SNARKs (Groth16 [42], Bulletproofs [19]) would forfeit
+the post-quantum security a long-retention setting demands.
+Reserving recovery to athresholdof auditors rather than
+one is a second obstacle: the standardized Module-Lattice-
+based Key Encapsulation Mechanism (ML-KEM) [67] is not a
+threshold scheme, and lattice threshold public-key encryption
+(PKE) [15, 17, 25, 54] is not yet practical at these parameters.
+Composing existing primitives independently does not meet
+these requirements simultaneously. Meeting them requires
+a joint design: a commit structure whose recoverability is
+verified at modest circuit cost, threshold escrow whose well-
+formedness is STARK-verified, and an epoch-0 bootstrap,
+together with a security argument that the pieces compose.
+This design yields ΠA, a protocol achievingauditability:
+the secret of every admitted epoch is recoverable by any
+threshold subset of the auditor committee, and that recov-
+erability is checked by every member when it admits the
+epoch. The member check carries the guarantee, so the guar-
+antee is conditioned on some member performing it: what ΠA
+establishes is that the secret of every epoch anhonestmem-
+ber accepts is threshold-recoverable. A group all of whose
+members collude can accept an epoch whose escrow holds a
+different value, and no check made from the log alone detects
+this, no admission check being able to recompute a secret it
+does not hold. That case is out of scope; §D.3.3 states the
+boundary. We state the property formally as an ideal function-
+ality (§4.2).
+1.1 Setting and construction
+The settingAu-CGKA targets alarge, long-lived group
+chatover MLS whose membershipchurns. The group ad-
+vances inepochs. In each epoch one member, thecommitter,
+rotates the keys and posts a commit message to a public,
+append-only log kept by the delivery service. A fixedaudi-
+tor committeeof N parties is designated: any (threshold) t
+or more of them can later reconstruct that epoch’s escrowed
+secret and recover its epoch key ke for a compliance audit.
+Recovering arbitrarily old epochs is the point, so the com-
+mittee cannot forget: a coalition of t auditors assembled at
+any moment recovers every past epoch and no later rekeying
+repairs that (Rem. 1). Trading forward secrecy against the
+committee for recoverability is the premise, not an artifact.
+Every commit message carries a zero-knowledge proof that
+the epoch’s secret is escrowed to this committee, so any mem-
+ber or third party can check the escrow without trusting the
+committer or the server.
+The constructionIn ΠA (auditability), the committer es-
+crows the epoch’s root secret ese, threshold secret-sharing
+it under the auditor committee’s post-quantum PKE keys,
+and publishes a commitment croot =H P2(“crot”∥G∥e∥ese)
+(Fig. 2). The proof checks that the escrow opens to a preim-
+age of croot. Since members deriveese themselves, they verify
+croot against their own epoch secret when they process the
+commit message, so a mis-escrow is rejectedat admission,
+before the epoch is accepted. The proof’s only hash work is
+the commitment and the escrow, and the MLS key schedule
+stays outside it. Recovery isper-epoch independent: any t
+auditors reconstruct ese for an epoch without touching any
+other, and an unrecoverable escrow ciphertext costs exactly
+that epoch. The auditor committee isoffline between audits
+and comes online only when an audit is requested.
+ΠA does not fix the update path at admission: the auditor
+recovers the epoch keys but obtains no independent account of
+how they were distributed. That scope is what keeps the proof
+small. The relation carries no term indexed by a path level, so
+its statement, its witness and its cost are the same whatever
+the group size: a ΠA proof is 15.31 MB and is produced in
+1.38 s. That proof is checked at admission and has no use
+afterwards, so a deployment may drop it once the epoch is
+admitted. The 15.31 MB is a cost on the commit, not on the
+archive (§7).
+ΠA therefore guarantees that every member accepting an
+epoch derives the samerecoverablesecret. The proof is post-
+quantum and zero-knowledge, and its verification is stateless:
+it needs the log and nothing else, which is what lets the de-
+livery service refuse a malformed escrow before it is ever
+admitted. The remaining step — that the escrowed preim-
+age is the group’s own epoch secret — is checked by each
+member against the secret it derived, and the paper is careful
+throughout to keep the two apart (§D.3.3).
+2
+
+1.2 Contributions
+1. Au-CGKA interface.We define the syntax ofauditable
+CGKA. It extends the standard CGKA interface [5] with
+AuditSetup,GroupCreateandVerifyCreate(epoch-0 boot-
+strap),VerifyCommit(stateless, log-only), andAudit(thresh-
+old, offline) (§4).
+2. A security model for auditable CGKA.We capture the
+recoverability guarantee as a UC ideal functionality Faud.
+We extend the insider-security model of [5] with creation,
+audit, and verification interfaces in a single specification
+(Fig. 1). The functionality is realized againstadaptivead-
+versaries in the secure-erasure model (§6); game-based
+privacy and escrow soundness follow as corollaries (Ap-
+pendix D.3.1; §D.3).
+3. A post-quantum construction. ΠA escrows the epoch
+secret and has recoverability checked at admission against
+croot. It realizes Faud from Module-LWE, CGKA path se-
+crecy for the underlying TreeKEM layer [5], and a straight-
+line zero-knowledge argument of knowledge in a pro-
+grammable global QROM, instantiated by post-quantum
+transparent STARK proofs [11]. We obtain it by jointly de-
+signing two standard techniques that keep the per-commit
+STARK tractable (§5). (i)Committed escrow: ΠA commits
+to the escrowed value, so admission needs only a com-
+mitment opening in circuit, and the MLS key schedule
+stays outside it. (ii)Verifiable threshold escrow: Shamir
+shares encrypted under a STARK-friendly Module-LWE
+PKE and proven well-formed in-circuit. This closes the
+silent-escrow gap.
+4. Implementation and evaluation.We prototype Au-
+CGKA in Rust and prove the complete escrow well-
+formedness relation on a real witness end-to-end (§7–8)
+on a custom multi-stage STARK. For the evaluated config-
+uration we arithmetize the relation directly: dedicated ML-
+KEM and field chips composed through shared lookup ar-
+guments. We also apply prover-side optimizations, chiefly
+stacking same-shape sub-computations, to reduce proof
+time and size. On an Apple M5 Pro an auditability commit
+proves in 1.38 s and verifies in 0.17 s, at every group size.
+The full protocol pseudocode is given in Appendix B.2.
+2 Related Work
+Table 1 places Au-CGKA against the closest prior work on
+the three properties it claims.
+CGKA and MLS securityThe CGKA abstraction was for-
+malized by Alwen et al. [3] with a game-based analysis of
+TreeKEM. Subsequent work added active and insider security
+in the UC framework [4], efficient key management for over-
+lapping groups [2], adaptive and active security via tainted
+trees [49], and machine-checked proofs of TreeSync [80]. Our
+Table 1: Au-CGKA vs. closest prior work. Audit = epoch-key
+recoverability by a designated party; PQ = post-quantum; UC
+= UC-proven.
+Work Audit PQ UC
+Message franking / AMF [44, 75] — — —
+DDF robustness NIZK [32] — — —
+TreeKEM / MLS [3, 7] —◦✓
+Key transparency [52, 53, 58, 59] — — —
+Quarantined-TreeKEM [26]◦ ◦✓
+Verifiable encryption [20, 55]◦ ◦—
+UC auditable surveillance [37]✓—✓
+Au-CGKA (this work)✓ ✓ ✓ ∗
+✓= provides the property;◦= partial, or provided for a different object; — = not
+provided. “Audit” for Au-CGKA is threshold recoverability of the secret of every epoch
+an honest member accepts, checked at admission (Theorem 13); no property is claimed
+against a group all of whose members collude.∗ in theF NIZK-hybrid model; the
+implemented backend needs (A3′) (Appendix D.2.2).
+starting point is the insider-security functionality of Alwen,
+Jost, and Mularczyk [5]; Faud extends it with creation, audit,
+and verification interfaces.
+TreeSync [80] authenticatesgroup management(mem-
+bership and tree consistency) with machine-checked proofs,
+complementary to Au-CGKA rather than a proof of it.
+Quarantined-TreeKEM (QTK) [26] uses Shamir sharing so in-
+active users’ key material can be recovered under arestricted-
+leakagethreat model, but is not a designated-auditor escrow
+whose per-commit well-formedness is proven and checked
+at admission. Au-CGKA is orthogonal: TreeSync concerns
+who and what is in the group, QTK concerns whether inac-
+tive users can resynchronize without unbounded leakage, and
+Au-CGKA concerns whether each epoch secret is threshold-
+recoverable by an auditor committee.
+Zero knowledge for update pathsDevigne, Duguey, and
+Fouque (DDF) [32] use classical NIZKs to prove well-
+formedness of MLS update messages, targetingrobustness
+against malicious insiders. Our goal is different and our proof
+covers a different object: we targetauditability, the recovery
+of epoch secrets by a designated party, with post-quantum
+security, and RA constrains the escrow rather than the update
+path. The two are complementary and compose in the obvious
+way, a deployment wanting both carrying both proofs.
+Accountable escrow and auditable surveillanceThat ex-
+ceptional access should beverifiableis not new. Verifiable
+(partial) key escrow [9] originates the requirement that an es-
+crow provably contains the right secret; oursilent escrow fail-
+ureis that requirement for a per-epoch CGKA seed. Account-
+able metadata-hiding escrow [50] and AUDIT [39] instead
+make theuseof access accountable after the fact, a question
+orthogonal to an escrow’s well-formedness. Closest to our
+model,universally composable auditable surveillance[37]
+gives a UC functionality for threshold escrow with a judge
+and a ledger-based audit trail. Those works target generic
+3
+
+decryption. Au-CGKA builds the audit invariant into each
+CGKA commit message, making every MLS epoch secret’s
+recoverability a per-commit, post-quantum property. To our
+knowledge, Faud is the first ideal functionality for anauditable
+CGKA(extending [5]).
+Verifiable encryption and escrowClassical verifiable en-
+cryption [20] proves knowledge of a plaintext inside a cipher-
+text; post-quantum lattice analogues exist both in one-shot
+form [55] and in recent proof toolkits [56]. Proving the es-
+crow ciphertexts well formed is the part of our statement
+such an argument discharges natively, in one proof for the
+whole committee; joining it to the rest would need a value
+committed in both systems. We prove the whole statement in
+one system instead, keeping a single extractor and a single
+assumption class. Committing to the escrowed value keeps
+the statement that small: clause (iii) ties the escrow to one
+published digest, so the whole relation has one secret input
+and the MLS key schedule stays outside the circuit. The share-
+then-encrypt composition behind our escrow (Shamir shares
+wrapped under each auditor’s KEM) is the standard route
+to threshold access from non-threshold primitives, dating to
+fair public-key cryptosystems [60] and threshold cryptosys-
+tems [31]. Au-CGKA adds aSTARK-verifiedproof that the
+sharing is well-formed, closing the silent-escrow gap. Proac-
+tive secret sharing [46] mitigates slow coalition assembly on
+long-lived auditor committee shares; the exceptional-access
+debate [1, 81] and anamorphic channels [69] apply to any
+escrow design.
+Transparency and accountability in messagingKey trans-
+parency (KT) systems (CONIKS [59], WhatsApp KT [52],
+OPTIKS [53], Parakeet [58]) makeidentity↔key bindingsau-
+ditable and detect equivocation of long-term keys. They donot
+recover MLS epoch secrets or prove escrow well-formedness.
+Au-CGKA instead auditsepoch-secret recoverabilityat the
+key-agreement layer, and is complementary. Private hierarchi-
+cal governance (MlsGov) [61] adds in-protocol moderation
+above MLS, orthogonal to Au-CGKA’s invariant on the key
+schedule.
+Abuse reporting and content moderation in E2EEA
+parallel line of work tackles accountability at themessage
+layer: message franking [44], its metadata-private asymmetric
+variant [75], and Hecate’s sealed-sender tokens [48] let a
+recipient report an abusive message unforgeably, and Scheffler
+and Mayer [71] systematize the design space. Au-CGKA
+operates at the key-agreement layer instead: the audited object
+is a per-epoch key seed, not a plaintext, and no Au-CGKA
+interface reports or attributesmessage content. The two are
+complementary.
+Post-quantum building blocksML-KEM [67] and
+SHAKE [65]/SHA-2 [64] are our on-wire primitives. The
+escrow ciphertext is a STARK-friendly instantiation of Ky-
+ber’s CPA core [16] under thesameModule-LWE assumption
+as ML-KEM (§A.3.1). Rather than a Fujisaki–Okamoto trans-
+form, the integrity of aloggedescrow ciphertext comes from
+proving well-formedness in zero knowledge (verifiable en-
+cryption[20, 55]); this is a property of the logged object, not
+non-malleability of the scheme. IND-CPA suffices, because
+there is no escrow-ciphertext decryption oracle. STARKs pro-
+vide post-quantum transparency [11]; Poseidon2 [40] is used
+for all in-circuit hashing.
+3 Preliminaries
+3.1 Notation
+Let λ=384 denote the security parameter. Key material on
+the MLS wire — path secrets and the epoch secret — has the
+RFC 9420 derivation width Nh =512 bits at SHA-512, and
+the construction escrows it at that width. The escrow coin η
+the committer samples per commit is λ bits, and the escrow
+messages µ j are 256 bits, the message capacity of one escrow-
+PKE ciphertext. It is η that fixes λ; see Appendix D.2.11 for
+details. We writex $← −Sfor uniform sampling from a setS, and
+x $← −Algfor the output of a randomized algorithm Alg. We
+write [N] for{1, . . . ,N}and{0,1}∗ for the set of all bit strings.
+A function ε:N→R ≥0 isnegligible, written ε(λ) =negl(λ) ,
+if it vanishes faster than any inverse polynomial.Table 5(Ap-
+pendix A) summarizes all critical symbols used throughout
+the paper.
+3.2 MLS and TreeKEM
+We recall the aspects of MLS (RFC 9420) [7] relevant to
+this work; see Appendix A.1 for full details. Throughout, we
+describe a single epoch transition: a commit advances the
+group from epoch e−1 to epoch e, and epoch-dependent
+quantities carryeas a subscript.
+Ratchet tree and update pathsMLS maintains a left-
+balanced binary tree of ne leaves, each node holding a Hybrid
+Public Key Encryption (HPKE) [8] (ML-KEM-based) key
+pair. A node isblankif it holds no key pair, for instance after
+a removal. Acommitby the member at leaf ℓ replaces the key
+pair of ℓ and of every node on ℓ’sfiltered direct path[7], the
+direct path from ℓ to the root with those nodes removed whose
+copath child has an empty resolution (Appendix A.1.1). We
+write me =|FDP(ℓ,e)| for its length and index the updated
+nodes i=0, . . . ,m e, with i=0 the leaf and i=m e the topmost
+node the path contains — the tree root except in degenerate
+trees. The treedepth he =⌈log 2 ne⌉ satisfies me≤h e, with
+equality when no node is blank; he is used only in cost state-
+ments about the unblanked case, and every path secret and
+ciphertext is indexed byme. The symbol ℓ denotes a leaf index4
+
+throughout; the published lane count of Appendix D.2.2 is
+ℓpub.
+Throughout the paper,commit messagedenotes the object
+the committer posts, andcommits tois reserved for commit-
+ment schemes.
+Path secret derivation and node keysThe committer sam-
+ples a fresh per-epoch secret at the RFC 9420 derivation width
+(Nh =512 bits at SHA-512) and derives apath secret chain
+along the filtered direct path by DeriveSecret, as defined in
+RFC 9420 [7]: psi =DeriveSecret(ps i−1). Each updated node
+takes its key pair from its own path secret,
+nsi =DeriveSecret(ps i,“node”)
+(ski,pk i) =KeyGen(ns i) (1)
+and the recipient of psi recomputes (1) and checks the result-
+ing pki against the key the UpdatePath publishes. Thecommit
+secretis the topmost path secret, and theepoch secret ese
+is derived from it and the previous epoch’s init_secret. ese
+is the object ΠA escrows, and this derivation is the RFC’s,
+unchanged (§3.3).
+Path encryptionEach updated node i∈[m e] has acopath
+resolutionof ρi HPKE public keys pki,1, . . . ,pki,ρi, the resolu-
+tion of node i’s copath child, i.e. the sibling of node i−1. The
+members holding those keys must receive psi, so the commit-
+ter produces cti,k =KEnc(pk i,k,ps i) for i∈[m e], k∈[ρ i]. The
+leaf secret ps0 is never encrypted, so there is no level-0 cipher-
+text. A member decrypts its psi0, recomputes psi0+1, . . . ,psme
+via psi =DeriveSecret(ps i−1), checks each node key by (1),
+and derives its keys.
+Transcript and confirmationEvery commit extends the
+transcript hash τe, a rolling hash over all public commit data;
+theconfirmation tag, an HMAC over τe under the epoch’s
+confirmation key, binds the epoch keys to the transcript, so a
+member who decrypts the wrongps i fails confirmation.
+Key schedule and external PSKsThe epoch secret
+is epoch_secret=HKDF(init_secret∥commit_secret) , from
+which all application and handshake keys derive (Ap-
+pendix A.1 gives the exact RFC 9420 schedule). MLS also
+supportsexternal pre-shared keys (ePSKs)[7], which mix
+out-of-band entropy into the schedule before epoch_secret.
+ΠA escrows epoch_secret itself, downstream of that mixing,
+so an audit recovers whatever an ePSK contributed and the
+construction places no restriction on ePSK proposals.
+3.3 Au-CGKA and the RFC 9420 Commit
+Au-CGKA isMLS-shaped: it keeps the ratchet tree, the res-
+olution rules, the filtered direct path, the wire format, the
+key schedule and the confirmation mechanism of RFC 9420,
+and it leaves the generation of a commit’s secret material un-
+touched. ΠA runs the RFC commit procedure verbatim and
+then escrows the epoch secret that procedure produces. What
+changes is thepayload: a commit carries the commitment
+croot, the escrow ciphertext Cesce and the proof π, and group
+creation carries the same three objects in its GroupInfo (§B.1).
+Every party additionally holds the group-wide public param-
+eter mpk. Appendix A.1.3 lists the complete set of design
+changes; because the commit procedure is the RFC’s, that list
+is short, and none of its entries touches how path secrets, node
+keys or path ciphertexts are produced.
+The cryptographic building blocks we use (Shamir se-
+cret sharing, ML-KEM, the PRF and hash functions) and
+the STARK background are recalled in Appendix A.
+3.4 Secure-Erasure Model
+All our security statements are in thesecure-erasuremodel: an
+honest party deletes eachephemeralsecret the instant it is no
+longer needed, retaining only thepersistentstate required for
+future operations. Concretely, once a committer has posted
+its commit message Me it erases the sharing randomness
+η, every Shamir share σ j and encapsulated key Kj, and the
+STARK witness we; the escrowed epoch secret ese follows
+the ordinary MLS ratchet, erased once the epoch’s keys are
+derived from it. The committer thereafter keeps only what
+standard MLS keeps: the decryption keys of the nodes it
+now owns and the epoch application/handshake secrets it is
+entitled to. Likewise, a group member erases a path secret,
+a node secret and a rotated HPKE secret as soon as it has
+derived the next one (the FS discipline of RFC 9420). The
+auditor committee is the one exception. Each A j mustretain
+its long-term decapsulation key skA
+j , since audit may occur
+arbitrarily far in the future. This key is therefore not erasable,
+and adaptive corruption of A j unavoidably exposes it. This is
+exactly the model under which [5] states its adaptive insider
+security, and it matches Au-CGKA’s erasure discipline. A
+corruption thus hands the adversary only the corrupted party’s
+current, non-erasedstate.
+3.5 CGKA Syntax
+A CGKA [3] for a group of up to Nmax members is a tuple of
+probabilistic polynomial-time (PPT) algorithms. Two objects
+recur below. Thegroup key state gks is a member’s private lo-
+cal state for the current epoch; therosteris the list of member
+identities and their key material, written rose once epochs are
+indexed (§4).
+•Init(1 λ)→gik : generates a party’sgroup info key gik, the
+long-term key material with which it creates or joins groups.
+•Create(gik,roster)→(gks,M 0): creates a group, returning
+the creator’s initial group key state gks and the epoch- 0
+(Welcome) messageM 0.
+5
+
+•Propose(gks,op)→(p,gks ′): generates a proposal p for
+operationop∈{add,remove,update}.
+•Commit(gks,{p i})→(gks ′,M e,commit_secret e): com-
+mits the pending proposals{pi}, producing the next group
+key state gks′, the commit message Me, and the epoch’s
+commit secret commit_secrete (in TreeKEM the root path
+secretps me of §3.2).
+•Process(gks,M e)→(gks′,commit_secret e): processes a re-
+ceived commit message, returning the updated state gks′
+and the same commit secretcommit_secret e.
+•Key(gks)→k e: extracts the current epoch key ke from the
+state.
+Security relative to the insider model of [5], and the inheri-
+tance of path confidentiality by Au-CGKA, are stated in §6.
+4 Auditable CGKA: Syntax and Ideal Func-
+tionality
+4.1 Extended Syntax
+An Au-CGKA is parameterized by anauditor committee A=
+{A j} j∈[N] of N parties and athreshold t≤N : any t or more of
+them can audit an epoch; fewer cannot. We write T⊆[N] for
+the subset of auditors that comes together for a given audit,
+pp for the public parameters shared by all algorithms, and L
+for the append-only public log of commit messages kept by
+the delivery service.
+An Au-CGKA inherits the CGKA algorithms of §3,
+with Init, Propose, Process, and Key unchanged; itextends
+Create (as GroupCreate) and Commit so their messages carry
+an escrow and aproof of correctness. The commit message be-
+comes Me = (croot,Cesce,π e): the epoch’scommitment croot,
+theescrow ciphertext Cesce carrying the threshold-shared se-
+cret, and a proof πe attesting that epoch e’s secret is escrowed
+to the committee (checked by VerifyCommit). An Au-CGKA
+furtheraddsthe following five algorithms.
+•AuditSetup(1 λ,N,t)→(mpk,{ask j} j∈[N] ,pp): generates
+the auditor committee’s public configuration mpk, compris-
+ing the auditors’ public keys{pk A
+j} j∈[N] and the threshold
+t; the per-auditor secret keys ask j, written skA
+j once instan-
+tiated in §5; and the public parameters pp. The keys are for
+the escrow PKE (§A.3).
+•GroupCreate(gks,pp,mpk,roster)→M 0: extends MLS
+Create so the epoch-0 message carries an additional epoch-
+0 escrow proof π0 attesting that the genesis epoch secret is
+threshold-escrowed to the auditor committee and bound to
+the epoch-0 GroupInfo hash (§B.1).
+•VerifyCreate(pp,mpk,M 0)→{0,1} : verifies π0 on the
+same terms; the log functionalityFLog that maintains L (§6)
+enforces this as an admission check on GroupInfo.
+•VerifyCommit(pp,mpk,L,M e)→{0,1} : stateless verifi-
+cation from the log, on a statementrecomputed from it
+rather than supplied by the committer (§B.2.1). Accepts
+iff Me carries a valid proof π binding the escrow to the
+commitment croot =H P2(“crot”∥G∥e∥ese). Whether that
+preimage is the group’s own epoch secret is what each mem-
+ber checks against the secret it derives, so VerifyCommit
+and member processing together are what admit an epoch.
+•Audit({ask j} j∈T ,L,e) for|T|≥t : reconstructs the es-
+crowed secret se and returns it together with the epoch key,
+(se,k e). Recovery is per-epoch independent: no other epoch
+is read. The escrow target is part of the output, since it is
+what the committee reconstructs and what the ideal AUDIT
+returns (item (R1), §D.2.5).
+4.2 The Ideal FunctionalityF aud
+We call the guarantee realized by Faud auditability, and
+specify it in Fig. 1. Faud maintains ahistory graph H of
+epoch nodes; each node νe stores roster rose, tree shape treee,
+filtered-path length me, the escrow target se, the epoch key
+ke, commitment croot, escrow ciphertext Cesce, proof πe, the
+accept setAcc e⊆ros e, the transcriptM e, and flaghonest.
+The functionality samples.It isabstract: for an honest com-
+mitter it samples se and ke independently and evaluates no
+cryptography, so ke is never derived from se inside it, at any
+interface. The real protocol’s relation ke =KeySchedule(es e)
+is established in the simulation by programming that oracle
+wherever a legitimate exposure reveals both sides; a func-
+tionality computing it would fix the same points, forbid that
+programming and be unrealizable (§D.2.5). Every hybrid of
+Appendix D refers to this one functionality.
+Figure 1 is the formal definition; we highlight the design
+points salient to the construction and proofs.
+Design points. Faud exposes asinglecreation interface and
+otherwise inherits the proposal/commit/process/key interfaces
+of [5]. Two things change at the commit. The transcript is the
+Au-CGKA message Me = (croot,Cesce,π e), stored opaquely;
+and for an honest committer the functionality samples se and
+ke internally, leaking only the public metadata L(e), whereas
+for a corrupt one S obtains them from the straight-line extrac-
+tor run on the logged proof, so what is registered is what the
+relation proves of the logged data rather than an assumption
+about S (Lemma 6). Ideal VerifyCommit is then an equality
+check against the registered node, and registration is itself
+conditioned on acceptance: S registers a corrupt commit mes-
+sage only if the concrete VerifyCommit accepts, including the
+STARK relation (RA, Eq. (2)). A mis-escrow therefore fails
+admission and is never registered.AUDIT returns the recorded
+pair (se,k e) — the escrow target as well as the key, because
+real auditors reconstruct the target itself — and epochs are
+escrowed independently, so recovery isper-epoch indepen-
+dent. Since FLog admits at most one node per position, group
+splitting is refused at the log level. Privacy of epoche holds
+exactly on executions meeting safeESC(e), that is, fewer than
+tof its auditorsevercorrupted.
+6
+
+Functionality Faud.Parameters: auditor committee size N, threshold t. Interacts with parties P , an auditor committee A={A j} j∈[N] , and the ideal adversary S. Maintains
+a history graph H of epoch nodes νe, each linked to its parent and storing theabstractstate (rose,treee,m e,s e,k e), the accept set Acce⊆ros e, the transcript Me, and the flag
+honest, where me is the length of the committer’s filtered direct path at e (§3.2). C is the corrupt set. Each party has a current node, set on creation or joining and advanced by
+PROCESS.
+Leakage. L(e) = (rose,treee,m e,Pe,PK e): roster, tree shape, filtered-path length, committer, and the ratchet-tree node public keys at e; all are public in the real execution. S
+suppliesPK e and the transcriptM e at every registration; the functionality storesM e and only compares it for equality.T⊆Ais the auditing subset.
+On (GROUPCREATE,G,ros 0) from P: require that (G,0) is unoccupied; set ros0 and derive tree0,m 0. If P is honest, sample s0,k 0
+$← −{0,1}Nh independently, put Acc0 =ros 0,
+and receive (M0,PK 0) from S; register ν0 with flag honest and record that s0 is threshold-escrowed to A. If P is corrupt, receive (s0,k 0),Acc 0,M 0,PK 0 from S and register ν0.
+SetP’s node toν 0; sendL(0)toS.
+On(PROPOSE,op)fromP: requireP∈ros e atP’s node; record the proposal and send it toS.
+On (COMMIT,{p i}) from P: require P∈ros e−1 at P’s node νe−1 and that (G,e) is unoccupied; validate{pi} and apply them to rose−1, giving rose,treee,m e. If P is honest,
+sample se,k e
+$← −{0,1}Nh independently, put Acce =ros e, receive (Me,PK e) from S, register νe as the child of νe−1 with flag honest, return ke to P, and send L(e) to S. If P is
+corrupt, receive(s e,k e),Acc e⊆ros e,M e,PK e fromSand registerν e.
+On(PROCESS,M e)fromP: ifM e does not equal the registered transcript, orP/∈ros e, return⊥. Else ifP∈Acc e, setP’s node toν e and returnk e; else return⊥.
+On(VERIFYCREATE,M 0)from any party(public): return 1 iffν 0∈HandM 0 equals the registered genesis transcript.
+On(VERIFYCOMMIT,M e)from any party(public): return 1 iffν e∈HandM e equals the registered transcript.
+On (AUDIT,T,e) from every A j∈T , T⊆A : if νe /∈Hor|T|<t , return⊥. Else return the recorded pair (se,k e) to every A j∈T and to S. No other node of H is read: recovery
+is per-epoch independent. No honesty condition is placed onT. An audited epoch is outsidesafe ESC.
+On(LEAK,e)fromS: ifν e /∈Hreturn⊥; if at leasttof epoche’s auditors are inC, return(s e,k e)toS; else return⊥.
+On (CORRUPT,P) from S at any point(adaptive): add P to C and hand S the party’s current, non-erased abstract state, namely its roster membership, its current node and ke at
+that node. For an auditor A j this discloses ask j =sk A
+j permanently, as it is not erasable. While P stays corrupt, release the same abstract state at each later epoch and mark that
+epoch outsidesafe ESC.
+Figure 1: The ideal functionalityF aud. Justifications for the features that realizability forces are in §D.2.5.
+the committer
+rekeys its filtered
+direct path, unchanged
+from RFC 9420
+no clause of RA con-
+strains the path
+ese
+Commit payload
+•c root =H P2(“crot”∥G∥e∥ese)
+•C esce: Shamir shares ofes e under{pk A
+j} j∈[N]
+•π : the escrow is well formed and opens to a
+croot-preimage
+auditor committee:
+any t of N recover ese;
+offline until then
+Figure 2: The escrow construction ΠA (§1.1). The committer
+runs the ordinary RFC 9420 commit, then escrows the epoch
+(root) secret ese it produces and publishes the commitment
+croot to it. VerifyCommit checks from the log that the escrow
+is a well-formed t-of-N sharing of a croot-preimage; each
+member checks croot against the epoch secret it derives before
+advancing; and anyt auditors later recover the epoch, touching
+no other. Notation: Table 5.
+Acceptance is recorded per party, in the accept set Acce⊆
+rose. RA determines the escrow and nothing else, so the func-
+tionality asserts nothing about which roster members reach the
+epoch, and one fixing Acce =ros e on every admitted epoch
+would not be realizable by ΠA. The guarantee Faud makes
+is about the epoch’s secret, and it is unconditional on the ac-
+cept set: every admitted epoch’s se is threshold-recoverable.
+Appendix D.2.5 shows which of these features are forced by
+realizability rather than chosen, and §B.1 gives the epoch-0
+anchor.
+5 Construction
+Figure 3 gives an overview of the construction and its audit
+flow. ΠA makes every epoch’s secret recoverable by any t-
+of-N auditors and proves it at commit time under a verifiable
+Shamir-over-escrow-PKE escrow (§A.3.2, A.3.1). It escrows
+the epoch’s root secret and commits to it, so a mis-escrow
+fails admission: the stateless VerifyCommit rejects an escrow
+that is not a well-formed sharing of a croot-preimage, and
+each member rejects a croot that disagrees with the epoch
+secret it derived. The committerproves the sharing and every
+component of the escrow ciphertext well-formed in-circuit.
+5.1Π A: Auditability by Committed Escrow
+SetupEach A j generates an escrow-pke keypair(pk A
+j ,sk A
+j );
+the escrow PKE is Kyber’s CPA core (K-PKE) [16] under
+Module-LWE, not ML-KEM (§A.3.1). The system publishes
+mpk= ({pk A
+j} j∈[N] ,t) . The auditor committee isentirely of-
+flineuntil an audit is requested. The fields of each PRF and
+keyed-stream input (domain labels and indices) are of fixed
+width.
+Commit at epoche
+1.Root secret and commitment.
+• Run the MLS commit as usual and let ese be the result-
+ing epoch (root) secret, from which the key schedule
+derivesk e.
+• Publish the escrow rootcroot =H P2(“crot”∥G∥e∥ese).
+The domain separator “crot”∥G∥e is required: without it
+one fixed function would map secret to digest across every
+epoch of every group, and the published roots would form
+7
+
+Setup.Committee A1, . . . ,AN, threshold t; each A j publishes an escrow-PKE key,
+mpk= ({pk A
+j},t). Offline until an audit.
+Epoch 0.Escrow the genesis secret es0 as Cesc0; prove Rinit, binding c(0)
+root to the
+GroupInfo hash.
+ΠA: commit at epoche
+1.Run the ordinary RFC 9420 commit; let ese be the epoch (root) secret. Pub-
+lishc root =H P2(“crot”∥G∥e∥ese).
+2.•Coinη $← −{0,1}λ;f d =F η(“coef”∥d);F q-Shamirf(0) =es e,σ j =f(j).
+•For eachj:µ j
+$← −{0,1}256;c esc
+j =Enc(pk A
+j ,µ j;CBD 2(Ψη(“esc”∥j∥G∥e))),
+Kj =H P2(“key”∥µ j),e j =σ j⊕H P2(“wrap”∥Kj);C esce ={(c esc
+j ,e j)}.
+3. π←Prove(x,w) for RA, clauses (i)–(iii), on the x that Stmt recomputes.Es-
+crow bound to c root; no key schedule, no path term.
+4.PostM e = (MLS Commit,c root,Cesce,π); eraseη,{µ j,K j,σ j}andw.
+Log L.Admit iff Vrfy(x,π) =1 and Cesce is present; at most one message per
+position(G,e).
+Member.Verify π; derive ese by ordinary MLS processing; check croot =
+HP2(“crot”∥G∥e∥ese) against it, then advance. A mis-escrow is refused here,
+at admission.
+Audit ate∗: anytauditors, recover-only
+•µ j =Dec(sk A
+j ,c esc
+j ),K j =H P2(“key”∥µ j),σ j =e j⊕H P2(“wrap”∥Kj).
+•es e∗ =Rec t ({(j,σ j)}) over Fq; check against the logged croot; derive ke∗ off-
+circuit.
+Output(es e∗ ,k e∗ ).Per-epoch independent: no other epoch is read.
+Figure 3: Protocol flow for ΠA, read top to bottom: setup,
+epoch-0 anchoring, the four commit steps, admission at the
+log and at each member, and audit. Blue is proved in-circuit;
+orange is audit. Notation in Table 5.
+a multi-target preimage problem rather than one single-
+target problem each (Appendix D.2.2).
+2.Threshold escrow.
+• Sample an escrow coin η $← −{0,1}λ and derive the
+sharing coefficientsf d =F η(“coef”∥d)ford∈[t−1].
+• Shamir-share ese over Fq (§A.3.2) into (σ j) j∈[N], so
+f(0) =es e and σ j =f(j) . Because the coefficients are
+derived from the single λ-bit coin η rather than drawn
+independently, privacy againstt−1 auditors is compu-
+tational in the real scheme, in the random-oracle model
+for F; the perfect t-privacy the analysis uses is available
+only once the coefficients are idealized (§A.3.2).
+• For each j∈[N] , sample µ j
+$← −{0,1}256 and en-
+crypt it under pkA
+j with CPA escrow-PKE noise
+CBD2(Ψη(“esc”∥j∥G∥e)) , giving Module-LWE ci-
+phertext cesc
+j = (u j,v j). The noise label carries (G,e)
+for the same single-target reason as croot: the published
+u j is a fixed function of the absorbed coin block under
+the auditor’s long-lived key.
+• Set Kj =H P2(“key”∥µ j) and wrap the share under a
+one-time pad,e j =σ j⊕H P2(“wrap”∥Kj).
+•The escrow ciphertext isC esce ={(c esc
+j ,e j)} j∈[N].
+Both the wrap key and the pad masking the share are
+derived by the field-native HP2, so clause (ii) proves the
+whole chain µ j→K j→pad→e j in-circuit at O(1) rows
+per auditor.
+3.Proof.
+• Compute π←Prove(x,w) for the relation RA below,
+on the statement x that Stmt recomputes from the log
+rather than one the committer supplies (§B.2.1).
+• Absorb x into the proof’s Fiat–Shamir transcript, so the
+challenges are bound to the epoch’s published inputs
+(§7).
+RA :
+(i)f(X) =es e + ∑t−1
+d=1 fdXd overF q with
+fd =F η(“coef”∥d), andσ j =f(j)for allj∈[N]
+(ii)∀j∈[N]:
+cesc
+j =Enc(pk A
+j ,µ j;CBD 2(Ψη(“esc”∥j∥G∥e)))
+(every noise coefficient range-checked),
+Kj =H P2(“key”∥µ j), and
+e j =σ j⊕H P2(“wrap”∥Kj)
+(iii)c root =H P2(“crot”∥G∥e∥ese), on the samees e
+that is clause (i)’s constant term
+(2)
+Public inputs: (G,e,ctx e,mpk,C esce,c root), where mpk=
+({pk A
+j} j∈[N] ,t) carries the auditor keys and ctxe binds the statement
+to the epoch’s public context.
+Witness: (ese,η,{µ j,K j,σ j} j∈[N] ) with µ j∈{0,1} 256 and σ j∈F q;
+κ is the escrow-PKE module rank and 256 the ring degree (§A.3.1).
+The commit message is Me =
+(MLS Commit,c root,Cesce,π). RA asserts nothing beyond
+well-formed threshold escrow of a croot-preimage: no in-
+circuit KeySchedule(ese) =k e, no SHA-512 key schedule
+and no confirmation tag, its only hash work being the Po-
+seidon2 commitment and the escrow clauses. The epoch
+key is bound to the escrow by the two-stage argument of §1:
+members hold ese from the ordinary MLS commit and check
+croot before advancing, and audit derives ke from the opened
+escrow off-circuit under CGKA path secrecy (Theorem 1). A
+mis-escrow is refused at admission. The relation carries no
+term indexed by the path, so its statement, its witness and its
+cost are the same at every group size.
+ErasureOnce Me is posted the committer erases the es-
+crow ciphertext ephemerals η,{µ j,K j,σ j} and the witness
+w per the discipline of §3.4; ese follows the normal MLS
+8
+
+ratchet. Only the auditor committee’s escrow ciphertext can
+then recover ese. This is the discipline the adaptive proof
+relies on (§6).
+Audit at epoch e∗ (recover-only, per-epoch independent)
+AnyT⊆[N]with|T|=t:
+•EachA j∈Tdecryptsµ j←Dec(sk A
+j ,c esc
+j ).
+• Each A j sets Kj =H P2(“key”∥µ j) and unwraps σ j =e j⊕
+HP2(“wrap”∥Kj).
+• The committee Lagrange-interpolates ese∗ =
+Rect ({(j,σ j)} j∈T ) over Fq and checks it against the
+loggedc root.
+• It derives ke∗←KeySchedule(es e∗ ) off-circuitand returns
+the pair(es e∗,k e∗).
+No other epoch is touched. An epoch whose escrow is unre-
+coverable therefore costs exactly that epoch, and an audit of
+epoche∗ costsO(1)rather thanO(e ∗).
+What is proved where VerifyCommit rests on three mech-
+anisms.In circuit: the escrow and its sharing (i)–(ii) and the
+commitment (iii).Recomputed from the log by Stmt: mpk,
+the epoch position and ctxe.Left to member processing: the
+equality of croot with the commitment to the epoch secret the
+member itself derived, and the MLS confirmation tag. No
+other component of a commit is claimed to be verified; in
+particular the update path is the RFC’s and no clause of RA
+constrains it.
+Group creation (epoch 0) is a base case the construction
+handles directly, escrowing the genesis epoch secret; we defer
+it to Appendix B.1.
+6 Universal Composability
+ΠA realizes auditability in the UC framework: it realizes
+Faud (Fig. 1, §4). A realization inherits privacy against sub-
+threshold coalitions and threshold recoverability. We sum-
+marize the model and result here. The complete treatment is
+the self-contained security analysis of Appendix D, covering
+the threat model, the simulator and hybrids, the game-based
+properties, and the adaptive post-quantum UC proof.
+Threat modelWe prove security against anadaptive, quan-
+tum adversary in the secure-erasure model. It drives creation,
+proposals, and commits and, as acorrupt committer, may
+submit an adversarially crafted commit message. Adaptive
+corruption of any member or auditor reveals that party’s cur-
+rent, non-erased state, including an auditor’s decryption key.
+Path ciphertexts also have a chosen-ciphertext oracle (the
+MLS wire uses ML-KEM). The escrow ciphertext has no
+decryption oracle, because auditors decapsulate only at audit.
+IND-CPA security therefore suffices (§A.3.1). The committee-
+corruption budget isglobal in time: fewer than t members
+of an epoch’s committee areevercorrupted. The fixed com-
+mittee and the archived escrow ciphertext allow a coalition
+of t or more auditors to reconstruct the escrowed secret by
+design (the auditor exception). Rem. 1 explains why the au-
+ditor committee cannot be forward-secret, so a coalition of
+t auditors assembled at any time recovers every past epoch;
+Appendix B.3 records a deployment add-on that narrows the
+window in which such a coalition can be assembled, at fixed
+committee keys. Five post-quantum assumptions carry the
+theorem, and we refer to them by these numbers throughout:
+(A1) Module-LWE encryption security: IND-CPA of the es-
+crow PKE and IND-CCA2 of ML-KEM-768 for the
+path wire.
+(A2)STARK zero-knowledgein the QROM, with errorε ZK.
+(A3) STARK straight-line knowledge soundnessin the
+QROM, with error εks, extraction being online from the
+compressed-oracle database. Plain knowledge sound-
+ness suffices because the hybrid sequence extractsbe-
+foreit simulates: at that point the honest proofs are still
+real, so the reduction still holds their witnesses and pro-
+duces them with the real prover, and the extractor is
+never run alongside a simulation oracle. The stronger
+property, simulation-extractability, is therefore not as-
+sumed (Appendix D.2.2).
+(A4) Commitment binding: collision resistance of HP2, with
+errorε bind.
+(A5) CGKA path secrecy: the adaptive insider-security hy-
+pothesis of [5] for a TreeKEM path layer whose node
+keys are freshly generated, with error εCGKA. ΠA runs
+exactly that layer, unmodified: it adds a payload to the
+commit message and changes no path secret, node key
+or ciphertext, so the hypothesis is applied to its own ob-
+ject and needs no bridging lemma. We do not re-prove
+path-secret confidentiality.
+The proof is carried out in the (FNIZK,F Log,G RO,F PKI)-
+hybrid model, so the realization statement below assumes
+no property of the proof system: FNIZK is the ideal NIZK,
+and (A2)–(A4) enter only when it is instantiated (Cor. 2).
+The model conditions, the QROM techniques the proof uses,
+the lifting of (A2)–(A4) to the bundle of sub-proofs that
+VerifyCommit verifies, the adversary’s two goals, and the
+instantiation assumption (A3′) are stated in Appendix D.
+Safety predicateFollowing the standard CGKA conven-
+tion [3,5], we state the realizationwith respect to a safety pred-
+icate. The predicate is the admissible corruption/interaction
+pattern under which an honest epoch’s key must remain secret:
+for an honest challenge epoche,
+•safe ESC(e): the epoch is CGKA-fresh (committer honest,
+no exposed on-path secret, no decryption-oracle shortcut)
+andfewer thantof epoche’s auditors areevercorrupted.
+safeESC is the privacy game’s freshness predicate Fresh (Ap-
+pendix D.3.1).
+9
+
+Theorem 1(Adaptive post-quantum UC security of ΠA).
+In the secure-erasure model and the programmable global
+quantumrandom-oracle model (QROM) [14], with N=
+O(1), ΠA UC-realizes Faud with respect to safeESC in
+the (FNIZK,F Log,G RO,F PKI)-hybrid model, againstquantum
+polynomial-time (QPT) adversaries that adaptively corrupt
+any number of group members and, for each honest epoch,
+fewer than t of its auditors, under the QROM forms of (A1),
+(A4) and (A5).
+Corollary 2(Instantiation).Replace FNIZK by the imple-
+mented multi-stage AIR backend of §7. Under the instan-
+tiation assumption (A3′) of Appendix D.2.2, the realization
+holds against the same adversary class, and the advantage of
+any QPT environment is bounded by Eq.(6).
+The theorem follows one hybrid argument: S equivo-
+cates escrow openings and programs GRO on adaptive cor-
+ruption/audit, reducing REAL to Faud on every safeESC-
+respecting execution (gap Eq. (6)). RA binds only the escrow
+and croot, and the commit message is carried on an ordinary
+TreeKEM UpdatePath. In particular, KeySchedule(ese)↔k e
+is charged to CGKA path secrecy, not to a missing in-circuit
+clause of RA: what makes the escrowed value the members’
+own epoch secret is their admission-time croot check, so a
+divergence is an HP2 collision rather than an unproven step.
+CGKA path secrecy is the adaptive CGKA insider-security
+hypothesis of [5], taken as an explicit black box and applied to
+ΠA’s unchanged TreeKEM update. The simulator, QROM as-
+sumptions, hybrids, and full proofs are in Appendix D (§D.2.2–
+D.2.8).
+The condition N=O(1) is not cosmetic: Eq. (6) charges
+the escrow term over 2NNE events, so 128 bits requires N+
+log2 N+log 2 E≤36 , which is N≤12 at E≤2 20 epochs and
+N≤8 at E≤2 24. We measure at N=5; §D.2.11 derives the
+ceiling.
+Game-based security propertiesUC realization implies
+the game-based guarantees as corollaries: privacy with the
+auditor exception, and escrow soundness. Their games, ex-
+act advantage bounds, and reductions are in Appendix D,
+together with the scope statement that keeps the two halves of
+admission apart: what VerifyCommit establishes from the log
+alone, and what each member establishes against the secret it
+derived.
+7 Implementation
+Software stack and what is prototypedWe prototype the
+Au-CGKArelation, the escrow it constrains, and the MLS
+path updates it rides on. This is a modified MLS stack, the ci-
+phersuite is custom (Appendix A.1.3). The measured harness
+runs one recipient per copath level, with no message signing.
+It proves the relation on real witnesses end to end, and we eval-
+uate the costs. We implement Au-CGKA in Rust, targeting
+the MLS key schedule and hash format (RFC 9420): the SHA-
+512 DeriveSecret/HKDF chain, the SHAKE256 PRF, and the
+TreeKEM path-secret derivation. On top of this we build the
+evaluated configuration, anoptimized custom AIR(algebraic
+intermediate representation) on a multi-stage Plonky3 [70]
+backend with dedicated ML-KEM chips, wired by an assem-
+bler into a single multi-stage proof and committed through-
+out under a FRI-based [10]hidingpolynomial commitment
+scheme (PCS). We also realize the relation as a single proof
+in the general-purpose SP1 [73] zkVM, prototyped and mea-
+sured in §8. ML-KEM-768 is provided by the formally ver-
+ified, constant-time libcrux [30]. A standalone audit tool
+replays a log snapshot.
+Circuit architectureThe relation is discharged by two fam-
+ilies of chips; a third, the SHA-512 chip the stack also imple-
+ments, isnotexercised by RA, which evaluates no MLS deriva-
+tion in circuit.(1) An ML-KEM chipproves each encryption
+in the escrow ciphertext Cesce under the escrow PKE, which
+is Kyber’s CPA core (K-PKE) [16] rather than ML-KEM it-
+self (§A.3.1). The chip is built from a modular multiply, the
+NTT butterfly, inner products, and their chained composition
+(Table 7, Appendix C). Written in the time domain, encryp-
+tion isu =INTT( ˆA⊤◦ ˆr) +e1 and the analogous accumulation
+for v, so per auditor it is one noise sampler, κ forward trans-
+forms, κ accumulations and the compression to the logged
+ciphertext. The matrix ˆA is a public input and costs nothing in
+circuit. Appendix C states what is assembled and what is not.
+(2) A field chiphandles the Poseidon2 commitment and PRF
+derivations, which are field-native over BabyBear (O(1) rows
+each), together with the Shamir escrow overFq. The prototype
+instantiates Fq at qS =nextprime(2 256), whose 17 base-216
+limbs and single signed carry chain per share cost about half
+of what a prime above 2512 would; because the STARK field
+is BabyBear, each share evaluation and Lagrange step is a
+small, constant number of range-checked multi-limb modular
+multiplications rather than one field operation. §A.3.2 car-
+ries an Nh-bit secret over that field and shows why doing so
+changes no relation clause and no security statement.
+A multi-stage lookup proverLogUp [45] needs a running-
+sum column built from a challenge drawnafterthe looked-
+up values are committed, which Plonky3’s [70] default
+uni-stark cannot host. We therefore build a multi-stage
+prover over its public primitives (two-adic FRI [10], duplex-
+sponge transcript, evaluation-domain helpers), with a range
+check over a fixed table and a tuple lookup instantiated as
+an XOR table. Lookups arebatchedinto one running sum
+separated by powers of a further challenge, without which
+unbalanced lookups cancel and the argument accepts an un-
+balanced multiset; we test this with a crafted cancellation
+attack. And the ML-KEM chips bind computation to those
+lookups inside a single proof, so a chip’s output feeds the
+10
+
+next and tampering with an intermediate fails the consuming
+constraint rather than only an opening.
+ValidationEvery self-contained cryptographic operation
+the construction needs is implemented as a Plonky3 AIR,
+proven, verified, and checked to reject a tampered public in-
+put. The three hash primitives of §3 are validated against
+official test vectors; and the ML-KEM arithmetic, the CBD2
+sampler, the compression maps and the Fq Shamir evalua-
+tion are adversarially tested against plain-Rust references.
+Every clause is then assembled on the engine and measured
+end-to-end (§8), with a cross-table binding bus enforcing pro-
+ducer/consumer equality on the shared secret. Appendix C
+gives the component-by-component account.
+Cross-clause bindingA bundle needs one witness consis-
+tent across its sub-proofs, not a sum of independent ones. The
+escrowed secret ese flows from the Shamir sharing (i) into the
+escrow wrap (ii) and the commitment (iii). Clause (i) shares
+that secret directly and publishes a commitment in the shar-
+ing’s packing, so a single ℓpub-lane equality ties the escrowed
+secret to the commitment the members check. Without it a
+committer could Shamir-share one value while publishing
+another’s commitment. That is a silent escrow failure that no
+per-clause check detects.
+Statement bindingEvery chip’s Fiat–Shamir transcript ab-
+sorbs a domain-separated digest of the published statement
+— the committee configuration, the epoch context, the logged
+escrow ciphertext,croot, the cross-proof ties and the parameter
+set — before any commitment, so a transcript is bound to its
+statement by construction rather than by a downstream check.
+The digest is absorbed rather than the pin columns, which are
+full-height and are a deterministic function of the statement
+that Stmt recomputes; the cost is one sponge per commit,
+measured at 0.28 ms, and the proof is unchanged because the
+verifier recomputes the digest from inputs it already holds.
+This is what puts the compiled argument inside the hypothe-
+ses of the QROM analyses of Appendix D.2.2; a regression
+proves under one statement and verifies under another on a
+chip that publishes no pin, so the property is decided by the
+transcript alone.
+Two mechanisms enforce it. A cross-chip tie folds column
+equality into the owning chip’s quotient polynomial with-
+out publishing an extra opening; a cross-table bus, a tuple-
+LogUp [45] multiset equality over committed limbs, ties pro-
+duced and consumed copies, and the bundle verifies only if
+the multisets match. The harness checks both a consistent
+witness (accept) and a deliberately inconsistent one (reject).
+Every clause is proven under the hiding PCS, so the transcript
+carries only truncated Poseidon2 commitments, public cipher-
+texts and public context, with no ese, η or plaintext share in
+it. Appendix C records the stacking and FRI configuration
+Table 2: Multi-stage lookup STARK under the hiding PCS
+(BabyBear, single core). Proof size in KB, prove/verify in ms.
+Trace heightTProof size Prove Verify
+24 =16 235.7 49.6 1.7
+26 =64 306.1 63.2 2.0
+28 =256 386.5 83.3 2.1
+210 =1024 476.8 119.7 2.3
+behind the measured bundle, its transcript surface, and the
+residual assumptions.
+FRI parameters and costThe challenge extension is de-
+gree 10 over BabyBear, set by the Grover bound on Fiat–
+Shamir: knowledge soundness is at most 1
+2 log2|Fext|, which
+a quartic extension would cap at 62 bits (Appendix D.2.2). A
+single multi-stage lookup STARK serializes to∼236–477 KB
+across trace heights and verifies in 2–3 ms (Table 2); proof
+size grows slowly with the trace because the FRI query open-
+ings dominate and are near-constant. Stacking same-shape
+sub-computations then collapses the full-relation bundle to
+2 proofs / 15.31 MB, proving in 1.38 s (§8 prove/verify and
+sizes). Table 3 gives the non-proof costs under ML-KEM-
+768: commit-message sizes excludingπ, committer/member
+latency, and 3-of-5 audit.
+The proof is not retained π is verified once by the deliv-
+ery service at admission and once by each member before
+it advances, and is then of no further use: VerifyCommit is
+stateless, and Audit reads only Cesce and croot. A deployment
+may therefore drop π once the epoch is admitted, retaining the
+5637 B those two objects occupy (Table 3). The 15.31 MB is
+a bandwidth and latency cost on the commit, not a term in the
+archive a long-retention setting carries, and it grows no party’s
+stored state. A deployment that wants the log independently
+checkable afterwards retains π and pays that per epoch; Faud
+reads neither, so §6 is unaffected either way.
+8 Evaluation
+Our evaluation answers three questions.(Q1)What does au-
+ditability costoffthe proof, in commit-message bytes, per-
+commit committer work, and audit throughput?(Q2)What
+does it cost to prove the escrow relation RA in zero knowl-
+edge on our custom multi-stage STARK backend?(Q3)How
+does that dedicated backend compare with running the same
+relation as a single proof in a general-purpose zkVM?Ev-
+ery proving figure on the custom backend is zero-knowledge:
+under the hiding PCS of §7 the transcript reveals nothing
+beyond the public inputs. The guarantee is computational, at
+εZK≤2−299 against the hiding FRI commitment (Lemma 11);
+every cross-proof tie the bundle publishes carries a secret salt
+derived fromη, so no weaker one-wayness term stands against
+that figure. Appendix D.2.9 gives the execution level.
+11
+
+Table 3: Non-STARK costs, excluding the proof π. Top:
+commit-message sizes in bytes. Bottom: per-commit latency
+and 3-of-5 audit cost. Apple M5 Pro, N=5, t=3, ML-KEM-
+768.
+Constr.h e MLS basec root escrow added overhead %
+ΠA 4 5 808 32 5 605 5 637 97
+10 12 816 32 5 605 5 637 44
+20 24 496 32 5 605 5 637 23
+Constr.h e commit (ms) audit (µs)
+ΠA any 0.031 93
+Parameters.The figures are measured at the deployed pa-
+rameters, the prototype derives its FRI query count from the
+target itself (nq·lb≥2(128+24+4) , so nq=156 at lb=2 ,
+which against ΠA’s own 221 event class leaves 135 quantum
+bits after the knowledge-soundness charge), and every pub-
+lished commitment is width-32 truncated to ℓpub =16 lanes.
+Every row of Table 8 therefore applies to the numbers be-
+low, the weakest being the 137-bit MMCS digest. The rows
+do not share a proof status, and the levels are conditional
+on (A3′) and on the ethSTARK conjecture behind the FRI
+row (Appendix D.2.2).
+Measurement methodologyAll figures come from the ref-
+erence implementation (§7) on an Apple M5 Pro (48 GB).
+ML-KEM-768 is the formally verified libcrux [30]; SHA-
+512/HKDF and Shamir field arithmetic are exact; the in-
+circuit commitment hash HP2 is Poseidon2 over Baby-
+Bear (§3); the PRF F and the path AEAD use SHAKE256,
+while the escrow ciphertext’s wrap key and pad are derived
+by HP2 so that clause (ii) proves them in-circuit at field-native
+cost. Byte sizes are exact serialized lengths at true ML-KEM-
+768 sizes. Auditor committeeN=5, threshold t=3 throughout.
+Each figure is the arithmetic mean of five runs at the operating
+point and of three per depth in the sweep. The harness runs
+theunblankedtree, me =h e and ρi =1 : blanking shortens the
+filtered path and widens the resolutions, which moves bytes
+between levels of the MLS base but changes no figure forΠA,
+whose relation is indexed by neither (§B.2.3).
+The reported figures use the STARK-friendly Module-LWE
+committee escrow, whose in-circuit derivation is Poseidon2
+and so needs no Keccak on that path; the standardized ML-
+KEM escrow (§A.3.1) is implemented but not reported. The
+MLS update-path ciphertexts are ML-KEM-768 throughout.
+Each end-to-end bundle prove time is thearithmetic mean
+of five successful wall-clock runs, measured around the whole
+prove (resp. verify) call on one coherent witness rather than
+summed from per-chip microbenchmarks; proof size is deter-
+ministic. Measurements are taken on a verified-idle machine,
+under the thread and scheduling settings of Appendix C. Ab-
+solute seconds are single-machine research-prototype figures
+and drift by a few percent with sustained load.
+Q1: Non-proof costAu-CGKA adds a fixed escrow cipher-
+text of 5605 B to each commit message, plus the epoch’s
+commitment (Table 3). That figure is N compressed escrow-
+PKE ciphertexts plus one wrap each (Appendix E.1); the
+harness realizes the escrow-PKE and HP2 paths as reference
+stand-ins (SHAKE) at those wire sizes, and the path ML-
+KEM and SHA-512 operations dominate them, so the figure
+is a lower bound on the committee half of a commit. At group
+size 1024 (he=10) the MLS update path is 12816 B, and Au-
+CGKA adds 5637 B: the escrow ciphertext is the dominant
+part and does not grow with the tree, the commitment croot
+contributing 32 B once. That 32 B is the stand-in digest width;
+at the deployed ℓpub=16 lanes the commitment is 64 B, which
+adds 32 B to the added column at every depth. Because the
+addition is fixed and the base grows, the relative overhead
+falls as the group grows, from 97% at he=4 to 23% at he=20
+(a group of 220≈10 6): at small group sizes the addition is
+comparable to the update path itself, and only at he≥20 does
+it become a modest fraction of it. The baseline here is a pure
+ML-KEM-768 MLS update path ( 1168 B per level); stan-
+dardized RFC 9420 ciphersuites carry far smaller path cipher-
+texts, against which the relative overhead is correspondingly
+larger. Committer cryptography outside the proof system is
+sub-millisecond and independent of the group: a commit costs
+0.031 ms at every depth (Table 3, bottom), dominated by the
+N committee encryptions. The member-side addition is a sin-
+gle hash of the epoch secret it already holds, which is why
+no separate verify figure is meaningful. The figures exclude
+the MLS signature, which this prototype does not perform.
+A 3-of-5 audit costs 93µs and touches one epoch, so audit-
+ing epoch e∗ costs 93µs irrespective of e∗. These costs are
+independent of the proof system, which dominates the total.
+Q2: Zero-knowledge backend costWe assemble every
+clause of the relation (Eq. (2)) on the custom backend. At
+group size 1024, N=5, on one coherent real-witness instance,
+ΠA proves in 1.38 sand verifies in 0.17 sfor a 15.31 MBbun-
+dle of2sub-proofs. Prove and verify times are the mean of five
+runs at the operating point and the proof size is deterministic.
+The cost is dominated by the N in-circuit lattice encryptions
+and the hiding-PCS commitments; the bundle discharges no
+Keccak permutation, no DeriveSecret link and no path NTT,
+because no clause asks for one. Beyond the stacking of §7,
+two mechanisms hold these costs down: row-independent
+chips (compression, CBD, parse, matrix–vector) are concate-
+nated into one proof each, and the sub-computations fixed by
+public inputs (the key hash and the ML-KEM matrix A) are
+recomputed by the verifier rather than proven.
+Q3: the zkVM realizationAs a general-purpose single-
+proof alternative we run the relation checker forRA as a guest
+program in the SP1 STARK zkVM. The guest escrows under
+the standardized ML-KEM instantiation, with the libcrux
+ML-KEM-768 encapsulations proven in-circuit, whereas the
+12
+
+custom-backend figures use the STARK-friendly Module-
+LWE escrow (§A.3.1), so the ratio below bounds the backend
+difference rather than isolating it.
+At the operating point of Q2, with SP1 proving shard-
+parallel across all 18 cores, the guest runs 1.97 M cycles and
+ΠA proves in 30.0 s,∼22× the dedicated-AIR backend’s fig-
+ure; the ratio compares recursively compressed proof to re-
+cursively compressed proof, and both backends use the same
+18 cores. In exchange the zkVM emits a single recursively
+compressed proof of constant size 1.21 MiBthat verifies in
+∼27 ms: a∼12× size reduction for that∼22× prove-time
+increase. Times are means of five runs. The two therefore
+trade prove time against proof size, and Appendix E.2 states
+the relation under which the custom bundle can be aggregated
+to the same constant size.
+The cycle count matches that accounting: the 1.97 M cy-
+cles cover the N-committee escrow and one commitment,
+with no key-schedule and no path work in the guest. These
+are conservative CPU figures, since SP1 lacks ML-KEM pre-
+compiles and the guest therefore runs as plain RISC-V . The
+depth sweep confirms what the relation already implies: every
+measured depth returns the same cycle count and the same
+30.0 s, because the guest program’s work does not depend on
+the tree.
+Scaling with group sizeTable 4 sweeps the update-path
+depth he from 4 to 20 (group size n=2 he, i.e. 16 to∼1M
+users), reporting the commit-message bytes alongside the
+proof cost on both backends.
+RA contains no update-path term at all, so ΠA is indepen-
+dent of the groupby construction— its cost is O(N) in the
+committee size and O(1) in the group size, N being a proto-
+col constant. At every depth it proves the same 2 sub-proofs
+over the same witness shape, for a byte-identical 15.31 MB
+proof; across the full he =3..20 sweep the measured prove
+time spans 1.37–1.49 s, and the residual spread is run-to-run
+and thermal drift rather than depth. We quote the range rather
+than the point for that reason. The zkVM path is flat for the
+same reason, at 30.0 s and a constant 1.21 MiB. Only the wire
+cost varies, as Q1 describes.
+9 Conclusion
+We show that MLS-shaped group messaging can make epoch-
+key recoverability a property each commit message carries
+and every honest member checks. We formalize this as a UC
+ideal functionality Faud that extends the MLS insider-security
+model with group-creation, audit, and verification interfaces,
+and we give a post-quantum construction that realizes it. Au-
+ditability here is a verifiable property of the key-agreement
+protocol itself: ΠA fixes recoverability of the epoch secret at
+admission, before any member advances, and an audit then
+recovers one epoch without reading another. The scope is
+Table 4: Cost versus group size for ΠA. The proof columns
+do not move: RA has no clause indexed by a path level, so
+the prover does the same work at every depth — the same 2
+sub-proofs and a byte-identical proof — and the zkVM guest
+is flat for the same reason. What moves is the wire: the escrow
+is a fixed addition to a base that grows with the tree, so the
+relative overhead falls by a factor of four across the range.
+Apple M5 Pro,N=5,t=3, ML-KEM-768.
+commit message (B) proof
+he group MLS base Au-CGKA ovh. % prove (s) size
+custom multi-stage STARK
+4 16 5 808 11 445 97 1.38 15.31 MB
+10 1024 12 816 18 453 44 1.38 15.31 MB
+20∼1M 24 496 30 133 23 1.38 15.31 MB
+SP1 zkVM, recursively compressed
+4 16 — — — 30.0 1.21 MiB
+10 1024 — — — 30.0 1.21 MiB
+20∼1M — — — 30.0 1.21 MiB
+Prove time is the mean of five runs at the operating point; across the full
+he =3..20 sweep it spans 1.37–1.49 s, a spread that is run-to-run and
+thermal drift rather than depth. Proof size is deterministic. Verification is
+0.17 s on the custom backend and∼27 ms on the zkVM, at every depth. The
+commit-message columns are the same measurement as Table 3 and are a
+property of the wire, not of the backend.
+what keeps the cost low. Because the relation commits to the
+escrowed value rather than re-deriving it, the MLS key sched-
+ule and the update path both stay outside the circuit, and the
+proof’s cost is independent of the group. On our prototype the
+dominant cost is proof generation and proof size, not verifica-
+tion: under ML-KEM-768, an auditability commit message
+proves in 1.38 s and verifies in 0.17 s at 15.31 MB, at every
+group size.
+References
+[1] Harold Abelson, Ross Anderson, Steven M. Bellovin, Josh Benaloh,
+Matt Blaze, Whitfield Diffie, John Gilmore, Matthew Green, Susan
+Landau, Peter G. Neumann, Ronald L. Rivest, Jeffrey I. Schiller, Bruce
+Schneier, Michael A. Specter, and Daniel J. Weitzner. Keys under
+doormats: Mandating insecurity by requiring government access to all
+data and communications.Journal of Cybersecurity, 1(1):69–79, 2015.
+[2] Joël Alwen, Benedikt Auerbach, Mirza Ahad Baig, Miguel Cueto Noval,
+Karen Klein, Guillermo Pascual-Perez, Krzysztof Pietrzak, and Michael
+Walter. Grafting key trees: Efficient key management for overlapping
+groups. InTCC, pages 222–253, 2021.
+[3] Joël Alwen, Sandro Coretti, Yevgeniy Dodis, and Yiannis Tselekounis.
+Security analysis and improvements for the IETF MLS standard for
+group messaging. InCRYPTO, pages 248–277, 2020.
+[4] Joël Alwen, Sandro Coretti, Daniel Jost, and Marta Mularczyk. Contin-
+uous group key agreement with active security. InTCC, pages 261–290,
+2020.
+[5] Joël Alwen, Daniel Jost, and Marta Mularczyk. On the insider security
+of MLS. InCRYPTO, pages 34–68, 2022.
+[6] Andris Ambainis, Mike Hamburg, and Dominique Unruh. Quantum
+security proofs using semi-classical oracles. InCRYPTO, pages 269–
+295, 2019.
+[7] Richard Barnes, Benjamin Beurdouche, Raphael Robert, Jon Millican,
+Emad Omara, and Katriel Cohn-Gordon. The Messaging Layer Security
+13
+
+(MLS) Protocol. Request for Comments 9420, Internet Engineering
+Task Force (IETF), 2023. URL: https://www.rfc-editor.org/
+info/rfc9420.
+[8] Richard Barnes, Karthikeyan Bhargavan, Benjamin Lipp, and Christo-
+pher A. Wood. Hybrid Public Key Encryption. Request for Com-
+ments 9180, Internet Engineering Task Force (IETF), 2022. URL:
+https://www.rfc-editor.org/info/rfc9180.
+[9] Mihir Bellare and Shafi Goldwasser. Verifiable partial key escrow. In
+ACM CCS, pages 78–91, 1997.
+[10] Eli Ben-Sasson, Iddo Bentov, Yinon Horesh, and Michael Riabzev. Fast
+Reed–Solomon interactive oracle proofs of proximity. InICALP, pages
+14:1–14:17, 2018.
+[11] Eli Ben-Sasson, Iddo Bentov, Yinon Horesh, and Michael Riabzev.
+Scalable, transparent, and post-quantum secure computational integrity.
+IACR Cryptology ePrint Archive, Report 2018/046, 2018. URL:https:
+//eprint.iacr.org/2018/046.
+[12] Eli Ben-Sasson, Dan Carmon, Yuval Ishai, Swastik Kopparty, and Shub-
+hangi Saraf. Proximity gaps for Reed–Solomon codes. InFOCS, pages
+900–909, 2020.
+[13] Benjamin Beurdouche, Eric Rescorla, Emad Omara, Srinivas Inguva,
+and Alan Duric. The Messaging Layer Security (MLS) Architecture.
+Request for Comments 9750, Internet Engineering Task Force (IETF),
+2025. URL:https://www.rfc-editor.org/info/rfc9750.
+[14] Dan Boneh, Özgür Dagdelen, Marc Fischlin, Anja Lehmann, Christian
+Schaffner, and Mark Zhandry. Random oracles in a quantum world. In
+ASIACRYPT, pages 41–69, 2011.
+[15] Dan Boneh, Rosario Gennaro, Steven Goldfeder, Aayush Jain, Sam
+Kim, Peter M. R. Rasmussen, and Amit Sahai. Threshold cryptosystems
+from threshold fully homomorphic encryption. InCRYPTO, pages 565–
+596, 2018.
+[16] Joppe W. Bos, Léo Ducas, Eike Kiltz, Tancrède Lepoint, Vadim Lyuba-
+shevsky, John M. Schanck, Peter Schwabe, Gregor Seiler, and Damien
+Stehlé. CRYSTALS-Kyber: A CCA-secure module-lattice-based KEM.
+InIEEE EuroS&P, pages 353–367, 2018.
+[17] Luís T. A. N. Brandão and René Peralta. NIST First Call for Multi-
+Party Threshold Schemes. NIST Internal Report (IR) 8214C ipd (Initial
+Public Draft), National Institute of Standards and Technology, 2023.
+URL:https://doi.org/10.6028/NIST.IR.8214C.ipd.
+[18] Gilles Brassard, Peter Høyer, and Alain Tapp. Quantum cryptanalysis
+of hash and claw-free functions. InLATIN, pages 163–169, 1998.
+[19] Benedikt Bünz, Jonathan Bootle, Dan Boneh, Andrew Poelstra, Pieter
+Wuille, and Greg Maxwell. Bulletproofs: Short proofs for confidential
+transactions and more. InIEEE S&P, pages 315–334, 2018.
+[20] Jan Camenisch and Victor Shoup. Practical verifiable encryption and
+decryption of discrete logarithms. InCRYPTO, pages 126–144, 2003.
+[21] Ran Canetti. Universally composable security.Journal of the ACM,
+67(5):28:1–28:94, 2020.
+[22] Ran Canetti, Uriel Feige, Oded Goldreich, and Moni Naor. Adaptively
+secure multi-party computation. InSTOC, pages 639–648, 1996.
+[23] Ran Canetti, Abhishek Jain, and Alessandra Scafuro. Practical UC
+security with a global random oracle. InACM CCS, pages 597–608,
+2014.
+[24] André Chailloux, María Naya-Plasencia, and André Schrottenloher.
+An efficient quantum collision search algorithm and implications on
+symmetric cryptography. InASIACRYPT, pages 211–240, 2017.
+[25] Marina Checri, Renaud Sirdey, Aymen Boudguiga, and Jean-Paul Bultel.
+On the practical CPAD security of “exact” and threshold FHE schemes
+and libraries. InCRYPTO, pages 3–33, 2024.
+[26] Céline Chevalier, Guirec Lebrun, Ange Martinelli, and Abdul Rahman
+Taleb. Quarantined-TreeKEM: A continuous group key agreement
+for MLS, secure in presence of inactive users. InACM CCS, pages
+2400–2414, 2024. IACR ePrint 2023/1903.
+[27] Alessandro Chiesa, Peter Manohar, and Nicholas Spooner. Succinct
+arguments in the quantum random oracle model. InTCC, pages 1–29,
+2019.
+[28] Katriel Cohn-Gordon, Cas Cremers, Luke Garratt, Jon Millican, and
+Kevin Milner. On ends-to-ends encryption: Asynchronous group mes-
+saging with strong security guarantees. InACM CCS, pages 1802–1819,
+2018.
+[29] Cryspen. Post-Quantum OpenMLS. Cryspen engineering blog, 2024.
+Experimental X-Wing hybrid cipher suite; code point unregistered.
+URL:https://cryspen.com/post/pq-openmls/.
+[30] Cryspen. libcrux: The formally verified crypto library for Rust.
+Software repository, 2025. URL: https://github.com/cryspen/
+libcrux.
+[31] Yvo Desmedt and Yair Frankel. Threshold cryptosystems. InCRYPTO,
+pages 307–315, 1989.
+[32] Julien Devigne, Céline Duguey, and Pierre-Alain Fouque. MLS group
+messaging: How zero-knowledge can secure updates. InESORICS,
+pages 587–607, 2021.
+[33] Jelle Don, Serge Fehr, Christian Majenz, and Christian Schaffner. Se-
+curity of the Fiat–Shamir transformation in the quantum random-oracle
+model. InCRYPTO, pages 356–383, 2019.
+[34] Jelle Don, Serge Fehr, Christian Majenz, and Christian Schaffner. Ef-
+ficient NIZKs and signatures from commit-and-open protocols in the
+QROM. InCRYPTO, pages 729–757, 2022. IACR ePrint 2022/270.
+[35] Jelle Don, Serge Fehr, Christian Majenz, and Christian Schaffner.
+Online-extractability in the quantum random-oracle model. InEU-
+ROCRYPT, pages 677–706, 2022. IACR ePrint 2021/280.
+[36] European Commission. Recording of Telephone Conversations or Elec-
+tronic Communications. Art. 76, Commission Delegated Regulation
+(EU) 2017/565 (MiFID II), 2017. URL: https://eur-lex.europa.
+eu/eli/reg_del/2017/565/oj/eng.
+[37] Valerie Fetzer, Michael Klooß, Jörn Müller-Quade, Markus Raiber,
+and Andy Rupp. Universally composable auditable surveillance. In
+ASIACRYPT, pages 453–487, 2023.
+[38] Financial Industry Regulatory Authority. General Require-
+ments. FINRA Rule 4511 (Books and Records Require-
+ments), 2023. URL: https://www.finra.org/rules-guidance/
+rulebooks/finra-rules/4511.
+[39] Jonathan Frankle, Sunoo Park, Daniel Shaar, Shafi Goldwasser, and
+Daniel J. Weitzner. Practical accountability of secret processes. In
+USENIX Security, pages 657–674, 2018. The “AUDIT” system; IACR
+ePrint 2018/697.
+[40] Lorenzo Grassi, Dmitry Khovratovich, and Markus Schofnegger.
+Poseidon2: A faster version of the Poseidon hash function. In
+AFRICACRYPT, pages 177–203, 2023.
+[41] Alex B. Grilo, Kathrin Hövelmanns, Andreas Hülsing, and Christian
+Majenz. Tight adaptive reprogramming in the QROM. InASIACRYPT,
+pages 637–667, 2021.
+[42] Jens Groth. On the size of pairing-based non-interactive arguments. In
+EUROCRYPT, pages 305–326, 2016.
+[43] Lov K. Grover. A fast quantum mechanical algorithm for database
+search. InSTOC, pages 212–219, 1996.
+[44] Paul Grubbs, Jiahui Lu, and Thomas Ristenpart. Message franking via
+committing authenticated encryption. InCRYPTO, pages 66–97, 2017.
+[45] Ulrich Haböck. Multivariate lookups based on logarithmic derivatives.
+IACR Cryptology ePrint Archive, Report 2022/1530, 2022. URL:
+https://eprint.iacr.org/2022/1530.
+[46] Amir Herzberg, Stanisław Jarecki, Hugo Krawczyk, and Moti Yung.
+Proactive secret sharing or: How to cope with perpetual leakage. In
+CRYPTO, pages 339–352, 1995.
+14
+
+[47] Dennis Hofheinz, Kathrin Hövelmanns, and Eike Kiltz. A modular
+analysis of the Fujisaki–Okamoto transformation. InTCC, pages 341–
+371, 2017.
+[48] Rawane Issa, Nicolas Alhaddad, and Mayank Varia. Hecate: Abuse
+reporting in secure messengers with sealed sender. InUSENIX Security,
+pages 2335–2352, 2022.
+[49] Karen Klein, Guillermo Pascual-Perez, Michael Walter, Chethan Ka-
+math, Margarita Capretto, Miguel Cueto Noval, Ilia Markov, Michelle
+Yeo, Joël Alwen, and Krzysztof Pietrzak. Keep the dirt: Tainted
+TreeKEM, adaptively and actively secure continuous group key agree-
+ment. InIEEE S&P, pages 268–284, 2021.
+[50] Markulf Kohlweiss and Ian Miers. Accountable metadata-hiding es-
+crow: A group signature case study.PoPETs, 2015(2):206–221, 2015.
+[51] Hugo Krawczyk and Pasi Eronen. HMAC-based Extract-and-Expand
+Key Derivation Function (HKDF). Request for Comments 5869, In-
+ternet Engineering Task Force (IETF), 2010. URL: https://www.
+rfc-editor.org/info/rfc5869.
+[52] Sean Lawlor and Kevin Lewi. Deploying Key Transparency at What-
+sApp. Engineering at Meta, 2023. URL: https://engineering.fb.
+com/2023/04/13/security/whatsapp-key-transparency/.
+[53] Julia Len, Melissa Chase, Esha Ghosh, Kim Laine, and Radames Cruz
+Moreno. OPTIKS: An optimized key transparency system. InUSENIX
+Security, 2024.
+[54] Baiyu Li and Daniele Micciancio. On the security of homomorphic
+encryption on approximate numbers. InEUROCRYPT, pages 648–677,
+2021.
+[55] Vadim Lyubashevsky and Gregory Neven. One-shot verifiable encryp-
+tion from lattices. InEUROCRYPT, pages 293–323, 2017.
+[56] Vadim Lyubashevsky, Gregor Seiler, and Patrick Steuer. The LaZer
+library: Lattice-based zero knowledge and succinct proofs for quantum-
+safe privacy. InACM CCS, pages 3125–3137, 2024.
+[57] Rohan Mahy and Richard Barnes. ML-KEM and Hybrid Cipher Suites
+for Messaging Layer Security. Internet-Draft draft-mahy-mls-pq-00,
+Internet Engineering Task Force (IETF), 2025. Work in progress;
+cipher suite code points provisional. URL: https://datatracker.
+ietf.org/doc/draft-mahy-mls-pq/00/.
+[58] Harjasleen Malvai, Lefteris Kokoris-Kogias, Alberto Sonnino, Esha
+Ghosh, Ercan Ozturk, Kevin Lewi, and Sean Lawlor. Parakeet: Practical
+key transparency for end-to-end encrypted messaging. InNDSS, 2023.
+[59] Marcela S. Melara, Aaron Blankstein, Joseph Bonneau, Edward W.
+Felten, and Michael J. Freedman. CONIKS: Bringing key transparency
+to end users. InUSENIX Security, pages 383–398, 2015.
+[60] Silvio Micali. Fair public-key cryptosystems. InCRYPTO, pages
+113–138, 1992.
+[61] Armin Namavari, Barry Wang, Sanketh Menda, Ben Nassi, Nirvan
+Tyagi, James Grimmelmann, Amy X. Zhang, and Thomas Ristenpart.
+Private hierarchical governance for encrypted messaging. InIEEE
+S&P, pages 2610–2629, 2024.
+[62] National Archives and Records Administration. Electronic Records
+Management. 36 C.F.R. Part 1236, 2023. URL: https://www.law.
+cornell.edu/cfr/text/36/part-1236.
+[63] National Institute of Standards and Technology. The Keyed-Hash
+Message Authentication Code (HMAC). FIPS PUB 198-1, 2008. URL:
+https://doi.org/10.6028/NIST.FIPS.198-1.
+[64] National Institute of Standards and Technology. Secure Hash Standard
+(SHS). FIPS PUB 180-4, 2015. URL: https://doi.org/10.6028/
+NIST.FIPS.180-4.
+[65] National Institute of Standards and Technology. SHA-3 Standard:
+Permutation-Based Hash and Extendable-Output Functions. FIPS PUB
+202, 2015. URL:https://doi.org/10.6028/NIST.FIPS.202.
+[66] National Institute of Standards and Technology. Module-Lattice-Based
+Digital Signature Standard. FIPS PUB 204, 2024. URL: https:
+//doi.org/10.6028/NIST.FIPS.204.
+[67] National Institute of Standards and Technology. Module-Lattice-Based
+Key-Encapsulation Mechanism Standard. FIPS PUB 203, 2024. URL:
+https://doi.org/10.6028/NIST.FIPS.203.
+[68] Jesper Buus Nielsen. Separating random oracle proofs from complexity
+theoretic proofs: The non-committing encryption case. InCRYPTO,
+pages 111–126, 2002.
+[69] Giuseppe Persiano, Duong Hieu Phan, and Moti Yung. Anamorphic
+encryption: Private communication against a dictator. InEUROCRYPT,
+pages 34–63, 2022.
+[70] Polygon Zero Team. Plonky3: A toolkit for polynomial IOPs. Software
+repository, 2025. URL:https://github.com/Plonky3/Plonky3.
+[71] Sarah Scheffler and Jonathan R. Mayer. SoK: Content moderation for
+end-to-end encryption.PoPETs, 2023(2):403–429, 2023.
+[72] Adi Shamir. How to share a secret.Communications of the ACM,
+22(11):612–613, 1979.
+[73] Succinct Labs. SP1: A performant, open-source zero-knowledge virtual
+machine for RISC-V. Software repository, 2025. URL: https://
+github.com/succinctlabs/sp1.
+[74] StarkWare Team. ethSTARK documentation. IACR Cryptology ePrint
+Archive, Report 2021/582, 2021. Conjectured FRI soundness in the
+list-decoding regime, i.e. proximity gaps up to capacity 1−ρ rather
+than the proven Johnson radius1−√ρ. URL: https://eprint.iacr.
+org/2021/582.
+[75] Nirvan Tyagi, Paul Grubbs, Julia Len, Ian Miers, and Thomas Risten-
+part. Asymmetric message franking: Content moderation for metadata-
+private end-to-end encryption. InCRYPTO, pages 222–250, 2019.
+[76] Dominique Unruh. Universally composable quantum multi-party com-
+putation. InEUROCRYPT, pages 486–505, 2010.
+[77] U.S. Congress. Records Management by Agency Heads: Gen-
+eral Duties. 44 U.S.C. § 3101 (Federal Records Act), 2014.
+URL: https://uscode.house.gov/view.xhtml?req=granuleid:
+USC-prelim-title44-section3101.
+[78] U.S. Department of Health and Human Services. Technical Safeguards:
+Audit Controls. 45 C.F.R. § 164.312(b) (HIPAA Security Rule), 2013.
+URL:https://www.law.cornell.edu/cfr/text/45/164.312.
+[79] U.S. Securities and Exchange Commission. Records to Be Preserved by
+Certain Exchange Members, Brokers and Dealers. 17 C.F.R. § 240.17a-
+4 (Securities Exchange Act Rule 17a-4), 2023. URL: https://www.
+law.cornell.edu/cfr/text/17/240.17a-4.
+[80] Théophile Wallez, Jonathan Protzenko, Benjamin Beurdouche, and
+Karthikeyan Bhargavan. TreeSync: Authenticated group management
+for messaging layer security. InUSENIX Security, pages 1217–1233,
+2023.
+[81] Charles V . Wright and Mayank Varia. Crypto crumple zones: Enabling
+limited access without mass surveillance. InIEEE EuroS&P, pages
+288–306, 2018.
+[82] Mark Zhandry. How to record quantum queries, and applications to
+quantum indifferentiability. InCRYPTO, pages 239–268, 2019.
+A Background
+A.1 MLS and TreeKEM Background
+This appendix records the MLS mechanisms the paper de-
+pends on beyond the summary of §3.2. All details follow
+RFC 9420 [7] and RFC 9750 [13].
+15
+
+Table 5: Symbolic notation used in the paper.
+Symbol Meaning
+Parameters & identifiers
+λSecurity parameter (384 bits)
+Nh RFC 9420 derivation width (512 bits at
+SHA-512)
+GGroup identifier
+eEpoch number
+ne Group size at epoche
+he =⌈log 2 ne⌉Tree depth (cost statements only)
+me =|FDP(ℓ,e)|Filtered-direct-path length; indexes every path
+object,m e≤h e
+τe Confirmed transcript hash
+Commit context, path secrets & commitments
+ctxe Commit context: tree∥props∥τ e−1
+psi :{0,1} Nh , 0≤i≤m e Path secret at nodei(MLS background only;
+no clause ofR A mentions it)
+croot Poseidon2 commitment
+HP2(“crot”∥G∥e∥ese), published byΠ A
+nsi Node secretDeriveSecret(ps i,“node”)
+ρi Size of the copath resolution of leveli
+(recipients ofps i)
+cti,k,i∈[m e],k∈[ρ i]Path ciphertext at leveli, copath-resolution
+indexk
+ke Epoch key at epoche
+Escrowed secrets, coins & escrow ciphertext
+ese :{0,1} Nh Epoch secret (key-schedule root); the escrowed
+secret
+η:{0,1} λ Coin for escrow ciphertext randomness
+fd ,d∈[t−1]Shamir coefficientF η(“coef”∥d);f(0)is the
+secret
+σ j =f(j),j∈[N]Shamir share of the escrowed secret forA j
+Cesce Escrow ciphertext for epoche
+Symbol Meaning
+Primitives & algorithms
+HSHA :{0,1} ∗→{0,1} 512 SHA-512 wire hash
+HP2 :F∗
+q→F q Poseidon2 (in-circuit)
+Fk(·):{0,1} ∗×{0,1}∗→
+{0,1}∗
+PRFSHAKE256(k∥·); keyed atλorN h
+ℓpub Published lanes of a truncated Poseidon2
+digest
+ℓLeaf index in the ratchet tree
+Ψk(x)Poseidon2 keyed stream (escrow noise; not
+F)
+CBD2(·)Centered binomial sampler of parameter 2,
+on aΨ()stream
+DeriveSecret:{0,1} ∗→
+{0,1} 512
+DeriveSecret (HKDF-Exp-Label)
+Encap,DecapML-KEM-768 encap/decap
+KeyGenDeterministic ML-KEM-768 key generation
+from a node secret
+KEnc,KDecML-KEM-768 + AEAD enc/dec
+Sharet,N ,Rect Shamir share/reconstruct overF q
+(Prove,Vrfy,Ext)STARK prover, verifier, extractor
+Auditor committee
+A={A j}N
+j=1,tAuditor committee and threshold
+mpk= ({pk A
+j},t)Auditor committee public configuration
+ask j Secret key share of auditorA j
+Constructions, relations, log & UC model
+ΠA The auditability construction
+Faud The functionality it realizes
+RA STARK relation proved at commit
+safeESC Safety predicate of the realization statement
+LAppend-only public transcript log
+S,A,ZUC simulator, adversary, environment
+QGRO ,Π p Oracle queries; punctured key families
+nπ,n tie,n u
+tie Bundle sub-proofs; published ties; unsalted
+ties
+T,K,d ext AIR trace height, constraint count, extension
+degree
+A.1.1 Copath Resolution
+A node isblankif it holds no key pair, for instance after a
+removal or when the tree is extended for a join; blank nodes
+are skipped during path derivation, which makes the number
+of recipients per level vary. Theresolution Res(v) of a node v
+is the smallest set of non-blank nodes covering all leaves inv’s
+subtree, defined recursively: Res(v) ={v} if v is non-blank;
+Res(v) = /0 if v is a blank leaf; and Res(v) =Res(left(v))∪
+Res(right(v)) if v is blank and internal. Thefiltered direct
+path FDP(ℓ,e) of leaf ℓ is its direct path with every node
+removed whose copath child has an empty resolution, those
+nodes having no recipients and being left blank by the update.
+It is the filtered path, of length me≤h e, that a commit rekeys,
+and every index i in this paper runs over it. For i∈[m e] the
+committer encrypts psi to every key in the copath resolution of
+level i, that is to{pkv :v∈Res(sibling(dp i−1))}, where dpi is
+the i-th node on the filtered path anddp0 =ℓ ; the recipients are
+therefore the members under node i’s copath child. Writing ρi
+for the size of that resolution, the number of path ciphertexts
+is ∑me
+i=1 ρi, with ρi =1 per level and me =h e when no nodes
+are blank. The leaf secret ps0 is encrypted to nobody — the
+topmost node has no relevant sibling and the leaf has no
+copath child — so the levels carrying ciphertexts are exactly
+1, . . . ,me.
+A.1.2 Path Secret Derivation and Key Schedule
+Each node on the filtered direct path derives its key pair from
+the chain by nsi =DeriveSecret(ps i,“node”) and (pki,sk i) =
+KeyGen(nsi), and a recipient recomputes that key pair from
+the path secret it recovered and rejects the commit if the de-
+rived pki differs from the one the UpdatePath publishes. Au-
+CGKA changes none of this: the committer’s leaf key pair is
+generated independently of the chain and the chain begins at
+the first filtered parent, exactly as RFC 9420 specifies. The
+topmost path secret psme becomes the commit_secret, which
+16
+
+enters the key schedule:
+js=HKDF.Ext(init_secret e−1,commit_secret),
+es=HKDF.Ext(js,GC e),
+app_secret=DeriveSecret(es,“app”),
+conf_key=DeriveSecret(es,“confirm”),
+init_secrete =DeriveSecret(es,“init”).
+Here GCe is the GroupContext: group id G, epoch e, tree
+hash, confirmed transcript hash τe and ciphersuite identifier,
+hashed into the schedule at every epoch so that the keys
+are bound to the public group state. Theconfirmation tagis
+CTe =HMAC(conf_key,τ e) [63], which every member veri-
+fies before accepting epoch e. The epoch secret es above is
+the object ΠA escrows: it is downstream of the whole update
+path and of any external PSK mixed in, which is why recov-
+ering it recovers the epoch without reference to any other. A
+Welcomemessage carries the new member’s path secret under
+its init key and the current init_secret under a pre-distributed
+KeyPackage; in Au-CGKA it additionally carries the epoch’s
+commitment croot, so a joining member can check it against
+the epoch secret its Welcome yields.
+HPKE ciphersuiteMLS uses HPKE (RFC 9180) for
+all asymmetric encryption. The post-quantum-safe ci-
+phersuite used here substitutes the Diffie–Hellman KEM
+(DHKEM) with ML-KEM-768 (FIPS 203), giving HPKE=
+(ML-KEM-768,HKDF-SHA512,SHAKE256-DEM) : the
+KEM step yields a shared key K and encapsulation ct, and
+K seeds the data-encapsulation mechanism (DEM), in our
+prototype a SHAKE256 stream-and-tag construction, so
+the ciphersuite rests only on lattice and hash assumptions.
+The same KEM+DEM protects Au-CGKA’s on-wire path
+ciphertexts, which are the RFC’s own and carry the RFC’s
+own coins; the auditor-committee escrow ciphertexts instead
+use the STARK-friendly escrow PKE of §A.3.1, with a
+one-time PRF pad in place of the DEM.
+A.1.3 Design Delta from MLS
+Au-CGKA keeps the ratchet tree, the resolution rules, the
+key-schedule stages, the transcript and the confirmation tag,
+and it runs the RFC 9420 commit procedure unchanged. It
+is nonethelessnotan RFC 9420-conformant extension: the
+per-commit payload is a field appended toCommit, and that is
+a change to the wire. We claim no code point and no interop-
+erability with current implementations. Four of the five items
+below do sit on extension points the RFC already defines; the
+fifth is the addition, and we state why no defined extension
+point can carry it.
+(D1) Auditor committee: a GroupContext extension.Every
+party holds mpk= ({pk A
+j},t) , a public input to RA. It
+is group-wide, public, and fixed at creation, which is
+the shape of a GroupContext extension (RFC §7.2).
+Carried there it is covered by the GroupInfo hash,
+which is the pinning Rinit relies on (§B.1), and a com-
+mittee change is a GroupContextExtensions proposal
+rather than an out-of-band step. The pinning matters:
+a committer free to substitute mpk would escrow to a
+committee it controls.
+(D2) Genesis payload: a GroupInfo extension.
+Group creation carries (Cesc0,π 0) in its
+GroupInfo (RFC §12.4.3.1), admitted byVerifyCreate,
+so epoch 0 is recoverable on the same terms as ev-
+ery later epoch (§B.1). How the genesis secret is
+generatedis unchanged.
+(D3) Per-commit payload: one field on Commit.Commits
+carry (croot,Cesce,π) and Welcomes the epoch’scroot.
+This is the one addition to the wire. Commit has no ex-
+tensions field, and neither of the two defined routes can
+carry the payload. A new proposal type (RFC §12.1)
+cannot: a proposal is aninputto the commit, covered
+by the transcript hash before the commit secret exists,
+whereas the payload is a function of ese, which the
+commit produces. A GroupInfo extension cannot ei-
+ther: GroupInfo is built after ese exists, but it reaches
+only Welcome recipients and external joiners, not the
+members processing an ordinary commit, so no mem-
+ber could check the escrow at admission — which is
+the guarantee ΠA makes. The authenticated_data
+field of FramedContent fails for the proposal’s rea-
+son rather than the GroupInfo’s: it is covered by the
+confirmed transcript hash, so it too is fixed before the
+commit secret from whiches e derives exists.
+(D4) Erasure is mandatory.What RFC 9420 treats as hy-
+giene the adaptive proof requires: on posting, erase η,
+every σ j and Kj, and the witness. Auditor decapsula-
+tion keys are the sole exception. This is a requirement
+on implementations, not a change to the wire.
+(D5) Ciphersuite.The prototype runs HPKE as
+(ML-KEM-768,HKDF-SHA512,SHAKE256-DEM) ,
+for which no RFC §17.1 suite is a match [29, 57].
+This is a post-quantum choice of our prototype, not
+a requirement of the escrow: RA constrains no path
+ciphertext, so a deployment may run any registered
+ciphersuite and keep every security statement of this
+paper.
+Unchanged:the ratchet tree and its algebra, blanking and
+resolution, the filtered direct path, path-secret derivation and
+node-key generation, the coins of every path ciphertext, the
+UpdatePath and Welcome wire structure, every proposal type
+including external PSKs, the key-schedule stages and labels,
+the GroupContext fields the RFC defines, the transcript hash
+and the confirmation tag, and the requirement that every mem-
+ber verify that tag before accepting an epoch.
+17
+
+A.2 Cryptographic and STARK Background
+A.3 Cryptographic Building Blocks
+Hash functions, PRF, and keyed streamWe model
+HSHA (SHA-512) and HP2 (Poseidon2 [40]) asindependent
+random oracles, so the security of one does not rest on the
+other. HSHA is the on-wire MLS derivation hash (the path-
+secret ladder psi =DeriveSecret(ps i−1) and the key schedule),
+and HP2 does allfield-nativein-circuit work: the commitment,
+escrow-ciphertext wrap-key derivation and FRI-internal hash-
+ing. RA evaluates no HSHA in circuit at all, which is the point
+of committing to the escrowed value (§5.1). Both are post-
+quantum, Grover reducing preimage security on ann-bit input
+to n/2 bits, which is 192 bits at λ=384 and 256 at the Nh =
+512 derivation width. The PRF is Fk(x) =SHAKE256(k∥x) ,
+modeled as a random oracle keyed by the first λ bits and used
+under the standard PRF definition. Separately, Ψk(x) is the
+keyed Poseidon2 sponge stream used only for field-native
+escrow-PKE noise and is not F; its output lanes are rejection-
+sampled by discarding the unique non-canonical BabyBear
+valuep−1, and their low 24 bits are consumed in order.
+CommitmentsThe epoch secretes e is committed as:
+croot =H P2(“crot”∥G∥e∥ese).(3)
+croot iscomputationally binding(a collision breaks collision
+resistance of HP2) and computationally butnotstatistically
+hiding, since an unbounded adversary can enumerate the com-
+mitted value. The proofs therefore rely onhigh-entropy hiding,
+whose relevant quantity is min-entropy: the epoch secret car-
+ries the full derivation width Nh =512 , so a QPT adversary
+recovers it from croot with probability at most QGRO2−512
+classically and 2−256 under Grover. Hiding also requires the
+published digest to be truncated, a full-width digest of a bijec-
+tive permutation being invertible whatever the entropy of its
+input (Appendix D.2.2). The domain separator “crot”∥G∥e
+makes each published root a single-target problem rather than
+one function shared across every epoch of every group. Hid-
+ing against the committer is irrelevant, since the extractor
+recovers a malicious committer’s witness regardless.
+Path encryption: ML-KEM-768 (FIPS 203)Path se-
+crets travel on the MLS wire under the standard KEM-
+DEM (HPKE, RFC 9180) compositionoverML-KEM [67],
+written KEnc/KDec: Encap(pk)→(c kem,K) agrees on a
+fresh key K and an AEAD under K carries the payload, yield-
+ing ct= (c kem,c dem). KEnc/KDec arenotFIPS-203 primi-
+tives but this composition. The path wire is untouched by ΠA:
+no clause of RA mentions it, and its confidentiality is charged
+to CGKA path secrecy (§D.2.2); the escrow ciphertext is a
+separate scheme with its own decryption-failure bound (Ap-
+pendix E.1).
+A.3.1 Escrow PKE: a STARK-friendly Module-LWE
+Scheme
+The escrow ciphertext wraps each Shamir share under an au-
+ditor’s key, so the in-circuit cost of proving it well-formed
+is a primary design constraint. Rather than run ML-KEM’s
+SHAKE-heavy sampler inside the STARK, we escrow under
+aSTARK-friendlyCPA public-key encryption scheme instanti-
+ating Kyber’s K-PKE core [16] under thesameModule-LWE
+assumption; it is not ML-KEM and makes no FIPS 203 claim.
+Over RqR =Z qR [X]/(X 256 +1) with module rank κ, a key
+is sk= s(short) and pkA = (A,b=As+e) withA ∈R κ×κ
+qR ;
+encryption of µ with coins (r,e1,e 2) isu = A⊤r + e1, v=
+b⊤r +e 2 +Encode(µ) , and Dec(s,(u,v)) =Decode(v− s⊤u).
+Three changes make it inexpensive to prove while keeping
+it post-quantum.Ais apublic input, recomputed by the veri-
+fier, so no matrix expansion (SHAKE/XOF) appears in-circuit.
+The noise (r,e1,e 2) is CBD2(Ψη(“esc”∥j∥G∥e)) , consumed
+in order andrange-checkedin-circuit, the stream’s rejection
+step making these coins exactly the reference CBD 2 distri-
+bution. And we drop the Fujisaki–Okamoto transform: the
+escrow ciphertext needs no decryption oracle, auditors de-
+capsulating only at audit, so IND-CPA suffices, and integrity
+of theloggedescrow ciphertext follows from the STARK
+proof of well-formedness (verifiable encryption) rather than
+from FO (Lemma 15; the scheme itself is not claimed non-
+malleable). The absent decryption oracle is an obligation on
+the deployment, not a property of the scheme: an auditor must
+decapsulate only ciphertexts admitted to FLog, since one that
+decrypted an attacker-supplied ciphertext would supply the
+oracle the argument assumes away. Audit reads from the log
+for this reason (§B.2.1).
+We use the scheme in KEM mode: Encap(pk A
+j ) encrypts
+a random µ j
+$← −{0,1}256 and sets Kj =H P2(“key”∥µ j),
+and the share is wrapped by a one-time pad e j =σ j⊕
+HP2(“wrap”∥Kj), which the simulator equivocates through
+the random oracle (§D.2.7). The width of µ j is 256 bits, both
+the message capacity of one such ciphertext and the min-
+entropy the pad point needs: that point isreprogrammedrather
+than punctured, so it is governed by the pQGRO-bounded
+term of Appendix D.2.2 and not by the QGRO-linear one
+that fixes λ. The parameter set, ciphertext compression, the
+decryption-failure bound, the IND-CPA reduction and the
+verifiable-encryption statement are in Appendix E.
+A.3.2 Shamir Secret Sharing overF q
+We use Shamir’s threshold scheme [72] over a prime field
+Fq with q>2 Nh, so an escrowed secret embeds injectively
+as an integer in{0, . . . ,2Nh−1}⊂F q. Sharet,N samples one
+degree-(t−1) polynomial f(X) =s+ ∑t−1
+d=1 fdX d over Fq with
+fd =F η(“coef”∥d) and outputs σ j =f(j) for j∈[N] ; Rect
+Lagrange-interpolates f(0) from any t shares.Onesharing
+carriesonesecret: this is the object clause (i) constrains and
+18
+
+what the security analysis assumes throughout.
+Arithmetizing one sharing over a 256-bit fieldThe pro-
+totype instantiates Fq at qS =nextprime(2 256) (§7), in which
+an Nh-bit secret does not fit, and therefore carries the shar-
+ing as apairof Fq elements: it splits the secret into two
+32-byte halves, shares each under its own coefficient family
+fb,d =F η(“coef”∥b∥d) and its own pad HP2(“wrap”∥b∥Kj)
+for b∈{0,1} , and reconstructs by interpolating both halves
+at zero and concatenating. The half index must be inside both
+derivations: without it in the coefficients the two polynomials
+coincide and one share reveals s0−s 1, and without it in the
+pad the two wraps satisfy e0,j⊕e 1,j =σ 0,j⊕σ 1,j , a linear
+relation between shares available to any holder of the escrow
+ciphertext. Instantiating Fq above 2512 drops the split. Be-
+cause the relation, the functionality and the proofs are stated
+over thesinglesharing above, the substitution needs an argu-
+ment rather than a remark:
+Lemma 3(The split-field sharing realizes the specified one).
+Fix t≤N and let s∈{0,1} Nh with halves s0,s 1∈{0,1} Nh/2.
+Define Share′
+t,N (s;η) =
+ 
+(σ0,j ,σ 1,j )
+
+j∈[N] with σb,j =f b(j)
+for the two degree-(t−1) polynomials fb over Fq with fb(0) =
+sb and coefficients fb,d, and Rec′
+t the pairwise interpolation
+at zero followed by concatenation. Then (Share′,Rec′) is a
+(t,N) -threshold scheme for s:(a) Rec′
+t returns s from any t
+index-distinct pairs;(b)for coefficients uniform and indepen-
+dent in Fq, any t−1 pairs are distributed independently of
+s; and(c)its share vector is a deterministic relabelling of
+one Sharet,N share vector for the same t, N and secret, so
+every statement of this paper that quantifies over “the sharing”
+holds verbatim for it.
+Proof. Each half is an ordinary Shamir sharing over Fq, so
+t index-distinct pairs give t evaluations of each fb and con-
+catenation inverts the split; perfect t-privacy of each half
+holds for uniform coefficients, and the two families are
+domain-separated by b, hence jointly uniform; and both ob-
+jects are the evaluation vector at [N] of an Fq-linear map of
+(s,coefficients) with the same threshold structure, the rela-
+belling beingj7→(j,b).
+The hypothesis of (b) requires care: the coefficients come
+from one λ-bit coin, so their joint entropy is at most λ where
+2(t−1) uniform ones carry 2(t−1)log 2 q bits. Real-world
+privacy is therefore computational, in the random-oracle
+model for F; perfect t-privacy is available only after the co-
+efficients are idealized at H3→H 4, the only place we use it
+(Lemma 8). Embedding an Nh-bit secret in the prime costs
+the negligible statistical distance (q−2 Nh)/q. The commit-
+ter proves the sharing well-formed in-circuit, so a verifier is
+assured the escrow ciphertext escrows the committed secret.
+The STARK field is BabyBear ( p=2 31−2 27 +1 ), which
+cannot hold an Fq element natively, so clause (i) represents
+each element in base-216 limbs and proves one signed carry
+chain per share; the committee index j being a small public
+scalar, each fd·j d is a per-limb scalar multiply rather than a
+big-by-big one.
+A.3.3 STARKs and the(Prove,Vrfy,Ext)Triple
+We use a STARK (Scalable Transparent ARgument of
+Knowledge) [11] instantiated as a Plonky3-style AIR (Al-
+gebraic Intermediate Representation) over a small field. It
+is a non-interactive argument in the random oracle model
+with five properties: completeness;knowledge soundness
+via a straight-line extractor Ext that, from any accepted
+(x,π∗), outputs w with (x,w)∈R except with negligible
+probability; zero knowledge, which we model by the FNIZK
+hybrid (§D.1); post-quantum security, its underlying IOP
+being information-theoretically sound and its Fiat–Shamir
+compilation knowledge-sound with a straight-line extrac-
+tor in the QROM [27, 33]; and succinctness, at proof size
+O(λ·polylog(T)) in the trace height T and independent of
+the witness size. The proof assumes all five holdsimultane-
+ouslyof the system we instantiate, which is assumption (A3′)
+of §6 and is not established here; §7 shows that the relation
+canbe arithmetized efficiently (in-circuit ML-KEM and Po-
+seidon2), which is a statement about cost rather than about
+(A3′).
+Global random oracle modelFollowing Canetti, Jain, and
+Scafuro [23], we model HSHA, HP2 and the keyed function F
+as a single joint global random oracle GRO accessible by all
+parties, the simulator and the environment; a keyed evaluation
+Fk(x) is the query GRO(k∥x) under domain separation. Plac-
+ing F inside GRO lets the proofprogramthe wrap, sharing
+and commitment derivations, and means no step invokes a
+PRF assumption. We donotcharacterize a programmable
+point as one the environment “has not queried”: against su-
+perposition access that event is undefined. The two admissi-
+ble mechanisms, reprogramming at a point of min-entropy ζ
+and puncturing with semi-classical O2H, are stated with their
+costs in §D.2.4, and every programmed and punctured point
+is tracked in the hybrid sequence.
+B Constructions and Protocol Specifications
+This appendix gives the epoch-0 bootstrap and the per-
+algorithm steps not stated in §5.
+B.1 Epoch-0 Bootstrap
+Epoch 0 is created rather than committed, so its escrow is
+fixed at group creation. Auditability is a per-epoch property
+and epoch 0 is an epoch, so it needs the same escrow, com-
+mitment and admission check as every later epoch; without
+them the first epoch of every group would be the one epoch
+no audit can reach. We therefore state group creation as an
+19
+
+algorithm of its own, Πinit. It keeps the RFC 9420 creation
+procedure unchanged, including how the initial key-schedule
+input is sampled and the convention that an epoch with no
+predecessor runs the key schedule with commit_secret0 = 0.
+Nothing about how the genesis secret isgeneratedchanges:
+ΠA escrows the epoch secret the RFC procedure already pro-
+duces, so no derivation is redirected through an escrowed
+value. What creation gains is the payload and its proof.
+Genesis (Πinit)The creator runs RFC 9420 creation, obtain-
+ing the genesis epoch secret es0. It samples η0
+$← −{0,1}λ,
+forms Cesc0 =Escrow(es 0,η 0,mpk) exactly as in ΠA step 2,
+publishesc (0)
+root =H P2(“crot”∥G∥0∥es0), and provesR init:
+Rinit :
+(i) escrow ciphertextC esc0 Shamir-escrowses 0 over
+Fq undermpk(asR A(i–ii))
+(ii)c (0)
+root =H P2(“crot”∥G∥0∥es0), on the samees 0
+that is clause (i)’s constant term, bound to the epoch-0
+GroupInfo hashGI-hash 0
+(4)
+Public inputs (mpk,Cesc0,c (0)
+root,GI-hash 0), witness
+(es0,η 0,{µ 0,j ,K0,j ,σ 0,j}); the GroupInfo extension car-
+ries (Cesc0,π 0). Epoch 0 has no update path — the group is
+created with its full roster and no node is rekeyed by a commit
+— so me =0 at the genesis node of H . A joining member
+obtains the epoch-0 secret from its Welcome message and
+admits the genesis only if c(0)
+root matches the commitment to
+that secret, so VerifyCreate refuses a mis-escrowed genesis
+on the same member-enforced terms as a later commit (§5.1).
+Audit is Audit (§B.2.2) on Cesc0: any t auditors recover es0
+and derive the epoch-0 key, touching no other epoch.
+Why the anchor is a payload rather than a derivation
+Binding c(0)
+root to GI-hash0 is what makes the committee the
+group intended the committee the genesis escrows to:mpk is a
+public input of Rinit, so a creator that substituted a committee
+of its own keys would produce a proof against a mpk the
+GroupInfo does not carry. No party retains epoch-0 material
+afterwards: the genesis secret is Shamir-escrowed under the
+committee’s keys, and the creator, which holds it transiently
+while building the Welcome messages, erases it on the same
+discipline as a later committer (§3.4). The simulator gains one
+group-creation case, handled as an honest commit (§D.2.7),
+which does not affect Theorem 1.
+B.2 Full Protocol Specifications
+We give the per-algorithm pseudocode of ΠA not already
+stated in §5, starting with the subroutines it shares with the
+epoch-0 bootstrap.
+B.2.1 Common Subroutines
+Escrow(s,η,mpk),Recover(T,C esc,{sk A
+j}).Escrow is
+step 2 of §5.1 on an arbitrary secret s in place of ese,
+returning Cesc ={(c esc
+j ,e j)} j∈[N]; Recover, for|T|=t , is the
+corresponding audit step, decrypting µ j←Dec(sk A
+j ,c esc
+j ),
+unwrapping σ j←e j⊕H P2(“wrap”∥HP2(“key”∥µ j)) and
+returning Rect ({(j,σ j)} j∈T ) over Fq. Neither routine reads
+any epoch but its own.
+Stmt(pp,mpk,L,M e). Recompute the STARK statement
+from the wire, takingnofield from the committer: read
+G, e and ctxe from the logged GroupContext; take mpk=
+({pk A
+j} j∈[N] ,t) from the group’s public parameters inL rather
+than from Me; and take Cesce and croot from Me, which oc-
+cupies the unique log position (G,e). Return the resulting x.
+The statement has no path-derived field, soStmt reads neither
+the ratchet tree nor the UpdatePath.
+ValidateCommit(pp,mpk,L,M e). Set x←
+Stmt(pp,mpk,L,M e) and check: (a) Vrfy(x,π) =1 ; (b) es-
+crow ciphertext Cesce is present and covered by π; (c) e is the
+next expected epoch forGinL. Reject on any failure.
+Why croot is outside τe croot isnothashed into the
+transcript hash, and cannot be: it is a function of ese =
+HKDF.Ext(js,GC e) and GCe contains τe, so a committer
+could compute neither value first. No binding is lost: croot is
+a public input of x and hence absorbed into the Fiat–Shamir
+transcript, it is recomputed from the wire by Stmt, and Me
+occupies the unique log position (G,e). Step (a) likewise veri-
+fies against therecomputed x, which costs nothing, every field
+being public in L; Appendix D.3.1 states why a committer-
+supplied statement would make the check vacuous.
+B.2.2 Per-Algorithm Steps Not Stated in §5
+Commit, Escrow and Audit are given in full in §5.1, and
+AuditSetup in its setup paragraph. The remaining interfaces
+are these.
+VerifyCommit. Run ValidateCommit on public inputs mpk,
+Cesce and croot. It is stateless: it reads the log and the message,
+holds no group state, and establishes that the logged escrow
+is a well-formed t-of-N sharing of a croot-preimage. It does
+not establish that the preimage is the group’s epoch secret;
+that is the member-side check below, and §D.3.3 states the
+boundary precisely.
+Process(gks,M e). Run ValidateCommit; run the ordinary
+RFC 9420 commit processing — decrypt the path secret
+the UpdatePath carries for this member, recompute the chain
+above it, check each node key and the confirmation tag — to
+derive ese and ke; then check croot =H P2(“crot”∥G∥e∥ese)
+and abort if not. Only the last step is new.
+Audit, key-schedule step. After Recover returns ese, check
+it against the logged croot, run the key schedule forward on it,
+and output (ese,k e). The step needs no other epoch’s material:
+20
+
+ese is the key schedule’s own root at epoche, already down-
+stream of the previous epoch’s init_secret and of any external
+PSK mixed in. Thec root check is the only failure condition.
+B.2.3 Public and Private Operations, Variable Depth
+VerifyCommit is stateless and needs only the log; §D.3.3
+states what it establishes and what it leaves to the mem-
+bers. Audit is neither stateless nor open: reconstructing the
+escrowed secret requires a threshold of auditors, leaves no
+record on the log, and returns its output only to the requesting
+committee.
+Group size and blanking both change each epoch, so the
+filtered-path length me varies. This costs ΠA nothing. RA has
+no clause indexed by a path level: the statement is the escrow,
+its sharing and one commitment, so the trace, the witness,
+the proof size and the prove time are the same whether the
+tree holds eight members or a million, and whether or not
+nodes are blank. The measured configuration of §8 reports
+the unblanked case me =h e, ρi =1 for the non-proof wire
+figures, where blanking does move bytes between levels; the
+proof figures are independent of both.
+B.3 Proactive Refresh of the Committee Keys
+The safety predicate of §6 counts auditor corruptions over
+thewholeexecution (Rem. 1), because audit must recover
+arbitrarily old epochs and the committee therefore cannot
+forget; an adversary that corrupts one auditor per year defeats
+a 3-of-5 committee in three years. We record here an add-on
+that narrows that window. It is a deployment measure rather
+than a part of ΠA: the base theorem is the fixed-sharing case,
+and no clause of RA, no object on FLog and no logged proof
+depends on it.
+Re-randomizing theper-epochsharing does not narrow
+the window: the shares of epoch e are wrapped inside Cesce
+on FLog under the auditors’ long-term keys, so refreshing
+it would mean decrypting and re-encrypting every archived
+epoch — O(E) work per period, the committee online over
+the whole archive, and a window in which plaintext shares
+exist — and would invalidate the logged proofs,Cesce being
+a public input of x. We refresh one level down instead. Each
+auditor’s escrow decapsulation keyskA
+j is itself held as akc-of-
+nc sharing among nc custodians of auditor j, andthatsharing
+is proactively re-randomized [46] every period: at periodθ the
+custodians hold sh(θ)
+j,1 , . . . ,sh(θ)
+j,nc with Reckc of any kc equal
+to skA
+j , the period-θ shares being information-theoretically
+independent of the period-θ′ shares for θ̸=θ′ given fewer than
+kc of each. Nothing on FLog changes: pkA
+j is fixed forever, so
+every archivedCesce stays decryptable and every logged proof
+stays valid. An audit becomes a two-level reconstruction, kc
+custodians of each of t auditors reassembling skA
+j before the
+committee interpolates as before. Because pkA
+j cannot rotate,
+the refresh bounds theprobabilitythat an adversary acquires
+skA
+j and not theconsequence: an skA
+j obtained in any one
+period opens that auditor’s slot in every archived epoch. That
+is the residual cost of Rem. 1, and no scheduling of the refresh
+removes it.
+Proposition 4(Refined safety predicate).Under periodic
+refresh, epoch e is private if for fewer than t indices j∈[N]
+the adversary ever obtains skA
+j , and it obtains skA
+j only by
+corrupting≥k c custodians of auditor j within a single refresh
+period. Writing safe′
+ESC for that predicate, Theorem 1 holds
+with respect tosafe′
+ESC in place ofsafeESC, with one additional
+term ENε prs for the refresh protocol’s own secrecy error.
+Proof sketch. The simulator is unchanged, still revealing skA
+j
+on a corruption of A j; only which corruption events yield skA
+j
+differs. On a custodian corruption below the thresholdS hands
+the adversary uniform shares of the period, distributed exactly
+as real bykc-privacy of the sub-sharing, and programs nothing;
+the wrap-point equivocation of Lemma 7 is reached only once
+skA
+j itself is exposed. Cross-period share consistency is the
+refresh protocol’s own guarantee, charged εprs, which we do
+not instantiate here.
+The refresh runs among auditor j’s custodians only, needing
+no interaction with the group, the delivery service or the other
+auditors, so it can run while the committee is otherwise offline.
+It replaces “fewer than t auditors ever corrupted” with “fewer
+than kc custodians of any auditor corrupted within one period,
+for all butt−1 auditors”, which is the weaker condition only if
+the period is short relative to the time to corruptkc custodians.
+The period is a deployment parameter.
+CostThe refresh is a standalone crate re-sharing skA
+j under
+a post-quantum Feldman VSS with Ajtai/SIS-style linear com-
+mitments over Fq. It is a statement-layer add-on: custodian
+state and committee membership change never enter RA, so
+pkA
+j and the loggedCesce are fixed for an epoch and no logged
+proof is affected. Table 6 reports wall-clock means at N=5,
+t=3, nc=5, kc=3; these are add-on operations, not STARK
+proving. A full Herzberg refresh round ( refresh_panel)
+costs 5.3 ms and a leave+join archiving the leaver key among
+the new committee ( replace_rotate_leave_join) costs
+2.7 ms; every other operation — VSS dealing and verification,
+delta verification, two-level audit — is under one millisecond.
+All of it runs off the group’s critical path.
+C Implementation Details
+Compute chips and cross-clause bindingEvery chip of
+§7 is cross-checked against a plain-Rust reference and rejects
+a tampered input. The dominant cost is the escrow cipher-
+text’s lattice arithmetic, 62,080 modular operations at N=5,
+proven as one fused multi-stage STARK with the field terms
+additive. The binder of the cross-clause tie (§7) is the Shamir
+21
+
+Table 6: Auditor re-sharing microbenchmarks (statement-
+layer add-on, not STARK proving). PQ Feldman VSS with
+Ajtai/SIS linear commitments over Fq; wall-clock means, re-
+lease build. Apple M5 Pro; committee N=5, t=3; custodians
+nc=5, kc=3. The full refresh panel and leave+join are the
+heaviest operations.
+Operation Mean
+PQ Feldman VSS
+vss::deal287µs
+vss::verify_share57µs
+Custodian sharing and proactive refresh
+share_seed1.0 ms
+verify_custodian_state98µs
+propose_refresh489µs
+verify_delta100µs
+apply_refresh501µs
+refresh_panel(full round) 5.3 ms
+reconstruct_seed165µs
+redistribute863µs
+Committee membership and archive
+setup_committee4.8 ms
+replace_rotate_leave_join2.7 ms
+verify_archive_share95µs
+reconstruct_from_archive152µs
+Two-level audit
+open_historical_askc463µs
+audit_with_askc79µs
+band’s own packing of ese, exported as one ℓpub-lane digest
+and consumed by the commitment and wrap chips, with no
+public value exposing ese, η or the plaintext shares. A com-
+mitment reading a different secret and a Shamir/commitment
+leaf mismatch are each rejected by test. The measured har-
+ness instantiates one recipient per copath level (ρi=1) for the
+wire figures; a resolution of size ρ multiplies the MLS base’s
+ciphertext and AEAD work byρ and leaves every proof figure
+and every security figure unchanged, the relation having no
+path-indexed clause. The stack also implements a SHA-512
+chip, validated against the official test vectors and used by the
+LogUp engine’s regression suite — LogUp cuts one compres-
+sion from∼100k plain constraints to∼8k lookup checks —
+but RA evaluates no SHA-512 in circuit, so it contributes noth-
+ing to the measured bundle. Table 7 reports each ML-KEM
+chip proven on the engine at full trace utilization: the [0,q R)
+modulus table fixes the height atT=4096 , so the chips share
+a trace size and differ in width, in how many columns are
+range-checked and in the number of computation constraints,
+with proof size tracking the column count.
+Where the proof size isTables 2 and 7 reportsingleargu-
+ments, and the measured bundle is not their sum: stacking
+concatenates the row-independent chips into 2 wide traces, so
+each sub-proof commits to many times the columns of any
+single row of Table 7. Column count is what sets the size. At
+a fixed nq=156 each query opens every committed column
+at its index and carries a Merkle path per commitment, so
+Table 7: ML-KEM chip costs under the hiding PCS. columns
+= main-trace columns, lookups = batched range lookups,
+constraints = computation constraints; proof size in KB,
+prove/verify in ms.
+Chip cols lookups constraints Proof Prove Verify
+mod-mulabmodq8 2 1 587.9 278.9 2.9
+NTT butterfly 21 6 3 628.3 353.8 3.4
+inner product ∑aisi 8 2 2 587.9 242.5 2.8
+chained FMA 15 4 2 608.3 292.0 3.1
+serialized bytes scale with columns×queries and only loga-
+rithmically with height — the same effect that makes Table 2
+near-flat in the trace. The N escrow encryptions supply those
+columns, their 62,080 modular operations being the widest
+band, and the hiding PCS adds the leaf salt and the masking
+columns on top of each. Size is thereforeO(N) in the commit-
+tee and O(1) in the group, and halving nq — which is what
+the ethSTARK conjecture buys — roughly halves it.
+Configuration behind the measured bundleThe mea-
+sured bundle uses stacked aggregation with parallel chip
+scheduling and FRI log-blowup 2; every chip of RA is de-
+gree≤3, so no part of the bundle needs the higher blowup
+the SHA-512 chain would. The non-hiding assembler, which
+exposes the shares publicly for offline auditing, is not the mea-
+sured configuration. Timings are taken under the tip Rayon
+pool at the core count (18 threads), FRI-merge off, and shared-
+DFT prewarm defaults; bundle verification checks sub-proofs
+on scoped OS threads and runs the FRI query phase in parallel
+once the indices are drawn serially, so neither the transcript
+nor the proof bytes depend on the thread count.
+End-to-end zero knowledgeUnder the hiding PCS the
+commit message and π expose only the intended publics:
+croot, the context, the committee public keys and the wrapped
+escrow ciphertexts. No witness secret appears — not ese, η,
+the escrow messages, the wrap keys, the pads or the shares.
+Values crossing between sub-proofs do so as a Poseidon2
+digest truncated to ℓpub lanes, under a secret salt of twelve
+further input lanes; the salt is derived from η, so sub-proofs
+sharing a value publish an identical digest, and η is carried at
+the full λ bits because it determines the coefficients, the noise
+and thence every wrap.Everytie in the bundle is salted this
+way — both chips that share a value hold η — so nu
+tie =0 in
+Lemma 11 and the transcript carries no unsalted commitment
+to a secret. The wrap key is bound to its escrow message
+in-circuit: the chip that hashes µ j derives Kj from that digest
+under a range-checked canonical bit decomposition and pub-
+lishes only the truncated commitment, so no published value
+determines Kj. A harness test scans the reconstructed pub-
+lished statement for the secrets and for any window of lanes
+from which the wrap key could be re-derived, and confirms
+that the wrap opens with the witness key but not from the
+22
+
+transcript.
+The assumptions these mechanisms rest on — collision
+resistance of the truncation under idealized Brassard–Høyer–
+Tapp, and the ethSTARK conjecture [74] behind the FRI fig-
+ure — are stated with their levels in Appendix D.2.2 and
+charged over an execution in Appendix D.2.11. Pad expan-
+sion is not among them: the field-native pad lets clause (ii)
+prove µ j→K j→pad→e j, so an auditor recovering Kj can
+always unwrapσ j.
+D Security Analysis
+This appendix is the complete security treatment of Au-
+CGKA, post-quantum throughout: the threat model and UC
+framework (§D.1); the assumptions and the adaptive post-
+quantum UC theorem, with its simulator and hybrid sequence
+(§D.2); and the game-based properties derived as corollaries,
+with their games and reductions (§D.3).
+Adversary powers and goals A has the powers granted by
+the oracle set of Appendix D.3.1: it drives the group through
+Ocreate,O prop,O commit and may, as a corrupt committer, submit
+an arbitrary commit message; Ocorrupt reveals a party’s cur-
+rent non-erased state, including an auditor’s ask j =sk A
+j ; and
+Odec on path ciphertexts makes the model chosen-ciphertext,
+excluded by freshness on the challenge epoch’s own logged ci-
+phertexts rather than on positions. The network is the append-
+only log FLog, which admits at most one node per position
+(G,e), so equivocation is refused at the log layer, and FPKI
+supplies authentication. Against this model the adversary
+pursues one of two goals, formalized as the games of Ap-
+pendix D.3.1:(a)learn a fresh epoch’s key without a thresh-
+old of auditors (Gamepriv), or(b)produce a commit message
+that verifies and is accepted by an honest member yet whose
+escrow is unrecoverable (Gamees, the silent-escrow attack).
+Both goals are about the escrow, which is what RA constrains.
+D.1 UC Framework and Hybrid Model
+We use the UC framework of Canetti [21]: protocol Π UC-
+realizesideal functionality F if for every QPT adversary A
+there is a QPT simulator S such that no QPT environment Z
+distinguishesREAL Π,A fromIDEAL F,S with more than neg-
+ligible advantage. We work in the (FNIZK,F Log,G RO,F PKI)-
+hybrid model. FNIZK is the ideal NIZK, providing prove/verify
+withsimulationfrom public inputs andstraight-line extrac-
+tionfrom adversarial proofs, instantiated by the STARK in
+the QROM; the extractor being online, it stays sound against
+a quantum prover. FLog is an append-only bulletin board ad-
+mitting at most one entry per position (G,e) with publicly
+readable history, modeling the delivery service’s ordering
+guarantee. GRO is a programmable global quantum random
+oracle [14,23] queried in superposition by all parties including
+S, run by the simulator as a compressed oracle [82] and repro-
+grammed at the derivation points the proof tracks explicitly
+(Appendix D.2.6). The MLS key schedule is modeled inside
+GRO, which is what lets S programthe relation between the
+escrowed secret and the epoch key at the points where an ex-
+posure reveals both. The functionality itself samples the two
+independently and derives neither (Fig. 1); every hybrid of Ap-
+pendix D.2 refers to that one functionality (Appendix D.2.5).
+FPKI is an ideal PKI mapping identities to public keys, whose
+realization — credential issuance and revocation, signature
+security — is orthogonal to auditable key agreement.
+Corruption model.Corruptions areadaptive, in the secure-
+erasure model (§3.4): A may corrupt any party at any point
+and learns only that party’s current, non-erased state, and any
+subset of group members may be corrupt, exactly as in [5].
+Auditor corruption is adaptive too, but the threshold budget is
+counted over thewholeexecution, so adaptivity changes only
+when and which auditorsA selects, not how many (Remark 1).
+Remark1 (Auditor-committee forward secrecy is precluded
+by audit).The global-in-time committee budget is a struc-
+tural consequence of auditability. Audit must recover the se-
+cret of anarbitrarily oldepoch on demand, so the committee
+must retain, for every past epoch, the means to reconstruct it:
+no committee-side forward secrecy is achievable, and a≥t
+breach is necessarilyretroactiveacross all epochs whose es-
+crow ciphertexts remain onFLog. Post-compromise security is
+void against such a coalition for the same reason, and neither
+property is recovered by later rekeying, the threshold struc-
+ture limiting how much of the committee an adversary must
+reach and not what it obtains once it has. Accordingly Fresh
+(Appendix D.3.1) counts auditor corruptions over the whole
+execution rather than in a per-epoch window, which also cov-
+ers an adversary accumulating them gradually without ever
+holding t shares at once. Appendix B.3 gives a mechanism
+that narrows the window and the refined predicate it delivers;
+the base theorem assumes a fixed sharing.
+D.2 Adaptive Post-Quantum UC Security
+We prove that ΠA isadaptivelyUC-secure against a
+QPT adversary in the secure-erasure model (§3.4) and
+the programmable global quantum random-oracle model
+(QROM) [14]: it realizesF aud.
+D.2.1 Model
+We keep the UC framework, the (FNIZK,F Log,G RO,F PKI)-
+hybrid model and the adaptive secure-erasure corruption
+model of §D.1. All machines ( Z,A,S ) are QPT; GRO is
+quantum-accessible, QGRO denotes the total number of su-
+perposition queries, and S may lazily sample GRO on fresh
+inputs and adaptively reprogram it at the points of §D.2.7. In
+the QROM, FNIZK simulates proofs from public inputs and
+admits a straight-line (online) extractor [27, 34].
+23
+
+D.2.2 Building blocks in the QROM
+Each block is post-quantum and QROM-secure;εX is the QPT
+advantage against the corresponding game. Table 8 collects
+the levels and §D.2.11 charges them over a whole execution.
+Escrow PKE, εesc.IND-CPA of the scheme of §A.3.1
+reduces to quantum Module-LWE at the parameters of
+Appendix E.1 (Lemma 14), and suffices because there is
+no escrow-ciphertext decryption oracle and integrity of a
+loggedciphertext comes from the proof of well-formedness
+(Lemma 15, proof-bound rather than scheme-level).
+Oracles. F=SHAKE256 , HP2 =Poseidon2 , the keyed
+stream Ψ and the RFC 9420 key schedule are all modeled in-
+side GRO, hence programmable; Ψ is included because H2→
+H3 punctures the “esc” label family. Modeling KeySchedule
+inside GRO is amodel condition: the functionality evaluates
+it nowhere, and S programs KeySchedule(ese,ctx e):=k e at
+exposure points, which §D.2.5 shows is forced. The pro-
+grammed points are counted in R. The path-secret ladder
+DeriveSecret needs no such treatment here: no clause of
+RA reaches it, and the path layer is handled whole by the
+TreeKEM simulator of [5].
+Commitment binding and hiding, εbind.Publishing ℓpub
+BabyBear lanes gives n≈30.9ℓ pub bits. Collision costs are
+2n/2 without large memory, ˜O(22n/5) under QRACM [24] and
+2n/3 with BHT quantum memory [18]; we quote BHT conser-
+vatively, so no result rests on a memory restriction. Hiding
+requires truncation, the permutation being invertible given all
+W lanes: an attacker guesses the W−ℓ pub withheld lanes, in-
+verts and reads the packed secret, at Grover costp(W−ℓpub)/2 =
+15.45(W−ℓ pub) bits. The right guess is recognizable (ese re-
+computes the confirmation tag), and the salt, recovered by
+the same inversion, strengthens only direct preimage search.
+Over the event classT=E(1+n tie), log2 T=21 at ΠA’s bun-
+dle, hiding delivers 15.45(W−ℓ pub)−10.5 bits and binding
+(30.9ℓpub−21)/3 : at the prototype’s W=32, ℓ pub =16 that
+is 236.7 and 157.8, matching the permutation width. Every
+published commitment is width-32 truncated to 16 lanes, a
+checked invariant (§C).
+Clause (iii) commits the whole secret in one region because
+direct Grover search at nv =N h delivers 245.5 bits over the
+execution against 117.5 for either 256-bit half. Hiding claims
+also require uniform committed secrets, which is no technical-
+ity: hiding iscomputational, so an epoch secret drawn below
+the full derivation width would fall to dictionary search on the
+published croot whatever the figures say. Multi-target search
+applies only where a published value is a direct function of the
+searched secret; this holds for croot and escrow noise, whose
+(G,e)separators leave 241 bits even atM=2 30.
+STARK FNIZK: εZK,ε ks.The FRI IOP is information-
+theoretically sound and its Fiat–Shamir compilation is
+knowledge-sound with a straight-line extractor and zero-
+knowledge against quantum verifiers in the QROM [27, 33,
+82].
+Three effects bound εks. The additive DEEP, quotient and
+proximity-gap terms are at least O(T·K)/|F ext| for a degree-
+dext challenge extension. A bad Fiat–Shamir challenge is
+found by Grover search over the transcript nonce, so ev-
+ery challenge-derived term is halved in the exponent and
+knowledge soundness is at most 1
+2 log2|Fext| whatever the
+height, query count or blowup. And FRI is multi-round, with
+nfold =Θ(logT) folding rounds, whose per-round QROM
+compilation loss [27] we absorb into theconjecturedeth-
+STARK query budget [74] rather than charge separately. At
+dext =10 ,|Fext|≈2 309, so the Grover cap is≈155 bits and
+the additive terms≈2−279 at T·K≈2 30: the binding con-
+straint is the query budget, whose q2/2nq·lb term is charged
+in §D.2.11. We deploy nq=156 , lb=2 , which credits each
+query with lb bits — the soundness of FRI at list-decoding
+capacity 1−ρ for rate ρ=2 −lb, i.e. the ethSTARK conjec-
+ture [74]. Proximity gaps are proven only to the Johnson
+radius 1−√ρ [12], crediting lb/2 bits per query: at the same
+target that is roughly twice the queries and, the openings dom-
+inating, roughly twice the proof size — about 30 MB for the
+15.31 MB of §8, at the same prove time to within the query-
+phase share. The figures of §8 are therefore conjectural in size
+as well as in level, and this is the one row of Table 8 that no
+engineering removes, only pays for. Grinding is zero, being
+Grover-halved like the query bits. dext =10 is a floor, not a
+preference: a quartic extension caps knowledge soundness at
+62 bits at every trace height and degree 8 at≈124 , and the
+degree costs roughly 3× prove time and 1.5× proof size over
+a quartic one.
+εZK is the advantage against the hiding FRI commitment,
+not the one-wayness of the published bindings. The prover
+blinds each committed polynomial with a uniform mask of
+degree exceeding the opened points, so the residual advantage
+is that the mask degree is exhausted, at most nfold nopen/|Fext|
+plus the QROM simulation loss; at dext =10 , εZK≤2−299.
+It is not Grover-halved, the mask being the prover’s own
+randomness. The bound has a precondition the interface does
+not enforce: the commitment interleaves a height-h trace with
+h uniform rows, so each column has degree below 2h with
+h blinding coefficients and the openings determine the trace
+once more than h distinct evaluations are revealed. Hiding
+therefore requires nq≤h per committed matrixrather than per
+batch, a short matrix being opened at the query index shifted
+right by the difference of log-heights. Every committed matrix
+is padded to at least the query count, a checked invariant of
+the prover.
+CGKA path secrecy, εCGKA.The main UC-realization the-
+orem of [5]: Insider-Secure TreeKEM realizes FCGKA against
+24
+
+adaptive corruptions in the (FAS,F KS)-hybrid ROM. Instanti-
+ated with ML-KEM HPKE (IND-CCA2 under Module-LWE
+via the FO transform [47]) and the SHA/HKDF schedule
+its components are post-quantum, its generalized-selective-
+decryption analysis is straight-line with polynomial loss, and
+the path wire’s chosen-ciphertext security is subsumed. We
+rely on it as a hypothesis and require εCGKA≤2−136 so that
+it is not the binding row of §D.2.11; its analysis is in the
+ROM rather than the QROM, and is the only assumption we
+lift rather than instantiate natively. ΠA applies it to its own
+object: the update path it runs is an unmodified TreeKEM
+update, with independently generated node keys and indepen-
+dent encryption coins, so the hypothesis transfers with no
+intermediate step.
+Authentication. FPKI credentials use ML-DSA-65
+(FIPS 204 [66]), EUF-CMA in the QROM.
+Model conditions rather than assumptions.The pro-
+grammable global QROM GRO, a committee of constant size
+N=O(1) , and the RFC 9420 key schedule modeled as an or-
+acle shared by the functionality, the parties and the simulator
+are conditions of the model, not computational assumptions.
+F is modeled as a random oracle and therefore carries no
+separate PRF assumption.
+The instantiated backend, (A3′).Assumptions (A2)–(A4)
+are properties of a single argument, whereas VerifyCommit
+verifies a bundle of sub-proofs tied by published digests. Lem-
+mas 10 and 11 lift these three assumptions from a single
+argument to the bundle (§D.2.9), and Eq. (6) carries the lifted
+forms. Corollary 2 uses them in one instantiated form:
+(A3′) theinstantiatedsystem — our multi-stage AIR bundle
+over a FRI-based hiding commitment with Poseidon2
+hashing, batched LogUp lookups and cross-table ties,
+Fiat–Shamir compiled — is a zero-knowledge straight-
+line argument of knowledge in the QROM for RA, at
+the errors of (A2)–(A4).
+(A3′) is an assumption rather than a theorem of this paper,
+and it is not one assumption: it bundles five claims of very
+different standing, and separating them is what makes the
+residual small enough to state. Four are properties ofour
+compiler, established in the artifact; the fifth is the conjecture
+the FRI row of Table 8 already carries.
+(a) The compilation matches the cited theorems.The
+QROM analyses of [27, 33] compile an IOP whose chal-
+lenges are H(x∥prefix), and the online extractor recovers a
+witnessfor the statement the transcript commits to. Every chip
+therefore absorbs a domain-separated digest of the published
+statement — committee configuration, epoch context, logged
+escrow ciphertexts, croot, the cross-proof ties and the param-
+eter set — before any commitment: the digest rather than
+the pin columns, those being full-height and a deterministic
+function of what Stmt recomputes. Enforcing the pins only
+downstream, by the constraint check at ζ, gives soundness
+for a fixed statement but leaves the challenges unbound, so
+the cited theorems would not apply as stated and the Grover
+charge of §D.2.11 would assume what the compiler does not
+enforce, that a prover fixes its statement before grinding. A
+regression proves under one statement and verifies under an-
+other on a chip publishing no pin, so the property is decided
+by the transcript alone.
+(b) The lookup argument.The per-argument error
+Lemma 10 lifts is that of abatchedLogUp: ℓpub lookups
+in one running sum separated by powers of a challenge δ, tu-
+ple and lookup challenges drawn after the trace commitment.
+Its statement and its two hypotheses — post-commitment
+challenges, δ-separation — are recorded with the engine, and
+the crafted cancellation attack that δ-separation defeats is
+mounted in the test suite rather than described.
+(c) The cross-table bus.The multiset equality turning nπ
+per-sub-proof witnesses into one witness for the conjunc-
+tion is stated as its own lemma with its own error, so what
+Lemma 10 assumes of a tie is written where the tie is imple-
+mented.
+(d) The arithmetization decides the relation.No cited anal-
+ysis says whether a constraint system decides its intended
+relation, and an under-constrained column is invisible be-
+cause every honest proof still verifies. A mutation harness
+therefore perturbs every cell of the trace under test and re-
+quires rejection, reporting survivors by position, replacing a
+chosen set of negative tests by an exhaustive one over the
+cells it covers. This item remains partial: the harness covers
+the lookup engine every chip is built on, not yet every chip.
+(e) The masking preconditions.The hiding bound requires
+at least nq rows per committed matrix, a hard assertion on
+every prover entry point, and live blinding randomness, which
+a fixed seed would satisfy silently; a regression requires two
+proofs of one witness to differ.
+What (A3′) still assumes is the FRI soundness of §D.2.2 in
+the list-decoding regime — the ethSTARK conjecture [74],
+already theCrow of Table 8 — with the per-round QROM
+compilation loss absorbed into it, and the completion of (d)
+to every chip. Only Corollary 2 rests on any of it: Theorem 1
+is stated in the FNIZK-hybrid model and holds independently
+of howF NIZK is realized.
+D.2.3 Straight-line reductions
+A reduction is valid against a QPT adversary precisely when
+it isstraight-line— it runs the adversary once, forwarding
+messages and superposition queries, never rewinding, cloning
+or measuring it — and black-box.
+Proposition 5(Straight-line simulation).The simulator of
+§D.2.7 and every hybrid-step reduction of §D.2.8 are straight-
+line and black-box in A. Measurements are confined to the
+oracle register of the compressed oracle and to the single
+25
+
+measure-and-reprogram query of (T3), both licensed against
+a quantum adversary [33, 82].
+Proof. By inspection of §D.2.8: every step is online extrac-
+tion (T1–T2), one measure-and-reprogram query (T3), a call
+to FNIZK.Sim, a single-run left-or-right reduction, punctur-
+ing with O2H (T4), an invocation of the TreeKEM simulator
+of [5] (straight-line by hypothesis), or oracle reprogramming.
+Z drives a single instance, so no quantum rewinding is needed
+for composition [76].
+D.2.4 QROM toolkit
+Four standard techniques carry the proof; none rewinds,
+clones or measures A.(T1) S runs GRO as Zhandry’scom-
+pressed oracle[82] — a purifying register whose basis states
+are databases D of at most QGRO point-value pairs, perfectly
+indistinguishable from a random oracle — because answer-
+ing from a classical transcript would disturb a superposition
+query; “S reads D” means a measurement.(T2)The extractor
+of FNIZK isonline[34, 35]: it recovers a witness from a veri-
+fying Fiat–Shamir proof by inspecting D, and for a commit-
+and-open argument that witness is the set of committed values
+D already fixes.(T3)Where the value committed at a chal-
+lenge point is needed we usemeasure-and-reprogram[33],
+whose O(Q2
+GRO ) loss is already inside εks [27].(T4)Steps
+that would otherwise condition on “A has not queried GRO
+at a secret point” — not well defined against superposition
+access — use semi-classical one-way-to-hiding [6]: for a set
+Sof secret points andG RO\Sthe punctured oracle,
+Pr[A GRO =1]−Pr[A GRO\S=1]
+≤2
+q
+(QGRO +1)Pr[Find],
+Pr[Find]≤4Q GRO pmax,
+with pmax bounding the probability that any single point of
+S takes a given value in A’s view. Every S we puncture on
+is determined by a uniform λ-bit secret, so pmax≤2−λ and
+each step costs
+εO2H(QGRO ) =4
+q
+QGRO (QGRO +1)·2 −λ/2.(5)
+D.2.5 Realizability of the functionality
+Five features of Fig. 1 are forced by realizability rather than
+chosen, each against an alternative an environment separates.
+(R1) AUDIT returns (se,k e) and reaches S on every audit,
+because S must explain the logged escrow ciphertext as a
+sharing of the reconstructed value and cannot invent se, and
+because the environment checks the returned se against the
+public croot, which S can only have programmed if it learned
+the value; releasing se leaks nothing the real audit does not.
+It returnsonlyepoch e’s pair, which makes the real inter-
+face realizable in the reverse direction too: a functionality
+releasing ancestors would leak more than Audit computes,
+Audit reading one escrow ciphertext and deriving ke from
+its own recovered ese. (R2) AUDIT is honesty-oblivious, real
+recovery interpolating over any t shares and a corrupt A j con-
+tributing a valid one, so a functionality returning ⊥ would
+refuse an audit the protocol completes; the residual leakage is
+stated directly instead, through the output reaching S when
+T∩C̸= /0 and through LEAK . (R3) The functionality evalu-
+ates no cryptography and samples se,k e independently. The
+alternative is not dependent sampling but a functionality that
+computes KeySchedule, which is unrealizable: it would fix
+the oracle points Lemma 9 must reprogram at an exposure,
+GRO being global. Independent sampling is consistent with
+what the environment can check because S programs the re-
+lation wherever an exposure reveals both sides, at the cost
+of Lemma 7. (R4) Acceptance is per party, because RA de-
+termines the escrow and nothing else: an admitted commit
+message fixes the escrowed secret and fixes nothing about
+what each roster member obtains from Process. A function-
+ality with Acce =ros e on every admitted epoch would be
+unrealizable by ΠA, and S instead computes Acce by replay
+from public data (Fig. 4); the guarantee is unaffected, AUDIT
+reading se and not Acce. (R5) L(e) names the committer and
+tree keys, genesis carries its own verification interface and
+a sampled k0, and S supplies Me and PKe at every registra-
+tion: RA’s statement is not determined by the roster, so no UC
+statement would otherwise cover π0. All are public in the real
+execution.
+Lemma 6(Corrupt-committer values are extracted, not cho-
+sen).For every commit message with a corrupt committer
+that VERIFYCOMMIT admits, the tuple S registers is the one
+the relation proves of the logged data: the escrow target is
+the value the logged escrow ciphertext shares and the logged
+croot commits to, and the transcript is the logged Me. This
+fails only if extraction fails on a verifying proof, with the
+probability of Lemma 10 per epoch.
+Proof.S obtains the values from the online extractor (T2).
+Clauses (i)–(iii) give es∗ whose commitment is the logged
+croot, shared by the logged escrow. The epoch key is sam-
+pled by S and tied to the extracted value by programming
+KeySchedule. The lemma is a statement about a simulator
+built as in Fig. 4, not a check the functionality performs; the
+corresponding statement about the protocol is escrow sound-
+ness (Theorem 13).
+D.2.6 Equivocation in the programmable QROM
+Every value a corruption can force S to open is GRO-
+derived — the wraps e j and the commitment croot (Eq. (3))
+— hence equivocable by lazy reprogramming. This replaces
+non-committingencryption [22, 68], which has no standard-
+ized post-quantum instantiation, at a constant 2N committee-
+guessing cost in H2→H 3. The path ciphertexts need no equiv-
+ocation of their own: they are the TreeKEM simulator’s, and
+26
+
+no interface of Faud publishes a value that would let Z recom-
+pute them. The substitution is not free, moving the obligation
+to the deployment, which must honor the erasure discipline
+of §3.4 with hardware-enforced erasure wherever software
+erasure is untrusted. The one secret deliberately outside that
+discipline is each auditor’s long-term decapsulation key: an
+audit may be requested arbitrarily far in the future, so adaptive
+corruption of A j exposes it unavoidably, and Appendix B.3
+bounds the window over which such corruptions accumulate.
+Lemma 7(Equivocation, QROM).Let S emit, at commit
+time, independent uniform strings for every wrap e j and for
+the commitment croot of an honest epoch, leaving the corre-
+sponding GRO-points unprogrammed, and reprogramGRO at
+such a point only when an adaptive CORRUPT or an Audit le-
+gitimately exposes the keying material. Let ζ lower-bound the
+min-entropy of the reprogrammed point in A’s view until that
+exposure. Then any QPT distinguisher makingQGRO superpo-
+sition queries detects a schedule of R such reprogrammings
+with advantage
+Advequiv
+S (λ)≤ 3
+2 R
+q
+QGRO 2−ζ,
+R=O
+ 
+E(N+2)
+
+,
+with E the number of epochs and N the committee size; the
+2 counts the commitment point and the key-schedule point of
+each epoch. The paper applies the lemma at two values of
+ζ: ζ=256 at the O(EN) wrap points, whose entropy is the
+width of µe,j , and ζ=N h at the commitment, key-schedule
+and audit-leaf points, whose entropy is the width of ese.
+Proof. Each emitted string is the GRO-image of a secret
+uniform input: a wrap pad at (“wrap”∥Ke,j ) with Ke,j =
+HP2(“key”∥µe,j ), carrying the 256 bits of µe,j , or a com-
+mitment, key-schedule image or audit leaf derived from the
+epoch secret, carrying Nh. Emitting a uniform string and
+later reprogramming GRO at that point to the required im-
+age is one instance of the adaptive resampling game of [41],
+whose theorem bounds aQ GRO-query quantum distinguisher
+by 3
+2
+q
+QGRO2−ζ at a position of min-entropy ζ; the R points
+are disjoint and domain-separated (the commitment carries
+the “crot” label the key schedule does not), so a hybrid over
+them accumulates additively, and per epoch there are ≤N
+wraps, one commitment, one key-schedule point and≤2+N
+audit points.
+The hypothesis must beinformation-theoreticmin-entropy,
+and at the wrap point the secrecy of µe,j is only computa-
+tional in the real protocol, so we do not apply the lemma
+there directly: H2→H 3 first replaces µe,j by an independent
+message under IND-CPA, after which the position is uni-
+form and independent of the logged ciphertext. Substituting a
+computational bound for ζ inside [41] would not be a valid
+instantiation, which is why that step precedes this one.
+D.2.7 Simulator
+Figure 4 gives S case by case. Emitting each honest tran-
+script before the corruption schedule is known is possible for
+two reasons proper to the secure-erasure model: erasure of a
+committer’s ephemerals means corrupting a sender exposes
+none of the randomness behind an emitted ciphertext or proof,
+and every value a receiver corruption exposes is GRO-derived,
+hence equivocable (Lemma 7). The two lemmas below are
+the content of the reconciling handlers.
+Lemma 8(Adaptive opening, QROM).On CORRUPT(P) at
+any time, S produces a state perfectly indistinguishable from
+a real corruption, conditioned on the event of Lemma 7 not
+occurring.
+Proof. If P is a member, Faud returns its current MLS state,
+which S renders through the adaptive TreeKEM simulator
+of [5]; by erasure no past ephemeral survives, so P’s earlier
+commits stay unopened on the sender side, and if P holds
+the epoch secret of a released epoch S reprograms GRO so
+the logged croot opens to it. If P=A j, S reveals skA
+j and
+for each emitted epoch draws σe,j
+$← −Fq and reprograms
+HP2(“wrap”∥Ke,j ):=e e,j⊕σ e,j . While fewer than t audi-
+tors are corrupt these shares are jointly independent of the
+escrowed secret by Shamir’s perfect t-privacy, so the uni-
+form choice is distributed exactly as real — available here
+because the lemma is applied at H4 and later, where the co-
+efficients are already idealized as uniform; before that step
+the sharing is only computationally private, its coefficients
+being a λ-bit-keyed oracle image (Lemma 3). The point is
+fresh because A cannot have recovered µe,j before holding
+skA
+j . Whole-ciphertext consistency is deferred to audit, and
+each reprogramming is one instance of Lemma 7.
+Lemma 9(Audit consistency, QROM).On Audit(T,e) with
+|T|≥t for an honest epoch, and on (LEAK,e) once≥t
+of epoch e’s auditors are corrupt, S explains the logged
+escrow ciphertext as a Shamir sharing of the epoch se-
+cret es∗ returned by Faud, programming the wrap and com-
+mitment openings so that reconstruction matches es∗ and
+KeySchedule(es∗,ctx e) =k e, except with the probability of
+Lemma 7. The argument does not depend on the honesty of T .
+Proof.S uses the returnedes∗ as the escrow opening and does
+not resample, since Z must see the values the functionality
+returns; it reprograms the unprogrammed croot point onto es∗,
+the key-schedule point KeySchedule(es∗,ctx e):=k e, and the
+residual wrap points onto a degree-(t−1) polynomial over Fq
+throughes∗ and the already-opened shares.
+Such a polynomial exists by a dimension count: r<t
+opened shares and f(0) =es ∗ impose r+1≤t independent
+conditions on t coefficients, leaving an affine space of dimen-
+sion t−r−1≥0 and a single polynomial exactly atr=t−1 ,
+so no later opening contradicts an earlier one; the split field
+runs the same count per half. Residual points are programmed
+27
+
+Simulator S (for ΠA). S runs a copy of A, relays between Z and A, plays the honest parties towardA, controls (FNIZK,F Log,G RO,F PKI), and interacts with Faud on its adversary
+interface. It keeps a local copy of H and a table Prog of programmed points. Corruption isadaptivein the secure-erasure model; C grows over time and per-epoch privacy
+holds while|C∩A(e)|<t . Every honest output is emitted before S knows the corruption schedule, so all secret openings are deferred to the CORRUPT , AUDIT and LEAK cases
+(Lemmas 7, 8).
+Oracles and setup. S runs GRO, and the KeySchedule points modeled inside it, as Zhandry’s compressed oracle [82] with a purifying database register D: programming a point
+updates D (T1) and extraction measures it (T2). S never records A’s queries. It generatesallcommittee keys {(pk A
+j ,sk A
+j )} j∈[N] via FPKI and publishes mpk; no secret key reaches
+Aexcept on a CORRUPT.
+On (GROUPCREATE) leakage L(0), honest creator:for every j∈[N] encrypt a random µ0,j under pkA
+j and emit a uniform wrap e0,j
+$← −Fq (no share fixed); emit c(0)
+root as a
+uniform ℓpub-lane digest, point left unprogrammed; ˜π0←F NIZK.Sim(x0) on the public Rinit statement; assemble M0, choose PK0, supply both to Faud, post M0 to FLog, erase
+the ephemerals.
+On A posting a GroupInfo, corrupt creator:if VerifyCreate rejects, ignore. Else extract a witness forRinit, givings0; sample k0
+$← −{0,1}Nh , program KeySchedule(s0,ctx 0):=
+k0, setAcc 0 =ros 0, and send(s 0,k 0),Acc 0,M 0,PK 0 toF aud.
+On(COMMIT)leakageL(e) = (ros e,treee,m e,Pe,PK e), honest committer:
+1. commitmentc root as a uniformℓ pub-lane digest, point left unprogrammed;
+2. escrow: encrypt a randomµ e,j under eachpk A
+j and emit a uniform wrape e,j , shares deferred (Lem. 7);
+3. forj∈C∩A(e)the wrap point is queryable at once, so fix those slots now: drawσ e,j
+$← −Fq if|C∩A(e)|<t, else call(LEAK,e)and program froms e;
+4. the whole update path — node keys, path secrets and path ciphertexts — from the TreeKEM simulator of [5], using Pe and PKe to fix the filtered path and copath resolutions.
+Sowes no openings of its own here: no clause ofR A constrains the path, and no interface ofF aud publishes a value from which a path ciphertext is recomputable;
+5.π←F NIZK.Sim(xe) with xe assembled from ctxe, mpk and the emitted values; assemble Me, supply (Me,PK e) to Faud, post to FLog. Erasure means a later corruption of the
+committer owes no witness.
+On(CORRUPT,P)at any time;F aud returnsP’s abstract state:
+1. member/committer:render P’s MLS state via the [5] TreeKEM simulator; if the released state determines the epoch secret of an epoche, program GRO so the logged croot
+opens to it and soKeySchedule(es e,ctx e):=k e. Repeat at each later epoch whilePstays corrupt;
+2. auditor A j:reveal skA
+j , add j to C, and for each emitted epoch drawσe,j
+$← −Fq and program HP2(“wrap”∥Ke,j ):=e e,j⊕σ e,j with Ke,j =H P2(“key”∥µe,j ) (Shamir-independent
+while|C∩A(e)|<t). When this corruption reachest, switch to the LEAKhandler.
+On A posting Me to FLog, corrupt committer:if Vrfy(xe,π)̸=1 for xe =Stmt(pp,mpk,L,M e), ignore. Else run Ext on the compressed-oracle database (T1–T2) to obtain a
+witness for RA; on failureabort(Lem. 10). Set se =es∗, sample ke
+$← −{0,1}Nh , program KeySchedule(es∗,ctx e):=k e, and send (se,k e),Acc e,M e,PK e to Faud. All recorded
+values are extracted, not chosen (Lem. 6); the witness is not forwarded. S sets Acce by replaying each honest member’s processing of the logged UpdatePath, as the [5]
+corrupt-committer handling does; the replay can return a proper subset ofros e, which is item (R4).
+On (AUDIT,T,e) ,|T|≥t ; Faud returns (se,k e) to S as well as to T :use se =es∗ as the escrow opening and donotresample; program the unprogrammed croot point onto es∗
+and KeySchedule(es∗,ctx e):=k e; then fix the degree-(t−1) polynomial f′ over Fq through es∗ and the already-opened shares and program every remaining wrap onto it, for
+every j∈Twhether corrupt or honest (Lem. 9). No path ciphertext is touched: an audit publishes no value from which one can be recomputed.
+On≥t of epoch e’s auditors being corrupt:call (LEAK,e) and program exactly as in the AUDIT case, so the shares A holds interpolate to es∗. No abort arises: the epoch is
+outsidesafe ESC.
+Aborts.Only (a) extraction failure on a verifying adversarial proof or (b) the semi-classical Find event on the points S must program, bounded by Lemmas 7 and 9. S makes no
+committee-subset guess and never aborts on an auditor corruption.
+Figure 4: Simulator S for Theorem 1, case by case over Faud. S matches the real transcript from public leakage and reconciles
+corruptions, audits and leakage by programmingG RO.
+for every j∈T regardless of honesty, real reconstruction be-
+ing honesty-oblivious. The LEAK case is identical with the
+sharing fixed when the t-th auditor is corrupted, the polyno-
+mial being unique.
+The logged path ciphertexts need no step of their own,
+which is where ΠA’s scope pays: an audit publishes ese, from
+which no path ciphertext is recomputable, the coins being the
+RFC’s independent randomness and the epoch secret down-
+stream of the whole update. No party can compare a repro-
+duced ciphertext against FLog, so the TreeKEM simulator’s ci-
+phertexts survive the audit unchanged. The points are counted
+in R: per exposed epoch, one commitment, one key-schedule
+point and up toNresidual wraps.
+D.2.8 Hybrid sequence
+We transform the real execution H0 into the ideal execution
+H6. Each step names the change, a reduction Ai built from Z,
+and the assumption it reduces to; by Proposition 5 every Ai
+is straight-line, and corruption is adaptive throughout, recon-
+ciled by Lemma 8. Of the features of §D.2.5, (R1)–(R2) make
+the ideal world leak more and are answered by Lemma 9, (R3)
+is discharged by the programming those lemmas perform, and
+(R4)–(R5) are computed bySfrom public data.Audit execu-
+tiondoes get its own step, H2→H 2.5: the interface an honest
+auditor runs changes there, and it must changebeforeany
+ciphertext does.
+H0→H 1 (extract from adversarial proofs).For each
+corrupt-committer epoch with Vrfy(xe,π e) =1 , run the
+straight-line QROM extractor on (xe,π e) and the compressed-
+oracle database (T1) to obtain a witness for RA; abort with
+⊥ks if extraction fails. A1 forwards each verifying pair to
+the knowledge-soundness game, so a⊥ on a verifying proof
+is exactly a break. Extractionprecedessimulation: the hon-
+est proofs are still real here, so A1 still holds their witnesses
+and produces them with the real prover, and needs only plain
+knowledge soundness, whereas simulating first would require
+simulation-extractability. Bound: Lemma 10 per epoch, with
+no separate term for the registration (Lemma 6).
+H1→H 2 (simulate honest proofs).Replace each honest
+πe←Prove(x e,w e) by FNIZK.Sim(xe). A ZK
+2 runs Z, calls its
+28
+
+zero-knowledge challenge oracle onxe at each honest commit,
+splices the reply in, and forwards Z’s bit. Bound:≤En π εZK
+(Lemma 11).
+H2→H 2.5 (route audit through the simulator).Replace the
+executionof Audit at every honest auditor by the interface S
+runs in the ideal world: the auditor receives the reconstruction
+S produces by the programming of Lemma 9 rather than com-
+puting Dec, the wrap key and the interpolation; ciphertexts,
+wraps and keys are unchanged. The step is perfect, since at
+H2 the logged cesc
+j still decapsulates to the µe,j that keys the
+pad, so each returned value coincides with the programmed
+one and Pr[H2.5] =Pr[H 2]. The order is forced: routing audit
+through S after the swap would require the mismatch to be
+argued unobservable.
+H2.5→H 3 (equivocate the escrow ciphertext).Replace the
+escrow message under every honest slot by an independent
+µ′
+e,j , and emit every wrap as a fresh uniform string, leav-
+ing (“wrap”∥Ke,j ) unprogrammed. Because N=O(1) , A esc
+3
+guesses the subset H⊆[N] of slots that stay honest for the
+whole execution (a factor≤2 N), embeds an IND-CPA chal-
+lenge key at each j∈H and holds real keys elsewhere, so it
+never owes a key it must later surrender; forj∈Hit obtains
+cesc
+j from its left-or-right challenge on(µ e,j ,µ′
+e,j ).
+The step isdecisionalfor a quantitative reason. Keeping the
+real µe,j and puncturing on S j ={“key”∥µ e,j ,“wrap”∥Ke,j}
+instead would bound Pr[Find] by the escrow PKE’s one-
+wayness at 2
+p
+(QGRO +1)4QGRO εesc per honest slot, which
+at εesc≈2−164 exceeds 2−53 already at QGRO =1 and reaches
+1 for QGRO≥2 53, so the bound is uninformative. After the
+decisional swap µe,j appears nowhere in the transcript, so
+(“wrap”∥Ke,j ) carries its 256 bits asinformation-theoretic
+min-entropy and Lemma 7 applies at ζ=256 , with no punc-
+turing and no square root. O2H must be applied at a position
+that is already information-theoretically uniform, never as a
+substitute for making it so, and the same holds atH 4→H 6.
+One consequence of the swap is accounted for rather than
+argued away. Under the swapped ciphertext the logged cesc
+j
+no longer decapsulates to the µe,j that keys the pad, so the real
+Audit would unwrap a wrong share at every honest slot — but
+no party runs it: H2.5 has already moved every honest auditor
+onto the programmed interface, and no corruption exposes
+a challenge slot’s key, H being by definition the slots that
+stay honest throughout. Consistency of the escrow with the
+reconstructed secret is restored where the functionality hands
+that secret out, not before.
+The reduction’s challenge ciphertext uses the challenger’s
+coins, whereas the protocol’s are CBD2(Ψη(“esc”∥j∥G∥e)) ,
+so the “esc” label family is punctured here; η is uniform
+and erased, and canonical-lane rejection makes the ideal-
+ized coins exactly CBD2-distributed. Bound:≤2 NNEε esc +
+Eε O2H(QGRO ), plus the equivocation term.
+H3→H 4 (idealize the sharing coefficients).Treat the shar-
+ing coefficients fd =F η(“coef”∥d) as independent uniform
+values of Fq, which is what makes Shamir’s t-privacy per-
+fect rather than computational and is the hypothesis Lemma 8
+needs. F is modeled inside GRO, so Fη(·) is a uniform random
+function. We may not argue that A never queries η∥·; instead
+we run the step against GRO\Sη for Sη ={η∥z} , where the
+images are information-theoretically absent so the replace-
+ment is perfect, and transfer back by (T4). Since η is uni-
+form, erased and never exposed, pmax≤2−λ and the transfer
+costs≤Eε O2H(QGRO ). The step reaches the escrow only:
+the update path carries the RFC’s own independent coins, so
+no lemma is required to treat the path layer as an ordinary
+TreeKEM commit.
+H4→H 5→H 6 (idealize the honest path layer and the com-
+mitment, jointly).Replace each honest epoch’s path-secret
+plaintexts inside its path ciphertexts by uniform values (H5)
+and each honest croot by a fresh uniform digest whose GRO-
+point is opened only on legitimate exposure ( H6). Neither
+ordering works alone: idealizing the commitment first needs
+O2H with an information-theoretic pmax, which the real ese
+— a deterministic function of the commit secret inside the
+logged ciphertexts — does not provide, while idealizing the
+path layer first needs the TreeKEM simulator of [5], which
+cannot be invoked while the transcript still contains a croot
+depending on the path secrets. We therefore do both in one re-
+duction to CGKA path secrecy: S runs STK for the path layer,
+adopting its openings on each member CORRUPT , and emits
+croot uniformly. The CGKA hypothesis then makes the com-
+mit secret, hence ese, uniform and independent of everything
+A sees, and only then is the O2H application on the commit-
+ment point legitimate. Bound:≤ε CGKA +Eε O2H(QGRO ).
+After H6 the transcript is a function of public metadata,
+the extracted adversarial injections, the corruption schedule
+(Lemma 8) and the audit events (Lemma 9), which is exactly
+the output ofF aud driven byS.
+D.2.9 Bundle soundness
+Assumption (A3) concerns one argument, whereas
+VerifyCommit verifies abundle: ΠA publishes 2 sub-proofs,
+tied by the mechanisms of §7. Extraction must yield one
+witness consistent across sub-proofs, so the bundle’s error is
+notε ks.
+Lemma 10(Bundle knowledge soundness).Let a bundle
+consist of nπ sub-proofs whose shared values are tied byntie
+published ℓpub-lane digests. If each sub-proof is straight-line
+knowledge-sound with error εks and the truncated digest is
+collision-resistant with error εbind, then from any accepted
+bundle the extractor outputs a single witness satisfying every
+clause, except with probability nπ εks +n tie εbind.
+Proof. Run the extractor of (T2) on each sub-proof; a failure
+on any one is a knowledge-soundness break, giving nπ εks.
+The nπ witnesses satisfy their own clauses but need not agree
+29
+
+on a shared value; for each tie the producing and consuming
+witnesses both open the same published digest, so a disagree-
+ment is a collision, charged εbind. Absent a collision their
+union is a single witness for the conjunction.
+Both nπ and ntie are constants for ΠA: the relation has no
+clause indexed by a path level, so the bundle does not grow
+with the group. The ties are published at the same ℓpub as
+every other commitment and enter the union charge of §D.2.11
+exactly asc root does.
+Lemma 11(Bundle zero knowledge).A bundle of nπ sub-
+proofs under the hiding PCS, publishing ntie tie digests of
+which nu
+tie are unsalted commitments to values of width n,
+is simulatable from its public inputs except with probability
+nπ εZK + 3
+2 nu
+tie
+pQGRO 2−n.
+Proof. The simulator obtains each sub-proof fromFNIZK.Sim,
+at nπ εZK. A salted tie digest is simulated by a uniform string,
+since its preimage contains twelve lanes of fresh random-
+ness from η. An unsalted tie digest is a deterministic public
+function of the committed value and cannot be simulated uni-
+formly; it is emitted as a uniform digest and reprogrammed
+onto the true value on exposure, which is one instance of
+Lemma 7 at ζ=n — the same mechanism the wraps and
+the commitment use, and charged the same way rather than
+asserted directly.
+For ΠA the second term iszero: every tie the bundle publishes
+crosses two chips that both hold η, so all of them carry the
+secret salt and nu
+tie =0 (§C). The lemma is stated in general
+form because Appendix E.2 applies it to an aggregated bundle.
+Zero knowledge of the commit transcript.The bundle lemmas
+cover the proof object; the claim is about the whole commit
+message Me. Its parts are simulated at distinct steps: πe by
+Lemma 11, croot and the path ciphertexts at H4→H 6, and
+Cesce at H2→H 3; their sum is the zero-knowledge part of
+Eq. (6), and the transcript is then a function ofL(e) alone. The
+governing term is zero knowledge of the proof system, the
+advantage against the hiding FRI commitment at εZK≤2−299
+(278 bits over the execution); there is no weaker one-wayness
+term to set against it,Π A’s ties all carrying a secret salt.
+D.2.10 Concrete bound and main theorem
+Summing the hybrid gaps, the equivocation term and Lem-
+mas 10 and 11 gives, for any QPT Z making QGRO superposi-
+tion queries,
+Pr[Z=1 inREAL]−Pr[Z=1 inIDEAL]
+
+≤En π εZK +En π εks +E(1+n tie)ε bind
++2 NNEε esc +ε CGKA
++ 3
+2Rw
+q
+QGRO 2−128 + 3
+2Rp
+q
+QGRO 2−Nh/2
++Π p εO2H(QGRO ).(6)
+Here nπ is the sub-proof count and ntie the tie count of
+§D.2.9; the reprogrammed points split by min-entropy into
+Rw =O(EN) wrap points at ζ=256 and Rp =O(E) commit-
+ment, key-schedule and audit-leaf points at ζ=N h, with R=
+Rw +R p and Πp =3E . No nu
+tie term appears, by Lemma 11.
+The Eε bind summand outside ntie arises because S registers
+the extracted secret for a corrupt-committer epoch while hon-
+est members run PROCESS on the secret they derive, and by
+clause (iii) a difference is an HP2 collision on the logged com-
+mitment. Both oracle terms are O(poly(λ)Q GRO 2−λ/2), the
+puncturing term dominating since it grows as QGRO againstpQGRO.
+Theorem 1(Adaptive post-quantum UC security of
+ΠA, restated).In the secure-erasure model and the pro-
+grammable global QROM, and under the assumptions of
+§D.2.2, ΠA UC-realizes Faud with respect to safeESC in the
+(FNIZK,F Log,G RO,F PKI)-hybrid model, against QPT adver-
+saries that adaptively corrupt any group members and, for
+each honest epoch, fewer than t of its auditors. Instantiating
+FNIZK under (A3′), the advantage of any QPT environment is
+bounded by Eq.(6), which is negligible inλ.
+Proof.By Proposition 5 the simulator and all reductions are
+straight-line and black-box; by §D.2.2 each assumption holds
+in the QROM; the simulator’s interfaces are correct by Lem-
+mas 8 and 9, whose only loss is the event of Lemma 7; the
+bundle steps are Lemmas 10 and 11; and §D.2.8 bounds each
+remaining gap. Summation yields Eq. (6).
+D.2.11 The query budget and the security of a whole
+execution
+Eq. (6) is negligible for every polynomialQGRO, but a concrete
+statement must charge each event class. Our bar isattack cost
+>2 128: for T·Θ(Q a
+GRO /2n), the query count at advantage 1
+has
+log2 QGRO = (n−log 2 T)/a.
+Thus execution charging subtractslog2 T/a from the primitive
+level n/a: one half of the union log for Grover (a=2 ) [43],
+one third for BHT (a=3 ) [18], twice it for reprogramming
+(a= 1
+2) [41], and all of it for puncturing (a=1) [6].
+For puncturing, Πp =3E covers the two label families
+keyed by η — the “esc” noise labels and the “coef” coeffi-
+cients — and the commitment point. Its 4ΠpQGRO 2−λ/2 term
+delivers 168.4 bits at E≤2 20 and λ=384 . Reprogramming
+reaches advantage 1 at QGRO =2 ζ/(2.25R2) [41]; the wrap
+and epoch-secret classes at ζ=256,N h deliver 210 and 466
+bits, respectively. This permits the escrow’s256-bit message
+capacity while puncturing fixes λ. It is η that is punctured,
+and this term is what sets the security parameter: it needs
+λ≥2(128+2+log 2 Πp), about 303 bits at E≤2 20 epochs,
+and 384 is the smallest standard length above it. At λ=256
+the same term would deliver 104 bits, below the target rather
+than at it.
+30
+
+The committee ceiling.The escrow-PKE row is the one
+entry whose event class grows faster than linearly in a
+parameter a deployment chooses. Its 2NNE class charges
+N+log 2 N+log 2 E bits against the 164-bit primitive level,
+so clearing the 128-bit bar requires N+log 2 N+log 2 E≤36 .
+At E≤2 20 that is N≤12 (35.6 bits at N=12, 36.7 at N=13);
+the measured N=5 charges 27.3 and leaves the 137 bits of
+Table 8. The two trade in the direction a deployment may
+not expect: the committee ceilingrisesas the epoch budget
+falls, to N≤16 at E≤2 16, and falls as it grows, to N≤8 at
+E≤2 24. A larger committee needs a stronger escrow param-
+eter set rather than a scheduling change. The 2N is the subset
+guess of §D.2.8 (H2.5→H 3): a per-slot hybrid would charge
+N, but the honest set is not determined in advance under adap-
+tive auditor corruption, and we do not know a reduction that
+avoids the guess. This is why Theorem 1 carriesN=O(1).
+The remaining event logs are log2(Enπ) =21 and
+log2(E(1+n tie)) =21 : both are constants times E, since
+ΠA’s bundle does not grow with the group. The prototype
+fixes the FRI query count from a conservative form of that
+charge, nq·lb≥2(128+24+4) , i.e. nq=156 at lb=2 ;
+against ΠA’s own 21-bit event class this leaves 135 quan-
+tum bits after the knowledge-soundness charge (145.5 under
+the q2/2nq·lb accounting of Table 8); grinding is zero, being
+Grover-halved like the query bits. Poseidon2 binding deliv-
+ers 157.8 bits at ℓpub =16 and guess-and-invert hiding 236.7
+at (W, ℓpub) = (32,16) . The 14-lane MMCS digest delivers
+137.2 BHT bits after the union and is the weakest row; a
+Grover search over the 11-lane hiding-MMCS leaf salt deliv-
+ers 159.5. Fixed-advantage terms retain 137 bits for escrow
+PKE and 278 for FRI hiding, and CGKA path secrecy is re-
+quired at 136 bits. Every row therefore clears the 128-bit bar
+at the configuration the measurements of §8 were taken at,
+which is the configuration Table 8 describes.
+D.3 Game-Based Security Properties
+UC realization is the primary result, but the auditability guar-
+antee is best also stated as standalone games, since the in-
+tegrity properties among them rest on assumptions a UC
+statement leaves implicit. Privacy follows directly from Theo-
+rem 1, read offFaud and transferred by UC indistinguishability.
+Escrow soundness is an argument-of-knowledge statement,
+proved by direct reduction (Appendix D.3.3) to εks and εbind
+through Lemma 10. It is an admission-time statement: a com-
+mit message whose escrow is malformed fails VerifyCommit,
+and one whose escrow opens to something other than the
+group’s epoch secret is refused by the members’ own croot
+check.
+D.3.1 Shared game setup
+We give the game-based formulations of the two security
+properties: privacy and escrow soundness. Both are parame-
+Table 8: Post-quantum levels at λ=384 , Nh =512 , W=32
+truncated to ℓpub =16 lanes, nq=156 FRI queries at log-
+blowup 2, 11-lane salt. “Exec.” charges the event class over
+E≤2 20 epochs at ΠA’s bundle (nπ =2 ); § fixed advantage, ¶
+attack cost. “St.” is proof status:Rproven reduction,Hhard-
+ness estimate,QQROM search/reprogramming,CethSTARK-
+conjectural [74].
+Primitive / role Event Prim. Exec. St.
+Escrow PKE, Module-LWE
+CPA
+2NNE164 137 § H
+ML-KEM-768 wire, ML-
+DSA-65 auth.
+E164 144 § H
+SHAKE256, PRFF/G RO Πp 192 168.4 ¶ Q
+HKDF/HMAC-SHA-512,
+schedule
+Πp 256 232.4 ¶ Q
+Poseidon2 ℓpub-lane digests E(1+ntie)165 158 ¶ Q
+MMCS DIGEST_ELEMS=
+14
+Enπ 144137 ¶ Q
+Duplex challenger, tran-
+script
+Enπ 165 158 ¶ Q
+Hiding FRI commitment,
+εZK
+Enπ 299 278 § R
+Hiding-MMCS leaf salt, ZK Enπ 170 159 ¶ Q
+FRI-STARK, degree- 10,
+FNIZK
+Enπ 156 145 ¶ C
+The digest row is collision resistance under conservative BHT; the same
+digests give 237 bits against guess-and-invert and 246 against direct search.
+Union bounds are proven (§D.2.11); “St.” grades the primitive-level entry.
+Two entries dominate the residual risk: theCrow, and the CGKA hypothesis,
+required at 136 bits and absent from the table.
+terized by λ, the group parameters (Nmax,t) and the number
+of epochs E, in Bellare–Rogaway notation with A a stateful
+QPT algorithm holding quantum access to GRO and classical
+access to the oracles below, against a stateful challengerCh.
+Shared oracle setEvery game gives A the standard CGKA
+oracles Ocreate, Oprop, Ocommit and Ocorrupt of [5]. Ocreate
+returns only the public M0, since returning the creator’s
+state would hand A the genesis secret; Ocorrupt reveals a
+party’s complete state — group key state, all decryption keys,
+all coins used since initialization — and for an auditor re-
+veals ask j =sk A
+j . Two oracles are new. Oaudit(G,e,T) runs
+Audit(T,L,e) for|T|≥t and returns its output with no hon-
+esty condition on T , since real recovery has none; this costs
+confidentiality of epoch e, which is why (F5) excludes it on
+the challenge. Odec(G,e,i,k,ct) returns the plaintext of the
+submitted ct under the key of the member at position k of
+copath node i’s resolution at epoch e, accepting any ct includ-
+ing ones A crafts, which makes the model chosen-ciphertext;
+clause (F3) excludes the submitted ciphertext, not the posi-
+tion.
+Freshness predicate Fresh(e∗,A) Corruption isadaptive—
+A may call Ocorrupt at any point, on group members or auditors
+— and the predicate is evaluated over the whole transcript. A
+challenge epoche∗ isfreshif all of the following hold:
+31
+
+(F1) The committer of e∗ is honest at the time of the commit.
+(F2) No call to Ocorrupt,at any time, has revealed the group
+key state of a member from whichke∗ is derivable; equiv-
+alently, A never adaptively corrupts a member while it
+holds an unrotated secret on the path to ke∗. This is the
+forward-secrecy/PCS window of the underlying CGKA,
+not a static-corruption restriction.
+(F3)O dec has not been called on any ciphertext ct appearing
+in the logged Me∗, nor on any ct whose plaintext deter-
+mines psme∗ (the commit secret). The exclusion is by
+ciphertext, so A retains full chosen-ciphertext access to
+every other ciphertext of epoche∗ and to all epochs.
+(F4) Fewer than t of epoch e∗’s auditors are corruptedat any
+point in the game, beforeorafter the challenge.
+(F5)O audit was never called on e∗ itself: an audit of e∗ hands
+ke∗ and the escrowed secret to the calling committee
+by design, so no confidentiality claim about e∗ survives
+it. Nootherepoch is excluded, an audit reading one
+epoch’s escrow ciphertext and nothing else. This clause
+is not implied by (F4): a subsetT containing one corrupt
+auditor still has fewer than t corrupt members, yet the
+audit output reaches the adversary.
+Fresh is evaluated on thecompletedtranscript, after A halts;
+checking it at declaration time would let A declare a fresh
+e∗, take the challenge and only then corrupt t of its audi-
+tors. Clauses (F1)–(F5) are the safety predicate safeESC under
+which the theorem of §6 is stated.
+D.3.2 The two games
+Each game begins with Ch running AuditSetup(1λ,N,t) and
+handing (mpk,pp) to A, which then queries the oracles above
+adaptively and may act as the committer in any epoch.
+Gamepriv (privacy with the auditor exception). A declares
+a challenge epoch e∗; Ch samples b $← −{0,1}and returns the
+real ke∗ if b=1 and k∗ $← −{0,1}Nh otherwise; A continues to
+query every oracle without restriction and outputs b′. It wins
+if b′ =b and Fresh(e∗,A) =1 on the completed transcript.
+Advpriv
+Π (λ) =|Pr[Awins]−1/2|, bounded in Corollary 12.
+Gamees (escrow soundness). A outputs a target
+epoch e∗ and a commit message M∗
+e∗ such that
+(a) VerifyCommit(pp,mpk,L,M ∗
+e∗) =1 and (b) some
+honest member P∗ accepted e∗ with Key(gksP∗) =k P∗, the
+member-derivedkey. Ch selects any uncorrupted T⊆[N]
+with|T|≥t and runs Audit(T,L,e∗), and A loses if no
+such T exists; it wins if theauditor-reconstructedkey k′
+in that output satisfies k′̸=k P∗. Three keys occur in this
+game and are kept apart throughout: kP∗ (member-derived), k′
+(auditor-reconstructed) and, in the proof, k† (the key implied
+by the extracted witness). Adves
+Π(λ) =Pr[Awins] , bounded
+in Theorem 13. Condition (b) is load-bearing rather than
+cosmetic: what ties the escrowed value to the group is the
+member’s own croot check, so the game quantifies over
+epochs a member accepted.
+In both games the challenger runs VerifyCommit on the state-
+ment x∗←Stmt(pp,mpk,L,M ∗) that itrecomputesfrom the
+wire, by the same deterministic procedure ValidateCommit
+uses (§B.2.1), never on a statement A supplies. Against a
+supplied statement the check would be vacuous: A could post
+an honestly generated M∗ alongside an unrelated x∗, or claim
+a committee of its own keys and a thresholdt=1 . This is why
+ValidateCommit recomputes x from the log and why escrow
+soundness is a statement about the group rather than about
+the committer’s claims.
+D.3.3 Corollaries and their reductions
+Privacy follows from the UC theorem; escrow soundness
+is an argument of knowledge, proved bydirect reduction
+to the named assumptions. Throughout, an “accepted com-
+mit message” is a M∗ with VerifyCommit=1 , hence with
+Vrfy(x∗,π∗) =1 , and Ext is the straight-line extractor of
+§A.3.3.
+Corollary 12(Privacy with the auditor exception, Gamepriv).
+For the game Gamepriv of Appendix D.3.2 (adversary corrupt-
+ing any group members and at most t−1 auditor committee
+members, challenge epoch satisfying Fresh), Advpriv
+Π (λ)≤
+AdvUC
+Π (λ) =negl(λ). FS and PCS hold as in [5].
+Proof. In Faud an honest epoch’s escrow target se and epoch
+key ke are sampled independently of the transcript, so ke is
+uniform in A’s view unless the functionality releases it, and
+there are exactly three release routes. PROCESS returns ke
+to a member of Acce, closed by (F2), which forbids corrupt-
+ing a member holding an unrotated secret on the path to
+ke∗. Audit(T,e) with|T|≥t returns (se,k e) to every A j∈T
+and to S, closed by (F5), which excludes an audit of e∗; the
+clause excludes no other epoch, because AUDIT reads only
+νe. (F4) alone doesnotclose this route, since a T containing
+one corrupt auditor has fewer than t corrupt members and
+is (F4)-fresh while the output still reaches A. (LEAK,e) re-
+quires≥t of epoch e’s auditors to be corrupt, closed by (F4).
+A distinguisher whose challenge epoch satisfies Fresh on the
+completed transcript is therefore an environment separating
+REAL from IDEAL on a safeESC-respecting execution, which
+Eq. (6) bounds.
+Theorem 13(Escrow soundness, Gamees).For the
+game Gamees of Appendix D.3.2, Adves
+Π(λ)≤n π εks +
+(1+ntie)ε bind +tδ esc =negl(λ) , in the bundle parameters of
+Lemma 10 (nπ sub-proofs, ntie published ties; the additional
+εbind is the member-versus-extraction collision, the same
+summand that appears outside ntie in Eq. (6)): no QPT
+adversary produces an accepted commit message for which t
+auditors running Audit recover a key different from the one
+honest members hold.
+32
+
+The term tδ esc is the escrow-PKE decryption-failure prob-
+ability over the opened slots, which clause (ii) does not re-
+move: proving a ciphertext well formed is not proving that
+decryption returns the encrypted message, and a failure on
+any opened slot yields a wrong share and hence a wrong
+key, exactly the winning condition. It is therefore not a proof-
+system error and does not vanish with better proof parameters.
+One audit opens t slots in one epoch, so no factor in the
+number of epochs appears, recovery being per-epoch inde-
+pendent. The range-checked CBD2 noise of §A.3.1 bounds
+δesc≤2−164 per ciphertext, hence tδ esc≤2−162 per audit, at
+the parameters of Appendix E.1. The guarantee is established
+atadmission: a commit message whose escrow is malformed
+fails VerifyCommit, and one whose escrow opens to a value
+other than the group’s epoch secret fails the members’ croot
+check.
+Proof. Let A win: it produces an accepted M∗
+e∗, an hon-
+est member holds key kP∗, yet Audit(T,L,e∗) with|T|=t
+uncorrupted returns k′̸=k P∗. Run Ext on π∗ (Lemma 10
+for the bundle); except with probability nπ εks +n tie εbind it
+yields a witness w∗∈R A, so by Eq. (2) the{σ∗
+j} are a
+degree-(t−1) Shamir sharing over Fq of a value es∗ (clause i)
+wrapped in the logged escrow ciphertext (clause ii) with
+croot =H P2(“crot”∥G∥e∥es∗)(clause iii).
+An honest member accepts e∗ only if croot matches the
+commitment to the epoch secret it derived; by binding, es∗
+is that epoch secret except with probability εbind. Hence the
+escrow ciphertext Shamir-shares the members’ actual epoch
+secret. By Shamir reconstruction on the proven-consistent
+shares, Audit recovers es∗, checks it against the logged croot
+and derives k† =KeySchedule(es∗), which is the members’
+own key schedule on the members’ own root secret, so k′ =
+k† =k P∗, contradicting k′̸=k P∗. The audit emits no fraud
+verdict, a mis-escrow having been refused at admission. The
+remaining route to a win is a decryption failure on one of
+the t opened slots, which yields a wrong share; summing the
+failure modes gives the bound.
+The scope of VerifyCommit.Escrow soundness is a state-
+ment about an epoch an honest member accepted, and the
+reason is worth stating on its own, because it fixes what
+VerifyCommit alone is good for. VerifyCommit is complete
+on honestly generated commit messages, and on any message
+it accepts, Lemma 10 extracts a witness for RA against the
+statement Stmt recomputed from the log, except with proba-
+bility nπ εks +n tie εbind. That witness says the logged Cesce is
+a well-formed t-of-N threshold sharing, under the committee
+mpk the log fixes, ofsomepreimage of the logged croot, with
+every component of the ciphertext well formed down to its
+noise ranges.
+It doesnotsay the preimage is the epoch secret the group
+derived. No clause of RA evaluates the MLS key schedule,
+and croot is a commitment the committer chose, so that step
+is established by the members, each against the secret it de-
+rived for itself. Faud is accordingly realized by a protocol
+whose admission check is one the group performs, not one
+a bystander performs, and the paper claims no property of
+the form “a third party establishes auditability from the log
+alone”. The boundary has a concrete consequence, stated in
+§1 and repeated here as the scope of condition (b): ifevery
+member of the group is corrupt, all of them may accept an
+epoch whose escrow opens to a value other than the one they
+use, and neither VerifyCommit nor FLog detects it, since no
+check made from the log alone can recompute a secret it does
+not hold. Auditability is a guarantee for groups retaining an
+honest member, and no design that keeps the key schedule
+outside the circuit can give more. VerifyCommit is a state-
+less filter — it is what lets FLog refuse a malformed escrow
+without holding group state — and its guarantee is the one
+above.
+E Escrow PKE and Aggregation
+E.1 The escrow PKE
+ParametersThe scheme of §A.3.1 runs at the ML-KEM-
+768 parameter set: ring degree 256, modulus qR =3329 ,
+module rank κ=3 , and CBD2 noise on every coefficient of
+(r,e1,e 2). Messages are the 256-bit escrow seeds µ j, encoded
+one bit per coefficient of the message polynomial in the top
+half of ZqR, 256 being both the capacity of one such cipher-
+text and, by §D.2.2, what the reprogramming bound needs.
+Ciphertext compression at (du,d v) = (10,4) isenabledin the
+measured configuration, which is what makes a per-auditor
+ciphertext 1088 B; disabling it costs 448 B per auditor and
+changes no security statement.
+Decryption failureDecryption recovers v− s⊤u =
+Encode(µ) +e 2 + e⊤r− s⊤e1 +∆ cmp, and a coefficient de-
+codes wrongly exactly when that error exceeds qR/4; at these
+parameters the quantities are the ML-KEM-768 ones, giving
+δesc≤2−164 per ciphertext and thetδ esc≤2−162 term of The-
+orem 13. The range checks of clause (ii) bound every noise
+coefficient, which is what lets an honest-encryption failure
+bound apply to a logged ciphertext an adversary produced.
+IND-CPA
+Lemma 14(IND-CPA of the escrow PKE).Any QPT ad-
+versary distinguishing Enc(pk A,µ 0) from Enc(pk A,µ 1) for
+chosen µ0,µ 1 has advantage at most2ε ML WE(κ,q R,CBD 2).
+Proof. Two single-run hops. Replace pkA = ( A,As + e)
+by (A,b) withbuniform, against which a distinguisher is
+a Module-LWE distinguisher in κ samples; then replace
+(u,v−Encode(µ)) by a uniform pair, against which a distin-
+guisher is one in κ+1 samples under the transposed matrix.
+33
+
+In the final game the ciphertext is independent of µ. Neither
+hop rewinds, clones or measures the adversary, so the reduc-
+tion is straight-line, and the QROM plays no role since no
+hash is applied to the message.
+Verifiable encryptionIND-CPA alone does not stop an
+adversary from mauling a logged escrow ciphertext; the proof
+supplies that. The property below is about thelogged object,
+not about the encryption scheme: it does not make a CPA-
+secure PKE non-malleable in the standard sense, and we do
+not claim that. We call itproof-bound ciphertext integrity.
+Lemma 15(Proof-bound integrity of a logged escrow cipher-
+text).Let Me be admitted, so Vrfy accepts its proof. Then
+for every j there is a witness, extractable by Ext, contain-
+ing µ j, σ j and noise within the range-checked bounds such
+that cesc
+j =Enc(pk A
+j ,µ j;·) and e j =σ j⊕H P2(“wrap”∥Kj),
+except with the probability of Lemma 10. Consequently an
+adversary that modifies any component of a loggedCesce must
+produce a fresh accepting proof for the modified statement,
+since Cesce is a public input of x and x is recomputed from the
+wire byStmt.
+Proof. Immediate from clause (ii) and straight-line knowl-
+edge soundness, together with the fact that Stmt takes Cesce
+fromLrather than from the committer (§B.2.1).
+This is the sense in which the construction uses verifiable
+encryption [20, 55]: the guarantee an FO transform would
+give for the primitive is given here for the logged object,
+which is the only one the protocol relies on.
+E.2 Recursive aggregation of the bundle
+A ΠA bundle is 2 sub-proofs and 15.31 MB. Aggregation col-
+lapses it to a single proof whose size is independent of the re-
+lation, and the security statement is a corollary of Lemma 10.
+The aggregation relationLet Πin be the bundle of §D.2.9:
+nπ sub-proofs{π1, . . . ,πnπ} over statements {x1, . . . ,xnπ}
+derived from one public x, tied by ntie published digests
+{δ1, . . . ,δntie}. Define
+Ragg :
+(i) Vrfy(xi,π i) =1 for every i∈[n π], where each
+xi is derived from the publicxby the fixed,
+deterministic splitter ofStmt
+(ii) then tie tie digests carried by the{x i}agree
+pairwise as producer/consumer
+(7)
+with public input x and witness ({πi},{δ l}). The aggre-
+gated proof is πagg←Prove(x,({π i},{δ l})) for Ragg, and
+VerifyCommitverifiesπ agg alone.
+Corollary 16(Aggregation preserves both properties).If the
+outer argument is straight-line knowledge-sound with error
+εout
+ks and zero-knowledge with error εout
+ZK, then from an accept-
+ing πagg a witness for RA is extractable except with probabil-
+ity εout
+ks +n π εks +n tie εbind, and the aggregated transcript is
+simulatable except with probabilityε out
+ZK.
+Proof. Extraction is two-stage: the outer extractor yields
+({πi},{δ l}) satisfying Ragg, at εout
+ks ; applying Lemma 10 to
+that bundle yields the single witness, atnπ εks +n tie εbind. Both
+stages are straight-line, so the composition is. For zero knowl-
+edge, the inner proofs and the tie digests are nowwitness
+rather than transcript: the aggregated transcript is (x,π agg)
+and nothing else, so the nu
+tie term of Lemma 11 cannot arise at
+all and outer zero knowledge is the whole statement. For ΠA
+that term is already zero (§D.2.9), so what aggregation buys
+here is size rather than a strengthened hiding claim.
+34

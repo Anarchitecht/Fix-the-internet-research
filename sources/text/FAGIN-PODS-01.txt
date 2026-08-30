@@ -1,0 +1,1859 @@
+arXiv:cs/0204046v1  [cs.DB]  22 Apr 2002
+Optimal Aggregation Algorithms for Middleware
+Ronald Fagin∗
+Amnon Lotem†
+Moni Naor‡
+Abstract: Assume that each object in a database has m grades, or scores, one for each of m attributes. For
+example, an object can have a color grade, that tells how red i t is, and a shape grade, that tells how round it is.
+For each attribute, there is a sorted list, which lists each o bject and its grade under that attribute, sorted by grade
+(highest grade ﬁrst). Each object is assigned an overall gra de, that is obtained by combining the attribute grades
+using a ﬁxed monotone aggregation function, or combining rule, such as min or average.
+To determine the top k objects, that is, k objects with the highest overall grades, the naive algorith m must
+access every object in the database, to ﬁnd its grade under ea ch attribute. Fagin has given an algorithm (“Fagin’s
+Algorithm”, or FA) that is much more efﬁcient. For some monot one aggregation functions, FA is optimal with
+high probability in the worst case.
+We analyze an elegant and remarkably simple algorithm (“thethreshold algorithm”, or TA) that is optimal in
+a much stronger sense than FA. We show that TA is essentially optimal, not just for some monotone aggregation
+functions, but for all of them, and not just in a high-probability worst-case sense, but over every database. Unlike
+FA, which requires large buffers (whose size may grow unboun dedly as the database size grows), TA requires
+only a small, constant-size buffer. TA allows early stoppin g, which yields, in a precise sense, an approximate
+version of the topk answers.
+We distinguish two types of access: sorted access (where the middleware system obtains the grade of an
+object in some sorted list by proceeding through the list sequentially from the top), and random access (where the
+middleware system requests the grade of object in a list, and obtains it in one step). We consider the scenarios
+where random access is either impossible, or expensive relative to sorted access, and provide algorithms that are
+essentially optimal for these cases as well.
+Extended abstract appeared in Proc. Twentieth ACM Symposiu m on Principles of Database
+Systems, 2001 (PODS 2001), pp. 102–113.
+∗IBM Almaden Research Center, 650 Harry Road, San Jose, California 95120. Email: fagin@almaden.ibm.com
+†University of Maryland–College Park, Dept. of Computer Sci ence, College Park, Maryland 20742. Email:
+lotem@cs.umd.edu
+‡Dept. of Computer Science and Applied Mathematics, Weizman n Institute of Science, Rehovot 76100, Israel. Email:
+naor@wisdom.weizmann.ac.il. The work of this author was performed while a Visiting Scientist at the IBM Almaden
+Research Center.
+
+1 Introduction
+Early database systems were required to store only small character strings, such as the entries in a tuple
+in a traditional relational database. Thus, the data was qui te homogeneous. Today, we wish for our
+database systems to be able to deal not only with character strings (both small and large), but also with
+a heterogeneous variety of multimedia data (such as images, video, and audio). Furthermore, the data
+that we wish to access and combine may reside in a variety of da ta repositories, and we may want our
+database system to serve as middleware that can access such data.
+One fundamental difference between small character strings and multimedia data is that multimedia
+data may have attributes that are inherently fuzzy. For exam ple, we do not say that a given image is
+simply either “red” or “not red”. Instead, there is a degree o f redness, which ranges between 0 (not at
+all red) and 1 (totally red).
+One approach [ ?] to deal with such fuzzy data is to make use of an aggregation function t. If
+x1,...,x m (each in the interval[0, 1]) are the grades of objectR under them attributes, thent(x1,...,x m)
+is the (overall) grade of objectR. We shall often abuse notation and writet(R) for the gradet(x1,...,x m)
+ofR. As we shall discuss, such aggregation functions are useful in other contexts as well. There is a
+large literature on choices for the aggregation function (see Zimmermann’s textbook [?] and the discus-
+sion in [?]).
+One popular choice for the aggregation function is min. In fact, under the standard rules of fuzzy
+logic [?], if objectR has gradex1 under attributeA1 andx2 under attributeA2, then the grade under the
+fuzzy conjunctionA1 ∧A2 is min(x1,x 2). Another popular aggregation function is the average (or the
+sum, in contexts where we do not care if the resulting overall grade no longer lies in the interval [0, 1]).
+We say that an aggregation function t is monotone if t(x1,...,x m) ≤ t(x′
+1,...,x ′
+m) whenever
+xi ≤ x′
+i for every i. Certainly monotonicity is a reasonable property to demand of an aggregation
+function: if for every attribute, the grade of object R′ is at least as high as that of object R, then we
+would expect the overall grade ofR′ to be at least as high as that ofR.
+The notion of a query is different in a multimedia database sy stem than in a traditional database
+system. Given a query in a traditional database system (such as a relational database system), there
+is an unordered set of answers. 1 By contrast, in a multimedia database system, the answer to a query
+is a “graded” (or “fuzzy”) set [ ?]. A graded set is a set of pairs (x,g ), where x is an object, and g
+(the grade) is a real number in the interval [0, 1]. Graded sets are usually presented in sorted order,
+sorted by grade. As in [ ?], we shall identify a query with a choice of the aggregation f unctiont. The
+user is typically interested in ﬁnding the topk answers, where k is a given parameter (such as k = 1 ,
+k = 10, ork = 100). This means that we want to obtain k objects (which we may refer to as the “top
+k objects”) with the highest grades on this query, each along with its grade (ties are broken arbitrarily).
+For convenience, throughout this paper we will think of k as a constant value, and we will consider
+algorithms for obtaining the topk answers in databases that contain at leastk objects.
+Other applications: There are other applications besides multimedia databases where we make
+use of an aggregation function to combine grades, and where w e want to ﬁnd the top k answers. One
+important example is information retrieval [ ?], where the objects R of interest are documents, the m
+attributes are search terms s1,...,s m, and the grade xi measures the relevance of document R for
+1 Of course, in a relational database, the result to a query may be sorted in some way for convenience in presentation,
+such as sorting department members by salary, but logically speaking, the result is still simply a set, with a crisply-de ﬁned
+collection of members.
+1
+
+search termsi, for 1 ≤i ≤m. It is common to take the aggregation function t to be the sum. That is,
+the total relevance score of documentR when the query consists of the search termss1,...,s m is taken
+to bet(x1,...,x m) = x1 + · · · +xm.
+Another application arises in a paper by Aksoy and Franklin [ ?] on scheduling large-scale on-
+demand data broadcast. In this case each object is a page, and there are two ﬁelds. The ﬁrst ﬁeld repre-
+sents the amount of time waited by the earliest user requesti ng a page, and the second ﬁeld represents
+the number of users requesting a page. They make use of the product functiont witht(x1,x 2) = x1x2,
+and they wish to broadcast next the page with the top score.
+The model: We assume that each database consists of a ﬁnite set ofobjects. We shall typically take
+N to represent the number of objects. Associated with each obj ectR arem ﬁeldsx1,...,x m, where
+xi ∈ [0, 1] for each i. We may refer to xi as the ith ﬁeld of R. The database can be thought of as
+consisting of a single relation, where one column correspon ds to the object id, and the other columns
+correspond tom attributes of the object. Alternatively, the way we shall think of a database in this paper
+is as consisting of m sorted listsL1,...,L m, each of length N (there is one entry in each list for each
+of theN objects). We may refer to Li as listi. Each entry of Li is of the form (R,x i), wherexi is the
+ith ﬁeld of R. Each list Li is sorted in descending order by the xi value. We take this simple view of
+a database, since this view is all that is relevant, as far as o ur algorithms are concerned. We are taking
+into account only access costs, and ignoring internal computation costs. Thus, in practice it might well
+be expensive to compute the ﬁeld values, but we ignore this issue here, and take the ﬁeld values as being
+given.
+We consider two modes of access to data. The ﬁrst mode of acces s is sorted (or sequential) access.
+Here the middleware system obtains the grade of an object in o ne of the sorted lists by proceeding
+through the list sequentially from the top. Thus, if objectR has theℓth highest grade in theith list, then
+ℓ sorted accesses to the ith list are required to see this grade under sorted access. Th e second mode of
+access is random access. Here, the middleware system requests the grade of objectR in theith list, and
+obtains it in one random access. If there are s sorted accesses and r random accesses, then the sorted
+access cost isscS, the random access cost isrcR, and the middleware cost isscS +rcR (the sum of the
+sorted access cost and the random access cost), for some positive constantscS andcR.
+Algorithms: There is an obvious naive algorithm for obtaining the top k answers. Under sorted
+access, it looks at every entry in each of them sorted lists, computes (usingt) the overall grade of every
+object, and returns the top k answers. The naive algorithm has linear middleware cost (li near in the
+database size), and thus is not efﬁcient for a large database.
+Fagin [?] introduced an algorithm (“Fagin’s Algorithm”, or FA), which often does much better than
+the naive algorithm. In the case where the orderings in the sorted lists are probabilistically independent,
+FA ﬁnds the topk answers, over a database withN objects, with middleware costO(N (m−1)/mk1/m),
+with arbitrarily high probability. 2 Fagin also proved that under this independence assumption, along
+with an assumption on the aggregation function, every corre ct algorithm must, with high probability,
+incur a similar middleware cost in the worst case.
+We shall present the “threshold algorithm”, or TA. This algorithm was discovered independently by
+(at least) three groups, including Nepal and Ramakrishna [ ?] (who were the ﬁrst to publish), G¨ untzer,
+Balke, and Kiessling [ ?], and ourselves. 3 For more information and comparison, see Section 10 on
+2We shall not discuss the probability model here, including the notion of “independence”, since it is off track. For details,
+see [?].
+3Our second author ﬁrst deﬁned TA, and did extensive simulati ons comparing it to FA, as a project in a database course
+2
+
+related work.
+We shall show that TA is optimal in a much stronger sense than F A. We now deﬁne this notion of
+optimality, which we consider to be interesting in its own right.
+Instance optimality: Let A be a class of algorithms, letD be a class of databases, and letcost(A, D)
+be the middleware cost incurred by running algorithm A over database D. We say that an algorithm B
+is instance optimal over A and D if B ∈ A and if for every A ∈ A and every D ∈ D we have
+cost(B, D) = O(cost(A, D)). (1)
+Equation (1) means that there are constantsc andc′ such that cost(B, D) ≤c · cost(A, D) +c′ for every
+choice of A ∈ A and D ∈ D. We refer to c as the optimality ratio. Intuitively, instance optimality
+corresponds to optimality in every instance, as opposed to j ust the worst case or the average case.
+FA is optimal in a high-probability worst-case sense under c ertain assumptions. TA is optimal in a
+much stronger sense, and without any underlying probabilistic model or probabilistic assumptions: it is
+instance optimal, for several natural choices of A and D. In particular, instance optimality holds when
+A is taken to be the class of algorithms that would normally be implemented in practice (since the only
+algorithms that are excluded are those that make very lucky guesses), and when D is taken to be the class
+of all databases. Instance optimality of TA holds in this case for all monotone aggregation functions. By
+contrast, high-probability worst-case optimality of FA ho lds only under the assumption of “strictness”
+(we shall deﬁne strictness later; intuitively, it means that the aggregation function is representing some
+notion of conjunction).
+Approximation and early stopping: There are times when the user may be satisﬁed with an ap-
+proximate topk list. Assumeθ >1. Deﬁne a θ-approximation to the topk answers for the aggregation
+functiont to be a collection ofk objects (each along with its grade) such that for eachy among thesek
+objects and each z not among these k objects,θt(y) ≥ t(z). Note that the same deﬁnition with θ = 1
+gives the top k answers. We show how to modify TA to give such a θ-approximation (and prove the
+instance optimality of this modiﬁed algorithm under certain assumptions). In fact, we can easily modify
+TA into an interactive process where at all times the system can show the user its current view of the top
+k list along with a guarantee about the degree θ of approximation to the correct answer. At any time,
+the user can decide, based on this guarantee, whether he would like to stop the process.
+Restricting random access: As we shall discuss in Section 2, there are some systems whererandom
+access is impossible. To deal with such situations, we show in Section 8.1 how to modify TA to obtain an
+algorithm NRA (“no random accesses”) that does no random accesses. We prove that NRA is instance
+optimal over all algorithms that do not make random accesses and over all databases.
+What about situations where random access is not impossible , but simply expensive? Wimmers et
+al. [?] discuss a number of systems issues that can cause random acc ess to be expensive. Although
+TA is instance optimal, the optimality ratio depends on the r atiocR/cS of the cost of a single random
+access to the cost of a single sorted access. We deﬁne another algorithm that is a combination of TA
+and NRA, and call it CA (“combined algorithm”). The deﬁnitio n of the algorithm depends on cR/cS.
+The motivation is to obtain an algorithm that is not only inst ance optimal, but whose optimality ratio
+is independent of cR/cS. Our original hope was that CA would be instance optimal (wit h optimality
+ratio independent of cR/cS) in those scenarios where TA is instance optimal. Not only do es this hope
+fail, but interestingly enough, we prove that there does not exist any deterministic algorithm, or even
+taught by Michael Franklin at the University of Maryland–College Park, in the Fall of 1997.
+3
+
+probabilistic algorithm that does not make a mistake, with o ptimality ratio independent of cR/cS in
+these scenarios! However, we ﬁnd a new natural scenario where CA is instance optimal, with optimality
+ratio independent ofcR/cS.
+Outline of paper: In Section 2, we discuss modes of access (sorted and random) t o data. In Sec-
+tion 3, we present FA (Fagin’s Algorithm) and its properties. In Section 4, we present TA (the Threshold
+Algorithm). In Section 5, we deﬁne instance optimality, and compare it with related notions, such as
+competitiveness. In Section 6, we show that TA is instance op timal in several natural scenarios. In the
+most important scenario, we show that the optimality ratio of TA is best possible. In Section 6.1, we dis-
+cuss the dependence of the optimality ratio on various parameters. In Section 6.2, we show how to turn
+TA into an approximation algorithm, and prove instance opti mality among approximation algorithms.
+We also show how the user can prematurely halt TA and in a preci se sense, treat its current view of
+the topk answers as an approximate answer. In Section 7, we consider situations (suggested by Bruno,
+Gravano, and Marian [?]) where sorted access is impossible for certain of the sorted lists. In Section 8,
+we focus on situations where random accesses are either impo ssible or expensive. In Section 8.1 we
+present NRA (No Random Access algorithm), and show its insta nce optimality among algorithms that
+make no random accesses. Further, we show that the optimalit y ratio of NRA is best possible. In Sec-
+tion 8.2 we present CA (Combined Algorithm), which is a result of combining TA and NRA in order to
+obtain an algorithm that, intuitively, minimizes random accesses. In Section 8.3, we show instance op-
+timality of CA, with an optimality ratio independent ofcR/cS, in a natural scenario. In Section 8.4, we
+show that the careful choice made by CA of which random access es to make is necessary for instance
+optimality with an optimality ratio independent ofcR/cS. We also compare and contrast CA versus TA.
+In Section 9, we prove various lower bounds on the optimality ratio, both for deterministic algorithms
+and for probabilistic algorithms that never make a mistake. We summarize our upper and lower bounds
+in Section 9.1. In Section 10 we discuss related work. In Section 11, we give our conclusions, and state
+some open problems.
+2 Modes of Access to Data
+Issues of efﬁcient query evaluation in a middleware system are very different from those in a traditional
+database system. This is because the middleware system rece ives answers to queries from various
+subsystems, which can be accessed only in limited ways. What do we assume about the interface
+between a middleware system and a subsystem? Let us considerQBIC4 [?] (“Query By Image Content”)
+as a subsystem. QBIC can search for images by various visual c haracteristics such as color and texture
+(and an experimental version can search also by shape). In re sponse to a query, such as Color=‘red’,
+the subsystem will output the graded set consisting of all objects, one by one, each along with its grade
+under the query, in sorted order based on grade, until the middleware system tells the subsystem to halt.
+Then the middleware system could later tell the subsystem to resume outputting the graded set where
+it left off. Alternatively, the middleware system could ask the subsystem for, say, the top 10 objects in
+sorted order, each along with its grade. then request the nex t 10, etc. In both cases, this corresponds to
+what we have referred to as “sorted access”.
+There is another way that we might expect the middleware syst em to interact with the subsystem.
+Speciﬁcally, the middleware system might ask the subsystem for the grade (with respect to a query)
+4QBIC is a trademark of IBM Corporation.
+4
+
+of any given object. This corresponds to what we have referre d to as “random access”. In fact, QBIC
+allows both sorted and random access.
+There are some situations where the middleware system is not allowed random access to some
+subsystem. An example might occur when the middleware syste m is a text retrieval system, and the
+subsystems are search engines. Thus, there does not seem to b e a way to ask a major search engine on
+the web for its internal score on some document of our choice under a query.
+Our measure of cost corresponds intuitively to the cost incu rred by the middleware system in pro-
+cessing information passed to it from a subsystem such as QBIC. As before, if there ares sorted accesses
+andr random accesses, then the middleware cost is taken to bescS +rcR, for some positive constants
+cS andcR. The fact thatcS andcR may be different reﬂects the fact that the cost to a middleware system
+of a sorted access and of a random access may be different.
+3 Fagin’s Algorithm
+In this section, we discuss FA (Fagin’s Algorithm) [ ?].This algorithm is implemented in Garlic [ ?],
+an experimental IBM middleware system; see [ ?] for interesting details about the implementation and
+performance in practice. Chaudhuri and Gravano [ ?] consider ways to simulate FA by using “ﬁlter
+conditions”, which might say, for example, that the color score is at least 0.2.5 FA works as follows.
+1. Do sorted access in parallel to each of the m sorted listsLi. (By “in parallel”, we mean that we
+access the top member of each of the lists under sorted access, then we access the second member
+of each of the lists, and so on.) 6 Wait until there are at leastk “matches”, that is, wait until there
+is a setH of at leastk objects such that each of these objects has been seen in each of them lists.
+2. For each object R that has been seen, do random access as needed to each of the li stsLi to ﬁnd
+theith ﬁeldxi ofR.
+3. Compute the grade t(R) = t(x1,...,x m) for each object R that has been seen. Let Y be a set
+containing thek objects that have been seen with the highest grades (ties are broken arbitrarily).
+The output is then the graded set {(R,t (R)) |R ∈Y }.
+It is fairly easy to show [?] that this algorithm is correct for monotone aggregation functionst (that
+is, that the algorithm successfully ﬁnds the top k answers). If there are N objects in the database, and
+if the orderings in the sorted lists are probabilistically i ndependent, then the middleware cost of FA is
+O(N (m−1)/mk1/m), with arbitrarily high probability [?].
+An aggregation function t is strict [?] if t(x1,...,x m) = 1 holds precisely when xi = 1 for
+everyi. Thus, an aggregation function is strict if it takes on the maximal value of 1 precisely when each
+argument takes on this maximal value. We would certainly expect an aggregation function representing
+5Chaudhuri and Gravano originally saw an early version of theconference paper (in the 1996 ACM Symposium on Princi-
+ples of Database Systems) that expanded into the journal version [?].
+6It is not actually important that the lists be accessed “in lockstep”. In practice, it may be convenient to allow the sorted lists
+to be accessed at different rates, in batches, etc. Each of the algorithms in this paper where there is “sorted access in parallel”
+remain correct even when sorted access is not in lockstep. Furthermore, all of our instance optimality results continue to hold
+even when sorted access is not in lockstep, as long as the rate s of sorted access of the lists are within constant multiples of
+each other.
+5
+
+the conjunction to be strict (see the discussion in [ ?]). In fact, it is reasonable to think of strictness as
+being a key characterizing feature of the conjunction.
+Fagin shows that his algorithm is optimal with high probability in the worst case if the aggregation
+function is strict (so that, intuitively, we are dealing wit h a notion of conjunction), and if the orderings
+in the sorted lists are probabilistically independent. In f act, the access pattern of FA is oblivious to the
+choice of aggregation function, and so for each ﬁxed database, the middleware cost of FA is exactly the
+same no matter what the aggregation function is. This is true even for a constant aggregation function;
+in this case, of course, there is a trivial algorithm that gives us the topk answers (anyk objects will do)
+withO(1) middleware cost. So FA is not optimal in any sense for some monotone aggregation functions
+t. As a more interesting example, when the aggregation function is max (which is not strict), it is shown
+in [?] that there is a simple algorithm that makes at most mk sorted accesses and no random accesses
+that ﬁnds the topk answers. By contrast, as we shall see, the algorithm TA is instance optimal for every
+monotone aggregation function, under very weak assumptions.
+Even in the cases where FA is optimal, this optimality holds only in the worst case, with high proba-
+bility. This leaves open the possibility that there are some algorithms that have much better middleware
+cost than FA over certain databases. The algorithm TA, whichwe now discuss, is such an algorithm.
+4 The Threshold Algorithm
+We now present the threshold algorithm (TA).
+1. Do sorted access in parallel to each of the m sorted listsLi. As an object R is seen under sorted
+access in some list, do random access to the other lists to ﬁnd the grade xi of object R in every
+listLi.7 Then compute the gradet(R) = t(x1,...,x m) of objectR. If this grade is one of the k
+highest we have seen, then remember object R and its grade t(R) (ties are broken arbitrarily, so
+that onlyk objects and their grades need to be remembered at any time).
+2. For each list Li, letxi be the grade of the last object seen under sorted access. Deﬁne the threshold
+valueτ to bet(x1,...,x m). As soon as at least k objects have been seen whose grade is at least
+equal toτ, then halt.
+3. Let Y be a set containing thek objects that have been seen with the highest grades. The output is
+then the graded set {(R,t (R)) |R ∈Y }.
+We now show that TA is correct for each monotone aggregation functiont.
+Theorem 4.1: If the aggregation functiont is monotone, then TA correctly ﬁnds the topk answers.
+Proof: LetY be as in Step 3 of TA. We need only show that every member of Y has at least as high a
+grade as every objectz not inY . By deﬁnition of Y , this is the case for each objectz that has been seen
+in running TA. So assume that z was not seen. Assume that the ﬁelds of z arex1,...,x m. Therefore,
+xi ≤xi, for everyi. Hence, t(z) = t(x1,...,x m) ≤t(x1,...,x m) = τ, where the inequality follows
+7It may seem wasteful to do random access to ﬁnd a grade that was already determined earlier. As we discuss later, this is
+done in order to avoid unbounded buffers.
+6
+
+by monotonicity oft. But by deﬁnition of Y , for everyy inY we havet(y) ≥τ. Therefore, for everyy
+inY we havet(y) ≥τ ≥t(z), as desired.
+We now show that the stopping rule for TA always occurs at leas t as early as the stopping rule for
+FA (that is, with no more sorted accesses than FA). In FA, if R is an object that has appeared under
+sorted access in every list, then by monotonicity, the grade ofR is at least equal to the threshold value.
+Therefore, when there are at least k objects, each of which has appeared under sorted access in ev ery
+list (the stopping rule for FA), there are at least k objects whose grade is at least equal to the threshold
+value (the stopping rule for TA).
+This implies that for every database, the sorted access cost for TA is at most that of FA. This does
+not imply that the middleware cost for TA is always at most that of FA, since TA may do more random
+accesses than FA. However, since the middleware cost of TA is at most the sorted access cost times a
+constant (independent of the database size), it does follow that the middleware cost of TA is at most a
+constant times that of FA. In fact, we shall show that TA is instance optimal, under natural assumptions.
+We now consider the intuition behind TA. For simplicity, we d iscuss ﬁrst the case where k = 1 ,
+that is, where the user is trying to determine the top answer. Assume that we are at a stage in the
+algorithm where we have not yet seen any object whose (overall) grade is at least as big as the threshold
+valueτ. The intuition is that at this point, we do not know the top ans wer, since the next object we see
+under sorted access could have overall grade τ, and hence bigger than the grade of any object seen so
+far. Furthermore, once we do see an object whose grade is at le astτ, then it is safe to halt, as we see
+from the proof of Theorem 4.1. Thus, intuitively, the stoppi ng rule of TA says: “Halt as soon as you
+know you have seen the top answer.” Similarly, for generalk, the stopping rule of TA says, intuitively,
+“Halt as soon as you know you have seen the top k answers.” So we could consider TA as being an
+implementation of the following “program”:
+Do sorted access (and the corresponding random access) until you know you have seen the topk
+answers.
+This very high–level “program” is a knowledge–based program [?]. In fact, TA was designed by
+thinking in terms of this knowledge-based program. The fact that TA corresponds to this knowledge–
+based program is what is behind instance optimality of TA.
+Later, we shall give other scenarios (situations where rand om accesses are either impossible or
+expensive) where we implement the following more general knowledge–based program:
+Gather what information you need to allow you to know the topk answers, and then halt.
+In each of our scenarios, the implementation of this second knowledge-based program is different. When
+we consider the scenario where random accesses are expensiv e relative to sorted accesses, but are not
+impossible, we need an additional design principle to decide how to gather the information, in order to
+design an instance optimal algorithm.
+The next theorem, which follows immediately from the deﬁnit ion of TA, gives a simple but impor-
+tant property of TA that further distinguishes TA from FA.
+Theorem 4.2: TA requires only bounded buffers, whose size is independentof the size of the database.
+7
+
+Proof: Other than a little bit of bookkeeping, all that TA must remember is the current topk objects and
+their grades, and (pointers to) the last objects seen in sorted order in each list.
+By contrast, FA requires buffers that grow arbitrarily larg e as the database grows, since FA must
+remember every object it has seen in sorted order in every list, in order to check for matching objects in
+the various lists.
+There is a price to pay for the bounded buffers. Thus, for every time an object is found under sorted
+access, TA may do m − 1 random accesses (where m is the number of lists), to ﬁnd the grade of the
+object in the other lists. This is in spite of the fact that thi s object may have already been seen in these
+other lists.
+5 Instance optimality
+In order to compare instance optimality with other notions from the literature, we generalize slightly the
+deﬁnition from that given in the introduction. Let A be a class of algorithms, and let D be a class of
+legal inputs to the algorithms. We assume that we are considering a particular nonnegative performance
+cost measure cost(A, D), which represents the amount of a resource consumed by running the algorithm
+A ∈ A on input D ∈ D. This cost could be the running time of algorithm A on input D, or in this paper,
+the middleware cost incurred by running algorithm A over database D.
+We say that an algorithm B is instance optimal over A and D if B ∈ A and if for every A ∈ A and
+every D ∈ D we have
+cost(B, D) = O(cost(A, D)). (2)
+Equation (2) means that there are constantsc andc′ such that cost(B, D) ≤c · cost(A, D) +c′ for every
+choice of A ∈ A and D ∈ D. We refer to c as the optimality ratio. It is similar to the competitive ratio
+in competitive analysis (we shall discuss competitive anal ysis shortly). We use the word “optimal” to
+reﬂect that fact that B is essentially the best algorithm in A.
+Intuitively, instance optimality corresponds to optimali ty in every instance, as opposed to just the
+worst case or the average case. There are many algorithms tha t are optimal in a worst-case sense, but
+are not instance optimal. An example is binary search: in the worst case, binary search is guaranteed to
+require no more than logN probes, forN data items. However, for each instance, a positive answer can
+be obtained in one probe, and a negative answer in two probes.
+We consider a nondeterministic algorithm correct if on no br anch does it make a mistake. We take
+the middleware cost of a nondeterministic algorithm to be th e minimal cost over all branches where it
+halts with the topk answers. We take the middleware cost of a probabilistic algorithm to be the expected
+cost (over all probabilistic choices by the algorithm). Whe n we say that a deterministic algorithm B
+is instance optimal over A and D, then we are really comparing B against the best nondeterministic
+algorithm, even if A contains only deterministic algorithms. This is because fo r each D ∈ D, there is
+always a deterministic algorithm that makes the same choice s on D as the nondeterministic algorithm.
+We can view the cost of the best nondeterministic algorithm that produces the topk answers over a given
+database as the cost of the shortest proof for that database t hat these are really the top k answers. So
+instance optimality is quite strong: the cost of an instanceoptimal algorithm is essentially the cost of the
+shortest proof. Similarly, we can view A as if it contains also probabilistic algorithms that never m ake
+a mistake. For convenience, in our proofs we shall always ass ume that A contains only deterministic
+8
+
+algorithms, since the results carry over automatically to nondeterministic algorithms and to probabilistic
+algorithms that never make a mistake.
+The deﬁnition we have given for instance optimality is forma lly the same deﬁnition as is used in
+competitive analysis [?, ?], except that in competitive analysis, (1) we do not assume t hat B ∈ A, and
+(2) cost(A, D) does not typically represent a performance cost. In competi tive analysis, typically (a) D
+is a class of instances of a particular problem, (b)A is the class of ofﬂine algorithms that give a solution
+to the instances in D, (c) cost(A, D) is a number that represents the goodness of the solution (whe re
+bigger numbers correspond to a worse solution), and (d) B is a particular online algorithm. In this case,
+the online algorithm B is said to be competitive. The intuition is that a competitive online algorithm
+may perform poorly in some instances, but only on instances w here every ofﬂine algorithm would also
+perform poorly.
+Another example where the framework of instance optimality appears, but again without the as-
+sumption that B ∈ A, and again where cost(A, D) does not represent a performance cost, is in the
+context of approximation algorithms [?]. In this case, (a) D is a class of instances of a particular prob-
+lem, (b) A is the class of algorithms that solve the instances in D exactly (in cases of interest, these
+algorithms are not polynomial-time algorithms), (c) cost(A, D) is the value of the resulting answer
+when algorithm A is applied to input D, and (d) B is a particular polynomial-time algorithm.
+Dagum et al. [?] give an interesting example of what we would call an instanc e optimal algorithm.
+They consider the problem of determining the mean of an unkno wn random variable by Monte Carlo
+estimation. In their case, (a) D is the class of random variables distributed in the interval [0, 1], (b) A
+is the class of algorithms that, by repeatedly doing indepen dent evaluations of a random variable and
+then averaging the results, obtain an estimate of the mean of the random variable to within a given
+precision with a given probability, (c) cost(A, D) is the expected number of independent evaluations
+of the random variable D under algorithm A, and (d) B is their algorithm, which they call AA for
+“approximation algorithm”. Their main result says, in our t erminology, that AA is instance optimal
+over A and D.
+Demaine et al. [?] give an example of an algorithm that is close to instance optimal. They consider
+the problem of ﬁnding the intersection, union, or differenc e of a collection of sorted sets. In their case,
+(a) D is the class of instances of collections of sorted sets, (b) A is the class of algorithms that do
+pairwise comparisons among elements, (c) cost(A, D) is the running time (number of comparisons) in
+running algorithm A on instance D, and (d) B is their algorithm. In a certain sense, their algorithm is
+close to what we would call instance optimal (to explain the details would take us too far astray).
+6 Instance Optimality of the Threshold Algorithm
+In this section, we investigate the instance optimality of T A. We begin with an intuitive argument that
+TA is instance optimal. If A is an algorithm that stops sooner than TA on some database, be fore A
+ﬁnds k objects whose grade is at least equal to the threshold value τ, then A must make a mistake on
+some database, since the next object in each list might have gradexi in each listi, and hence have grade
+t(x1,...,x m) = τ. This new object, which A has not even seen, has a higher grade than some object in
+the topk list that was output by A, and so A erred by stopping too soon. We would like to convert this
+intuitive argument into a proof that for every monotone aggr egation function, TA is instance optimal
+over all algorithms that correctly ﬁnd the topk answers, over the class of all databases. However, as we
+9
+
+shall see, the situation is actually somewhat delicate. We ﬁrst make a distinction between algorithms that
+“make wild guesses” (that is, perform random access on objec ts not previously encountered by sorted
+access) and those that do not. (Neither FA nor TA make wild guesses, nor does any “natural” algorithm
+in our context.) Our ﬁrst theorem (Theorem 6.1) says that for every monotone aggregation function, TA
+is instance optimal over all algorithms that correctly ﬁnd t he topk answers and that do not make wild
+guesses, over the class of all databases. We then show that this distinction (wild guesses vs. no wild
+guesses) is essential: if algorithms that make wild guesses are allowed in the class A of algorithms that
+an instance optimal algorithm must compete against, thenno algorithm is instance optimal (Example 6.3
+and Theorem 6.4). The heart of this example (and the corresponding theorem) is the fact that there may
+be multiple objects with the same grade in some list. Indeed, once we restrict our attention to databases
+where no two objects have the same value in the same list, and make a slight, natural additional restric-
+tion on the aggregation function beyond monotonicity, then TA is instance optimal over all algorithms
+that correctly ﬁnd the topk answers (Theorem 6.5).
+In Section 6.2 we consider instance optimality in the situation where we relax the problem of ﬁnding
+the topk objects into ﬁnding approximately the topk.
+We now give our ﬁrst positive result on instance optimality of TA. We say that an algorithm makes
+wild guesses if it does random access to ﬁnd the grade of some objectR in some list before the algorithm
+has seenR under sorted access. That is, an algorithm makes wild guesses if the ﬁrst grade that it obtains
+for some object R is under random access. We would not normally implement algo rithms that make
+wild guesses. In fact, there are some contexts where it would not even be possible to make wild guesses
+(such as a database context where the algorithm could not know the name of an object it has not already
+seen). However, making a lucky wild guess can help, as we show later (Example 6.3).
+We now show instance optimality of TA among algorithms that d o not make wild guesses. In this
+theorem, when we take D to be the class of all databases, we really mean that D is the class of all
+databases that involve sorted lists corresponding to the arguments of the aggregation functiont. We are
+takingk (where we are trying to ﬁnd the topk answers) and the aggregation functiont to be ﬁxed. Since
+we are takingt to be ﬁxed, we are thereby taking the number m of arguments oft (that is, the number
+of sorted lists) to be ﬁxed. In Section 6.1, we discuss the assumptions thatk andm are constant.
+Theorem 6.1: Assume that the aggregation functiont is monotone. Let D be the class of all databases.
+Let A be the class of all algorithms that correctly ﬁnd the top k answers for t for every database and
+that do not make wild guesses. Then TA is instance optimal over A and D.
+Proof: Assume that A ∈ A, and that algorithm A is run over database D. Assume that algorithm
+A halts at depth d (that is, if di is the number of objects seen under sorted access to list i, for 1 ≤
+i ≤ m, then d = max idi). Assume that A seesa distinct objects (some possibly multiple times). In
+particular,a ≥ d. Since A makes no wild guesses, and sees a distinct objects, it must make at least a
+sorted accesses, and so its middleware cost is at least acS. We shall show that TA halts on D by depth
+a +k. Hence, the middleware cost of TA is at most (a +k)mcS + (a +k)m(m − 1)cR, which is
+amcS +am(m − 1)cR plus an additive constant ofkmcS +km(m − 1)cR. So the optimality ratio of
+TA is at most amcS +am(m−1)cR
+acS
+=m +m(m − 1)cR/cS. (Later, we shall show that if the aggregation
+function is strict, then this is precisely the optimality ratio of TA, and this is best possible.)
+Note that for each choice ofd′, the algorithm TA sees at leastd′ objects by depthd′ (this is because
+by depthd′ it has mademd′ sorted accesses, and each object is accessed at most m times under sorted
+10
+
+access). Let Y be the output set of A (consisting of the top k objects). If there are at most k objects
+that A does not see, then TA halts by deptha +k (after having seen every object), and we are done. So
+assume that there are at leastk + 1 objects that A does not see. SinceY is of sizek, there is some object
+V that A does not see and that is not inY .
+LetτA be the threshold value when algorithm A halts. This means that if xi is the grade of the last
+object seen under sorted access to list i for algorithm A, for 1 ≤i ≤m, thenτA =t(x1,...,x m). (If
+listi is not accessed under sorted access, we takexi = 1.) Let us call an objectR big ift(R) ≥τA, and
+otherwise call objectR small.
+We now show that every memberR ofY is big. Deﬁne a database D′ to be just like D, except that
+objectV has gradexi in theith list, for 1 ≤ i ≤ m. Put V in listi below all other objects with grade
+xi in listi (for 1 ≤ i ≤ m). Algorithm A performs exactly the same, and in particular gives the same
+output, for databases D and D′. Therefore, algorithm A hasR, but notV , in its output for database D′.
+Since the grade ofV in D′ isτA, it follows by correctness of A thatR is big, as desired.
+There are now two cases, depending on whether or not algorithm A sees every member of its output
+setY .8
+Case 1: Algorithm A sees every member ofY . Then by depth d, TA will see every member ofY .
+Since, as we showed, each member of Y is big, it follows that TA halts by depth d ≤ a < a+k, as
+desired.
+Case 2: Algorithm A does not see some member R ofY . We now show that every object R′ that
+is not seen by A must be big. Deﬁne a database D′ that is just like D on every object seen by A. Let
+the grade of V in list i be xi, and put V in list i below all other objects with grade xi in list i (for
+1 ≤ i ≤ m). Therefore, the grade of V in database D′ isτA. Since A cannot distinguish between D
+and D′, it has the same output on D and D′. Since A does not see R and does not see R′, it has no
+information to distinguish betweenR andR′. Therefore, it must have been able to giveR′ in its output
+without making a mistake. But ifR′ is in the output and notV , then by correctness of A, it follows that
+R′ is big. SoR′ is big, as desired.
+Since A seesa objects, and since TA sees at least a +k objects by depth a +k, it follows that by
+deptha +k, TA sees at leastk objects not seen by A. We have shown that every object that is not seen
+by A is big. Therefore, by depth a +k, TA sees at leastk big objects. So TA halts by depth a +k, as
+desired.
+The next result is a corollary of the proof of Theorem 6.1 and o f a lower bound in Section 9 (all
+of our results on lower bounds appear in Section 9). Speciﬁca lly, in the proof of Theorem 6.1, we
+showed that under the assumptions of Theorem 6.1 (no wild gue sses), the optimality ratio of TA is at
+most m +m(m − 1)cR/cS. The next result says that if the aggregation function is str ict, then the
+optimality ratio is precisely this value, and this is best possible. Recall that an aggregation function t is
+strict if t(x1,...,x m) = 1 holds precisely when xi = 1 for everyi. Intuitively, strictness means that
+the aggregation function is representing some notion of conjunction.
+Corollary 6.2: Lett be an arbitrary monotone, strict aggregation function withm arguments. Let D be
+the class of all databases. Let A be the class of all algorithms that correctly ﬁnd the topk answers fort
+for every database and that do not make wild guesses. Then TA is instance optimal over A and D, with
+optimality ratiom +m(m − 1)cR/cS. No deterministic algorithm has a lower optimality ratio.
+8For the sake of generality, we are allowing the possibility t hat algorithm A can output an object that it has not seen. We
+discuss this issue more in Section 6.1.
+11
+
+L1
+(1, 1)
+(2, 1)
+(3, 1)
+. . .
+(n + 1, 1)
+(n + 2, 0)
+(n + 3, 0)
+. . .
+(2n + 1, 0)
+L2
+(2n + 1, 1)
+(2n, 1)
+(2n − 1, 1)
+. . .
+(n + 1, 1)
+(n, 0)
+(n − 1, 0)
+. . .
+(1, 0)
+Figure 1: Database for Example 6.3
+Proof: In the proof of Theorem 6.1, it is shown that TA has an optimality ratio of at mostm +m(m −
+1)cR/cS for an arbitrary monotone aggregation function, The lower b ound follows from Theorem 9.1.
+We cannot drop the assumption of strictness in Corollary 6.2 . For example, let the aggregation
+function be max (which is not strict). It is easy to see that TA halts afterk rounds of sorted access, and
+its optimality ratio ism (which, we might add, is best possible for max).9
+What if we were to consider only the sorted access cost? This c orresponds to takingcR = 0. Then
+we see from Corollary 6.2 that the optimality ratio of TA is m. Furthermore, it follows easily from the
+proof of Theorem 9.1 that if the aggregation function is stri ct, and ifcR = 0, then this is best possible:
+no deterministic algorithm has a lower optimality ratio thanm.10
+What if we were to consider only the random access cost? This c orresponds to taking cS = 0 . In
+this case, TA is far from instance optimal. The naive algorithm, which does sorted access to every object
+in every list, does no random accesses, and so has a sorted access cost of 0.
+We now show that making a lucky wild guess can help.
+Example 6.3 :Assume that there are2n+1 objects, which we will call simply1, 2,..., 2n+1, and there
+are two listsL1 andL2 (see Figure 1). Assume that in listL1, the objects are in the order 1, 2,..., 2n +
+1, where the top n + 1 objects 1, 2,...,n + 1 all have grade 1, and the remaining n objects n +
+2,n + 3,..., 2n + 1 all have grade 0. Assume that in list L2, the objects are in the reverse order
+2n + 1, 2n,..., 1, where the bottomn objects 1,...,n all have grade 0, and the remainingn + 1 objects
+n + 1,n + 2,..., 2n + 1 all have grade 1. Assume that the aggregation function is min , and that we
+are interested in ﬁnding the top answer (i.e., k = 1). It is clear that the top answer is object n + 1 with
+overall grade 1 (every object except objectn + 1 has overall grade 0).
+An algorithm that makes a wild guess and asks for the grade of o bject n + 1 in both lists would
+determine the correct answer and be able to halt safely after two random accesses and no sorted ac-
+9 Note that the instance optimality of TA, as given by Theorem 6.1, holds whether or not the aggregation function is strict.
+For example, the instance optimality of TA as given by Theorem 6.1 holds even when the aggregation function is max. This is
+in contrast to the situation with FA, where high-probability worst-case optimality fails when the aggregation function is max.
+Corollary 6.2 makes use of the assumption of strictness only in order to show that the optimality ratio of TA is then precisely
+m + m(m − 1)cR/c S, and that this is best possible.
+10We are assuming in this paper that cR and cS are both strictly positive. However, Corollary 6.2 and the p roof of Theo-
+rem 9.1 would still hold if we were to allow cR to be 0.
+12
+
+cesses.11 However, let A be any algorithm (such as TA) that does not make wild guesses. Since the
+winning objectn + 1 is in the middle of both sorted lists, it follows that at least n + 1 sorted accesses
+would be required before algorithm A would even see the winning object.
+What if we were to enlarge the classA of algorithms to allow queries of the form “Which object has
+theith largest grade in listj, and what is its grade in list j?” We then see from Example 6.3, where we
+replace the wild guess by the query that asks for the object with the (n + 1)st largest grade in each list,
+that TA is not instance optimal. Effectively, these new queries are “just as bad” as wild guesses.
+Example 6.3 shows that TA is not instance optimal over the cla ss A of all algorithms that ﬁnd the
+top answer for min (with two arguments) and the class D of all databases. The next theorem says that
+under these circumstances, not only is TA not instance optimal, but neither is any algorithm.
+Theorem 6.4 :Let D be the class of all databases. Let A be the class of all algorithms that correctly ﬁnd
+the top answer for min (with two arguments) for every databas e. There is no deterministic algorithm
+(or even probabilistic algorithm that never makes a mistake) that is instance optimal over A and D.
+Proof: Let us modify Example 6.3 to obtain a family of databases, each with two sorted lists. The ﬁrst
+list has the objects 1, 2,..., 2n + 1 in some order, with the top n + 1 objects having grade 1, and the
+remaining n objects having grade 0. The second list has the objects in the reverse order, again with
+the top n + 1 objects having grade 1, and the remaining n objects having grade 0. As before, there
+is a unique object with overall grade 1 (namely, the object in the middle of both orderings), and every
+remaining object has overall grade 0.
+Let A be an arbitrary deterministic algorithm inA. Consider the following distribution on databases:
+each member is as above, and the ordering of the ﬁrst list is ch osen uniformly at random (with the
+ordering of the second list the reverse of the ordering of the ﬁrst list). It is easy to see that the expected
+number of accesses (sorted and random together) of algorithm A under this distribution in order to even
+see the winning object is at leastn+1. Since there must be some database where the number of accesses
+is at least equal to the expected number of accesses, the numb er of accesses on this database is at least
+n + 1. However, as in Example 6.3, there is an algorithm that makes only 2 random accesses and no
+sorted accesses. Therefore, the optimality ratio can be arb itrarily large. The theorem follows (in the
+deterministic case).
+For probabilistic algorithms that never make a mistake, we a ppeal to Yao’s Minimax Principle [?]
+(see also [?, Section 2.2], and see [?, Lemma 4] for a simple proof), which says that the expected cost of
+the optimal deterministic algorithm for an arbitrary input distribution is a lower bound on the expected
+cost of the optimal probabilistic algorithm that never makes a mistake.
+Although, as we noted earlier, algorithms that make wild gue sses would not normally be imple-
+mented in practice, it is still interesting to consider them . This is because of our interpretation of
+instance optimality of an algorithm A as saying that its cost is essentially the same as the cost of t he
+shortest proof for that database that these are really the to pk answers. If we consider algorithms that
+11The algorithm could halt safely, since it “knows” that it has found an object with the maximal possible grade of 1 (this
+grade is maximal, since we are assuming that all grades lie be tween 0 and 1). Even if we did not assume that all grades lie
+between 0 and 1, one sorted access to either list would provid e the information that each overall grade in the database is a t
+most 1.
+13
+
+allow wild guesses, then we are allowing a larger class of pro ofs. Thus, in Example 6.3, the fact that
+objectn + 1 has (overall) grade 1 is a proof that it is the top answer.
+We say that an aggregation function t is strictly monotone 12 if t(x1,...,x m) < t(x′
+1,...,x ′
+m)
+wheneverxi < x′
+i for everyi. Although average and min are strictly monotone, there are a ggregation
+functions suggested in the literature for representing conjunction and disjunction that are monotone but
+not strictly monotone (see [?] and [?] for examples). We say that a database D satisﬁes the distinctness
+property if for eachi, no two objects in D have the same grade in listLi, that is, if the grades in list Li
+are distinct. We now show that these conditions guarantee optimality of TA even among algorithms that
+make wild guesses.
+Theorem 6.5: Assume that the aggregation function t is strictly monotone. Let D be the class of all
+databases that satisfy the distinctness property. Let A be the class of all algorithms that correctly ﬁnd
+the topk answers fort for every database in D. Then TA is instance optimal over A and D.
+Proof: Assume that A ∈ A, and that algorithm A is run over database D ∈ D. Assume that A sees
+a distinct objects (some possibly multiple times). We shall s how that TA halts on D by depth a +k.
+Hence, TA makes at mostm2(a+k) accesses, which ism2a plus an additive constant ofm2k. It follows
+easily that the optimality ratio of TA is at mostcm2, wherec = max {cR/cS,c S/cR}.
+If there are at most k objects that A does not see, then TA halts by depth a +k (after having seen
+every object), and we are done. So assume that there are at leastk + 1 objects that A does not see. Since
+Y is of size k, there is some object V that A does not see and that is not in Y . We shall show that TA
+halts on D by deptha + 1.
+Letτ be the threshold value of TA at deptha + 1. Thus, if xi is the grade of the (a + 1)th highest
+object in list i, then τ = t(x1,...,x m). Let us call an object R big ift(R) ≥ τ, and otherwise call
+objectR small. (Note that these deﬁnitions of “big” and “small” are different from those in the proof of
+Theorem 6.1.)
+We now show that every memberR ofY is big. Letx′
+i be some grade in the topa + 1 grades in list
+i that is not the grade in list i of any object seen by A. There is such a grade, since all grades in list i
+are distinct, and A sees at mosta objects. Let D′ agree with D on all objects seen by A, and let object
+V have gradex′
+i in theith list of D′, for 1 ≤i ≤m. Hence, the grade ofV in D′ ist(x′
+1,...,x ′
+m) ≥τ.
+SinceV was unseen, and sinceV is assigned grades in each list in D′ below the level that A reached by
+sorted access, it follows that algorithm A performs exactly the same, and in particular gives the same
+output, for databases D and D′. Therefore, algorithm A hasR, but notV , in its output for database D′.
+By correctness of A, it follows thatR is big, as desired.
+We claim that every memberR ofY is one of the topa + 1 members of some listi (and so is seen
+by TA by depth a + 1). Assume by way of contradiction that R is not one of the top a + 1 members
+of listi, for 1 ≤ i ≤ m. By our assumptions that the aggregation function t is strictly monotone. and
+that D satisﬁes the distinctness property, it follows easily thatR is small. We already showed that every
+member of Y is big. This contradiction proves the claim. It follows that TA halts by depth a + 1, as
+desired.
+In the proof of Theorem 6.5, we showed that under the assumpti ons of Theorem 6.5 (strict mono-
+tonicity and the distinctness property) the optimality ratio of TA is at mostcm2, wherec = max {cR/cS,c S/cR}.
+12This should not be confused with the aggregation function being both strict and monotone. We apologize for the clash in
+terminology, which exists for historical reasons.
+14
+
+In Theorem 9.2, we give an aggregation function that is strictly monotone such that no deterministic al-
+gorithm can have an optimality ratio of less than m−2
+2
+cR
+cS
+. So in our case of greatest interest, where
+cR ≥cS, there is a gap of around a factor of 2m in the upper and lower bounds.
+The proofs of Theorems 6.1 and 6.5 have several nice properties:
+• The proofs would still go through if we were in a scenario wher e, whenever a random access of
+objectR in listi takes place, we learn not only the grade of R in listi, but also the relative rank.
+Thus, TA is instance optimal even when we allow A to include also algorithms that learn and
+make use of such relative rank information.
+• As we shall see, we can prove the instance optimality among ap proximation algorithms of an
+approximation version of TA, under the assumptions of Theorem 6.1, with only a small change to
+the proof (as we shall see, such a theorem does not hold under the assumptions of Theorem 6.5).
+6.1 Treating k and m as Constants
+In Theorems 6.1 and 6.5 about the instance optimality of TA, w e are treating k (where we are trying
+to ﬁnd the top k answers) and m (the number of sorted lists) as constants. We now discuss the se
+assumptions.
+We begin ﬁrst with the assumption that k is constant. As in the proofs of Theorems 6.1 and 6.5,
+leta be the number of accesses by an algorithm A ∈ A. If a ≥ k, then there is no need to treat k as
+a constant. Thus, if we were to restrict the class A of algorithms to contain only algorithms that make
+at leastk accesses to ﬁnd the top k answers, then there would be no need to assume that k is constant.
+How can it arise that an algorithm A can ﬁnd the top k answers without making at least k accesses,
+and in particular without accessing at least k objects? It must then happen that either there are at most
+k objects in the database, or else every object R that A has not seen has the same overall grade t(R).
+The latter will occur, for example, ift is a constant function. Even under these circumstances, it i s still
+not reasonable in some contexts (such as certain database co ntexts) to allow an algorithm A to output
+an object as a member of the top k objects without ever having seen it: how would the algorithm even
+know the name of the object? This is similar to an issue we raised earlier about wild guesses.
+What about the assumption that m is constant? As we noted earlier, this is certainly a reasona ble
+assumption, since m is the number of arguments of the aggregation function, whic h we are of course
+taking to be ﬁxed. In the case of the assumptions of Theorem 6. 1 (no wild guesses), Corollary 6.2 tells
+us that at least for strict aggregation functions, this dependence onm is inevitable. Similarly, in the case
+of the assumptions of Theorem 6.5 (strict monotonicity and the distinctness property), Theorem 9.2 tells
+us that at least for certain aggregation functions, this dependence onm is inevitable.
+6.2 Turning TA into an Approximation Algorithm, and Allowin g Early Stopping
+TA can easily be modiﬁed to be anapproximation algorithm. It can then be used in situations where we
+care only about the approximately topk answers. Thus, let θ >1 be given. Deﬁne a θ-approximation
+to the topk answers (fort over database D) to be a collection of k objects (and their grades) such that
+for eachy among thesek objects and eachz not among thesek objects,θt(y) ≥t(z). We can modify
+TA to ﬁnd aθ-approximation to the top k answers by modifying the stopping rule in Step 2 to say “As
+15
+
+L1
+(1, ·)
+(2, ·)
+. . .
+(n + 1, 1
+θ )
+(n + 2, 1
+2θ2 )
+(n + 3, ·)
+. . .
+(2n + 1, ·)
+L2
+(2n + 1, ·)
+(2n, ·)
+. . .
+(n + 1, 1
+θ )
+(n, 1
+2θ2 )
+(n − 1, ·)
+. . .
+(1, ·)
+Figure 2: Database for Example 6.8
+soon as at leastk objects have been seen whose grade is at least equal toτ/θ , then halt.” Let us call this
+approximation algorithm TAθ.
+Theorem 6.6: Assume thatθ >1 and that the aggregation functiont is monotone. Then TA θ correctly
+ﬁnds aθ-approximation to the topk answers fort.
+Proof: This follows from a straightforward modiﬁcation of the proof of Theorem 4.1.
+The next theorem says that when we restrict attention to algo rithms that do not make wild guesses,
+then TAθ is instance optimal.
+Theorem 6.7: Assume thatθ >1 and that the aggregation functiont is monotone. Let D be the class of
+all databases. Let A be the class of all algorithms that ﬁnd a θ-approximation to the topk answers for
+t for every database and that do not make wild guesses. Then TAθ is instance optimal over A and D.
+Proof: The proof of Theorem 6.1 carries over verbatim provided we modify the deﬁnition of an object
+R being “big” to be thatθt(R) ≥τA.
+Theorem 6.7 shows that the analog of Theorem 6.1 holds for TA θ. The next example, which is
+a modiﬁcation of Example 6.3, shows that the analog of Theore m 6.5 does not hold for TA θ. One
+interpretation of these results is that Theorem 6.1 is sufﬁciently robust that it can survive the perturbation
+of allowing approximations, whereas Theorem 6.5 is not.
+Example 6.8 :Assume thatθ >1, that there are 2n + 1objects, which we will call simply1, 2,..., 2n +
+1, and that there are two listsL1 andL2 (see Figure 2).13 Assume that in listL1, the grades are assigned
+so that all grades are different, the ordering of the objects by grade is 1, 2,..., 2n + 1, objectn + 1 has
+the grade 1/θ, and objectn + 2 has the grade 1/(2θ2). Assume that in list L2, the grades are assigned
+so that all grades are different, the ordering of the objects by grade is 2n + 1, 2n,..., 1 (the reverse of
+the ordering inL1), objectn + 1 has the grade 1/θ, and objectn has the grade 1/(2θ2). Assume that the
+aggregation function is min, and thatk = 1 (so that we are interested in ﬁnding aθ-approximation to the
+top answer). The (overall) grade of each object other than ob jectn + 1 is at mostα = 1/(2θ2). Since
+θα = 1/(2θ), which is less than the grade 1/θ of objectn + 1, it follows that the unique object that can
+13In this and later ﬁgures, each centered dot represents a value that it is not important to give explicitly.
+16
+
+be returned by an algorithm such as TAθ that correctly ﬁnds a θ-approximation to the top answer is the
+objectn + 1.
+An algorithm that makes a wild guess and asks for the grade of o bject n + 1 in both lists would
+determine the correct answer and be able to halt safely aftertwo random accesses and no sorted accesses.
+The algorithm could halt safely, since it “knows” that it has found an object R such that θt(R) = 1 ,
+and so θt(R) is at least as big as every possible grade. However, under sor ted access for list L1, the
+algorithm TAθ would see the objects in the order 1, 2,..., 2n + 1, and under sorted access for list L2,
+the algorithm TAθ would see the objects in the reverse order. Since the winning objectn + 1 is in the
+middle of both sorted lists, it follows that at least n + 1 sorted accesses would be required before TA θ
+would even see the winning object.
+Just as we converted Example 6.3 into Theorem 6.4, we can convert Example 6.8 into the following
+theorem.
+Theorem 6.9: Assume that θ > 1. Let D be the class of all databases that satisfy the distinctness
+property. Let A be the class of all algorithms that ﬁnd a θ-approximation to the top answer for min for
+every database in D. There is no deterministic algorithm (or even probabilisti c algorithm that never
+makes a mistake) that is instance optimal over A and D.
+Early stopping of TA: It is straightforward to modify TA θ into an interactive process where at all
+times the system can show the user the current top k list along with a guarantee about the degree of
+approximation to the correct answer. At any time, the user can decide, based on this guarantee, whether
+he would like to stop the process. Thus, let β be the grade of the kth (bottom) object in the current top
+k list, letτ be the current threshold value, and let θ = τ/β . If the algorithm is stopped early, we have
+θ > 1. It is easy to see that similarly to the situation of Theorem 6 .6, the current top k list is then a
+θ-approximation to the topk answers. Thus, the user can be shown the current topk list and the number
+θ, with a guarantee that he is being shown aθ-approximation to the topk answers.
+7 Restricting Sorted Access
+Bruno, Gravano, and Marian [?] discuss a scenario where it is not possible to access certain of the lists
+under sorted access. They give a nice example where the user wants to get information about restaurants.
+The user has an aggregation function that gives a score to each restaurant based on how good it is, how
+inexpensive it is, and how close it is. In this example, the Za gat-Review web site gives ratings of
+restaurants, the NYT-Review web site gives prices, and the M apQuest web site gives distances. Only
+the Zagat-Review web site can be accessed under sorted acces s (with the best restaurants at the top of
+the list).
+LetZ be the set of indices i of those lists Li that can be accessed under sorted access. We assume
+thatZ is nonempty, that is, that at least one of the lists can be accessed under sorted access. We takem′
+to be the cardinality |Z| ofZ (and as before, takem to be the total number of sorted lists). Deﬁne TA Z
+to be the following natural modiﬁcation of TA, that deals with the restriction on sorted access.
+1. Do sorted access in parallel to each of the m′ sorted listsLi withi ∈ Z. As an object R is seen
+under sorted access in some list, do random access as needed to the other lists to ﬁnd the gradexi
+17
+
+of object R in every listLi. Then compute the grade t(R) = t(x1,...,x m) of object R. If this
+grade is one of the k highest we have seen, then remember object R and its grade t(R) (ties are
+broken arbitrarily, so that onlyk objects and their grades need to be remembered at any time).
+2. For each list Li withi ∈ Z, let xi be the grade of the last object seen under sorted access. For
+each listLi withi ⁄∈Z, letxi = 1. Deﬁne the threshold valueτ to bet(x1,...,x m). As soon as
+at leastk objects have been seen whose grade is at least equal toτ, then halt.14
+3. Let Y be a set containing thek objects that have been seen with the highest grades. The output is
+then the graded set {(R,t (R)) |R ∈Y }.
+In the case where |Z| = 1, algorithm TAZ is essentially the same as the algorithm TA-Adapt in [?].
+In footnote 5, we noted that each of the algorithms in this pap er where there is “sorted access in
+parallel” remain correct even when sorted access is not in lockstep. Algorithm TAZ provides an extreme
+example, where only some of the sorted lists are accessed under sorted access, and the remaining sorted
+lists are accessed under random access only.
+We now show that Theorem 6.1, which says that TA is instance optimal when we restrict attention to
+algorithms that do not make wild guesses, and Corollary 6.2, which says that the optimality ratio of TA
+is best possible when we restrict attention to algorithms that do not make wild guesses, both generalize
+to hold for TAZ. What about our other theorem about instance optimality of T A (Theorem 6.5), which
+says that TA is instance optimal when the aggregation functi ont is strictly monotone and the class of
+legal databases satisﬁes the distinctness property? Inter estingly enough, we shall show (Example 7.3)
+that this latter theorem does not generalize to TAZ.
+Theorem 7.1: Assume that the aggregation functiont is monotone. Let D be the class of all databases.
+Let A be the class of all algorithms that correctly ﬁnd the top k answers for t for every database and
+that do not make wild guesses, where the only lists that may be accessed under sorted access are those
+listsLi withi ∈Z. Then TAZ is instance optimal over A and D.
+Proof: The proof is essentially the same as the proof of Theorem 6.1, except for the bookkeeping.
+Assume that A ∈ A, and that algorithm A is run over database D. Assume that algorithm A halts at
+depthd (that is, if di is the number of objects seen under sorted access to list i, for 1 ≤ i ≤ m, then
+d = max idi). Assume that A seesa distinct objects (some possibly multiple times). Since A makes no
+wild guesses, and seesa distinct objects, it must make at leasta sorted accesses, and so its middleware
+cost is at leastacS. By the same proof as that of Theorem 6.1, it follows that TA Z halts on D by depth
+a +k. Hence, the middleware cost of TA Z is at most (a +k)m′cS + (a +k)m′(m − 1)cR, which is
+am′cS +am′(m − 1)cR plus an additive constant ofkm′cS +km′(m − 1)cR. So the optimality ratio
+of TAZ is at most am′cS+am′(m−1)cR
+acS
+=m′ +m′(m − 1)cR/cS.
+The next result, which is analogous to Corollary 6.2, is a corollary of the proof of Theorem 7.1 and
+of a lower bound in Section 9.
+14As we shall see in Example 7.3, even though there are at least k objects, it is possible that after seeing the grade of every
+object in every list, and thus having done sorted access to ev ery object in every list Li with i ∈ Z, there are not at least k
+objects with a grade that is at least equal to the ﬁnal threshold value τ. In this situation, we say that TAZ halts after it has seen
+the grade of every object in every list. This situation cannot happen with TA.
+18
+
+L1
+(R, 1)
+. . .
+(·, 0.7)
+L2
+. . .
+(R, 0.6)
+. . .
+L3
+(R, 1)
+. . .
+. . .
+Figure 3: Database for Example 7.3
+Corollary 7.2: Lett be an arbitrary monotone, strict aggregation function withm arguments. Assume
+that |Z| = m′. Let D be the class of all databases. Let A be the class of all algorithms that correctly
+ﬁnd the topk answers fort for every database, and that do not make wild guesses, where the only lists
+that may be accessed under sorted access are those lists Li withi ∈ Z. Then TA Z is instance optimal
+over A and D, with optimality ratio m′ +m′(m − 1)cR/cS. No deterministic algorithm has a lower
+optimality ratio.
+Proof: In the proof of Theorem 7.1, it is shown that TA Z has an optimality ratio of at most m′ +
+m′(m − 1)cR/cS for an arbitrary monotone aggregation function, The lower b ound follows from a
+minor variation of the proof of Theorem 9.1, where we takeψ = (dm′ − 1)cS + (dm′ − 1)(m − 1)cR.
+The simple details are left to the reader.
+Theorem 6.5 says that if the aggregation function t is strictly monotone, and if the class of legal
+databases satisﬁes the distinctness property, then TA is instance optimal. We now show by example that
+the analogous result fails for TAZ. In fact, we shall show that TAZ need not be instance optimal even if
+we assume not only that aggregation functiont is strictly monotone, and that the class of legal databases
+satisﬁes the distinctness property, but in addition we assume that the aggregation functiont is strict, and
+that no wild guesses are allowed.
+Example 7.3 :Assume that the database satisﬁes the distinctness property, that there are only three sorted
+listsL1,L2, and L3 (see Figure 3), and that Z = {1} (so that only L1 may be accessed under sorted
+access). Let t be the aggregation function where t(x,y,z ) = min {x,y } if z = 1 , and t(x,y,z ) =
+(min {x,y,z })/2 ifz ⁄= 1 . It is easy to see that t is strictly monotone and strict. Assume that we are
+interested in ﬁnding the top answer (i.e.,k = 1).
+Assume that object R has grade 1 in lists L1 andL3, and grade 0.6 in list L2. Hence t(R) = 0.6.
+Note that for each objectR′ other thanR, necessarily the grade ofR′ inL3 is not 1 (by the distinctness
+property), and sot(R′) ≤ 0.5. Therefore,R is the unique top object.
+Assume that the minimum grade in list L1 is 0.7. It follows that the threshold value is never less
+than 0.7. Therefore, TAZ does not halt until it has seen the grade of every object in every list. However,
+let A be an algorithm that does sorted access to the top object R in list L1 and random access to R in
+listsL2 andL3, and then halts and announces thatR is the top object. Algorithm A does only one sorted
+access and two random accesses on this database. It is safe fo r algorithm A to halt, since it “knows”
+that objectR has grade 0.6 and that no other object can have grade bigger th an 0.5. Since there can be
+an arbitrarily large number of objects, it follows that TAZ is not instance optimal. Hence, the analogue
+of Theorem 6.5 fails for TAZ.
+It is instructive to understand “what goes wrong” in this example and why this same problem does
+not also cause Theorems 6.5 or 7.1 to fail. Intuitively, what goes wrong in this example is that the
+threshold value is too conservative an estimate as an upper b ound on the grade of unseen objects. By
+19
+
+contrast, in the case of Theorem 7.1, some unseen object may have an overall grade equal to the threshold
+value, so the threshold value is not too conservative an estimate. In the case of Theorem 6.5, an analysis
+of the proof shows that we consider the threshold value at dep tha + 1 rather than depth a. Intuitively,
+although the threshold value may be too conservative an esti mate, the threshold value one extra level
+down is not.
+8 Minimizing Random Access
+Thus far in this paper, we have not been especially concerned about the number of random accesses.
+For every sorted access in TA, up to m − 1 random accesses take place. Recall that if s is the number
+of sorted accesses, andr is the number of random accesses, then the middleware cost isscS +rcR, for
+some positive constantscS andcR. Our notion of instance optimality ignores constant factors likem and
+cR (they are simply multiplicative factors in the optimality ratio). Hence, there has been no motivation
+so far to concern ourself with the number of random accesses.
+There are, however, some scenarios where we must pay attention to the number of random accesses.
+The ﬁrst scenario is where random accesses are impossible (w hich corresponds to cR = ∞). As we
+discussed in Section 2, an example of this ﬁrst scenario aris es when the middleware system is a text
+retrieval system, and the sorted lists correspond to the res ults of search engines. Another scenario is
+where random accesses are not impossible, but simply expensive relative to sorted access. An example
+of this second scenario arises when the costs correspond to disk access (sequential versus random). Then
+we would like the optimality ratio to be independent of cR/cS. That is, if we allow cR andcS to vary,
+instead of treating them as constants, we would still like the optimality ratio to be bounded.
+In this section we describe algorithms that do not use random access frivolously. We give two
+algorithms. One uses no random accesses at all, and hence is called NRA (“No Random Access”). The
+second algorithm takes into account the cost of a random acce ss. It is a combination of NRA and TA,
+and so we call it CA (“Combined Algorithm”).
+Both algorithms access the information in a natural way, and , in the spirit of the knowledge-based
+programs of Section 4, halt when they know that no improvemen t can take place. In general, at each
+point in an execution of these algorithms where a number of so rted and random accesses have taken
+place, for each object R there is a subset S(R) = {i1,i 2,...,i ℓ} ⊆ { 1,...,m } of the ﬁelds of R
+where the algorithm has determined the values xi1,x i2,...,x iℓ of these ﬁelds. Given this information,
+we deﬁne functions of this information that are lower and upp er bounds on the value t(R) can obtain.
+The algorithm proceeds until there are no more candidates whose current upper bound is better than the
+currentkth largest lower bound.
+Lower Bound: Given an object R and subset S(R) = {i1,i 2,...,i ℓ} ⊆ { 1,...,m } of known
+ﬁelds ofR, with valuesxi1,x i2,...,x iℓ for these known ﬁelds, we deﬁneWS(R) (or W(R) if the subset
+S =S(R) is understood from the context) as the minimum (or worst) value the aggregation functiont
+can attain for object R. When t is monotone, this minimum value is obtained by substituting for each
+missing ﬁeldi ∈ {1,...,m }\S the value 0, and applyingt to the result. For example, ifS = {1,...,ℓ },
+thenWS(R) = t(x1,x 2,...,x ℓ, 0,..., 0). The following property is immediate from the deﬁnition:
+Proposition 8.1: IfS is the set of known ﬁelds of objectR, thent(R) ≥WS(R).
+In other words, W (R) represents a lower bound on t(R). Is it the best possible? Yes, unless we have
+additional information, such as that the value 0 does not appear in the lists. In general, as an algorithm
+20
+
+progresses and we learn more ﬁelds of an objectR, itsW value becomes larger (or at least not smaller).
+For some aggregation functions t the valueW (R) yields no knowledge until S includes all ﬁelds: for
+instance if t is min, then W (R) is 0 until all values are discovered. For other functions it is mo re
+meaningful. For instance, when t is the median of three ﬁelds, then as soon as two of them are kno wn
+W (R) is at least the smaller of the two.
+Upper Bound: The best value an object can attain depends on other information we have. We will
+use only the bottom values in each ﬁeld, deﬁned as in TA: xi is the last (smallest) value obtained via
+sorted access in listLi. Given an object R and subsetS(R) = {i1,i 2,...,i ℓ} ⊆ { 1,...,m } of known
+ﬁelds ofR, with valuesxi1,x i2,...,x iℓ for these known ﬁelds, we deﬁneBS(R) (or B(R) if the subset
+S is understood from the context) as the maximum (or best) value the aggregation functiont can attain
+for object R. When t is monotone, this maximum value is obtained by substituting for each missing
+ﬁeldi ∈ {1,...,m }\S the valuexi, and applyingt to the result. For example, if S = {1,...,ℓ }, then
+BS(R) = t(x1,x 2,...,x ℓ,x ℓ+1,...,x m). The following property is immediate from the deﬁnition:
+Proposition 8.2: IfS is the set of known ﬁelds of objectR, thent(R) ≤BS(R).
+In other words, B(R) represents an upper bound on the value t(R) (or the best value t(R) can
+be), given the information we have so far. Is it the best upper bound? If the lists may each contain
+equal values (which in general we assume they can), then give n the information we have it is possible
+that t(R) = BS(R). If the distinctness property holds (equalities are not all owed in a list), then for
+continuous aggregation functions t it is the case that B(R) is the best upper bound on the value t can
+have on R. In general, as an algorithm progresses and we learn more ﬁel ds of an object R and the
+bottom valuesxi decrease,B(R) can only decrease (or remain the same).
+An important special case is an object R that has not been encountered at all. In this case B(R) =
+t(x1,x 2,...,x m). Note that this is the same as the threshold value in TA.
+8.1 No Random Access Algorithm—NRA
+As we have discussed, there are situations where random acce sses are impossible. We now consider
+algorithms that make no random accesses. Since random acces ses are impossible, in this section we
+change our criterion for the desired output. In earlier sections, we demanded that the output be the “top
+k answers”, which consists of the top k objects, along with their (overall) grades. In this section , we
+make the weaker requirement that the output consist of the to p k objects, without their grades. The
+reason is that, since random access is impossible, it may be m uch cheaper (that is, require many fewer
+accesses) to ﬁnd the top k objects without their grades. This is because, as we now show by example,
+we can sometimes obtain enough partial information about grades to know that an object is in the topk
+objects without knowing its exact grade.
+Example 8.3 :Consider the following scenario, where the aggregation function is the average, and where
+k = 1 (so that we are interested only in the top object). There are o nly two sorted lists L1 andL2 (see
+Figure 4), and the grade of every object in both L1 andL2 is 1/3, except that object R has grade 1 in
+L1 and grade 0 in L2. After two sorted accesses to L1 and one sorted access to L2, there is enough
+information to know that object R is the top object (its average grade is at least 1/2, and every other
+object has average grade at most 1/3). If we wished to ﬁnd the g rade of objectR, we would need to do
+sorted access to all ofL2.
+21
+
+L1
+(R, 1)
+(·, 1
+3 )
+. . .
+(·, 1
+3 )
+L2
+(·, 1
+3 )
+. . .
+(·, 1
+3 )
+(R, 0)
+Figure 4: Database for Example 8.3
+Note that we are requiring only that the output consist of the topk objects, with no information being
+given about the sorted order (sorted by grade). If we wish to k now the sorted order, this can easily
+be determined by ﬁnding the top object, the top 2 objects, etc . Let Ci be the cost of ﬁnding the top i
+objects. It is interesting to note that there is no necessary relationship betweenCi andCj fori<j . For
+example, in Example 8.3, we have C1 < C2. If we were to modify Example 8.3 so that there are two
+objectsR andR′ with grade 1 in L1, where the grade of R inL2 is 0, and the grade of R′ inL2 is 1/4
+(and so that, as before, all remaining grades of all objects in both lists is 1/3), thenC2<C 1.
+The cost of ﬁnding the top k objects in sorted order is at most k maxiCi. Since we are treating k
+as a constant, it follows easily that we can convert our instance optimal algorithm (which we shall give
+shortly) for ﬁnding the top k objects into an instance optimal algorithm for ﬁnding the to pk objects in
+sorted order. In practice, it is usually good enough to know t he top k objects in sorted order, without
+knowing the grades. In fact, the major search engines on the w eb no longer give grades (possibly to
+prevent reverse engineering).
+The algorithm NRA is as follows.
+1. Do sorted access in parallel to each of them sorted listsLi. At each depthd (whend objects have
+been accessed under sorted access in each list):
+• Maintain the bottom valuesx(d)
+1 ,x (d)
+2 ,...,x (d)
+m encountered in the lists.
+• For every objectR with discovered ﬁelds S =S(d)(R) ⊆ { 1,...,m }, compute the values
+W (d)(R) = WS(R) andB(d)(R) = BS(R). (For objects R that have not been seen, these
+values are virtually computed asW (d)(R) = t(0,..., 0), andB(d)(R) = t(x1,x 2,...,x m),
+which is the threshold value.)
+• LetT (d)
+k , the current top k list, contain the k objects with the largest W (d) values seen so
+far (and their grades); if two objects have the same W (d) value, then ties are broken using
+theB(d) values, such that the object with the highestB(d) value wins (and arbitrarily among
+objects that tie for the highestB(d) value). LetM (d)
+k be thekth largestW (d) value inT (d)
+k .
+2. Call an object R viable ifB(d)(R) > M(d)
+k . Halt when (a) at least k distinct objects have been
+seen (so that in particularT (d)
+k containsk objects) and (b) there are no viable objects left outside
+T (d)
+k , that is, whenB(d)(R) ≤M (d)
+k for allR ⁄∈T (d)
+k . Return the objects inT (d)
+k .
+We now show that NRA is correct for each monotone aggregationfunctiont.
+Theorem 8.4: If the aggregation functiont is monotone, then NRA correctly ﬁnds the topk objects.
+22
+
+Proof: Assume that NRA halts after d sorted accesses to each list, and that T (d)
+k = {R1,R 2,...,R k}.
+Thus, the objects output by NRA are R1,R 2,...,R k. Let R be an object not among R1,R 2,...,R k.
+We must show thatt(R) ≤t(Ri) for eachi.
+Since the algorithm halts at depth d, we know that R is nonviable at depth d, that is, B(d)(R) ≤
+M (d)
+k . Now t(R) ≤ B(d)(R) (Proposition 8.2). Also for each of the k objects Ri we have M (d)
+k ≤
+W (d)(Ri) ≤ t(Ri) (from Proposition 8.1 and the deﬁnition of M (d)
+k ). Combining the inequalities we
+have shown, we have
+t(R) ≤B(d)(R) ≤M (d)
+k ≤W (d)(Ri) ≤t(Ri)
+for eachi, as desired.
+Note that the tie-breaking mechanism was not needed for correctness (but will be used for instance
+optimality). We now show instance optimality of NRA over all algorithms that do not use random
+access:
+Theorem 8.5: Assume that the aggregation functiont is monotone. Let D be the class of all databases.
+Let A be the class of all algorithms that correctly ﬁnd the topk objects fort for every database and that
+do not make random accesses. Then NRA is instance optimal over A and D.
+Proof: Assume A ∈ A. If algorithm NRA halts at depth d, and NRA saw at leastk distinct objects for
+the ﬁrst time by depth d, then NRA makes only a constant number of accesses (at most km2) on that
+database. So suppose that on some database D, algorithm NRA halts at depth d, and that NRA saw at
+leastk distinct objects by depthd − 1. We claim that A must get to depthd in at least one of the lists. It
+then follows that the optimality ratio of NRA is at mostm, and the theorem follows. Suppose the claim
+fails; then from the fact that algorithm NRA did not halt at de pthd − 1 there is an object R ⁄∈T (d−1)
+k
+such thatB(d−1)(R) > M(d−1)
+k . We know that W (d−1)(R) ≤ M (d−1)
+k , sinceR ⁄∈T (d−1)
+k Further, we
+know from the tie-breaking mechanism that if W (d−1)(R) = M (d−1)
+k , then for each Ri ∈T (d−1)
+k such
+thatW (d)(Ri) = M (d)
+k necessarilyB(d−1)(Ri) ≥B(d−1)(R).
+There are now two cases, depending on whether or not algorith m A outputsR as one of the top k
+objects. In either case, we construct a database on which A errs.
+Case 1: Algorithm A outputs R as one of the top k objects. We construct a database D′ where
+A errs as follows. Database D′ is identical to D up to depth d − 1 (that is, for each i the top d − 1
+objects and their grades are the same in list Li for D′ as for D). For each Ri and for each missing ﬁeld
+j ∈ { 1,...,m }\S(d−1)(Ri) assign value x(d−1)
+j . For the object R assign all of the missing ﬁelds in
+{1,...,m }\S(d−1)(R) the value 0. We now show thatt(R)<t (Rj) for eachj with 1 ≤j ≤k. Hence,
+R is not one of the topk objects, and so algorithm A erred. First, we have
+t(R) = W (d−1)(R) ≤M (d−1)
+k (3)
+Also, for alli with 1 ≤i ≤k we have
+M (d−1)
+k ≤W (d−1)(Ri) ≤B(d−1)(Ri) = t(Ri). (4)
+If W (d−1)(R) < M(d−1)
+k , then we have from (3) and (4) that t(R) < t(Ri) for each i, as desired.
+So assume that W (d−1)(R) = M (d−1)
+k . Again, we wish to show that t(R) < t(Ri) for each i. We
+23
+
+consider separately in two subcases those i whereM (d−1)
+k = W (d−1)(Ri) and those where M (d−1)
+k ⁄=
+W (d−1)(Ri).
+Subcase 1: M (d−1)
+k = W (d−1)(Ri). Then t(R) ≤ M (d−1)
+k < B(d−1)(R) ≤ B(d−1)(Ri) = t(Ri),
+as desired, where the last inequality follows from the tie-breaking mechanism.
+Subcase 2: M (d−1)
+k ⁄= W (d−1)(Ri), and so M (d−1)
+k < W(d−1)(Ri). From the inequalities in (4),
+we see thatM (d−1)
+k <t (Ri). So by (3), we havet(R)<t (Ri), as desired.
+Case 2: Algorithm A does not output R as one of the top k objects. We construct a database
+D′′ where A errs as follows. Database D′′ is identical to D up to depth d − 1. At depth d it gives
+each missing ﬁeld i ∈ { 1,...,m }\S(d−1)(R) ofR the valuex(d−1)
+i . For all remaining missing ﬁelds,
+including missing ﬁelds ofR1,...,R k, assign the value 0. Nowt(R) = B(d−1)(R)>M (d−1)
+k , whereas
+(a) for at least one Ri (namely, thatRi whereW (d)(Ri) = M (d)
+k ) we have t(Ri) = M (d−1)
+k , and (b)
+for each objectR′ not amongR1,R 2,...,R k orR we have thatt(R′) ≤M (d−1)
+k . Hence, algorithm A
+erred in not outputtingR as one of the topk objects.
+Note that the issue of “wild guesses” is not relevant here, si nce we are restricting our attention to
+algorithms that make no random accesses (and hence no wild guesses).
+The next result, which is analogous to Corollaries 6.2 and 7. 2 is a corollary of the proof of Theo-
+rem 8.4 and of a lower bound in Section 9. Speciﬁcally, in the p roof of Theorem 8.4, we showed that
+the optimality ratio of NRA is at most m. The next result says that if the aggregation function is str ict,
+then the optimality ratio is preciselym, and this is best possible.
+Corollary 8.6: Lett be an arbitrary monotone, strict aggregation function withm arguments. Let D be
+the class of all databases. Let A be the class of all algorithms that correctly ﬁnd the top k objects for
+t for every database and that do not make random accesses. Then NRA is instance optimal over A and
+D, with optimality ratiom. No deterministic algorithm has a lower optimality ratio.
+Proof: In the proof of Theorem 8.4, it is shown that NRA has an optimal ity ratio of at most m for an
+arbitrary monotone aggregation function, The lower bound follows from Theorem 9.5.
+Remark 8.7: Unfortunately, the execution of NRA may require a lot of bookkeeping at each step, since
+when NRA does sorted access at depthℓ (for 1 ≤ℓ ≤d), the value ofB(ℓ)(R) must be updated for every
+objectR seen so far. This may be up to ℓm updates for each depth ℓ, which yields a total of Ω(d2m)
+updates by depth d. Furthermore, unlike TA, it no longer sufﬁces to have bounde d buffers. However,
+for a speciﬁc function like min it is possible that by using appropriate data structures the computation
+can be greatly simpliﬁed. This is an issue for further investigation.
+8.2 Taking into Account the Random Access Cost
+We now present the combined algorithm CA that does use randomaccesses, but takes their cost (relative
+to sorted access) into account. As before, let cS be the cost of a sorted access and cR be the cost of a
+random access. The middleware cost of an algorithm that make ss sorted accesses and r random ones
+isscS +rcR. We know that TA is instance optimal; however, the optimalit y ratio is a function of the
+relative cost of a random access to a sorted access, that is cR/cS. Our goal in this section is to ﬁnd an
+24
+
+algorithm that is instance optimal and where the optimalityratio is independent ofcR/cS. One can view
+CA as a merge between TA and NRA. Let h = ⌊cR/cS ⌋. We assume in this section that cR ≥ cS, so
+thath ≥ 1. The idea of CA is to run NRA, but every h steps to run a random access phase and update
+the information (the upper and lower bounds B andW ) accordingly. As in Section 8.1, in this section
+we require only that the output consist of the top k objects, without their grades. If we wish to obtain
+the grades, this requires only a constant number of additional random accesses, and so has no effect on
+instance optimality.
+The algorithm CA is as follows.
+1. Do sorted access in parallel to each of them sorted listsLi. At each depthd (whend objects have
+been accessed under sorted access in each list):
+• Maintain the bottom valuesx(d)
+1 ,x (d)
+2 ,...,x (d)
+m encountered in the lists.
+• For every objectR with discovered ﬁelds S =S(d)(R) ⊆ { 1,...,m }, compute the values
+W (d)(R) = WS(R) andB(d)(R) = BS(R). (For objects R that have not been seen, these
+values are virtually computed asW (d)(R) = t(0,..., 0), andB(d)(R) = t(x1,x 2,...,x m),
+which is the threshold value.)
+• LetT (d)
+k , the current top k list, contain the k objects with the largest W (d) values seen so
+far (and their grades); if two objects have the same W (d) value, then ties are broken using
+theB(d) values, such that the object with the highestB(d) value wins (and arbitrarily among
+objects that tie for the highestB(d) value). LetM (d)
+k be thekth largestW (d) value inT (d)
+k .
+2. Call an object R viable ifB(d)(R) > M(d)
+k . Every h = ⌊cR/cS⌋ steps (that is, every time the
+depth of sorted access increases byh), do the following: pick the viable object that has been seen
+for which not all ﬁelds are known and whose B(d) value is as big as possible (ties are broken
+arbitrarily). Perform random accesses for all of its (at mos tm − 1) missing ﬁelds. If there is no
+such object, then do not do a random access on this step15.
+3. Halt when (a) at least k distinct objects have been seen (so that in particular T (d)
+k contains k
+objects) and (b) there are no viable objects left outside T (d)
+k , that is, when B(d)(R) ≤ M (d)
+k for
+allR ⁄∈T (d)
+k . Return the objects inT (d)
+k .
+Note that if h is very large (say larger than the number of objects in the dat abase), then algorithm
+CA is the same as NRA, since no random access is performed. If h = 1 , then algorithm CA is similar
+to TA, but different in intriguing ways. For each step of doin g sorted access in parallel, CA performs
+random accesses for all of the missing ﬁelds of some object. Instead of performing random accesses for
+all of the missing ﬁelds of some object, TA performs random accesses for all of the missing ﬁe lds of
+every object seen in sorted access. Later (Section 8.4), we discuss further CA versus TA.
+For moderate values of h it is not the case that CA is equivalent to the intermittent algorithm that
+executesh steps of NRA and then one step of TA. (That is, the intermitten t algorithm does random
+15 The reason for this escape clause is so that CA does not make a w ild guess. We now give an example where this escape
+clause may be invoked. Assume that k = 2 and cR = cS. Assume that on the ﬁrst round of sorted access in parallel, the same
+object appears in all of the lists. Then on the ﬁrst opportunity to do a random access, the escape clause must be invoked, since
+every ﬁeld is known for the only object that has been seen. In t he proof of Theorem 8.9, we show that if the escape clause is
+invoked after depth k (that is, after there has been at least k rounds of sorted access in parallel), then CA halts immediat ely
+after.
+25
+
+accesses in the same time order as TA does, but simply delays t hem, so that it does random accesses
+everyh steps.) We show later (Section 8.4) an example where the intermittent algorithm performs much
+worse than CA. The difference between the algorithms is that CA picks “wisely” on which objects to
+perform the random access, namely, according to their B(d) values. Thus, it is not enough to consider
+the knowledge-based program of Section 4 to design the insta nce optimal algorithm CA; we need also
+a principle as to which objects to perform the random access on. This was not an issue in designing TA,
+since in that context, random accesses increase the cost by only a constant multiple.
+Correctness of CA is essentially the same as for NRA, since th e same upper and lower bounds are
+maintained:
+Theorem 8.8: If the aggregation functiont is monotone, then CA correctly ﬁnds the topk objects.
+In the next section, we consider scenarios under which CA is i nstance optimal, with the optimality
+ratio independent ofcR/cS.
+8.3 Instance Optimality of CA
+In Section 4, we gave two scenarios under which TA is instance optimal over A and D. In the ﬁrst sce-
+nario (from Theorem 6.1), (1) the aggregation functiont is monotone; (2) D is the class of all databases;
+and (c) A is the class of all algorithms that correctly ﬁnd the top k objects fort for every database and
+that do not make wild guesses. In the second scenario (from Theorem 6.5), (1) the aggregation function
+t is strictly monotone; (2) D is the class of all databases that satisfy the distinctness property; and (3) A
+is the class of all algorithms that correctly ﬁnd the topk objects fort for every database in D. We might
+hope that under either of these two scenarios, CA is instance optimal, with optimality ratio independent
+ofcR/cS. Unfortunately, this hope is false, in both scenarios. In fa ct, our theorems say that not only
+does CA fail to fulﬁll this hope, but so does every algorithm. In other words, neither of these scenarios
+is enough to guarantee the existence of an algorithm with optimality ratio independent ofcR/cS. In the
+case of the ﬁrst scenario, we obtain this negative result fro m Theorem 9.1. In the case of the second
+scenario, we obtain this negative result from Theorem 9.2.
+However, we shall show that by slightly strengthening the as sumption on t in the second scenario,
+CA becomes instance optimal, with optimality ratio independent ofcR/cS. Let us say that the aggrega-
+tion functiont is strictly monotone in each argument if whenever one argument is strictly increased and
+the remaining arguments are held ﬁxed, then the value of the a ggregation function is strictly increased.
+That is,t is strictly monotone in each argument ifxi <x ′
+i implies that
+t(x1,...,x i−1,x i,x i+1,...,x m)
+< t (x1,...,x i−1,x ′
+i,x i+1,...,x m).
+The average (or sum) is strictly monotone in each argument, whereas min is not.
+We now show (Theorem 8.9) that in the second scenario above, i f we replace “The aggregation
+functiont is strictly monotone” by “The aggregation functiont is strictly monotone in each argument”,
+then CA is instance optimal, with optimality ratio independ ent of cR/cS. We shall also show (Theo-
+rem 8.10) that the same result holds if instead, we simply taket to be min, even though min is not strictly
+monotone in each argument.
+26
+
+Theorem 8.9: Assume that the aggregation functiont is strictly monotone in each argument. Let D be
+the class of all databases that satisfy the distinctness property. Let A be the class of all algorithms that
+correctly ﬁnd the top k objects fort for every database in D. Then CA is instance optimal over A and
+D, with optimality ratio independent ofcR/cS.
+Proof: Assume D ∈ D. Assume that when CA runs on D, it halts after doing sorted access to depth
+d. Thus, CA makes md sorted accesses andr random accesses, wherer ≤md/h. Note that in CA the
+two components (mdcS andrcR) of the cost mdcS +rcR are roughly equal, and their sum is at most
+2mdcS. Assume A ∈ A, and that A makesd′ sorted accesses andr′ random accesses. The cost that A
+incurs is therefored′cS +r′cR.
+Suppose that algorithm A announces that the objectsR′
+1,R ′
+2,...,R ′
+k are the topk. First, we claim
+that eachR′
+i appears in the topd′ +r′ + 1 objects of at least one listLj. Suppose not. Then there is an
+objectR′
+i output by A such that in each list there is a vacancy aboveR′
+i that has not been accessed either
+by sorted or random access. There is a database D′ identical to D in all locations accessed by A but
+with an object R′ ⁄∈ {R′
+1,R ′
+2,...,R ′
+k} whose values reside in these vacancies. From the distinctne ss
+property, for each ﬁeld the value for R′ is strictly larger than that for R′
+i, and from strict monotonicity
+oft we havet(R′)> t(R′
+i), makingR′ a mandatory member of the output. (Note: we used only strict
+monotonicity oft rather than the stronger property of being strictly monotone in each variable.) This is
+a contradiction. Hence, eachR′
+i appears in the topd′ +r′ + 1 objects of at least one listLj.
+Let Sk = min {t(R′
+1),t (R′
+2),...,t (R′
+k)}. Deﬁne the set C of objects not output by A whose B
+value at stepd′ +r′ + 1 of CA (that is, afterd′ +r′ + 1 parallel sorted accesses) is more thanSk, that is,
+C = {R ⁄∈ {R′
+1,R ′
+2,...,R ′
+k}|B(d′+r′+1)(R)>S k}.
+We claim that for each object R ∈ C, algorithm A must use a random access (to determine R’s
+value in some list). Suppose not. Then we show a databaseD′ on which algorithm A performs the same
+as on D but where t(R) > Sk. This is a contradiction, since then R would have to be in the output
+of A. For each ﬁeld i ofR that is not accessed by A, we assign in D′ the highest value from the top
+d′ +r′ + 1locations ofLi that had not been accessed byA; such “free” locations exist by the pigeonhole
+principal, since A “touched” at mostd′ +r′ objects. Now each ﬁeld i ofR that is accessed by A is one
+of the topd′ values inLi, since by assumptionR was accessed only under sorted access by A. Also, by
+construction, in D′ each remaining ﬁeldi ofR is one of the topd′ +r′ + 1 values inLi. So in D′, every
+ﬁeld i ofR is one of the top d′ +r′ + 1 values inLi. Also, by construction, the value of every ﬁeld i
+ofR is at least as high in D′ as in D. It follows by monotonicity of t that the value of t(R) in D′ is at
+leastB(d′+r′+1)(R) (we do not need the stronger fact thatt is strictly monotone in each argument). But
+B(d′+r′+1)(R)>S k, sinceR ∈C. Hence, t(R)>S k. This is the contradiction that was to be shown.
+So indeed, for each objectR ∈C algorithm A must use a random access. Hence,r′ ≥ |C|.
+Setd′′ =h(|C| +k) +d′ +r′ + 1. We now show that CA halts by depthd′′. There are two cases,
+depending on whether or not the escape clause in Step 2 of CA (w hich says “If there is no such object,
+then do not do a random access on this step”) is invoked at somedepth ˆd withd′ +r′ + 1 ≤ ˆd ≤d′′.
+Case 1: The escape clause of CA is invoked at some depth ˆd withd′ +r′ + 1 ≤ ˆd ≤d′′. There are
+two subcases, depending on whether or notd′ +r′ + 1 ≥k.
+Subcase 1:d′ +r′ + 1 ≥k. Then ˆd ≥d′ +r′ + 1 ≥k. Just as in the second paragraph of the proof
+of Theorem 6.1, we know that the algorithm CA has seen at least ˆd objects by depth ˆd (this is because
+27
+
+by depth ˆd it has made m ˆd sorted accesses, and each object is accessed at most m times under sorted
+access). If CA had seen strictly more than ˆd objects by depth ˆd, then the escape clause would not be
+invoked. Since the escape clause was invoked, it follows tha t CA must have seen exactly ˆd objects by
+depth ˆd. By depth ˆd, the algorithm CA has made exactly ˆdm sorted accesses. Since CA has seen exactly
+ˆd objects by depth ˆd, and since each object is accessed at most m times under sorted access, it follows
+that each of the ˆd objects that CA has seen has been seen under sorted access in every one of them lists.
+Since ˆd ≥k, by depth ˆd there are at leastk objects that have been seen under sorted access in every one
+of the lists. (This situation should sound familiar: it is th e stopping rule for FA.) For every object that
+has been seen, there is no uncertainty about its overall grad e (since it has been seen in every list), and
+so no object that has been seen and is not in the top k list is viable. Since each object that has not been
+seen hasB(ˆd) value at most equal to the threshold value at depth ˆd, and each member of the top k list
+has grade at least equal to the threshold value, it follows that no object that has not been seen is viable.
+So there are no more viable objects outside of the topk list, and CA halts by depth ˆd ≤d′′, as desired.
+Subcase 2: d′ +r′ + 1 < k. So algorithm A sees less thank objects before it halts. If database D
+contains more than k objects, then there are two objects R andR′ that algorithm A does not see such
+that algorithm A outputsR but notR′ as part of the top k. But then, since algorithm A does not have
+information to distinguishR andR′, it must make a mistake on some database (either the databaseD or
+the database obtained from D by reversing the roles ofR andR′). So database D cannot contain more
+thank objects. Since we are assuming throughout this paper that th e number of objects in the database
+is at least k, it follows that D contains exactlyk objects. Therefore, at depth k of algorithm CA, all k
+objects have been seen under sorted access in every list. Sim ilarly to the proof in Subcase 1, it follows
+that CA halts at depthk. Sincek <d′′, we know that CA halts by depthd′′, as desired.
+Case 2: The escape clause of CA is not invoked at any depth ˆd withd′ +r′ + 1 ≤ ˆd ≤d′′. Recall
+that CA performs random access on viable objects based on theirB values. Until they receive a random
+access after step d′ +r′ + 1 of CA, the members of C have the highest B values. Therefore, within
+h|C| steps after reaching depthd′ +r′ + 1 (that is, by stepd′ +r′ + 1 +h|C|), all members ofC will
+be randomly accessed. We now argue that the next objects to be accessed in CA will be the R′
+i’s that
+are output by A (unless they have been randomly accessed already.) Here we w ill appeal to the strict
+monotonicity in each argument of the aggregation function t. For a function t that is strictly monotone
+in each argument, at each step of CA on a database that satisﬁes the distinctness property and for every
+objectR, if S(R) is missing some ﬁelds, then BS(R) > t(R). Therefore at step d′ +r′ + 1 + h|C|
+of CA, for all R′
+i whoset value has not been determined we have B(d′+r′+1+h|C|)(R′
+i) > t(R′
+i) ≥Sk.
+Since no other object with B(d′+r′+1+h|C|) value larger than Sk is left, after at most hk more steps in
+CA, all of {R′
+1,R ′
+2,...,R ′
+k} with missing ﬁelds will be randomly accessed and their t value will be
+known to CA.
+We claim that at step d′′ of CA there are no more viable objects left: ﬁrst, M (d′′)
+k = Sk, since all
+of {R′
+1,R ′
+2,...,R ′
+k} have been accessed (in every ﬁeld) and each of their W (d′′) values equals their t
+values. Since all other objectsR withB(d′′)(R)>S k have been accessed, there are more viable objects
+left, so CA halts.
+We have shown that in both cases, the algorithm CA halts by depthd′′. Recall that when CA gets to
+depthd it incurs a cost of at most 2mdcS. We showed that CA halts by depth d′′ =h(|C| +k) +d′ +
+r′ + 1 ≤h(r′ +k) +d′ +r′ + 1. Hence, the cost CA incurs is at most 2m(h(r′ +k) +d′ +r′ + 1)cS,
+28
+
+which is 2m(h(r′ +k) +d′ +r)cS plus an additive constant of 2mcS. Now
+2m(h(r′ +k) +d′ +r′)cS ≤ 2m(cR
+cS
+(r′ +k)cS + (d′ +r′)cS)
+= 2 m(r′(cR +cS) +d′cS +kcR)
+≤ 2m(r′(2cR) +d′cS +kcR) since by assumptioncR ≥cS
+≤ 2m(r′(2cR) +d′cS +kr′cR) sincer′ ≥ 1 (see below)
+= 2 md′cS + (4m +k)r′cR
+≤ (4m +k)(d′cS +r′cR)
+Sinced′cS +r′cR is the middleware cost of A, we get that the optimality ratio of CA is at most4m +k.
+So we need only show that we may assumer′ ≥ 1. Assume not. Then A makes no random accesses.
+Now by Theorem 8.5, NRA is instance optimal compared with algorithms that make no random access,
+and of course the optimality ratio is independent ofcR/cS. Further, the cost of CA is at most twice that
+of NRA. So CA is instance optimal compared with algorithms that make no random access, such as A,
+with optimality ratio independent ofcR/cS.
+In the proof of Theorem 8.9, we showed that under the assumpti ons of Theorem 8.9 (strict mono-
+tonicity in each argument and the distinctness property), t he optimality ratio of CA is at most 4m +k.
+In Theorem 9.2, we give a lower bound that is linear in m, at least for one aggregation function that is
+strictly monotone in each argument.
+The next theorem says that for the function min (which is not strictly monotone in each argument),
+algorithm CA is instance optimal.
+Theorem 8.10: Let D be the class of all databases that satisfy the distinctness p roperty. Let A be the
+class of all algorithms that correctly ﬁnd the topk objects for min for every database in D. Then CA is
+instance optimal over A and D, with optimality ratio independent ofcR/cS.
+Proof (Sketch): The proof is similar to the proof of Theorem 8.9, where the key point is that for the
+function min at every stepd of CA there can be at most m differentR’s with the sameB(d)(R) value,
+sinceB(d)(R) equals one of the ﬁelds of R and the distinctness property assures that there are at most
+m different ﬁelds in all lists with the same value (this replaces the use of strict mon otonicity in each
+argument). Therefore at step d′ +r′ + 1 + h|C| there are at most m objects with B value that equals
+Sk, and there are no objects outside of {R′
+1,R ′
+2,...,R ′
+k} whose B value exceeds Sk. Since the B
+value of each member of {R′
+1,R ′
+2,...R ′
+k} is at least Sk, it follows that after hm more steps all of
+{R′
+1,R ′
+2,...,R ′
+k} will be randomly accessed, so there will be no viable objects left and CA will halt.
+The rest of the analysis is similar to the proof of Theorem 8.9 , except that hk is replaced by hm. The
+net result is an optimality ratio of at most 5m.
+In the proof of Theorem 8.10, we showed that under the assumpt ions of Theorem 8.10 (the dis-
+tinctness property with min as the aggregation function), t he optimality ratio of CA is at most 5m. In
+Theorem 9.4, we give a lower bound that is linear inm.
+8.4 CA Versus Other Algorithms
+In this section, we compare CA against two other algorithms. The ﬁrst algorithm we compare it against
+is the intermittent algorithm, which does random accesses in the same time order as TA does, but
+29
+
+L1
+(·, 1
+2 + h−2
+8h )
+(·, 1
+2 + h−3
+8h )
+(·, 1
+2 + h−4
+8h )
+. . .
+(·, 1
+2 + 1
+8h )
+(R, 1
+2 )
+(·, 1
+8 )
+. . .
+L2
+(·, 1
+2 + h−2
+8h )
+(·, 1
+2 + h−3
+8h )
+(·, 1
+2 + h−4
+8h )
+. . .
+(·, 1
+2 + 1
+8h )
+(R, 1
+2 )
+(·, 1
+8 )
+. . .
+L3
+(·, 1
+2 + h2−1
+8h2 )
+(·, 1
+2 + h2−2
+8h2 )
+(·, 1
+2 + h2−3
+8h2 )
+. . .
+(·, 1
+2 + 1
+8h2 )
+(R, 1
+2 )
+. . .
+. . .
+Figure 5: Database about CA versus the intermittent algorithm
+simply delays them, so that it does random accesses every h = ⌊cR/cS ⌋ steps. The second algorithm
+we compare CA against is TA.
+CA versus the intermittent algorithm: We now consider the choice we made in CA of doing
+random access to ﬁnd the ﬁelds of the viable object R whoseB(d) value is the maximum. We compare
+its performance with the intermittent algorithm, which we j ust described. We show a database (see
+Figure 5) where the intermittent algorithm does much worse than CA. Consider the aggregation function
+t wheret(x1,x 2,x 3) = x1 +x2 +x3. LetcR/cS be a large integer. Let D be a database where the top
+h − 2 locations inL1 andL2 have grades of the form 1/2 +i/(8h), for 1 ≤i ≤h − 2, and where none
+are matched with each other. Locationh − 1 in the two lists belong to same objectR, with grade 1/2 in
+both of them. Location h in the two lists both have the grade 1/8. In L3 the toph2 − 1 locations have
+grades of the form 1/2 +i/(8h2), for 1 ≤i ≤h2 − 1, and in locationh2, objectR has grade 1/2. Note
+that the maximum overall grade (which occurs for the objectR) is 1 1
+2 and that all objects that appear in
+one of the toph − 2 locations in listsL1 andL2 have overall grades that are at most 1 3
+8 (this is because
+each object in the top h − 2 locations inL1 has grade at most 5/8 inL1, grade at most 1/8 inL2, and
+grade at most 5/8 inL3.) At step h in CA we have that B(h)(R) ≥ 1 1
+2, whereas for all other objects
+theirB(h) value is at most 1 3
+8. Therefore on this database, CA performs h sorted accesses in parallel
+and a single random access onR and then halts. Its middleware cost is thereforehcS +cR = 2cR. The
+intermittent algorithm, on the other hand, does not give pri ority to checking R, and will ﬁrst do two
+random accesses for each of the h − 2 objects at the top of each of the three lists. Since we take all of
+these objects to be distinct, this is 6(h − 2) random accesses, with a middleware cost of 6(h − 2)cR.
+So the ratio of the middleware cost of the intermittent algor ithm to the middleware cost of CA on this
+database is at least 3(h − 2), which can be arbitrarily large.
+In particular, Theorem 8.9 would be false if we were to replac e CA by the intermittent algorithm,
+since this example shows that the optimality ratio of the int ermittent algorithm can be arbitrarily large
+forh arbitrarily large.
+CA versus TA: It is intriguing to consider the differences between CA and T A, even whencR/cS
+is not large. Intuitively, TA beats CA in terms of sorted accesses, and CA beats TA in terms of random
+accesses. More precisely, TA never makes more sorted access es than CA, since TA gathers as much
+information as it can about every object it encounters under sorted access. On the other hand, if we
+focus on random accesses, then we see that TA does random acce ss to every ﬁeld of every object that
+it sees under sorted access. But CA is more selective about it s random accesses. It “stores up” objects
+that it has seen under sorted access, and then does random acc ess only for the object in its stored-up
+30
+
+collection with the best potential.
+We now consider other advantages of CA over TA. In the database we presented in comparing CA
+with the intermittent algorithm, the random access cost of T A is the same as that of the intermittent
+algorithm. So for this database, the ratio of the middleware cost of TA to the middleware cost of CA is
+at least 3(h − 2). This is a manifestation of the dependence of the optimality ratio of TA oncR/cS and
+the independence of the optimality ratio of CA oncR/cS. Furthermore, the fact that at least under certain
+assumptions, TA has an optimality ratio that is quadratic inm, whereas under certain assumptions, CA
+has an optimality ratio that is only linear in m, is also an indicator of the possible superiority of CA
+over TA in certain circumstances. This requires further investigation. As an example where it might be
+interesting to compare CA and TA, let the aggregation function be min, letD be the class of all databases
+that satisfy the distinctness property, and let A be the class of all algorithms that correctly ﬁnd the top
+k objects for min for every database in D. We know that TA and CA are both instance optimal in this
+scenario (Theorems 6.5 and 8.9), and we know that the optimality ratio of CA is independent of cR/cS
+(Theorem 8.9). What are the precise optimality ratios of TA and CA in this scenario? Which has a better
+optimality ratio when, say,cR =cS?
+TA has an important advantage over CA. Namely, TA requires ve ry little bookkeeping, whereas,
+on the face of it, CA requires a great deal of bookkeeping. Thu s, in CA, for every sorted access it is
+necessary to update theB value (the upper bound on the overall grade) for every objectwhere not all of
+its ﬁelds are known. As we discussed in Remark 8.7 for NRA, it w ould be interesting to develop data
+structures for CA that would lead to a reasonable amount of bo okkeeping. We could then compare CA
+versus TA in realistic scenarios (both by analysis and simulations).
+9 Lower Bounds on the Optimality Ratio
+In this section, we prove various lower bounds on the optimality ratio, both for deterministic algorithms
+and for probabilistic algorithms that never make a mistake. Each lower bound corresponds to at least
+one theorem from earlier in the paper.
+The next theorem gives a matching lower bound for the upper bo und on the optimality ratio of TA
+given in the proof of Theorem 6.1, provided the aggregation function is strict. As we noted earlier, this
+lower bound need not hold if the aggregation function is not s trict (for example, for the aggregation
+function max).
+Theorem 9.1: Let t be an arbitrary monotone, strict aggregation function with m arguments. Let D
+be the class of all databases. Let A be the class of all algorithms that correctly ﬁnd the top k answers
+fort for every database and that do not make wild guesses. There is no deterministic algorithm that is
+instance optimal over A and D, with optimality ratio less thanm +m(m − 1)cR/cS.
+Proof: We assume ﬁrst thatk = 1; later, we shall remove this assumption. We restrict our att ention to
+a subfamily D′ of D, by making use of positive parametersd,ψ,k 1,k 2 where
+1. d,k1, andk2 are integers.
+2. ψ = (dm − 1)cS + (dm − 1)(m − 1)cR.
+3. k2 >k 1 > max(d,ψ/c S ).
+31
+
+The family D′ contains every database of the following form. In every list, the topk2 grades are 1, and
+the remaining grades are 0. No object is in the top k1 of more than one list. There is only one object
+T that has grade 1 in all of the lists, and it is in the top d of one list. Except for T , each object that is
+in the top k1 of any of the lists has grade 1 in all but one of the lists, and gr ade 0 in the remaining list.
+It is easy to see that we can pick k1 andk2 big enough to satisfy our conditions, for a sufﬁciently larg e
+numberN of objects.
+Let A be an arbitrary deterministic algorithm in A. We now show, by an adversary argument, that
+the adversary can forceA to have middleware cost at leastψ on some database inD′. The idea is that the
+adversary dynamically adjusts the database as each query co mes in from A, in such a way as to evade
+allowing A to determine the top element until as late as possible.
+Let us say that an object is high in listi if it is in the topd of listi, and high if it is high in some list.
+Since no object is high in more than one list, there are dm high objects. Assume that A sees at most
+dm − 2 high objects, and hence does not see at least two high objects S1 andS2. Then the adversary
+can force the answers that A receives to be consistent with eitherS1 orS2 being the top objectT . This
+is a contradiction, since A does not have enough information to halt safely, since it doe s not know the
+identity of the top object. So A must see at least dm − 1 high objects. Since A does not make wild
+guesses, its sorted access cost is at least (dm − 1)cS. There are two cases.
+Case 1: Algorithm A sees some high object under sorted access in a listj where it is not high (and
+hence below position k1 in list j, since no object can be in the top k1 positions in more than one list).
+Then A has sorted access cost more thank1cS > (ψ/cS )cS =ψ, as desired.
+Case 2: There is no high object that A sees under sorted access in a list where it is not high. Let
+us say that a high object h is fully randomly accessed if A does random access to h in each of the lists
+where it is not high. Whenever A does random access to a high object in a list where it is not high, then
+the adversary assures that the ﬁrst m − 2 such random accesses have grade 1, and only the ﬁnal such
+random access has grade 0 (this is possible for the adversaryto continue until it has donem − 1 random
+accesses for all but one of the high objects). Assume that the re are at least two high objects P1 andP2
+that are not fully randomly accessed. Then the adversary can force the answers that A receives to be
+consistent with eitherP1 orP2 being the top objectT . This is a contradiction, since once again, A does
+not have enough information to halt safely. So there is at most one high object that is not fully randomly
+accessed. Since there aredm high objects, it follows thatA must make at least(dm−1)(m−1) random
+accesses, with a random access cost of (dm − 1)(m − 1)cR. Hence, the middleware cost of A is at least
+(dm − 1)cS + (dm − 1)(m − 1)cR =ψ, as desired.
+So in either case, the middleware cost of algorithm A on the resulting database is at least ψ. How-
+ever, there is an algorithm in A that makes at most d sorted accesses and m − 1 random accesses,
+and so has middleware cost at most dcS + (m − 1)cR. By choosing d sufﬁciently large, the ratio
+(dm−1)cS +(dm−1)(m−1)cR
+dcS+(m−1)cR
+can be made as close as desired to m +m(m − 1)cR/cS. The theorem fol-
+lows in the case whenk = 1.
+We now describe how to modify the proof in the case whenk >1. The idea is that we make k − 1
+of the top k objects easy to ﬁnd. We modify the databases given in the proo f above by creating k − 1
+new objects, each with a grade of 1 in every list, and putting t hem at the top of each of the lists. The
+simple details are left to the reader.
+In the proof of Theorem 6.5 (which assumes strict monotonici ty and the distinctness property), we
+showed that the optimality ratio of TA is at most cm2, where c = max {cR/cS,c S/cR}. In the next
+32
+
+theorem, we give an aggregation function that is strictly monotone such that no deterministic algorithm
+can have an optimality ratio of less than m−2
+2
+cR
+cS
+. So in our case of greatest interest, where cR ≥ cS,
+there is a gap of around a factor of 2m in the upper and lower bounds. The aggregation function we use
+for this result is the functiont given by
+t(x1,x 2,...,x m) = min(x1 +x2,x 3,...,x m) (5)
+The reason we made use of the unusual aggregation function in (5) is that in the case of min (or an
+aggregation function such as average that is strictly monotone in each argument), there is an algorithm
+(algorithm CA of Section 8.2) with optimality ratio independent ofcR/cS when we restrict our attention
+to databases that satisfy the distinctness property. Thus, the negative result of the next theorem does not
+hold for min or average.
+Theorem 9.2: Let the aggregation functiont be given by (5) above. Let D be the class of all databases
+that satisfy the distinctness property. Let A be the class of all algorithms that correctly ﬁnd the top k
+objects fort for every database in D. There is no deterministic algorithm that is instance optim al over
+A and D, with optimality ratio less than m−2
+2
+cR
+cS
+.
+Proof: As in the proof of Theorem 9.1, we can assume without loss of generality thatk = 1. We restrict
+our attention to a subfamily D′ of D, by making use of positive parametersd,N, andψ, where
+1. d andN are integers.
+2. ψ = (d − 1)(m − 2)cR.
+3. N >max(d, 4ψ/cS ), andN is a multiple of 4.
+The family D′ contains each database of the following form. There are N objects. The top d grades in
+lists 1 and 2 are of the form i/(2d + 2) for 1 ≤i ≤d, and the object with grade i/(2d + 2) in list 1 is
+the one with the grade (d + 1 −i)/(2d + 2) in list 2. Hence, thex1 +x2 value of thesed objects is 1/2.
+The grades in the other lists are of the formi/N, for 1 ≤i ≤N. One of the top d objects in lists 1 and
+2 has a grade in the half-closed interval [ 1
+2, 3
+4 ) in each of the other lists. All the rest of the top d objects
+in lists 1 and 2 have a grade in the half-closed interval[ 1
+2, 3
+4 ) in all but one of the other lists, and a grade
+in the open interval (0, 1
+2 ) in the remaining list. The top object, which we call T , is the unique object
+whose overall grade is 1/2. Since T has grade less than 3/4 in lists 3, ... , m, it occurs after the ﬁrst
+N/4 objects in each of these m − 2 lists. Furthermore, simply based on the grades of the top d objects
+in lists 1 and 2, it is clear that the top object has grade at most 1/2.
+Let A be an arbitrary deterministic algorithm in A. We now show, by an adversary argument, that
+the adversary can forceA to have middleware cost at leastψ on some database inD′. The idea is that the
+adversary dynamically adjusts the database as each query co mes in from A, in such a way as to evade
+allowing A to determine the top element until as late as possible. There are two cases.
+Case 1: A does at leastN/4 sorted accesses. Then the sorted access cost of A is at least (N/4)cS >
+(ψ/cS )cS =ψ, as desired.
+Case 2: A does less than N/4 sorted accesses. Let us call the top d objects in lists 1 and 2 candi-
+dates. Thus, A does not see any candidate under sorted access in any of the lists 3,...,m . Let us call a
+33
+
+grade that is at least 1/2 high, and a grade less than 1/2 low. Let us say that a candidate S is fully ran-
+domly accessed if A does random access to S in each of the lists 3,...,m . Whenever A does random
+access to a candidate in at least one of lists3,...,m , then as long as possible, the adversary assures that
+the ﬁrstm − 3 random accesses have a high grade, and that only the ﬁnal random access has a low grade
+(it is possible for the adversary to continue like this until all but one of the candidates is fully randomly
+accessed). Assume that there are at least two candidatesP1 andP2 that are not fully randomly accessed.
+Then the adversary can force the answers that A receives to be consistent with eitherP1 orP2 being the
+top objectT . This is a contradiction, since A does not have enough information to halt safely. So there
+is at most one candidate that is not fully randomly accessed.
+Since there are at least d − 1 candidates that are fully randomly accessed, and hence each have at
+leastm − 2 random accesses, the random access cost of A is at least (d − 1)(m − 2)cR. Hence, the
+middleware cost of A is at least (d − 1)(m − 2)cR =ψ, as desired.
+So in either case, the middleware cost of algorithm A on the resulting database is at least ψ. How-
+ever, there is an algorithm inA that accesses the topd objects in lists 1 and 2, and then makes a random
+access to object T in each of lists 3, ... ,m. Its middleware cost is 2dcS + (m − 2)cR. By choosing
+d sufﬁciently large, the ratio (d−1)(m−2)cR
+2dcS +(m−2)cR
+can be made as close as desired to m−2
+2
+cR
+cS
+. The theorem
+follows.
+The next theorem is somewhat redundant (except for the fact t hat it deals with probabilistic algo-
+rithms), because of Theorem 9.1. We give it because its proof is simple, and because we generalize the
+proof in the theorem following it.
+Theorem 9.3: Let t be an arbitrary monotone, strict aggregation function with m arguments. Let D
+be the class of all databases. Let A be the class of all algorithms that correctly ﬁnd the top k answers
+for t for every database and that do not make wild guesses. There is no deterministic algorithm (or
+even probabilistic algorithm that never makes a mistake) th at is instance optimal over A and D, with
+optimality ratio less thanm/2.
+Proof: As in the proof of Theorem 9.1, we can assume without loss of ge nerality thatk = 1 . We now
+deﬁne a family of databases, each with m sorted lists. There is a parameter d. The top dm values in
+each of the lists is 1, and all remaining values are 0. There is only one object T that has a value of 1
+in more than one of the lists, and this object T has value 1 in all of the lists. Therefore T has overall
+grade 1, and every other object has overall grade 0. Suppose t hatT has position d in one of the lists,
+and positiondm in all of the other lists.
+Let A be an arbitrary deterministic algorithm inA. Consider the following distribution on databases:
+each member is as above, and the list where T appears in positiond is chosen uniformly at random. It
+is easy to see that the expected number of sorted accesses und er this distribution of algorithm A is at
+least (dm + 1)/2. Since there must be some database where the number of sorted accesses is at least
+equal to the expected number of sorted accesses, the number o f sorted accesses on this database is at
+least (dm + 1)/2, and so the middleware cost of A on the resulting database is at least (dm + 1)cS/2.
+However, there is an algorithm in A that makesd sorted accesses and m − 1 random accesses, and so
+has middleware costdcS + (m − 1)cR. By choosing d sufﬁciently large, the ratio (dm+1)cS /2
+dcS +(m−1)cR
+can be
+made as close as desired tom/2. The theorem follows (in the deterministic case).
+In the case of probabilistic algorithms that never makes a mistake, we conclude as in the conclusion
+of the proof of Theorem 6.4.
+34
+
+In the proof of Theorem 8.10, we showed that under the assumptions of Theorem 8.10 (the distinct-
+ness property with min as the aggregation function), the optimality ratio of CA is at most 5m. The next
+theorem gives a lower bound that is linear inm.
+Theorem 9.4: Let D be the class of all databases that satisfy the distinctness p roperty. Let A be the
+class of all algorithms that correctly ﬁnd the top k answers for min for every database. There is no
+deterministic algorithm (or even probabilistic algorithm that never makes a mistake) that is instance
+optimal over A and D, with optimality ratio less thanm/2.
+Proof: The proof is obtained from the proof of Theorem 9.3 by modifyi ng the construction slightly to
+guarantee that we consider only databases that satisfy the d istinctness property. The simple details are
+left to the reader.
+The next theorem gives a matching lower bound for the upper bound on the optimality ratio of NRA
+given in the proof of Theorem 8.4, provided the aggregation function is strict.
+Theorem 9.5: Lett be an arbitrary monotone, strict aggregation function withm arguments. Let D be
+the class of all databases. Let A be the class of all algorithms that correctly ﬁnd the top k objects fort
+for every database and that do not make random accesses. Ther e is no deterministic algorithm that is
+instance optimal over A and D, with optimality ratio less thanm.
+Proof: As in the proof of Theorem 9.1, we can assume without loss of generality thatk = 1. We restrict
+our attention to a subfamily D′ of D, by making use of a positive integer parameter d. The family D′
+contains every database of the following form.
+There are 2m special objects T1,...,T m,T ′
+1,...,T ′
+m. There is only one object T in the database
+with a grade of 1 in every list, and it is one of the 2m special objects. Thus, the top object T is one of
+the special objects. For eachi, let us refer to listi as the challenge list for the special objectsTi andT ′
+i .
+For eachi, the top 2m − 2 objects in listi are precisely the special objects except for Ti andT ′
+i . Thus,
+no special object is in the top 2m − 2 of its challenge list, but all of the other special objects ar e. The
+topd objects in each list have grade 1, and every remaining object in each list has grade 0. IfT =Ti or
+T =T ′
+i , thenT is in position d in listi. Thus, the unique top object is at position d in some list. Note
+that each special object is at or below positiond in its challenge list, and exactly one special object (the
+top object) is at positiond in its challenge list.
+Let A be an arbitrary deterministic algorithm in A. We now show, by an adversary argument, that
+the adversary can force A to have sorted access cost at least dm on some database in D′. The idea is
+that the adversary dynamically adjusts the database as each query comes in from A, in such a way as to
+evade allowing A to determine the top element until as late as possible.
+The ﬁrstm−1 times that algorithmA reaches positiond in a list, the adversary forcesA to encounter
+some object that is not special in position d. Thus, the ﬁrst time that the adversary allows algorithm A
+to encounter a special object after position 2m − 2 is at position d of the last list i that it accesses to
+depthd. Only at that time does the adversary allow the algorithm to d iscover which of Ti orT ′
+i is the
+top object.
+It is clear that the sorted access cost of A on this resulting database is at leastdm. However, there is
+an algorithm in A that makes at mostd sorted accesses to one list and 2m − 2 sorted accesses to each of
+35
+
+D Every D; Distinctness; Distinctness;
+t Everyt Ref. t SM Ref. t SMV or Ref.
+A min
+Every TA:cm2 Thm 6.5 CA: 4m +k ; Thm 8.9
+correct A No instance 5m for min Thm 8.10
+(wild optimal algorithm Lower bound: Lower bound:
+guesses ok) possible Thm 6.4 m−2
+2
+cR
+cS
+Thm 9.2 m
+2 Thm 9.4
+(certaint)
+No wild TA:m + (m−1)m
+2
+cR
+cS
+Thm 6.1
+guesses
+Lower bound:
+m + (m−1)m
+2
+cR
+cS
+Thm 9.1
+(t strict)
+No random NRA:m Thm 8.5
+access
+Lower bound:
+m Thm 9.5
+(t strict)
+Table 1: Summary of Upper and Lower Bounds
+the remaining lists, for a total of at mostd + (m − 1)(2m − 2) sorted accesses. and so has middleware
+cost at most (d + (m − 1)(2m − 2))cS. By choosing d sufﬁciently large, the ratio dmcS
+(d+(m−1)(2m−2)cS
+can be made as close as desired tom. The theorem follows.
+9.1 Summary of upper and lower bounds
+Table 1 summarizes our upper and lower bounds. The rows correspond to the different restrictions on the
+set A of algorithms, and the columns to the restrictions on the setD of databases and on the aggregation
+functiont. Note that “SM” means “strictly monotone” and “SMV” means “s trictly monotone in each
+variable.” “Distinctness” means thatD is the collection of databases that satisfy the distinctness property.
+Note also thatc = max { cR
+cS
+, cS
+cR
+}. For each such combination we provide our upper and lower bou nds,
+along with the theorem where these bounds are proven. The upp er bounds are stated above the single
+separating lines and the lower bounds are below them. (The upper bounds are stated explicitly after the
+proofs of the referenced theorems.) The lower bounds may be deterministic or probabilistic.
+10 Related Work
+Nepal and Ramakrishna [ ?] deﬁne an algorithm that is equivalent to TA. Their notion of optimality is
+weaker than ours. Further, they make an assumption that is es sentially equivalent to the aggregation
+36
+
+function being the min.16
+G¨ untzer, Balke, and Kiessling [?] also deﬁne an algorithm that is equivalent to TA. They call t his
+algorithm “Quick-Combine (basic version)” to distinguishit from their algorithm of interest, which they
+call “Quick-Combine”. The difference between these two algorithms is that Quick-Combine provides a
+heuristic rule that determines which sorted list Li to do the next sorted access on. The intuitive idea is
+that they wish to speed up TA by taking advantage of skewed dis tributions of grades.17 They make no
+claims of optimality. Instead, they do extensive simulations to compare Quick-Combine against FA (but
+they do not compare Quick-Combine against TA).
+We feel that it is an interesting problem to ﬁnd good heuristi cs as to which list should be accessed
+next under sorted access. Such heuristics can potentially l ead to some speedup of TA (but the number
+of sorted accesses can decrease by a factor of at most m, the number of lists). Unfortunately, there
+are several problems with the heuristic used by Quick-Combi ne. The ﬁrst problem is that it involves
+a partial derivative, which is not deﬁned for certain aggreg ation functions (such as min). Even more
+seriously, it is easy to ﬁnd a family of examples that shows that as a result of using the heuristic, Quick-
+Combine is not instance optimal. We note that heuristics that modify TA by deciding which list should
+be accessed next under sorted access can be forced to be insta nce optimal simply by insuring that each
+list is accessed under sorted access at least everyu steps, for some constantu.
+In another paper, G¨ untzer, Balke, and Kiessling [?] consider the situation where random accesses
+are impossible. Once again, they deﬁne a basic algorithm, ca lled “Stream-Combine (basic version)”
+and a modiﬁed algorithm (“Stream-Combine”) that incorporates a heuristic rule that tells which sorted
+list Li to do a sorted access on next. Neither version of Stream-Comb ine is instance optimal. The
+reason that the basic version of Stream-Combine is not insta nce optimal is that it considers only upper
+bounds on overall grades of objects, unlike our algorithm NR A, which considers both upper and lower
+bounds. They require that the top k objects be given with their grades (whereas as we discussed, we do
+not require the grades to be given in the case where random acc esses are impossible). Their algorithm
+cannot say that an object is in the top k unless that object has been seen in every sorted list. Note
+that there are monotone aggregation functions (such as max, or more interestingly, median) where it is
+possible to determine the overall grade of an object without knowing its grade in each sorted list.
+Natsev et al. [?] note that the scenario we have been studying can be thought of as taking joins over
+sorted lists where the join is over a unique record ID present in all the sorted lists. They generalize by
+considering arbitrary joins.
+11 Conclusions and Open Problems
+We studied the elegant and remarkably simple algorithm TA, as well as algorithms for the scenario where
+random access is impossible or expensive relative to sorted access (NRA and CA). To study these algo-
+rithms, we introduced the instance optimality framework in the context of aggregation algorithms, and
+16 The assumption that Nepal and Ramakrishna make is that the ag gregation function t satisﬁes the lower bounding prop-
+erty. This property says that whenever there is some i such that xi ≤ x′
+j for every j, then t(x1, . . . , x m) ≤ t(x′
+1, . . . , x ′
+m).
+It is not hard to see that if an aggregation function t satisﬁes the lower bounding property, then t(x1, . . . , x m) =
+f (min {x1, . . . , x m}), where f (x) = t(x, . . . , x ). Note in particular that under the natural assumption that t(x, . . . , x ) = x,
+so that f (x) = x, we have t(x1, . . . , x m) = min {x1, . . . , x m}.
+17They make the claim that the optimality results proven in [ ?] about FA do not hold for a skewed distribution of grades,
+but only for a uniform distribution. This claim is incorrect: the only probabilistic assumption in [?] is that the orderings given
+by the sorted lists are probabilistically independent.
+37
+
+provided both positive and negative results. This framework is appropriate for analyzing and comparing
+the performance of algorithms, and provides a very strong no tion of optimality. We also considered
+approximation algorithms, and provided positive and negative results about instance optimality there as
+well.
+Open problems: Let us say that an algorithm is tightly instance optimal (over A and D) if it is
+instance optimal (over A and D) and if its optimality ratio is best possible. Thus, Corolla ry 8.6 says
+that NRA is tightly instance optimal, and Corollary 6.2 says that in the case of no wild guesses and a
+strict aggregation function, TA is tightly instance optima l. In the case of no wild guesses, for which
+aggregation functions is TA tightly instance optimal?18 What are the possible optimality ratios? For the
+other cases where we showed instance optimality of one of our algorithms (as shown in Table 1), is the
+algorithm in question in fact tightly instance optimal? For cases where our algorithms might turn out
+not to be tightly instance optimal, what other algorithms are tightly instance optimal?
+There are several other interesting lines of investigation . One is to ﬁnd other scenarios where in-
+stance optimality can yield meaningful results. Another is to ﬁnd other applications of our algorithms,
+such as in information retrieval. We already mentioned (Remark 8.7 and Section 8.4) the issue of ﬁnding
+efﬁcient data structures for NRA and CA in cases of interest, and of comparing CA versus TA.
+12 Acknowledgments
+We are grateful to Michael Franklin for discussions that led to this research, to Miklos Ajtai, Allan
+Borodin, Erik Demaine, David Johnson, Madhu Sudan, Andrew T omkins and Mihalis Yannakakis for
+useful suggestions, and to Larry Stockmeyer for helpful comments that improved readability.
+18As noted earlier, when the aggregation functiont is max, which is not strict, TA is tightly instance optimal, with optimality
+ratio m. Similarly, when t is a constant, TA is tightly instance optimal, with optimality ratio 1. There are aggregation functions
+where TA is not tightly instance optimal. For example deﬁne t by letting t(x1, . . . , x m) = min( x1, x 2). It is not hard to see
+that TA is not tightly instance optimal for this choice of t when m ≥ 3.
+38

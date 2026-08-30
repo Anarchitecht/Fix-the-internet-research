@@ -1,0 +1,1958 @@
+Compact Key Storage in the Standard Model
+Yevgeniy Dodis⋆ and Daniel Jost
+New York University
+{dodis, daniel.jost}@cs.nyu.edu
+Abstract. In recent work [Crypto’24], Dodis, Jost, and Marcedone introduced Compact Key
+Storage (CKS) as a modern approach to backup for end-to-end (E2E) secure applications. As
+most E2E-secure applications rely on a sequence of secrets(s1, . . . ,sn) from which, together with
+the ciphertexts sent over the network, all content can be restored, Dodis et al. introduced CKS as
+a primitive for backing up(s1, . . . ,sn). The authors provided definitions as well as two practically
+efficient schemes (with different functionality-efficiency trade-offs). Both, their security definitions
+and schemes relied however on the random oracle model (ROM).
+In this paper, we first show that this reliance is inherent. More concretely, we argue that
+in the standard model, one cannot have a general CKS instantiation that is applicable to all
+“CKS-compatible games”, as defined by Dodis et al., and realized by their ROM construction.
+Therefore, one must restrict the notion of CKS-compatible games to allow for standard model
+CKS instantiations.
+We then introduce an alternative standard-model CKS definition that makes concessions in
+terms of functionality (thereby circumventing the impossibility). More precisely, we specify CKS
+which does not recover the original secretsi but a derived keyki, and then observe that this
+still suffices for many real-world applications. We instantiate this new notion based on minimal
+assumptions. For passive security, we provide an instantiation based on one-way functions only.
+For stronger notions, we additionally need collision-resistant hash functions and dual-PRFs,
+which we argue to be minimal.
+Finally, we provide a modularization of the CKS protocols of Dodis et al. In particular,
+we present a unified protocol (and proof) for standard-model equivalents for both protocols
+introduced in the original work.
+⋆ Research partially supported by NSF grant CNS-2055578, and gifts from JP Morgan, Protocol Labs, Stellar,
+and Algorand Foundation.
+
+Table of Contents
+1 Introduction...................................................................... 3
+1.1 Contributions ................................................................ 3
+1.2 Outline ..................................................................... 5
+2 Compact Key Storage ............................................................. 5
+2.1 Overview.................................................................... 5
+2.2 CKS Syntax ................................................................. 6
+2.3 Impossibility of Standard-model CKS ........................................... 6
+2.4 Weaker Standard Model CKS .................................................. 8
+3 Trapdoor Key Derivation .......................................................... 9
+3.1 Defining TKDFs ............................................................. 9
+3.2 Symmetric TKDF ............................................................ 11
+3.3 A Standard-Model Symmetric-TKDF Construction ............................... 12
+4 Iterative CKS .................................................................... 13
+4.1 Syntax ...................................................................... 14
+4.2 Security ..................................................................... 14
+4.3 Constructing I-CKS from TKDF ............................................... 15
+5 CKS from Iterative CKS ........................................................... 18
+A Preliminaries ..................................................................... 21
+B Standard-model CKS: Definitions ................................................... 21
+B.1 Correctness .................................................................. 21
+B.2 Integrity .................................................................... 23
+
+1 Introduction
+Backup is an essential functionality of any application storing user data. For instance, users of a secure
+messaging (SM) application may expect cloud backup to be provided such that they do not lose their
+conversation history or sent and received attachments, such as photos, in the event their device is
+broken, lost, or stolen. The existing cryptographic literature on backup heavily focuses on how to
+secure a cryptographic secret under a human-memorizable secret, such as a low-entropy password. For
+instance, WhatsApp combines hardware secure modules (HSM) with PAKE such that users can retrieve
+a cryptographic secret, that is securely stored on WhatsApp’s HSMs, based on their password. Various
+solutions replacing the trust assumption on the HSM with secret sharing have also been proposed. For
+example password-protected secret sharing (PPSS) [1,11] and more recent solutions such as updatable
+oblivious key management [12] and DPaSE [6].
+In contrast, very little attention has been paid towhat cryptographic secretshould be securely stored
+or how this interacts with the security of the application under consideration. Indeed, most end-to-end
+(E2E) secure applications use the rather naive solution of using a static secret key to symmetrically
+encrypt the user content and upload it to the cloud. This not only can have determinantal effects on
+the application’s (presumed) security as recently demonstrated by Fábrega et al. [9] but also lacks all
+of the advanced security properties, such as forward secrecy (FS) and post-compromise security (PCS),
+we have been accustomed to from E2E-secure protocols. Secure messaging furthermore has a clear
+push toward enabling large groups with potentially thousands of members — such as the recent IETF
+Message Layer Security (MLS) standard. The naive backup solution, however, cannot take advantage
+of this inherent redundancy across users for either storage or bandwidth.
+Compact Key Storage.In recent work, Dodis et al. [7] introduce the notion ofcompact key storage
+(CKS). Essentially, CKS serves as the backup of underlying secrets of an E2E-secure application, rather
+than the content itself. For instance, for an SM application using the Double Ratchet protocol, CKS
+would back up the keys from the symmetric ratcheting layer used to encrypt and authenticate the
+ciphertexts. In addition, the service provider would then need to retain the original Double Ratchet
+ciphertexts or outsource them to some cloud storage of the users’ choice.
+CKS uses a compact secret state that evolves whenever a user’s application learns or generates a
+new key, offloading the storage to an untrusted server. Crucially, (1) any users outsourcing the same
+sequence of keys can use a shared outsourced storage and (2) CKS allows for fine-grained FS and PCS
+such that every user can restore exactly the set of keys they once knew and have not erased in the
+meantime. The compact local state can then be backed up using traditional methods such as HSMs or
+secret sharing. This has several key benefits:
+– PCS/FS: When using CKS for backup, the combined application inherits the PCS/FS guarantees
+of the underlying messaging application. In particular, user can efficientlyerase messages from
+their storage and the backup by securely replacing their CKS state with an updated one.
+– Deduplication: All cloud storage (both the CKS storage and the storage of the application
+ciphertexts) is shared among all users of a given chat.
+– Delegation: Fine-grained FS enables efficient delegation of parts of the conversation history. The
+user can create a copy of their CKS state, erase all parts they wish not to share, and then delegate
+access by sending the CKS state to another party.
+In their work, Dodis et al. observe that the natural security notion — key indistinguishability from
+randomness, conditioned on the outsourced storage — is impossible. Instead, the authors propose a
+novel security notion ofpreservation securitywhich, roughly speaking, demands that a broad class of
+applications remains secure when enhanced by CKS. That is, for each given application one needs to
+show that it is “CKS compatible” to deduce that it can be securely augmented by any secure CKS
+scheme. They then provide formal definitions of preservation security and present efficient schemes.
+However, both the security notion and the protocol inherently live in the Random Oracle model
+(ROM).
+1.1 Contributions
+In this work, we investigate CKS in the standard model.
+Impossibility of preservation security.First, we show that the notion of preservation security by Dodis
+et al. inherently requires an idealized model. More concretely, we show that for any CKS scheme in
+the standard model, there exists a CKS-compatible game that becomes insecure when enhanced with
+the CKS scheme.1
+Standard model CKS definitions.While the original CKS notion was aimed at augmenting any (legacy)
+E2E-secure application, we observe that if the application is designed with CKS in mind, then the
+aforementioned impossibility can be circumvented. More concretely, we observe the following: if instead
+of recovering the original secrets(s1,..., sn), henceforth calledseed, each party only needs to recover a
+derived key (k1,..., kn) then the impossibility no longer holds. For instance, assume that the seeds are
+1 Note the order of quantifiers. A stronger statement that there exist CKS-compatible applications that are
+insecure for any CKS scheme is conceivable, but left to future work. Still, our result means we cannot
+instantiate the definition from [7].
+3
+
+K0∥T0
+Derive
+s1
+K1∥T1
+C1
+Invert
+K0∥T0
+s1
+K1∥T1
+Derive
+s2
+K2∥T2
+C2
+Invert
+s2
+K2∥T2
+Derive
+s3
+K3∥T3
+C3
+Invert
+s3
+K3∥T3
+Fig.1: [7, Fig. 7]. A schematic representation of all-or-nothing CKS scheme from [7]. The top half
+depicts the parties outsourcing the keys, while the lower half shows the key-recovery process.
+the output of a Continuous Group Agreement (CKA) or Continuous Group Key Agreement (CGKA)
+protocol. Our proposed notion is compatible with any E2E-secure application that only uses a derived
+key ki = KDF(si) instead of the seed. This can either be a new application explicitly with CKS in
+mind (in which case the standard-model CKA scheme gets to choose the KDF) or a legacy application
+that already happens to involve an additional key derivation step (under modest assumptions on the
+KDF).
+On a high level, we observe that the impossibility stems from circularity that necessitates an
+idealized model such as the ROM. Having an explicit key derivation step then resolves this circularity.
+Indeed, we observe that for this weaker notion of CKA, indistinguishability from randomness is
+achievable, no longer necessitating the (rather intricate) notion of preservation security. We then adapt
+the CKS notion accordingly. Our standard-model CKS is incomparable with the original ROM-based
+definition from [7]. On the one hand, we obtain the stronger indistinguishability-based notion. On the
+other hand, we have to concede in several aspects:
+– As mentioned above, standard-model CKS recovers only keys instead of the seeds. This makes it
+(potentially) unsuitable for some legacy applications.
+– Delegation of keys only. Similarly, parties can only delegate keys. This somewhat restricts func-
+tionality as the receiving party can no longer equally contribute to the shared outsourced state
+without the original seeds.
+– Selective security only. Fully adaptive security seems to imply non-committing encryption for
+messages longer than the key, as the compact local state is significantly shorter than the total length
+of the keys that are outsourced. This is generally known to be impossible in the standard model.
+We therefore settle for selective security, even though for (some of) our schemes the framework by
+Kamath et al. [13] should yield at least quasi-polynomial reductions against adaptive adversaries.
+Standard-model CKS schemes.We present an efficient scheme for standard-model CKA. When targeting
+outsider security and an honest-but-curious server, our scheme only needs a PRG and one-time secure
+symmetric encryption. In other words, in its weakest form, it can be constructed purely from one-way
+functions. When targeting an actively malicious server, we additionally need collision-resistant hash
+functions. To achieve insider security, where either parties delegate inconsistent keys, or already start
+with inconsistent seeds, our scheme additionally needs a Dual-PRF [2,4], for which it is an open
+problem whether they can be constructed from one-way functions.
+Modularization. Dodis et al. [7] present two CKS schemes: One which allows all-or-nothing delegation
+(and all-or-nothing erasure) and which has a constant size local statestu. The other allows to efficiently
+delegate any continuous interval of secrets and has a local state that grows logarithmically in the
+number of epochs. At their core, both schemes use Convergent Encryption (CE) [8] to recursively
+aggregate the two secrets into one and a ciphertext. Slightly simplified, the former scheme aggregates
+the old statestu and the secrets for the next consecutive epoch as:
+– Parse (K,T )← stu
+– Compute a new keyK′← H(stu||s)
+– Compute C′← SE. Enc(K, (stu||s))
+– Compute T′← H(C′∥T )
+– Set st′
+u← (K,T ) and send C← (C,T′) to the server.
+This process is called “derive” in the schematic representation of the all-or-nothing scheme in
+Fig. 1. The security of the scheme inherently requires the ROM for the key generation in the second
+step. Moreover, the authors of [7] observe that the abstraction of CE as Message Locked Encryption
+(MLE) by Bellare et al. [3] does not apply to the recursive application, and the authors instead proved
+the scheme’s security directly based on the security of the symmetric encryptionSE. Enc and the
+ROM. This raises the question: what is the appropriate substitute for the above “derivation box” for
+standard-model CKS? Observe that while the above construction allows to recovers based on the
+ciphertext and the local state, whereas standard-model CKS only needs to recover a key that is derived
+4
+
+from the seed. We, therefore, answer this question by introducing the abstraction of aTrapdoor KDF
+(TKDF). A TKDF, in a nutshell, represents a kind of “invertible” KDF that generates a keyk and
+updated state z′ from a seeds and previous statez, such that fromz a secrettrapdoor t to invert the
+operation can be derived.
+As a second abstraction, we introduce the notion ofiterative CKS, which is a class of CKS protocols
+that encompass both schemes from [7]. This abstraction has several benefits: (1) its definitions are
+significantly simpler than the ones of fully general CKS; (2) it allows us to formalize and prove the
+security of a natural unified protocol of which the all-or-nothing and the interval protocol are special
+cases. In particular, we note that the iterative CKS notion reduces finding the right trade-off between
+functionality (in terms of delegation and fine-grained erasure) and efficiency of the scheme to a graph
+theoretic problem. The class of graphs involved is further closely related to graphs studied in pebbling
+games, for instance, allowing us to link it with the work on adaptive security by Jafargholi et al. [10]
+and Kamath et al. [13].
+1.2 Outline
+In Section 2, we first argue the impossibility of standard-model CKS, according to the definition of [7],
+and then introduce an alternative definition with weakened functionality (which still suffices for many
+practical applications). In Section 3, we then introduce the TKDF notion, abstracting over the core
+component of both constructions from [7], and provide an efficient instantiation from standard-model
+primitives. In Section 4 we introduce a special case of CKS protocols, dubbed iterative CKS, and show
+how a generic protocol (based on TKDF) abstracts over both protocols from [7]. Finally, in Section 5,
+we sketch how any iterative CKS protocol implies a general (standard model) CKS protocol. Some
+preliminaries are presented in Appendix A.
+2 Compact Key Storage
+2.1 Overview
+Recall from Section 1 that Compact Key Storage allows a group of users that know a shared set of
+secrets (s1,..., sn) to maintain a shared backup of those secrets. To this end, for every new secretsi
+obtained by the users,at least oneuser uploads a ciphertextCi to the (untrusted) server. Each user
+u only keeps a small local statestu and the server storage should not grow in the number of users
+— hence the namecompact. All users must then be able to use their local state and the ciphertexts
+to recover all secrets they once knew (and have not explicitly erased). Importantly, [7] introduced
+CKS fordynamic groups, meaning that not every user necessarily knows all secrets. On the contrary,
+a user who does not know a certain secretsi should not be able to derive any information aboutsi
+from the CKS ciphertexts. This, in turn, implies post-compromise security, asstu before the useru
+learned si together with all ciphertexts(C1,..., Cn) must not leak information aboutsi. Unfortunately,
+it was shown in [7] that the natural definition ofsi remaining pseudorandom given all ciphertexts
+(C1,..., Cn), and a party’s initial state, is impossible even in idealized models.
+Before recapping the formal CKS notion of [7], let us provide a high-level summary of the desired
+functionality.
+– Outsourcing secrets.Each user can append a secretsi for a new epochi to their local state. To
+save bandwidth, this should, intuitively, be an operation done locally by all users except one. As
+this is infeasible when having users who know substantially different subsets of secrets, [7] relaxed
+this condition slightly. More precisely, a userU should upload unless another userU′, who knew a
+superset of the secrets of the former, did the upload when learningsi.
+– Retrieving secrets.Whenever the userU later wants to retrieve one or more of the secrets they
+knew at some point, they should be able to use their local statestu and the help of the server.
+The notion of [7] imposes integrity to ensure that U will never retrieve a different secret than
+they originally knew. Of course, as for any outsourced storage scheme a malicious server can do a
+denial-of-service attack. A strong correctness notion, however, ensures that as long as the server is
+honest other malicious group members cannot preventU from retrieving their secrets.
+– Key delegation.A user U should be able to delegate access to the entirety or parts of their secrets
+by sending a short messagemsg over a secure channel to any other userU′. Using msg, U′ should
+then be able to recover those secrets with the help of the server.
+– Key erasure.To securely delete specific content of the application, the userU should be able to
+delete access to their secrets. In other words,U may wish to erasesi (or more generally a subset
+of the secrets) such that afterward their updated statestU and the ciphertexts(C1,..., Cn) no
+longer reveal information aboutsi, without requiring the server to securely erase information. This
+can be seen as a special case of delegation where the user delegates themselves the set of secrets
+they wish to retain; more efficient implementations are however conceivable.
+It is not too hard to see that it is impossible for a scheme to support erasing and delegating
+arbitrary subsets of the secrets while maintaining a compact local state. Thus, [7] parametrized each
+concrete CKS in the set of operations that it supports efficiently. Those sets are described as predicates
+that determine whether an operation is feasible for a set of epochsshare given the set of epochsknow
+for which the user currently “knows” the secrets (i.e., learned and not erased them).
+5
+
+Definition 1([7, Def. 1]).A delegation familyG is a predicateG :P(N )×P (N )→{ 0, 1}, where for
+a set know⊆ N of epochs with the respective keys known to a party,G(know, share) indicates whether
+they can delegateshare⊆ N . Analogously, aretrieval familyR and aerasure familyE indicate whether
+the party can recovershare⊆ N or erase share⊆ N , respectively.
+2.2 CKS Syntax
+We now recap the Compact Key Storage notion. The following section is mostly taken verbatim from
+[7].
+Definition 2([7, Def. 2]). A Compact Key Storage (CKS)scheme CKS for a delegation familyG,
+a retrieval familyR, and an erasure familyE (or (G,R,E)-CKS for short) is an interactive protocol
+between stateful userU and server S algorithms, respectively, defined by the following sub-algorithms:
+Initialization:
+– The stS← S.Init(1κ) algorithm initializes the server’s state.
+– The st← U.Init(1κ) algorithm initializes a user’s state.
+Key Management:
+– The non-interactive append algorithm takes the current statest, an epoche, a secrets, and flag
+upload. The invocation (
+st′, stup
+)
+← U.Append(st, e, s, upload),
+produces an updated statest′ and, if upload = true, an upload statestup. (If upload = false,
+then stup =⊥.)
+– The interactive upload algorithm takes the upload state and after the interaction
+(
+⊥; st′
+S
+)
+←
+⟨
+U.Upload(stup)↔ S.Upload(stS)
+⟩
+,
+the server outputs an updated statest′
+S.
+– The interactive erase algorithm takes the current statest and a set of epochsshare⊆ N . After the
+following interaction
+(
+st′;⊥
+)
+←
+⟨
+U.Erase(st, share)↔ S.Erase(stS)
+⟩
+,
+both the user outputs an updated statest′ (and the server has no output).
+Delegation:
+– The interactive granting algorithm takes a userU1’s state st1 and a setshare⊆ N of keys to be
+shared with another userU2. After the interaction
+(
+msg;⊥
+)
+←
+⟨
+U1.Grant(st1, share)↔ S.Grant(stS)
+⟩
+the user outputs the informationmsg to be sent to the other partyU2.
+– The interactive grant-accepting algorithm extends another user’sU2 known key set by processing a
+grant msg. After the interaction
+(
+st′
+2, stup;⊥
+)
+←
+⟨
+U2.Accept(st2, share, msg, upload)↔ S.Accept(stS)
+⟩
+the user outputs an updated statest′
+2, as well as (ifupload = true) a state for theUpload algorithm.
+Retrieval:
+– The interactive key-retrieval algorithm restores the secrets for epochsshare⊆ N with the interaction
+(
+secrets; st′
+S
+)
+←
+⟨
+U.Retrieve(st, share)↔ S.Retrieve(stS)
+⟩
+ending with the user outputting a functionsecrets : share→ s, as well as an updated server state.
+A CKS scheme is considered efficient if all operations work in sublinear — ideally logarithmic
+— time in the number of epochsn (when secrets are appended in consecutive order). As such, the
+predicates (G,R,E) dictate efficiency requirements: if for instance a party wants to retrieve an arbitrary
+setI of epochs, they can find a minimal coverI =I1∪···∪I k of subsets consistent withR and
+retrieve subset. This leads to an overall efficiency ofO(k log(n)). In terms of client state, we require it
+to grow at most in the order ofO(d log(n)), withd denoting the number of erasure operations.
+In case secrets are appended sparsely (such as odd epochs only), are appended completely out
+of order, or linearly many erasures have been performed, efficiency may degrade to linear time. The
+server state must grow at most linearly in the number of overall epochs outsourced by any party, and
+in particular, must not grow in the number of participating parties.
+2.3 Impossibility of Standard-model CKS
+The authors of [7] showed that any non-trivial state compactness guarantee of the user makes it
+impossible to satisfy the most desirable key indistinguishability property for CKS, even if one only
+wants to recover alln secrets (s1,..., sn) from the latest statestn of the user, with the help of the CKS
+6
+
+server. Concretely, the following probability cannot be upper bounded by1
+2 + negl(κ) for all efficient
+attackersA:
+Pr
+
+
+b =b′
+⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐
+b←${0, 1}
+st← U.Init(1κ); stS← S.Init(1κ)
+s0
+1, s1
+1, s0
+2, s1
+2,..., s0
+n, s1
+n←${0, 1}κ
+∀i∈ [n] : (st, stup)← U.Append(st,i, s0
+i, true),(
+⊥; stS
+)
+←
+⟨
+U.Upload(stup)↔ S.Upload(stS)
+⟩
+b′←A (1κ, sb
+1,..., sb
+n, stS)
+
+
+Intuitively, one cannot expect that then secrets (s1,..., sn) are still pseudorandom when the attacker
+gets access to the CKS functionality (in particular, server public storagestS). This is because CKS
+provides a testable functionality — (user) state compaction — which is not possible with random
+unrelated secrets.
+To circumvent this result in the random oracle model (ROM), the authors introduced a rather
+intricate, weaker notion of “CKS-preservation”, described below. Note that while the authors of [7]
+observed that relying on an idealized model for CKS-preservation seemed inherent, no formal result
+was proven. In the next section, we close this gap, showing that preservation security is impossible
+in the standard model. Since preservation security was meant to be the weakest meaningful security
+notion for CKS this, in spirit, establishes that CKS recovering the original secrets (as a standalone
+primitive) is impossible in the standard model.2
+Impossibility of CKS-preservation.Intuitively, CKS-preservation relaxes key indistinguishability with
+the requirement that access to the CKS functionality does not hurt the security of the underlying
+application Π (originally not designed with CKS in mind). To make this statement non-tautologous,
+[7] had to define the types of applicationsΠ where this makes sense, without using CKS-syntax inside
+Π, but still keepingΠ as general as possible. They call such gamesCKS-compatible. Below we give a
+special case of such a CKS-compatible game, which already shows the impossibility of standard-model
+CKS-presevation.
+Concretely, we will concentrate on the (subset of) CKS-compatible gamesΠ where: (1)Π has a
+sequence of secrets(s1,..., sn); (2)Π remains secure even if permits the adversaryA has access to
+the testing oracleTest(i, s) which returns 1 if s = si. The ROM-based construction of [7] worked for
+all the games in this class, provided the honest parties do not use the random oracle utilized by the
+CKS.3 Thus, to show the standard-model impossibility of instantiating this result, we only need to
+construct a single gameΠ which satisfies properties (1) and (2), but where the knowledge of server
+state stS will breakΠ.
+Counter-Example Game. We consider the following gameΠ between the challengerC and the
+polynomial-time attackerA, where κ is the security parameter, andn is chosen large enough so
+that the length of the CKS statestn after appendingn random secrets si∈{ 0, 1}κ satisfies|stn|≤
+n(κ−ω(logκ)).
+1. C samples random s1,..., sn∈{ 0, 1}κ.
+2. C computes the states of the user after appendings1,..., sn:
+st0← U.Init(1κ)
+∀i∈ [n] : (sti,·)← U.Append(sti−1,i, si, false),
+3. C sends stn toA.
+4. C honestly responds toTest(i,s ) queries ofA: return 1 iff s =si.
+5. A send guess valuess′
+1,..., s′
+n.
+6. C outputs 1 iff∀i∈ [n] s i = s′
+i.
+First, we argue that this game is easily won by the attacker if the attackerA additionally gets
+the server statestS when the standard-model CKS is applied tos1,..., sn, as allowed by the CKS-
+preservation security security definition from [7]. This is true because the correctness of the CKS holds
+even when theAppend and theUpload algorithms are run by the different users. Namely, the adversary
+can still successfully recover the original secretss1,..., sn, by using the “Alice’s state”stn (given toA
+by the challengerC above) and the server statestS obtained when “another user Bob” (corresponding
+to the helper in the “CKS-enhanced game” of [7]) uploaded the corresponding ciphertexts to the server.
+Hence, CKS-preservation does not happen forΠ.
+Second, we nevertheless argue that the original gameΠ is “CKS-compatible”. Namely,Π is secure
+against any polynomial time attackerA, who does not get to see the server statestS in Π, but is
+allowed to have theTest oracle. To see this, we use a standard compression argument. Let us say that
+A madeq = poly(κ) queries to theTestoracle. The key observation is to notice that one can compactly
+encode allq responses using significantly fewer thanq bits. Namely, for eachi∈ [n], we only need to
+know the first indexj∈ [q + 1] where theq’s query ofA was successful (or setj =q + 1 if this never
+2 In the standard model, our result is a strict strengthening of the impossibility result of key-indistinguishable
+CKS from [7], but does not generalize to idealized models.
+3 In practice, this is easy to accomplish with salting.
+7
+
+happened). Thus, allq answers obtained byA take at mostn log(q + 1) = O(n logκ) bits to encode.
+Now, if the attacker winsΠ with non-negligible probability, we can useA to successfully compressnκ
+truly random bitss1,..., sn as follows:
+– Include the final statestn, whose size is assumed to be|stn|≤ n(κ−ω(logκ)).
+– Include the encoding ofq test queries ofA, which takes at mostn log(q + 1) = O(n logκ) bits to
+encode.
+Combined, this information is enough to run the attacker to produce its guesss′
+1,..., s′
+n. Yet, the
+compression string has overall length|stn| +n log(q + 1)≪nκ. Which means that the probability that
+(s′
+1,..., s′
+n) = (s 1,..., sn) must be negligible. Which shows that gameΠ is CKS-compatible.
+Discussion. We make several observations. First, our gameΠ was allowed to depend on the (hypo-
+thetical) algorithms of the standard-model CKS. Indeed, unlike ROM, there is no effective mechanism
+to prevent honest users from (artificially) utilizing the CKS inside the gameΠ, ifΠ is only restricted
+to satisfy very weak properties (1) and (2) for CKS-preservation.4 Notice, that simple techniques
+like utilizing the common reference string do not help, since that string should be available to the
+users to run the CKS, and a general application (even CKS-compatible) could still “trick” the users
+to use the right common reference string. Second, our counter-example above is extremely artificial,
+specifically targeting to break CKS-compatibility, while supporting theTest oracle. This is expected,
+since for most “natural” applications, such as Signal or MLS, we expect the heuristic instantiation of
+the ROM-based construction of [7] to be secure in the real world. Instead, the counter-example below
+should be viewed from the lens that “CKS-preservation” does not appear to be the right security notion
+of CKS forstandard-model instantiations. Indeed, our standard model solution will go back to the
+clean and elegant key-indistinguishability, but will slightly change the functionality of the application
+to circumvent the impossibility result below.
+2.4 Weaker Standard Model CKS
+In this section, we now introduce our new notion of standard-model CKS. Simply put, we distinguish
+between seeds (s1,..., sn) and keys (k1,..., kn), where each key is (deterministically) derived from
+its respective seed. More concretely,U.Append appends a seedsi whilst U.Retrieve later recovers the
+respective key ki. In addition, delegation is assumed to only delegate keys rather than seeds. This
+weaker notion of CKS, of course, is only compatible with applications that distribute seeds, for instance
+as part of a CGKA, but then use keys for the message encryption layer.
+Definition 3. A Standard Model Compact Key Storage (CKS)scheme CKS is a CKS scheme for
+which there is additionally a deterministic algorithmU.Key(e, s)→ k which takes an epoche and a
+seed s, and returns the corresponding keyk. A standard-model CKS scheme is defined with respect
+to a generalized delegation familyG, retrieval familyR, and erasure familyE, each of which takes
+two arguments: the set of epochs for which a party knows the seeds (and therefore also the keys) and
+the set of epochs for which they know the keys only. Finally, for consistency, we denote the output of
+U.Retrieve as keys (instead of secrets).
+Correctness and Security.We now adapt correctness and security to the standard-model setting.
+The former remains mostly unchanged from ROM-CKS with the obvious difference thatU.Retrieve
+now must return the correct keys instead of seeds. That is, if a user for epoche appended a seeds to
+their CKS state, then correctness requires thatU.Retrieve later recovers U.Key(e, s), instead ofs as in
+the ROM-CKS notion.
+ROM-CKS formalized security as two properties: preservation security and integrity. Intuitively, the
+former demands that applying CKS to a so-called “CKS-compatible” application does not undermine
+that application’s security. The latter, on the other hand, requires that the CKS scheme only recovers
+correct seeds — that is, the ones they initially appended to their state — or an error, for an honest
+party interacting with a malicious server potentially colluding with other malicious users. Integrity
+of standard-model CKS also remains mostly unchanged from ROM-CKS, with the obvious changes
+to accommodate the key derivation. For concreteness, we present both the adapted correctness and
+integrity games in Appendix B.
+In the remainder of this section, we present the key-indistinguishability notion of standard-model
+CKS. This notion replaced the preservation-security notion and, intuitively, represents the desired
+best-possible security.
+Definition 4.We say that a standard-model(G,R,E)-CKS scheme CKS is key indistinguishable, if
+the probability of any PPT adversaryA winning the (G,R,E)-CKS-KeyIndistA
+CKS game from Fig. 2 is
+negligible inκ.
+The goal of the adversary is to guess whether the game uses real keys (b = 0) or random ones (b = 1).
+The game follows the template of the preservation-security game from [7], which is very similar to the
+one of the correctness and integrity games. Notably, the adversary has various oracles mirroring the
+CKS algorithms. For each of the interactive algorithms, the adversary furthermore assumes the role of
+the server; that is, the game considers an actively malicious server. (Note that we assume the adversary
+4 Indeed, we will later observe (cf. Theorem 3 and Corollary 4) that for a special sub-class of protocols, we
+can build provably secure CKS in the standard model, even satisfying key indistinguishability!
+8
+
+Game (G,R,E)-CKS-KeyIndistA
+CKS (Security)
+Main
+b←${0, 1}
+n← 0
+St[·], Secret[·], Keys[·], GrantInfo[·]←⊥
+KnownSeed[·,·], KnownKey[·,·], ActualKey[·,·]← false
+(stA ,Corr)←A (1κ)
+b′←A CreateUser,...,Accept(1κ, stA )
+return b′ = b
+Oracle CreateUser
+n← n + 1
+St[n]← U.Init(1κ)
+Oracle Corrupt
+Input: u∈ [n]
+req ActualKey[u,·]⊆ Corr
+return St[u]
+Oracle Append
+Input: (u, e, s)∈ [n]× N ×{ 0, 1}κ
+req¬KnownSeed[u, e]
+(s, k)← sample-if-nec(u, e, s)
+KnownKey[u, e]← true;
+KnownSeed[u, e]← true
+try (St[u], stup)← U.Append(St[u], e, s, upload)
+try
+⟨
+U.Upload(stup)↔A
+⟩
+return k
+Oracle Erase
+Input: (u, share)∈ [n]×P (N )
+reqE(KnownSeed[u,·], KnownKey[u,·], share)
+try
+(
+St[u];⊥
+)
+←
+⟨
+U.Erase(St[u], share)↔A
+⟩
+for e∈ share do
+KnownSeed[u, e]← false; KnownKey[u, e]← false
+ActualKey[u, e]← false
+Oracle Retrieve
+Input: (u, share)∈ [n]×P (N )
+reqR(KnownSeed[u,·], KnownKey[u,·], share)
+try
+(
+keys;⊥
+)
+←
+⟨
+U.Retrieve(St[u], share)↔A
+⟩
+for e∈ share do
+if ActualKey[u, e] then keys(e)← Keys[e]
+return keys
+Oracle Grant
+Input: (u, share, leak)∈ [n]× [n]×P (N )×{ 0, 1}
+reqG(KnownSeed[u,·], KnownKey[u,·], share)
+actual←{ e∈ share| ActualKey[u, e]}
+req¬leak∨ actual⊆C orr
+try
+(
+msg;⊥
+)
+←
+⟨
+U.Grant(St[u], share)↔A
+⟩
+if leak then
+h← msg
+else
+h←${0, 1}κ // handle for delivery
+Msgs[h]← (msg, actual)
+return h
+Oracle Accept
+Input: (u′, share, h)∈ [n]×P (N )×{ 0, 1}∗
+actual =⊥
+if Msgs[h]̸=⊥ then
+(msg, actual)← Msgs[h] // Delivery
+else
+msg← h // Injection
+try
+(
+St[u′], stup;⊥
+)
+←
+⟨
+U.Accept(St[u′], share, msg, upload)↔A
+⟩
+try
+⟨
+U.Upload(stup)↔A
+⟩
+if actual̸=⊥ then
+for e∈ actual do
+if KnownKey[u′, e] = false then
+ActualKey[u′, e]← true
+for e∈ share do
+KnownKey[u′, e]← true
+sample-if-nec(U, e, s)
+if s̸=⊥ then
+k← U.Key(e, s)
+return (s, k)
+else if Secret[e]̸=⊥ then
+Secret[e]←${0, 1}κ
+if b = 0∨ e∈C orr then Keys[e]← U.Key(e, s)
+else Keys[e]←${0, 1}κ
+ActualKey[U, e]← true
+return (Secret[e], Keys[e])
+Fig.2: The key-indistinguishability notion for standard-model CKS. We assume the adversary to not
+interleave calls of the adversarial oracles for the same user.
+not to interleave calls of the oracles for the same user.) The game mostly just executes the protocol
+while keeping track of some additional state. For instance,KnownSeed[U, e] and KnownKey[U, e] keep
+track whether the useru knows the seed and key for epoche, respectively. Furthermore, the game uses
+ActualKey[u, e] to keep track whether the key known by the user for an epoch is the one chosen by
+the game or one injected by the adversary. The seeds and keys chosen by the game are tracked using
+Seed[e] and Keys[e].
+Observe that the functionsample-if-nec samples one fresh seed for every epoche and then uses
+that one consistently thorough the execution. Furthermore, depending on the bitb, it either derives
+the respective key or chooses an independent one. Those keys are then output as part ofU.Append
+and U.Retrieve as challenges, whenever the respective user is known to use the proper seed. (If the
+adversary instead provides a seed forU.Append, by inputtings̸=⊥, then sample-if-nec just returns
+keys that are consistent.)
+Finally, note that in theGrant oracle the adversary gets to choose whether they receive the message
+produces by U.Grant or not, using theleak flag. This message is assumed to be transmitted over a
+secure channel to the recipient; therefore, leaking the message implies leaking the delegated keys. If
+the message is transmitted securely, then the adversary is given an opaque handleh to the message
+instead, which they later can use for delivery to another useru′. In theAccept oracle, the adversary
+can then either input a handleh or a granting messagemsg. In the former case, the game looks up the
+actual granting messagemsg, as well as for which of the granted keys correspond to actual keys chosen
+by the game (as opposed to keys injected by the adversary).
+Note that the game formalizesselective securityby having the adversary commit to the setCorr
+of all epochs for which the keys can be compromised before starting the interaction. Any type of
+corruption, whether leaking a user’s private set or a grant message, is then predicated all of the keys
+which can be deduced by correctness being for corruptible epochs. Finally, observe that this formalizes
+forward secrecy and post-compromise security as corruptions are allowed whenever a user are not
+supposed to know the epoch’s actual key.
+3 Trapdoor Key Derivation
+3.1 Defining TKDFs
+In this section, we introduce the Trapdoor KDF (TKDF) primitive that will serve as the fundamental
+building block for our standard-model schemes. Recall from Section 1.1 that TKDF, in a nutshell,
+9
+
+si
+zi−1
+TKDF.Key
+TKDF.Derive
+ki
+zi
+ci
+det
+$
+TKDF.T rapdoor ti
+TKDF.Invert
+ti−1
+ki
+Fig.3: A schematic representation of our symmetric TKDF scheme.
+represents a kind of “invertible” KDF that generates a keyk and updated statez′ from a seeds and
+previous state z, such that fromz a secrettrapdoor t to invert the operation can be derived.
+A schematic representation of a TKDF scheme is presented in Fig. 3. Observe that (to avoid
+circularity) we only require the inversion to recover the key and trapdoor rather than the seed and
+state. To be suitable for our CKS construction, we also require certain operations to be deterministic,
+as expressed as part of the following definition.
+Definition 5.A Trapdoor Key Derivation Function (TKDF)is a tuple(TKDF. Key, TKDF. Derive,
+TKDF. Trapdoor, TKDF. Invert) of PPT algorithms with an associated seed spaceS, key spaceK,
+state spaceZ, trapdoor spaceT, and ciphertext spaceC.
+– The deterministic key derivation algorithmki← TKDF. Key(si) outputs the keyki corresponding
+to a seedsi
+– The state derivation algorithm(zi, ci)← TKDF. Derive(si, zi−1) takes a seedsi and a statezi−1 as
+inputs, and outputs the next statezi and a ciphertextci. The algorithm can be randomized, butzi is
+a deterministic function of the inputs. Hence, onlyci may depend on the algorithm’s randomness.
+– The deterministic ti← TKDF. Trapdoor(zi) algorithm outputs a trapdoorti based on the state.
+– The deterministic inversion algorithm(ki, ti−1)← TKDF. Invert(ci, ti) takes the ciphertext and
+trapdoor, and outputs the key and the previous trapdoor.
+We generally require the state spaceZ to be small (e.g., about as big as the key space) and in particular
+to consist only of elements of the same length.
+Correctness requires that TKDF. Invert correctly inverts TKDF. Derive, as formalized by the
+following definition.
+Definition 6 (Correctness).We say that a TKDF is correct, if
+Pr
+
+
+(ki, ti−1) = TKDF. Invert(ci, ti)
+⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐⏐
+si←$S, zi−1←$Z,
+ti−1← TKDF. Trapdoor(zi−1),
+ki← TKDF. Key(si),
+(zi, ci)← TKDF. Derive(si, zi−1),
+ti← TKDF. Trapdoor(zi)
+
+
+= 1,
+where the randomness is taken both over the sampling ofzi−1 and si, as well as over the coins of
+TKDF. Derive.
+For security, we require that the resulting keyki is indistinguishable from an independent uniform
+random, for an attacker that does not know the seedsi. Analogously, we require that the trapdoorti
+is indistinguishable from random for an attacker that does not know the secret statezi. (This will be
+important for being able to iterate the TKDF.) Finally, we require the ciphertextci to be semantically
+secure and not reveal any information about eitherki or ti−1 to an adversary not knowingti. The
+precise security definitions are a bit subtle. We now first state the formal definition and then discuss
+some of the intricacies.
+Definition 7(TKDF Security).A TKDF scheme is said to be secure if there exists a PPT algorithm
+TKDF. Sim(ti, ki, ti−1)→ ci which simulates ciphertexts such that the following three properties hold:
+1. Key randomness. For any PPTA, the advantage
+AdvGKeyRand
+TKDF
+(A) :=
+⏐⏐⏐Pr[GKeyRand-0
+TKDF (A)⇒ 1]− Pr[GKeyRand-1
+TKDF (A)⇒ 1]
+⏐⏐⏐
+is negligible in the security parameterκ, for the real-or-ideal game from Fig. 4.
+2. Trapdoor randomness.For any PPTA, the advantage
+AdvGT dRand
+TKDF
+(A) :=
+⏐⏐Pr[GTdRand-0
+TKDF (A)⇒ 1]− Pr[GTdRand-1
+TKDF (A)⇒ 1]
+⏐⏐
+is negligible in the security parameterκ, for the real-or-ideal game from Fig. 5.
+10
+
+Game GKeyRand-0
+TKDF
+Main
+si←$S
+ki← TKDF. Key(si)
+b←A Derive(1κ, ki)
+return b
+Oracle Derive(zi−1)
+(zi, ci)← TKDF. Derive(si, zi−1)
+return (zi, ci)
+Game GKeyRand-1
+TKDF
+Main
+Zi[·]←⊥
+ki←$K
+b←A Derive(1κ, ki)
+return b
+Oracle Derive(zi−1)
+if Zi[zi−1] =⊥ then Zi[zi−1]←$Z
+ti← TKDF. Trapdoor(Zi[zi−1])
+ti−1← TKDF. Trapdoor(zi−1)
+ci← TKDF. Sim(ti, ki, ti−1)
+return (Zi[zi−1], ci)
+Fig.4: The games formalizing key-randomness of a TKDF scheme.
+Game GT dRand-0
+TKDF
+Main
+zi−1←$Z
+ti−1← TKDF. Trapdoor(zi−1)
+b←A Derive(1κ, ti−1)
+return b
+Oracle Derive(si)
+(zi, ci)← TKDF. Derive(si, zi−1)
+return (zi, ci)
+Game GT dRand-1
+TKDF
+Main
+Zi[·]←⊥
+ti−1←$T
+b←A Derive(1κ, ti−1)
+return b
+Oracle Derive(si)
+if Zi[si] =⊥ then Zi[si]←$Z
+ti← TKDF. Trapdoor(Zi[si])
+ki← TKDF. Key(si)
+ci← TKDF. Sim(ti, ki, ti−1)
+return (zi, ci)
+Fig.5: The games formalizing trapdoor-randomness of a TKDF scheme.
+3. Semantic security. For any keys k0
+i and k1
+i, and any trapdoorst0
+i−1 and t1
+i−1, the following
+distributions are computationally indistinguishable:
+{(
+k0
+i, k1
+i, t0
+i−1, t1
+i−1, TKDF. Sim(ti, k0
+i, t0
+i−1)
+)
+: ti←$T
+}
+≈c
+{(
+k0
+i, k1
+i, t0
+i−1, t1
+i−1, TKDF. Sim(ti, k1
+i, t1
+i−1)
+)
+: ti←$T
+}
+.
+We denote withAdvGIND-CP A-OT
+TKDF
+(A) the maximum respective advantage for an adversaryA, over
+any challenge.
+We say that the TKDF scheme isone-time secure if no PPT adversary has non-negligible advantage
+when restricted to a singleDerive query in the key-randomness and trapdoor-randomness games.
+Let us consider the key-randomness property. Intuitively, this property requires thatki is indistin-
+guishable from random when not knowing the seedsi. However, the property further has to account for
+leakage from the ciphertext and, especially, the statezi (which can be used for subsequent evaluations).
+Therefore, the property demands thatki and zi are indistinguishable from independently sampled
+uniform random values. In any actual scheme, however, those values are related via the ciphertextci
+by correctness: Any attacker can deriveti from zi and use this to decryptci, resulting in(ti−1, ki).
+Therefore, GKeyRand-1
+TKDF allows the ciphertext to be generated consistently using a simulatorTKDF. Sim.
+Crucially, the simulator ensures thatti from zi are only related indirectly via the trapdoorti, i.e.,
+that the above check is essentially the only thing an attacker can do to distinguishki and zi from
+independent uniform random values. Finally, note that the attacker gets multipleTKDF. Derive queries
+for their prior statezi−1 of choice. This will turn out to be vital for active security where several users
+knowing the same seedsi are tricked to evaluate the TKDF with different prior states. Indeed, for
+passive security one-time TKDF security suffices.
+Trapdoor randomness is then defined analogously to key randomness. For instance, the attacker
+gets to do multipleTKDF. Derive to anticipate attacks where to parties with the same secret statezi
+are tricked into using different seedssi chosen by the adversary.
+Finally, consider semantic security. This is essentially one-time IND-CPA security for the ciphertext.
+Note that as all three security properties use the same simulator, the former ones already imply that
+the simulated ciphertext is indistinguishable from a real one. Phrasing semantic security in terms of
+the simulator will turn out to make the definition a bit easier to use in hybrid arguments where either
+key randomness or trapdoor randomness is applied first.
+3.2 Symmetric TKDF
+For more CKS schemes with non-trivial delegation and erasure, we need a TKDF that treats its two
+inputs more interchangeably than the basic TKDF notion introduced above. That is, a TKDF does
+not strictly distinguish between the concepts of seeds and states and allows them to be used somewhat
+interchangeably. In particular, we want (1) a TKDF statez can be used as a seed for a subsequent
+TKDF call, and (2) that trapdoors are generated analogously to derived keys.
+11
+
+TKDF.Derive and TKDF.Key
+TKDF.T rapdoor
+TKDF.Invert
+si PRG
+ki
+ki
+PRGzi−1
+xi
+yi
+dPRF
+zi
+SE. Encti−1
+PRG
+ti
+SE. Dec
+ci ki
+ti−1
+PRG
+ti
+Fig.6: A schematic representation of the Symmetric TKDF scheme from Fig. 7. The left box shows
+both TKDF. Key (the upper output only depending onsi) and TKDF. Derive (the middle and lower
+outputs).
+Protocol Symmetric TKDF Scheme
+TKDF. Key
+Input: si∈S
+(ki,·)← PRG(si)
+return ki
+TKDF. Trapdoor
+Input: zi∈Z
+(ti,·)← PRG(zi)
+return ti
+TKDF. Derive
+Input: (si, zi−1)∈S×Z
+(ki, xi)← PRG(si)
+(ti−1, yi)← PRG(zi−1)
+zi← dPRF(xi, yi)
+(·, ti)← PRG(zi)
+ci← SE. Encti ((ti−1, ki))
+return (zi, ci)
+TKDF. Invert
+Input: (ci, ti)∈C×T
+(ti−1, ki)← SE. Decti (ci)
+return (ki, ti−1)
+Fig.7: A simple construction based on a PRG, a dual-PRF, and symmetric encryption. Note that
+TKDF. Key and TKDF. Trapdoor are the same, as required for a symmetric TKDF.
+We call such a TKDF a symmetric TKDF. (We remark that unlike the notion of a symmetric
+PRF [4] we do not necessarily require that such a TKDF treats its argument symmetrically, i.e.,
+TKDF. Derive(s, z) = TKDF. Derive(z, s), but simply that the two arguments play the same general
+role.) We formalize the structural requirement in the following definition.
+Definition 8.A symmetric TKDFis a TKDF scheme with the following structural properties:
+– The seed space is equal to the state space, i.e.,S =Z, and the key space is equal to the trapdoor
+space, i.e.,K =T.
+– The key derivation is equivalent to the trapdoor derivation, i.e.,TKDF. Key = TKDF. Trapdoor.
+The security of a symmetric TKDF is the same as the security of a regular TKDF. Note that key
+randomness and trapdoor randomness coincide iffTKDF. Derive treats its argument symmetrically.
+3.3 A Standard-Model Symmetric-TKDF Construction
+We now present a simple construction of a symmetric TKDF. The construction is based on a length-
+doubling PRG, a dual-PRF [2,4], and a one-time secure symmetric encryption schemeSE. Recall that
+a dual-PRF is a deterministic algorithmdPRF :{0, 1}κ×{ 0, 1}κ→{ 0, 1}κ that behaves like a PRF
+in both arguments, i.e., such that for a uniform random keyk, both dPRF(k,·) and dPRF(·,k ) are
+PRFs. The scheme first uses the PRG to expand the seedsi into the keyki and an auxiliary value
+xi, and to expand the previouszi−1 into yi and the previous trapdoorti−1. The valuesxi and yi are
+then combined using the dPRF to obtain the next statezi. From this state, we moreover derive the
+current trapdoors ti as the second part of the output yield from expandingzi (analogously as forti−1).
+ti then serves as encryption key to encrypt(ti−1, ki). The trapdoor algorithm simply recomputesti
+from zi and, finally, the inversion algorithm decrypts the ciphertext to obtain the trapdoor and key.5
+A schematic depiction of the scheme is presented in Fig. 6, whereas for completeness formal definition
+is given in Fig. 7.
+Note that we assumed here thatZ =S ={0, 1}κ. Using a length-doubling PRG, we can thus
+observe thatK =T ={0, 1}κ as well, implying that our construction satisfies the structural property
+of a symmetric TKDF. Correctness then immediately follows by the correctness of the symmetric
+encryption scheme SE. Security is established by the following theorem.
+5 We remark that if a party consecutively computes zi ← TKDF. Derive(si, zi−1), and zi+1 ←
+TKDF. Derive(si+1, zi), then an actual implementation would not need to expandzi in both operations
+separately. Thus, the number of PRG iterations per epoch is actually two instead of three.
+12
+
+Theorem 1. Assume SE is a one-time IND-CPA secure symmetric encryption scheme,PRG is a
+secure length-doubling pseudo-random generator, anddPRF is a secure dual-PRF. Then, the TKDF
+from Fig. 7 scheme is secure. More formally, for each of the three properties and every PPT adversary
+A, there exist attackersAPRG against the PRG security gameGIND
+PRG, andASE against the IND-CPA
+game GIND-CPA
+SE , that have roughly the same running time, such that
+AdvGKeyRand
+TKDF
+(A)≤ AdvGIND
+PRG
+(APRG) + AdvGIND
+dPRF
+(AdPRF) (1)
+AdvGT dRand
+TKDF
+(A)≤ AdvGIND
+PRG
+(APRG) + AdvGIND
+dPRF
+(AdPRF) (2)
+AdvGIND-CP A-OT
+TKDF
+(A)≤ AdvGIND-CP A-OT
+SE
+(ASE). (3)
+Proof. We use the following simple simulator that just mimics the encryption performed by the scheme
+TKDF. Sim(ti, k0
+i, t0
+i−1) := SE. Encti ((ti−1, ki)).
+First, consider key randomness. Observe that, in theTKDF. Derive computation of GKeyRand-0
+TKDF , by
+PRG security ki and xi are indistinguishable from independent and uniformly random sampled values
+as si is sampled uniformly at random and not otherwise used. Now, we can apply dual-PRF security to
+conclude that in theDerive oracle the dPRF(xi, zi−1) evaluation furthermore behaves like a uniform
+random function in the second argument. Therefore, we can instead replacezi with the output of
+a URF, as inGKeyRand-1
+TKDF . The indistinguishability now follows by observing thatTKDF. Derive just
+computes ti and ti−1 the same way asTKDF. Trapdoor in GKeyRand-1
+TKDF , followed by the same encryption
+that TKDF. Sim performs.
+The trapdoor randomness follows analogously, using thatdPRF(·, zi−1) behaves like a uniform
+random function forzi−1 chosen uniformly at random. Finally, consider the semantic security. Given
+the definition of our simulator, this follows directly from the one-time IND-CPA security ofSE. Enc. ⊓ ⊔
+Corollary 1.Trapdoor KDFs exist if and only if dual-PRFs exist.
+Proof. Dual-PRFs imply the existence of one-way functions and, thus, PRG and (one-time secure)
+symmetric encryption. Therefore, the first direction follows from Theorem 1. Moreover, observe that
+key-randomness and trapdoor-randomness games jointly imply dual-PRF security with respect to the
+first output zi of TKDF. Derive.
+Variants. We now consider some variants of the scheme. First, observe that for one-time TKDF
+security, we can replace the dual-PRF with a simple XOR operation ofxi and yi. The proof follows
+analogously, observing that for a single evaluationxi⊕ yi behaves indistinguishable from the dual-PRF.
+While dPRFs are known to be constructible from standard assumptions [4] it is an open problem
+whether than can be constructed from one-way functions only.
+Theorem 2.When replacing zi← dPRF(xi, yi) with zi← xi⊕ yi in the scheme from Fig. 7, then the
+modified scheme is one-time TKDF secure, assumingSE is a one-time IND-CPA secure symmetric
+encryption scheme andPRG is a secure length-doubling pseudo-random generator.
+Corollary 2.The existence of one-way functions implies the existence of one-time secure TKDF
+schemes.
+Second, we observe that the usage of thePRG is just one special case of a key derivation mechanism,
+expanding a seedsi or state zi into two independent secrets. Therefore, if we have a legacy application
+that already prescribes a key-derivation step, and that allows us to derive one more unrelated secret,
+then our scheme can be made compatible with the legacy application. For instance, the MLS group
+messaging protocol already involves a key derivation function (KDF) based on HKDF [14,5]. Our
+TKDF scheme, could therefore deriveki according to that key derivation andxi using the same
+key derivation but on a different context (and analogously for expandingzi). As long as the legacy
+application does not use that context itself, the composed scheme is secure. The proof of the following
+theorem follows analogous to Theorem 1.
+Theorem 3. For any secure key derivation function (KDF) we can replace the usage ofPRG in the
+scheme from Fig. 7 with theKDF evaluated twice on two distinct contexts. The resulting scheme is a
+secure TKDF, assuming the KDF, the dual-PRF are secure andSE is a one-time IND-CPA secure
+symmetric encryption scheme.
+4 Iterative CKS
+Recall from Section 1.1 that the all-or-nothing scheme by Dodis et al. was built around iteratively
+applying a “derivation” that aggregates a secret state and a seed into a new secret state (and a
+ciphertext) as depicted in Fig. 1. The second scheme by Dodis et al. — which allows for efficient
+delegation and erasure of arbitrary continuous intervals of secrets — follows a similar template. Indeed,
+the scheme simply arranges the epochs as leaves in a binary tree, where each node aggregates its two
+children. (We refer to [7] for details on the scheme.)
+In this section, we abstract CKS schemes built around this template. We call such a scheme
+an iterative CKS scheme, for which we define the respective notion. The corresponding (security)
+definitions for this special case turn out to be significantly simpler than the (fully general) CKS notion
+as introduced in [7]. We then present a unified protocol for the iterative CKS template, based on a
+TKDF, and prove its security. This essentially allows us to reduce choosing the right trade-off between
+functionality (in terms of delegation and fine-grained erasure) and efficiency of CKS schemes to a
+graph theoretic problem.
+13
+
+4.1 Syntax
+In this section, we formally introduce the simplified iterative CKS notion. On a high level, the idea
+is that such a scheme repeatedly aggregates secrets — which could either be seeds or secret states
+themselves — into a new secret and a ciphertext. Intuitively, the resulting secret should allow to reverse
+the aggregation. Therefore, recursively, the state when combined with the appropriate ciphertexts
+should allow recovering any secret that went into the aggregation.
+Note that the aggregation essentially forms a directed graph with seeds as sources and each non-
+source having indegree two. To avoid circularity, we will restrict ourselves to directed acyclic graphs
+(DAG). The following definition assigns each node the set of epochs that have a path from their source
+to the node, i.e., the set of seeds they aggregate over.
+Definition 9.We say S⊆P (2N ) is aset familyfor an interactive CKS if:
+1. ∅ /∈ S
+2. {e}∈ S, for all e∈ N
+3. For each setS ∈S with|S| > 1, there exists a unique decompositionS1,S2 ∈ S such that
+S =S1∪S 2.
+Furthermore, letDagS denote the respective DAG over the setS where an edge(Si,Sj) is present iff
+there existsS′∈ S such thatSj =Si∪S′. By property 3, each internal node ofDagS has in-degree2.
+We now define iterative CKS for a set familyS. Recursively aggregating seeds according to edges in
+DagS, such a scheme allows a party knowing all seeds{se| e∈S} to create a compactseeds stateSSS
+and a compactkeys state KSS, as well as ciphertextCS. For security, the ciphertexts should not reveal
+any information about the keys derived from the seeds. For correctness, on the other hand, the keys
+state KSS and ciphertext CS should be sufficient to recover thekeys by “undoing” the aggregation
+and, ultimately, recover individual keyske.
+Definition 10.An Iterative Compact Key Storage (I-CKS)scheme CKS consists of the following
+PPT algorithms:
+– GenPub(1κ)→ pub generates public parameters for the scheme.
+– DeriveKey(pub, se, e)→ ke returns the key corresponding to a seed for epoche. This algorithm is
+assumed to be deterministic.
+– Init(pub, e, se)→ (SS{e}, C{e}) initializes a secret seeds state forS ={e}. Additionally, output an
+(optional) ciphertext.
+– Compact(S1, SSS1,S2, SSS2 )→ (SSS1∪S2, CS1∪S2 ) takes two seed states and compacts them into a
+joint one and a ciphertext to be stored. This assumes that(S1∪S 2)∈ S.
+– DeriveKS(S, SSS )→ KSS computes the keys state corresponding to a seeds state.
+– Expand(S, KSS, CS,S1,S2)→ (KSS1, KSS2 ) obtains the keys state for a subintervalsS1⊂S and
+S2⊂S based on the keys state for the joint intervalS =S1∪S 2 and the respective ciphertext.
+– Recover(e, KS{e}, C{e})→ ke recovers the keyke for an epoche.
+Correctness. We now formalize the correctness of our notion. Simply put, we require the following
+two properties:
+1. Recover “undoes” Init. Consider an epoche∈ N . Then,
+– (SS{e}, C{e})← Init(pub, e, se)
+– KS{e}← DeriveKS({e}, SS{e})
+– k′
+e← Recover(e, KS{e}, C{e})
+outputs the correct key, i.e.,k′
+e = DeriveKey(pub, se, e).
+2. Expand “undoes” Compact. Consider an epoch setsS1,S2∈ S such that their union is inS. Then,
+– (SSS′, CS′)← Compact(S1, SSS1,S2, SSS2 )
+– KSS′← DeriveKS(S′, SSS′)
+– (KS′
+S1, KS′
+S2 )← Expand(S′, KSS′, CS′,S1,S2)
+produces keys states such thatKS′
+S1 is interchangeable withKSS1 obtained viaDeriveKS(S1, SSS1 ),
+and KS′
+S2 is interchangeable withKSS2, respectively.
+A formal version of correctness is presented in Fig. 8. Note that the game treats any seeds state,
+keys state, and ciphertext for the same epoch setS∈ S interchangeably. In a deterministic scheme
+this is trivially achieved by each being unique — we however only formally requireDeriveKey to be
+deterministic.
+4.2 Security
+For security, we consider two games: pseudorandomness and integrity. The pseudorandomness game
+is depicted in Fig. 9. The game allows the adversary to create an arbitrary number of seed states
+for a single epoch, usingInit, and then to gradually accumulate seeds usingCompact, returning the
+ciphertext to the adversary. ForInit, the adversary obtains either the real keyke, ifb = 0, or a random
+one, ifb = 1. Note that the adversary can also inject their own seed by inputtingse̸=⊥, in which case
+the real key is used. Finally, note that, for simplicity, the game formalizes selective security, with the
+adversary having to commit to the set of corruptionsCorr ahead of time. However, observe that the
+structure of our game (and I-CKS in general) is essentially one of a pebbling game on the graphDagS.
+Therefore, the framework on adaptive security by Jafargholi et al. [10] and Kamath et al. [13] should
+allow us to get (quasi-polynomial) adaptive security for specific graphsDagS.
+14
+
+Game GCorr
+I-CKS
+Main
+win← false,
+public SS, KS, C← []
+pub← GenPub(1κ)
+AInit,...,Recover(1κ, pub)
+return win
+Oracle Init(e, se)
+S←{ e}
+ke← DeriveKey(pub, se, e)
+KS←{ (e, ke)}
+SSS← Init(pub, e, se)
+SS
++
+← (S, SSS ,KS )
+Oracle Compact(S1, SSS1 ,KS1 ,S2, SSS2 ,KS2 )
+S′←S 1∪S 2
+reqS′∈ S∧ (S1, SSS1 ,KS1 )∈ SS
+∧ (S2, SSS2 ,KS2 )∈ SS
+∧ ¬∃e, k1̸= k 2 : (e, k1)∈K 1∧ (e, k2)∈K 2
+(SSS′ , CS′ )← Compact(S1, SSS1 ,S2, SSS2 )
+KS′←K 1∪K 2
+SS
++
+← (S′, SSS′ ,K′); C
++
+← (S′, CS′ ,K′)
+Oracle DeriveKS(S, SSS ,KS )
+req (S, SSS ,KS )∈ SS
+KSS← DeriveKS(S, SSS )
+KS
++
+← (S, KSS ,KS )
+Oracle Expand(S, KSS ,KS , CS ,S1,S2)
+req (S, KSS ,KS )∈ KS∧ (S, CS ,KS )∈ C
+∧ S1∈ S∧S 2∈ S∧ (S1∪S 2) =S
+(KSS1 , KSS2 )← Expand(S, KSS , CS ,S1,S2)
+KS1←{ (e, k)∈KS| e∈S 1}
+KS2←{ (e, k)∈KS| e∈S 2}
+KS
++
+← (S1, KSS1 ,KS1 ); KS
++
+← (S2, KSS2 ,KS2 )
+Oracle Recover(e, KS{e}, C{e},K{e})
+S←{ e}
+req (S, KSS ,KS )∈ KS∧ (S, CS ,KS )∈ C
+ke← Recover(e, KSS , CS )
+if (e, ke) /∈KS then win← true
+Fig.8: The Iterative CKS correctness game.
+Game GKeys-RoR
+I-CKS
+Main
+b←${0, 1},
+SS← []
+Seeds[·], Keys[·]←⊥
+pub← GenPub(1κ)
+(stA ,Corr)←A (1κ, pub)
+b′←A Init,Corrupt,Compact(stA )
+return b′ = b
+Oracle Init(i, e, se)
+S←{ e}
+(se, ke)← sample-if-nec(e, se)
+(SSS , CS )← Init(pub, e, se)
+SS
++
+← (S, SSS )
+return (ke, CS )
+Oracle Corrupt(i)
+(S, SSS )← SS[i]
+reqS⊆C orr
+return SSS
+Oracle Compact(i, j)
+(S1, SSS1 )← SS[i]; (S2, SSS2 )← SS[j]
+S′←S 1∪S 2
+reqS′∈ S
+(SSS′ , CS′ )← Compact(S1, SSS1 ,S2, SSS2 )
+SS
++
+← (S′, SSS′ )
+return CS′
+sample-if-nec(e, se)
+ke← DeriveKey(Seeds[e])
+if se̸=⊥ then return (se, ke)
+else if Seeds[e] =⊥ then
+Seeds[e]←${0, 1}κ
+if b = 0∨ e∈C orr then Keys[e]← ke
+else Keys[e]←${0, 1}κ
+return (Seeds[e], Keys[e])
+Fig.9: The real-or-random security game for an Iterative CKS scheme.
+Definition 11.An I-CKS scheme is secure, if for any set familyS, the following advantage
+AdvGKeys-RoR
+I-CKS
+(A) := Pr[GKeys-RoR
+I-CKS (A)⇒ 1]
+is negligible inκ for any PPT adversaryA. We say that the scheme is passively secure if the advantage
+is negligible for anyA who is restricted to only passse =⊥ to the Init oracle.
+The integrity game, depicted in Fig. 10, is similar to the correctness game in structure. It, however,
+no longer restricts the adversary to submit honestly generated ciphertexts and, in turn, allows the
+algorithms to fail. Integrity then requires thatRecover either fails or outputs the same keyke that was
+initially aggregated over. In addition, the game can be won ifCompact succeeds on seed states that
+contain conflicting information for the same epoch. Observe that the game formalizes a strong variant
+of integrity where all states are presumed to be public (analogous to the general CKS integrity game).
+Definition 12.An I-CKS scheme is said to satisfy integrity, if for any set familyS, the following
+advantage is negligible inκ for any PPT adversaryA:
+AdvGIntegrity
+I-CKS
+(A) := Pr[GIntegrity
+I-CKS (A)⇒ 1].
+4.3 Constructing I-CKS from TKDF
+We now build a generic iterative CKS scheme based on a (symmetric) TKDF. Recall from Section 1.1
+that the goal of a TKDF was to provide a standard-model abstraction for the “derive” and “invert”
+boxes used in the schemes of [7]. See, for example, Fig. 1 for a high-level schematic of the ROM-CKS
+all-or-nothing scheme — and compare it with the intended analogous for the standard model presented
+in Fig. 11.
+The scheme for a set familyS is then fairly straightforward. In a nutshell, TKDF states roughly
+correspond to seed states, and TKDF trapdoors to key states. For each internal node ofDagS we
+use TKDF. Derive to compact the seed states of its two child nodes as part ofCompact. Conversely,
+for Expand we use TKDF. Invert to obtain the key states of the node’s children. We now discuss the
+scheme in a bit more detail; see Fig. 12 for a pseudocode description.
+15
+
+Game GIntegrity
+I-CKS
+Main
+win← false,
+public SS, KS← []
+pub← GenPub(1κ)
+AInit,...,Recover(1κ, pub)
+return win
+Oracle Init(e, se)
+S←{ e}
+ke← DeriveKey(se)
+KS←{ (e, ke)}
+try (SSS , CS )← Init(pub, e, se)
+SS
++
+← (S, SSS ,KS )
+Oracle Compact(S1, SSS1 ,KS1 ,S2, SSS2 ,KS2 )
+S′←S 1∪S 2
+req (S1, SSS1 ,KS1 )∈ SS
+∧ (S2, SSS2 ,KS2 )∈ SS∧S′∈ S
+try (SSS′ , CS′ )← Compact(S1, SSS1 ,S2, SSS2 )
+if∃e, k1̸= k 2 : (e, k1)∈KS1∧ (e, k2)∈KS2 then
+win← true
+SS
++
+← (S′, SSS′ ,KS1∪KS2 )
+Oracle DeriveKS(S, SSS ,KS )
+req (S, SSS ,KS )∈ SS
+try KSS← DeriveKS(S, SSS )
+KS
++
+← (S, KSS ,KS )
+Oracle Expand(S, KSS ,KS , CS ,S1,S2)
+req (S, KSS ,KS )∈ KS∧ (S1∪S 2) =S
+∧ S1∈ S∧S 2∈ S
+try (KSS1 , KSS2 )← Expand(S, KSS , CS ,S1,S2)
+KS1←{ (e, k)∈KS| e∈S 1}
+KS2←{ (e, k)∈KS| e∈S 2}
+KS
++
+← (S1, KSS1 ,KS1 ); KS
++
+← (S2, KSS2 ,KS2 )
+Oracle Recover(e, KS{e}, C{e},K{e})
+S←{ e}
+req (S, KSS ,KS )∈ KS
+try ke← Recover(e, KSS , CS )
+if (e, ke) /∈KS then win← true
+Fig.10: The integrity game for an Iterative CKS scheme.
+˜ z
+Derive
+s1
+z1
+c1
+Invert
+˜t
+k1
+t1
+T rapdoor
+Derive
+s2
+z2
+c2
+Invert
+k2
+t2
+T rapdoor
+Derive
+s3
+z3
+c3
+Invert
+k3
+t3
+T rapdoor
+Fig.11: The all-or-nothing scheme from Fig. 1 adapted to the standard-model CKS setting, using a
+TKDF instead of convergent encryption.˜ zis some fixed TKDF state used to initialize the iteration.
+Note that the tagsTi from Fig. 1 are omitted here (which are not to be confused with the trapdoors
+ti).
+Seed states and key states.For now, let us describe a variant of the scheme without integrity. Each
+seed state SSS is then of one of two forms: (a) a regular stateSSS = zS storing a TKDF state, or
+(b) an immediate stateSSS = s e, in caseS ={e}. (For clarity, we further mark the state with the
+constant ‘seeds′.) Analogously, each keys stateKSS either (a) is a TKDF trapdoorKSS = tS, if
+|S| > 1, or (b) a keyKS e = k e ifS ={e}.
+Init and Recover.Both Init and Recover are, in principle, extremely simple. The former just outputs
+SS{e} = s e as seed state, with no ciphertext necessary. The latter takesKS{e} = k e and outputs ke.
+Some complications arise from supporting regular TKDF, for instance for the all-or-nothing scheme
+depicted in Fig. 11. Observe that hereSS{1} and SS{2} have to behave slightly differently, as the
+former seed s1 has the extra derivation with the initial constant state˜ z. (Looking slightly ahead, the
+TKDF. Derive mixing in s2 will be performed as part ofCompact of SS{1} and SS{2}.) To solve this
+issue, the formal protocol from Fig. 12 solves this issue by introducing a “base set”B⊆ N of epochs,
+for which such an extra derivation should be performed. BothB and ˜ zare then considered protocol
+parameters.
+Compact, DeriveKS, and Expand.As mentioned, Compact corresponds directly to TKDF. Derive
+and Expand to TKDF. Invert. Similarly,DeriveKS corresponds directly toTKDF. Trapdoor, deriving
+the TKDF trapdoor (= keys state) from the TKDF state (= seeds state). One more subtlety arises,
+however. We want different users to compact two states in the same order, i.e., they should agree
+on which of the statesSSS1 or SSS2 is used as a first and which as a second argument. Otherwise,
+various parties who may learn the same set of seeds in different orders may still create incompatible
+outsourcings, undermining the compactness of the server state. In particular, the order must be well
+defined when using Expand to recover prior trapdoors. We solve this by introducing as a protocol
+parameter an order≺ on any two setsS1 andS2 which can be combined. (Note that this is not required
+to be a proper order relation among allS, something like the lexicographic order on the descriptions
+ofS1 andS2 would suffice.)
+16
+
+Protocol I-CKS Scheme
+Parameters:
+– set family S;
+– ordering of sets S1≺S 2, for all S1,S2 such that S1∪S 2∈ S;
+– set of epochs B⊆ N for which an extra derivation step is applied;
+– a constant TKDF state ˜ z∈Z to be used for epochs e∈B .
+GenPub(1κ)
+pub←${0, 1}κ
+return pub
+DeriveKey(pub, se, e)
+ke← TKDF. Key(se)
+return ke
+Init(pub, e, se)
+h← Hpub(e)
+if e∈B then
+(z, c)← TKDF. Derive(se, ˜ z)
+SS← (‘seeds′, z, h)
+C← (h,⊥, c)
+return (SS, C )
+else
+h← Hpub(e)
+SS← (‘seeds′, se, h)
+return (SS,⊥)
+Compact(S1, SSS1 ,S2, SSS2 )
+reqS1,S2∈ S∧ (S1∪S 2)∈ S
+∧ S1≺S 2
+parse (‘seeds′, z1, h1)← SSS1
+parse (‘seeds′, z2, h2)← SSS1
+(z, c)← TKDF. Derive(z1, z2)
+h← Hpub(h1, h2, c)
+C← (h1, h2, c)
+SS← (‘seeds′, z, h)
+return (SS, C )
+DeriveKS(S, SSS )
+reqS∈ S
+if∃e∈ N \B :S ={e} then
+parse (‘seeds′, s, h)← SSS
+k← TKDF. Key(s)
+KSS← (‘keys′, k, h)
+else
+parse (‘seeds′, z, h)← SSS
+t← TKDF. Trapdoor(z)
+KSS← (‘keys′, t, h)
+return KSS
+Expand(S, KSS , CS ,S1,S2)
+reqS,S1,S2∈ S∧ (S1∪S 2) =S
+∧ S1≺S 2
+parse (‘keys′, t, h)← KSS
+parse (h1, h2, c)← CS
+req h = H pub(h1, h2, c)
+(t1, t2)← TKDF. Invert(c, t)
+KS 1← (‘keys′, t1, h1)
+KS 2← (‘keys′, t2, h2)
+return (KS 1, KS 2)
+Recover(e, KS{e}, C{e})
+if e∈B then
+parse (‘keys′, t, h)← KS{e}
+parse (h′,⊥, c)
+req h′ = h∧ h = H pub(e)
+(k, t′)← TKDF. Invert(c, t)
+req t′ = TKDF. Trapdoor(˜ z)
+else
+parse (‘keys′, k, h)← KS{e}
+req h = H pub(e)
+return k
+Fig.12: A description of the I-CKS scheme based on a (symmetric) TKDF. Note that for brevity we did
+not include the public hash keypub as part of every state. Furthermore, inCompact and Expand we
+assumeS1≺S 2; the general protocol is obtained by invoking the algorithm with reversed arguments
+in the other case.
+Integrity. Finally, let us enhance our protocol to satisfy integrity. This can be done using a collision-
+resistant hash functionHpub(·). Each state is enhanced with a hash, where the hash of a combined
+state is set toh = Hpub(h1,h 2, c), when computingCompact on seed states with hashesh1 and h2,
+respectively, and c is the TKDF ciphertext produced duringCompact. The hashesh1 and h2 are then
+output as part of the ciphertext alongc, i.e., we setC = (h1,h 2, c). For an immediate stateSS{e} the
+hash just binds the epoch numbere.
+Correctness and security.The correctness of the scheme follows from the correctness of the TKDF
+and inspection.
+Theorem 4.The iterative CKS scheme from Fig. 12 is correct if the underlying TKDF is correct and
+has deterministic ciphertexts. More concretely,
+AdvGCorr
+I−CKS
+(A)≤ (qInit +qCompact)· AdvGCorr
+TKDF
+(A′)
+)
+whereqInit and qCompact denote bounds on the number ofInit and Compact calls.
+Proof. Note that the TKDF states and trapdoor are deterministic functions of the inputs. Therefore,
+each unique setK ={(e, se)| e∈S} of epoch-seed pairs there is exactly one corresponding seed state
+SSS and key stateKSS. As a result, for eachK there exists a unique TKDF statezi and ti. Finally
+not thatqInit +qCompact is a bound on the number of TKDF instances. Correctness is thus directly
+implied by the correctness of the TKDF. ⊓ ⊔
+We now establish security of the TKDF scheme.
+Theorem 5.The iterative CKS scheme from Fig. 12 satisfies real-or-random security of keys if the
+TKDF is secure. More concretely,
+AdvGKeys-RoR
+I-CKS
+(A)≤ (qInit +qCompact)·
+(
+AdvGKeyRand
+TKDF
+(A1) + AdvGT dRand
+TKDF
+(A2)
++ AdvGIND-CP A-OT
+TKDF
+(A3)
+)
+whereqInit and qCompact denote bounds on the number ofInit and Compact calls.
+Proof. We perform two sequences of hybrids overDagS. (Technically, over the subset of vertices
+the adversary explores during the interaction, i.e., the set ofS for which SSS is computed.) More
+specifically, we actually have one copy of the node for each distinct seed stateSSS the adversary
+generates for the node. In each hybrid step, exactly one node gets touched. For simplicity, we ignore
+the hashes in the following, as they are only computed on public data (ciphertexts and other hashes).
+We say that the node is secure if at least one of its children is secure. A source is said to be secure if it
+uses a seed not provided by the adversary and if its epoch is not inCorr.
+The first sequence of hybrids is in the direction of the graph, i.e., we visit each secure node once all
+its children have been visited. Consider a particular node characterized byv = (S, zS, tS, cS ). Do the
+following steps:
+17
+
+– For all its parent nodes that have not been such thatv is a left child (according to≺), replace tS
+by a freshly sampled value andcS with a simulated ciphertext.
+– Analogously for parent nodes wherev is the right child. (Replace each node only once.)
+Note that the invariant we maintain is that when starting the hybrid step,v already has an independent
+TKDF trapdoor and simulated ciphertext, meaning itsz is independent of nodes lower in the graph.
+Therefore, the first step is indistinguishable by key randomness whereas the latter by trapdoor
+randomness. (For source nodes withe∈B initially perform the same step.)
+Now consider the second sequence of hybrids in the reverse direction. For simplicity, consider a sink
+v = (S, zS, tS, cS ). Observe thatzS is not used at all in the game. Therefore, we can apply semantic
+security to replacecS with a ciphertext that is independent of all other values in the game. More
+generally, once forv the ciphertext of all its parent nodes have had their ciphertext replaced, the above
+argument holds.
+At the end of the second hybrid sequence, all trapdoors/keys assigned to secure nodes are (1)
+independently and uniformly sampled and (2) not otherwise used in the game. It is easy to see that in
+this game the adversary can thus not distinguish “real” keys from random ones. ⊓ ⊔
+Theorem 6.The iterative CKS scheme from Fig. 12 satisfies integrity if the hash functionHpub(·) is
+collision-resistant and the TKDF correct and has deterministic ciphertexts. More concretely,
+AdvGIntegrity
+I-CKS
+(A)≤ (qInit +qCompact)·
+(
+AdvGCorr
+TKDF
+(A′) + AdvGCR
+H
+(A′′)
+)
+whereqInit and qCompact denote bounds on the number ofInit and Compact calls.
+Proof. By collision resistance of the hash functionHpub(·), Expand and Recover will only accept the
+exact ciphertext C used to generate the respective keys space. Furthermore, the protocol will only
+accept the correct hash values for the child nodes inDagS as well. This reduces integrity to correctness,
+which in turn is implied by the correctness of the TKDF. ⊓ ⊔
+Variants. The above scheme is secure against an active adversary controlling the server (i.e., delivering
+wrong ciphertexts) and malicious insiders making parties use inconsistent and adversarially chosen
+seeds. We state some simple observations about weaker security models. First, we note that hash
+functions are only needed to protect against an active attacker delivering wrong ciphertexts.
+Corollary 3. Standard-model I-CKS against honest-but-curious servers, i.e., without integrity, can be
+built from dual-PRFs. Additionally, the TKDF ciphertexts do not need to be deterministic.
+Second, we observe that one-time TKDF security suffices when considering outsider security only.
+Lemma 1.Outsider-secure I-CKS, e.g., when restricting the adversary to submitse =⊥ for the Init
+oracle can be built from one-time secure TKDF and, therefore, from one-way function only.
+Proof. Observe that in the proof of real-or-random security, the number ofTKDF. Derive(z,·) queries
+correspond to the number of distinct other seed statesz gets compacted with. In the case of outsider
+security, those states are unique (for each setS). Therefore, one-time key randomness suffices. The
+analogous argument can be made forTKDF. Derive(·, z) and one-time trapdoor randomness.
+5 CKS from Iterative CKS
+In this section, we sketch how to turn any iterative CKS scheme into a regular (standard model) CKS
+scheme. This provides a template for how to use iterative CKS for a group of parties to outsource
+a sequence of keys that are derived from seeds. Note that the key derivationU.Key(e, s) for the
+standard-model CKS scheme is just the one from the iterative CKS scheme, i.e.,DeriveKey(se, e). If
+we target insider security or security against malicious servers, we require the iterative CKS scheme to
+have deterministic ciphertexts. For the weakest passive security notion, any I-CKS scheme suffices. In
+the following, we consider the stronger security notion (and briefly discuss the weaker variants).
+Server state and algorithms. The server just implements a bulletin boardBB. Each entry stores
+an I-CKS ciphertextC and is indexed by a collision-resistant hash thereof, i.e.,BB[Hpub(C )] = C.
+Importantly, the server will compute the hash themselves. This ensures that a malicious insider cannot
+overwrite a valid ciphertext of another user, or preemptively set a position of the bulletin board to
+something invalid. For a passively secure CKS protocol, we can index the bulletin board using a
+description of the setS instead, i.e., BB[S] = CS. The server will then store the first ciphertext sent
+for eachS and ignore all subsequent ones.
+As we will see,U.Upload will just send a set of ciphertexts that the server will store. Similarly,
+U.Erase, U.Grant, U.Accept, and U.retrieve will query the bulletin board for a subset of positions. We
+note that for our specific iterative CKS scheme, this could be a bit optimized: asC = (h1,h 2, c) the
+user would not need to (iteratively) query forh1 and h2 and the server could just (recursively) include
+all ciphertexts needed by the protocol.
+18
+
+User state. The client state depends on the graphDagS. More specifically, the client stores the seeds
+state SSS or the keys stateKSS for a subset of nodes. We say that for a nodeS∈ S, we say that
+SSS is derivable if either (a)SSS is directly stored or (b) it is derivable for at least one of the parent
+nodes ofS. We say thatKSS is derivable if either (a)KSS is stored, (b)SSS is stored, or (c) the keys
+state is derivable for at least one of the parent nodes ofS. We say thatSSS and KSS are indirectly
+derivable if the respective options (a) do not apply. The user state is then maintained subject to the
+following invariant, where additional seeds states or keys states are purged.
+Invariant 1 (Compactness)A nodeS∈ S only has the seeds stateSS stored if it’s not indirectly
+derivable. Analogously, it only has the keys stateKS stored if it’s not indirectly derivable. (This in
+particular means that that no node stores both seeds and keys state.)
+Appending seeds.When appending a seedse for an epoche, the algorithm proceeds in three steps:
+1. Create a seeds stateSS{e}← Init(e, se) for the leaf node.
+2. Iteratively derive seeds along all paths starting at the leaf node usingCompact. That is, for any
+of the nodes along a path, if the seeds states of both children are known, then useCompact to
+compute the one for this node.
+3. Purge any seeds states or keys states that violate compactness.
+The upload state stup then contains all ciphertexts produced by Compact. We assume those
+ciphertexts to be deterministic (which does not violate security; for instance, our TKDF uses a
+one-time IND-CPA secure encryption scheme) then they can simply be sent to the server.
+Retrieving keys. To retrieve the keyke for an epoche, U.retrieve identifies a node on a path from the
+leafS ={e} for which either the seeds state or the keys state is stored. (If multiple candidates exist,
+pick e.g. the one the shortest distance from the leaf.) If it is a seeds state, useDeriveKS to derive the
+respective keys state. Then the algorithm usesExpand and finally Recover to retrieve the key. For
+each step, request the necessary ciphertexts from the server. To retrieve the keys for an entire subset
+of epochs share⊂ N , the above steps are generalized by identifying a suitable set of (internal) nodes
+that cover share with respect to reachability inDagS.
+Delegation. Delegation works similarly to the retrieval of keys, except that internal nodes are not
+further expanded if all or their descendants are part of the set of delegated keysshare⊂ N . Note that
+the delegation message can either contain keys statesKSS or SSS. The latter is preferable if it is
+stored by the delegating user. The accepting user receives those elements. If they already know keys for
+any epoch e∈ share they check consistency by recovering the keyke according to their own state and
+the retrieved one. Afterward, they add the obtained information to their local state and compact it.
+Erasing keys. Erasure works like self-delegation of the epochs not erased, except that no consistency
+checks are needed. That is, if a user knows — i.e., can currently recover — keys for epochsK and
+wants to eraseshare, then they self-delegateK\ share.
+Functionality and efficiency.Observe that the efficiency of the above scheme inherently depends
+onDagS. As a result, the choice ofDagS also dictates which sets of epochs can be efficiently retrieved,
+delegated, and erased as formalized byR,G, andE. We do not make this connection fully formal but
+only highlight some of the relations.
+– Small covers.For the user state to be compact, there need to exist nodes that “cover” large sets of
+epochs, i.e., for which a large set of leaf nodes are descendants. For instance in the all-or-nothing
+scheme in [7] there exist nodes that cover[1,n ], for anyn, and in the interval scheme nodes that
+cover [2i, 2i + 2j− 1] for i,j ∈{ 0, 1,... }.
+Similarly, delegation and erasure only work efficiently for subsetsshare⊂ N that have a small
+cover, sub-linear inshare.
+– Limited out degrees.If a node inDagS has too many ancestors on disjoint paths, thenU.Append
+becomes inefficient. In [7], both schemes used a structure where each node has out-degree1.
+– Short diameter.IfDagS contains too long path, thenU.Append or U.retrievecan become inefficient.
+This is, for instance, the reason why the all-or-nothing scheme cannot support efficient (i.e., sub-
+linear) retrieval of individual keys.
+Security and correctness.The security of the standard-model CKS scheme reduces directly to the
+respective properties of the iterative CKS scheme. In other words, the integrity of the CKS scheme
+follows from the integrity of the I-CKS scheme, and analogously for pseudorandomness and correctness.
+The proof of the following theorem follows by inspection.
+Theorem 7(Informal). The above sketched CKS scheme is correct and secure if the iterative CKS
+scheme is correct and secure. The same furthermore applies to the variants considering passive security
+or security against an honest-but-curious server.
+19
+
+Legacy compatibility. Observe that the result from Theorem 3 carries over to the entire CKS
+scheme.
+Corollary 4. Assume there is an E2E-secure application that provides a secure KDF, that we can
+evaluate on one additional input, to derive keys from initial seeds (and does not otherwise use the
+seeds). Then we can build a CKS scheme that is compatible with said application that recovers the keys.
+In particular, this class of legacy applications contains common schemes such as the Double Ratchet
+or MLS, which use a key schedule based on HKDF.
+References
+1. Bagherzandi, A., Jarecki, S., Saxena, N., Lu, Y.: Password-protected secret sharing. In: Chen, Y., Danezis,
+G., Shmatikov, V. (eds.) ACM CCS 2011. pp. 433–444. ACM Press (Oct 2011).https://doi.org/10.
+1145/2046707.2046758
+2. Bellare, M.: New proofs for NMAC and HMAC: Security without collision resistance. Journal of Cryptology
+28(4), 844–878 (Oct 2015).https://doi.org/10.1007/s00145-014-9185-x
+3. Bellare, M., Keelveedhi, S., Ristenpart, T.: Message-locked encryption and secure deduplication. In:
+Johansson, T., Nguyen, P.Q. (eds.) EUROCRYPT 2013. LNCS, vol. 7881, pp. 296–312. Springer, Heidelberg
+(May 2013). https://doi.org/10.1007/978-3-642-38348-9_18
+4. Bellare, M., Lysyanskaya, A.: Symmetric and dual PRFs from standard assumptions: A generic validation
+of an HMAC assumption. Cryptology ePrint Archive, Report 2015/1198 (2015),https://eprint.iacr.
+org/2015/1198
+5. Brzuska, C., Cornelissen, E., Kohbrok, K.: Security analysis of the MLS key derivation. In: 2022 IEEE
+Symposium on Security and Privacy. pp. 2535–2553. IEEE Computer Society Press (May 2022).https:
+//doi.org/10.1109/SP46214.2022.9833678
+6. Das, P., Hesse, J., Lehmann, A.: DPaSE: Distributed password-authenticated symmetric-key encryption,
+or how to get many keys from one password. In: Suga, Y., Sakurai, K., Ding, X., Sako, K. (eds.) ASIACCS
+22. pp. 682–696. ACM Press (May / Jun 2022).https://doi.org/10.1145/3488932.3517389
+7. Dodis, Y., Jost, D., Marcedone, A.: Compact key storage. In: Reyzin, L., Stebila, D. (eds.) Advances in
+Cryptology – CRYPTO 2024. pp. 75–109. Springer Nature Switzerland, Cham (2024)
+8. Douceur, J., Adya, A., Bolosky, W., Simon, P., Theimer, M.: Reclaiming space from duplicate files in a
+serverless distributed file system. In: Proceedings 22nd International Conference on Distributed Computing
+Systems. pp. 617–624 (2002).https://doi.org/10.1109/ICDCS.2002.1022312
+9. Fábrega, A., Pérez, C.O., Namavari, A., Nassi, B., Agarwal, R., Ristenpart, T.: Injection attacks against end-
+to-end encrypted applications. In: 2024 IEEE Symposium on Security and Privacy (SP). pp. 85–85. IEEE
+Computer Society, Los Alamitos, CA, USA (may 2024).https://doi.org/10.1109/SP54263.2024.00082,
+https://doi.ieeecomputersociety.org/10.1109/SP54263.2024.00082
+10. Jafargholi, Z., Kamath, C., Klein, K., Komargodski, I., Pietrzak, K., Wichs, D.: Be adaptive, avoid
+overcommitting. In: Katz, J., Shacham, H. (eds.) CRYPTO 2017, Part I. LNCS, vol. 10401, pp. 133–163.
+Springer, Heidelberg (Aug 2017).https://doi.org/10.1007/978-3-319-63688-7_5
+11. Jarecki, S., Kiayias, A., Krawczyk, H., Xu, J.: Highly-efficient and composable password-protected secret
+sharing (or: How to protect your bitcoin wallet online). In: 2016 IEEE European Symposium on Security and
+Privacy (EuroS&P). pp. 276–291. IEEE Computer Society, Los Alamitos, CA, USA (mar 2016).https://
+doi.org/10.1109/EuroSP.2016.30, https://doi.ieeecomputersociety.org/10.1109/EuroSP.2016.30
+12. Jarecki, S., Krawczyk, H., Resch, J.K.: Updatable oblivious key management for storage systems. In:
+Cavallaro, L., Kinder, J., Wang, X., Katz, J. (eds.) ACM CCS 2019. pp. 379–393. ACM Press (Nov 2019).
+https://doi.org/10.1145/3319535.3363196
+13. Kamath, C., Klein, K., Pietrzak, K., Walter, M.: The cost of adaptivity in security games on graphs. In:
+Nissim, K., Waters, B. (eds.) TCC 2021, Part II. LNCS, vol. 13043, pp. 550–581. Springer, Heidelberg
+(Nov 2021). https://doi.org/10.1007/978-3-030-90453-1_19
+14. Krawczyk, H.: Cryptographic extraction and key derivation: The HKDF scheme. In: Rabin, T. (ed.)
+CRYPTO 2010. LNCS, vol. 6223, pp. 631–648. Springer, Heidelberg (Aug 2010).https://doi.org/10.
+1007/978-3-642-14623-7_34
+20
+
+A Preliminaries
+Notation. Let N :={1, 2,... }. x←a denotes assigning the valuea to the variablex and, for a setS,
+we writex←$S to denote sampling an element uniformly at random.P(S) denotes the powerset ofS
+and κ∈ N the security parameter. When describing stateful algorithms or security games, we make
+use of the following special keywords. First, for a boolean conditioncond, the statementreq cond is a
+shorthand for “ifcond is false, revert all changes to the state made during this invocation and return
+an error⊥.” Second, the statementparse (x,y )←z denotes the attempt to parsez as a tuple and
+abort analogous toreq in case this is not possible. Third, we usetry y← A(x) to denote that if the
+invocation of algorithmA fails, the calling procedure itself unwinds and aborts with an error.
+Interactive Algorithms. For describing interactive algorithms, we adapt the notation of [7] and
+assume a simple notion of (token-based) interactive algorithms. An execution of a two-party algorithm
+Alg between partiesA and B is denoted (yA;yB)←
+⟨
+A.Alg(xA)↔ B.Alg(xB)
+⟩
+, wherexA and xB
+denote the respective parties’ inputs andyA and yB their outputs. In particular, we view oracle
+machines as a special case of such an interactive algorithm where the oracle name is appropriately
+encoded as part of a message sent from the invoking party to the invoked party.
+When executing an interactive protocol between two honest parties in a security game we assume
+that the oracle blocks until the interaction is finished. We write(yU ;⊥)←
+⟨
+U.Alg(xU )↔A
+⟩
+to denote
+that the adversary acts as the second party. In that case, whenever the interactive protocol transfers
+control to the adversary, they may either choose to reply and transfer control back to the partyU, or
+may choose to invoke a different oracle, or answer to a different ongoing interactive protocol. As such,
+the adversary may arbitrarily interleave oracle invocations and protocol executions (unless otherwise
+specified). The execution of the oracle code continues once the honest party terminates.
+Cryptographic Primitives. We use some basic cryptographic primitives.
+Pseudo-Random Generators.A length-doubling pseudo-random generatorPRG :{0, 1}κ→{ 0, 1}2κ.
+We require that {
+PRG(Uκ)
+}
+κ∈N ≈c
+{
+U2κ
+}
+κ∈N
+where Un denotes the uniform distribution over{0, 1}n.
+Dual-PRF. A dual-PRF, as introduced in [2], is a functiondPRF :X×Y→Z is a deterministic
+algorithm such that for uniform randomx←$X and y←$Y, both dPRF(x,·) and dPRF(·,y ) behave
+like a PRF. That is, the former is computationally indistinguishable, for any PPT adversaryA having
+oracle access, from a uniform random functionF :Y→Z and the latter form a uniform random
+function G :X→Z .
+Hash functions. We use a family of hash functionsHk(·) :{0, 1}∗→{ 0, 1}κ, indexed by a public
+hash-key k∈{ 0, 1}κ. We require the function family to be collision-resistant, namely, that givenk
+chosen uniformly at random any PPT adversaryA has negligible probability in findingx̸=x′ such
+that Hk(x) = Hk(x′).
+Symmetric encryption. Finally, we require a one-time IND-CPA secure symmetric encryption scheme
+SE = (SE. Enc, SE. Dec). Here one-time security means that the adversary only gets to make a single
+challenge (m0,m 1) to the challenger — to receive an encryption ofmb — with no further encryption
+(or decryption) queries allowed.
+B Standard-model CKS: Definitions
+In this section, we formally define correctness and integrity for standard-model CKS. The definitions
+follow closely the ones for ROM-CKS as introduced in [7].
+B.1 Correctness
+In a nutshell, correctness requires that parties retrieve the correct keys when interacting with an honest
+server. Note that the correctness notion accounts for malicious insiders: even when a malicious insider
+uploads information to the honest server, correctness must be ensured for honest users. The game is a
+rather straightforward modification of the one from [7], the main differences are:
+– The game keeps track separately of for which epoch a useru knows the seed and key using the
+KnownSeed and KnownKey arrays, respectively, instead of using a singleKnown array. Whenever a
+seed is appended, the user is assumed to both know the seed and key, whereas delegation is only
+assumed to delegate keys.
+– Accordingly, the game tracks the concrete seeds and keys each user knows usingSeeds[u, e] and
+Keys[u, e]. The latter is now used for all consistency checks, i.e., the game usesKeys[u, e] to ensure
+that a user never retrieves an inconsistent key. TheSeeds[u, e] is used for functionality as part of
+subsumed. More concretely, for correctness, we say that a party must upload unless another party
+knows at least as manyseeds. This models that a party only having been delegated keys might not
+be able to contribute to the shared CKS state in the same manner as a party having appended the
+underlying seed.
+21
+
+Game (G,R,E)-CKS-CorrA
+CKS (Correctness)
+Main
+win← false, n← 0
+St[·], Seeds[·,·], Keys[·,·], GrantInfo[·]←⊥
+KnownSeed[·,·], KnownKey[·,·]← false
+stS← S.Init(1κ)
+ACreateUser,...,UploadAdv(1κ, stS)
+return win
+Oracle CreateUser
+n← n + 1
+St[n]← U.Init(1κ)
+return St[n]
+Oracle Append
+Input: (u, e, s, upload)∈ [n]× N ×{ 0, 1}κ×{ 0, 1}
+req Keys[u, e] =⊥
+Seeds[u, e]← s; Keys[u, e]← U.Key(e, s)
+KnownSeed[u, e]← true; KnownKey[u, e]← true
+if¬subsumed(u) then
+upload← true
+(St[u], stup)← U.Append(St[u], e, s, upload)
+if upload then(
+⊥; stS
+)
+←
+⟨
+U.Upload(stup)↔ S.Upload(stS)
+⟩
+return (stS, St[u], stup)
+Oracle Erase
+Input: (u, share)∈ [n]×P (N )
+reqE(KnownSeed[u,·], KnownKey[u,·], share)(
+st′;⊥
+)
+←
+⟨
+U.Erase(St[u], share)↔ S.Erase(stS)
+⟩
+if st′ = ERROR then
+if∃e∈ share : Keys[u, e]̸=⊥ then win← true
+else
+St[u]← st′
+for e∈ share do
+KnownSeed[u, e]← false
+KnownKey[u, e]← false
+Seeds[u, e]←⊥ ; Keys[u, e]←⊥
+return st′
+Oracle Retrieve
+Input: (u, share)∈ [n]×P (N )
+reqR(KnownSeed[u,·], KnownKey[u,·], share)(
+keys;⊥
+)
+←⟨
+U.Retrieve(St[u], share)↔ S.Retrieve(stS)
+⟩
+if keys = ERROR then
+if∀e∈ share : Keys[u, e]̸=⊥ then win← true
+else
+for e∈ share do
+if Keys[u, e] /∈{⊥ , keys(e)} then
+win← true
+Keys[u, e]← keys(e)
+return keys
+Oracle Grant
+Input: (u, share)∈ [n]× [n]×P (N )
+reqG(KnownSeed[u,·], KnownKey[u,·], share)(
+msg;⊥
+)
+←
+⟨
+U.Grant(St[u], share)↔ S.Grant(stS)
+⟩
+if msg = ERROR then
+if∀e∈ share : Keys[u, e]̸=⊥ then win← true
+else
+keys[·]←⊥
+for e∈ share do
+keys[e]← Keys[u, e]
+GrantInfo[msg]← (share, keys)
+return msg
+Oracle Accept
+Input: (u′, msg, share, upload)
+∈ [n]×{ 0, 1}∗×P (N )×{ 0, 1}
+(share′, keys)← GrantInfo[msg]
+if GrantInfo[msg]̸=⊥∧ share′ = share then
+for e∈ share do
+Keys[u, e]← keys[e]
+KnownKey[u, e]← true
+if¬subsumed(u′) then upload← true
+else upload← true(
+st′, stup;⊥
+)
+←
+⟨
+U.Accept(St[u′], share, msg, upload)
+↔ S.Accept(stS)
+⟩
+if upload then(
+⊥; stS
+)
+←
+⟨
+U.Upload(stup)↔ S.Upload(stS)
+⟩
+if GrantInfo[msg]̸=⊥∧ share′ = share then
+if st′ = ERROR then win← true
+St[u′]← st′
+else if st′̸= ERROR then
+for e∈ share do Known[u, e]← true
+St[u′]← st′
+return (stS, st′)
+Oracle UploadAdv
+(⊥; stS)←
+⟨
+A↔ S.Upload(stS)
+⟩
+return stS
+subsumed
+Input: u∈ [n]
+return∃u′̸= u∈ [n] :
+∀e : Seeds[u, e]∈{⊥ , Seeds[u′, e]}
+Fig.13: The Compact Key Storage correctness notion. We assume that the adversary does not interleave
+calls to UploadAdv with calls to other oracles.
+22
+
+– The retrieval predicateR, delegation predicateG, and erasure predicateE are evaluated on both
+KnownSeed and KnownKey, in correspondence to their generalized definition for standard-model
+CKS.
+Let us briefly discuss some aspects of the correctness game — we refer to [7] for a more in-depth
+discussion. First, observe the use of theupload flag in theAppend and Accept oracles. Using this flag,
+the adversary can force the user to run the upload procedure, as correctness must hold even if multiple
+users upload. The flag is overwritten in case the user must upload for correctness, as determined by
+the subsumed helper. Second, observe the slight discrepancy betweenKnownKey[u, e] and Keys[u, e]. In
+principle, whenever a user has a concrete key assigned, i.e.,Keys[u, e]̸=⊥, thenKnownKey[u, e] = true.
+The converse does not necessarily hold, however. If the user is granted some key by a malicious user
+(indicated by msg not produced by theGrant oracle) then the game does not know the resulting key.
+Keys[u, e] is then set whenever the game first learns of the injected key, to ensure that the user only
+outputs one key for a given epoch even after a malicious delegation. Finally, observe the error handling.
+Erase, Retrieve, and Grant may all fail after having accepted a malicious grant. This allowsAccept
+to be efficient and not verify the entire set of keysshare upfront. Erase is allowed to fail ifall keys
+where maliciously injected; therefore any secure key can be erase.Retrieve and Grant may even fail if
+at least one of the involved keys has been injected.
+Definition 13.We say that a(G,R,E)-CKS scheme CKS is correct, if the probability of any adversary
+A winning the (G,R,E)-CKS-CorrA
+CKS game from Fig. 13 is negligible inκ.
+B.2 Integrity
+Integrity requires that users either restore their correct key, i.e., the one they outsourced, or output an
+explicit error indicating that a key could not be restored. The modifications compared to ROM-CKS
+are similar to the one for the correctness notion. In particular, the game now keeps track of the keys a
+user outsources instead of the seeds.
+Overall, the game works fairly similarly to the correctness game. Let us briefly mention some of the
+intricacies. First, note that the game uses placeholders for keys not yet known to the game. Concretely,
+whenever a useru accepts an injected grant messagemsg, the game assigns placeholdersKp, forp∈ N ,
+for all the keys. Those placeholders are later (globally) replaced once the key becomes known. This
+allows to enforce consistency even ifu further delegates those keys. Second, observe that all algorithms
+are now allowed to fail, as indicated with thetry keyword. Integrity guarantees consistency only
+whenever users succeed. Finally, we note that the game formalizes a strong variant of integrity where
+the adversary is assumed to know all secret states. This guarantees that even state leakages cannot
+break integrity.
+Definition 14.We say that a CKS schemeCKS satisfies integrity, if the probability of any adversary
+A winning the CKS-IntA
+CKS game from Fig. 14 is negligible inκ.
+Game CKS-IntA
+CKS (Integrity)
+Main
+win← false
+n← 0
+p← 0
+St[·], Keys[·], Granted[·]←⊥
+ACreateUser,Append,Erase,Grant,Retrieve(1κ)
+return win
+Oracle CreateUser
+n← n + 1
+St[n]← U.Init(1κ)
+return St[n]
+Oracle Append
+Input: (u, e, s)∈ [n]× N ×{ 0, 1}κ
+try (St[u], stup)← U.Append(St[u], e, k, upload)
+try
+⟨
+U.Upload(stup)↔A
+⟩
+k← U.Key(e, s)
+if Keys[u, e]̸=⊥∧ Keys[u, e]̸= k
+∧∀ p∈ N : Keys[u, e]̸= Kp then
+win← true
+if∃p∈ N : Keys[u, e] = Kp then
+for all (u′, e′) s.t. Keys[u′, e′] = Kp do
+Keys[u′, e′]← k
+else
+Keys[u, e]← k
+return St[u]
+Oracle Erase
+Input: (u, share)∈ [n]× N ×P (N )
+try
+(
+St[u];⊥
+)
+←
+⟨
+U.Erase(St[u], share)↔A
+⟩
+for e∈ share do Keys[u, e]←⊥
+return St[u]
+Oracle Grant
+Input: (u, share)∈ [n]×P (N )
+try
+(
+msg;⊥
+)
+←
+⟨
+U.Grant(St[u], share)↔A
+⟩
+for e∈ share do
+if Keys[u, e] =⊥ then win← true
+Granted[msg]←{ (e, Keys[u, e])| e∈ share}
+return (St[u], msg)
+Oracle Accept
+Input: (u′, share, msg)∈ [n]×P (N )×{ 0, 1}∗
+try
+(
+St[u′], stup;⊥
+)
+←
+⟨
+U.Accept(St[u′], share, msg, upload)↔A
+⟩
+try
+(
+St[u′];⊥
+)
+←
+⟨
+U.Upload(stup)↔A
+⟩
+if Granted[msg]̸=⊥ then
+if share̸={e| (e,·)∈ Granted[msg]} then
+win← true
+for (e, k)∈ Granted[msg] do
+if Keys[u′, e] /∈{⊥ , k} then win← true
+Keys[u′, e]← k
+else
+for e∈ share do
+if Keys[u′, e] =⊥ then
+p← p + 1
+Keys[u′, e]← Kp
+return St[n′]
+Oracle Retrieve
+Input: (u, share)∈ [n]×P (N )
+try
+(
+keys;⊥
+)
+←
+⟨
+U.Retrieve(St[u], share)↔A
+⟩
+for e∈ share do
+if Keys[u, e]̸= keys(e)∧∀ p∈ N : Keys[u, e]̸= Kp then
+win← true
+if∃p∈ N : Keys[u, e] = Kp then
+for all (u′, e′) s.t. Keys[u′, e′] = Kp do
+Keys[u′, e′]← keys(e)
+return St[u]
+Fig.14: The integrity notion of CKS. The valuesKp, forp∈ N , are placeholders that are assumed to
+be distinct symbols, i.e.,Kp̸=⊥, Kp̸= k for any bitstringk, and Kp̸= Kq for p̸=q.
+23

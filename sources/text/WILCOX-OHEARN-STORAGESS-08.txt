@@ -1,0 +1,699 @@
+Tahoe – The Least-Authority Filesystem
+Zooko Wilcox-O’Hearn
+allmydata.com
+555 De Haro St.
+San Francisco, CA 94107
+zooko@zooko.com
+Brian Warner
+allmydata.com
+555 De Haro St.
+San Francisco, CA 94107
+warner@allmydata.com
+ABSTRACT
+Tahoe is a system for secure, distributed storage. It uses ca-
+pabilities for access control, cryptography for conﬁdentiality
+and integrity, and erasure coding for fault-tolerance. It has
+been deployed in a commercial backup service and is cur-
+rently operational. The implementation is Open Source.
+Categories and Subject Descriptors: D.4.6 [Security
+and Protection] : Access controls; E.3 [Data Encryp-
+tion]: Public key cryptosystems; H.3 [Information Sys-
+tems]: Information Storage and Retrieval; E.4 [Coding
+and Information Theory]: Error control codes
+General Terms: Design, Human Factors, Reliability, Se-
+curity
+Keywords: capabilities, fault-tolerance, open source, peer-
+to-peer
+1. INTRODUCTION
+Tahoe is a storage grid designed to provide secure, long-
+term storage, such as for backup applications. It consists
+of userspace processes running on commodity PC hardware
+and communicating with one another over TCP/IP. Tahoe
+was designed following the Principle of Least Authority [21]
+– each user or process that needs to accomplish a task should
+be able to perform that task without having or wielding more
+authority than is necessary.
+Tahoe was developed by allmydata.com to serve as the
+storage backend for their backup service. It is now in oper-
+ation and customers are relying on the Tahoe grid for the
+safety of their data. Allmydata.com has released the com-
+plete Tahoe implementation under open source software li-
+cences [1].
+The data and metadata in the ﬁlesystem is distributed
+among servers using erasure coding and cryptography. The
+erasure coding parameters determine how many servers are
+used to store each ﬁle – denoted N, and how many of them
+are necessary for the ﬁle to be available – denoted K. The
+default settings for those parameters, and the settings which
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+StorageSS’08,October 31, 2008, Fairfax, Virginia, USA.
+Copyright 2008 ACM 978-1-60558-299-3/08/10 ...$5.00.
+are used in the allmydata.com service, areK = 3, N = 10, so
+each ﬁle is shared across 10 diﬀerent servers, and the correct
+function of any 3 of those servers is suﬃcient to access the
+ﬁle.
+The combination of cryptography and erasure coding min-
+imizes the user’s vulnerability to these servers. It is an un-
+avoidable fact of life that servers can fail, or can turn against
+their clients. This can happen if the server is compromised
+through a remote exploit, subverted by insider attack, or if
+the owners of the server are required by their government to
+change its behavior, as in the case of Hushmail in 2007 [29].
+Tahoe’s cryptography ensures that even if the servers fail
+or turn against the client they cannot violate conﬁdentiality
+by reading the plaintext, nor can they violate integrity by
+forging ﬁle contents. In addition, the servers cannot violate
+freshness by causing ﬁle contents to rollback to an earlier
+state without a collusion of multiple servers.
+2. ACCESS CONTROL
+Tahoe uses the capability access control model [6] to man-
+age access to ﬁles and directories. In Tahoe, a capability
+is a short string of bits which uniquely identiﬁes one ﬁle or
+directory. Knowledge of that identiﬁer is necessary and suf-
+ﬁcient to gain access to the object that it identiﬁes. The
+strings must be short enough to be convenient to store and
+transmit, but must be long enough that they are unguess-
+able (this requires them to be at least 96 bits).
+Such an access scheme is known as “capabilities as keys”
+or “cryptographic capabilities” [22]. This approach allows
+ﬁne-grained and dynamic sharing of ﬁles or directories.
+The Tahoe ﬁlesystem consists of ﬁles and directories. Files
+can be mutable, such that their contents can change, includ-
+ing their size, or immutable, such that they are writable only
+once.
+Each immutable ﬁle has two capabilities associated with
+it, a read capability or read-cap for short, which identiﬁes
+the immutable ﬁle and grants the ability to read its content,
+and a verify capability or verify-cap, which identiﬁes the im-
+mutable ﬁle and grants the ability to check its integrity but
+not to read its contents.
+For mutable ﬁles, there are three capabilities, the read-
+write-cap, the read-only-cap, and the verify-cap.
+Users who have access to a ﬁle or directory can delegate
+that access to other users simply by sharing the capability.
+Users can also produce a verify-cap from a read-cap, or pro-
+duce a read-only-cap from a read-write-cap. This is called
+diminishing a capability.
+
+3. ERASURE CODING
+All data is erasure coded using Reed-Solomon codes over
+GF (28) [28]. When writing, a writer chooses erasure cod-
+ing parameters N – the total number of shares that will be
+written – and K – the number of shares to be used on read.
+Using this codec allows an eﬃcient byte-wise implemen-
+tation of encoding and decoding, and constrains the choice
+of erasure coding parameters to be 1 <= N < = 256 and
+1 <= K < = N.
+Compared to erasure codes such as Tornado Codes [5],
+Reed-Solomon codes oﬀer optimal storage overheard – ex-
+actly b blocks of erasure code data (plus metadata – the in-
+dex number of each block) are necessary to decode a b-block
+ﬁle. On the other hand, Reed-Solomon codes suﬀer from
+asymptotically worse computational complexity – the time
+to encode or decode a ﬁle with a Reed-Solomon codec is in
+the worst case proportional to N 2 where N is the number of
+erasure code blocks. Other codes oﬀer asymptotically faster
+encoding and decoding – O(N) computational complexity –
+but they impose storage overhead – more than b blocks are
+necessary to reconstruct a b block ﬁle. Also, many of these
+faster codes are patented.
+In Tahoe we have learned that since K and N are small
+and since our implementation of Reed-Solomon (“zfec”) is
+fast [25], the measured computational cost of erasure coding
+is low, and in fact is lower than the cost of the encryption
+and secure hash algorithms.
+4. CRYPTOGRAPHY
+4.1 Requirements
+Tahoe is designed to run in software without requiring
+“Trusted Computing” (also called “Treacherous Computing”
+[2]) hardware. Therefore, the only robust way to constrain
+users or administrators from certain behavior such as unau-
+thorizedly reading or altering ﬁles is to make such behavior
+require secrets, and to withhold those secrets from people
+who are not authorized to perform those behaviors. Thus,
+cryptography.
+In this section we will describe the access control require-
+ments of the diﬀerent kinds of capabilities and how Tahoe
+satisﬁes those requirements using cryptographic techniques.
+We want a verify-cap to enable its wielder to check the
+integrity of a ﬁle, but not to enable its wielder to learn the
+ﬁle’s plaintext. This way a user can delegate to some other
+entity (such as a backup service) the job of checking that a
+ﬁle is still correctly stored, without sacriﬁcing conﬁdential-
+ity.
+A read-only-cap to a ﬁle has to give the ability to read
+the plaintext of the ﬁle and also to verify its integrity. We
+also require that a holder of a read-only-cap to a ﬁle is able
+to diminish it to produce a verify-cap to the same ﬁle.
+A read-write-cap is meaningful only for mutable ﬁles. A
+read-write-cap grants its wielder the ability to write new
+contents to a ﬁle, and to produce a read-only-cap to the
+same ﬁle.
+It is essential that these powers can not be gained by some-
+one who has not been granted the appropriate capability. In
+particular, knowing a read-only-cap to a mutable ﬁle must
+not allow a user to change the contents of that ﬁle. This im-
+poses an asymmetric cryptographic requirement on mutable
+ﬁle capabilities: users who hold a read-only-cap but not a
+read-write-cap must be able to check the integrity of the ﬁle
+data
+(plaintext)
+AES
+data
+(ciphertext)
+FEC
+shares
+share
+Merkle tree
+ciphertext
+Merkle tree
+Capability Extension
+            Block
+ciphertext root
+share root
+read-cap
+encryption
+key
+ verify
+cap
+sha256d
+Figure 1: immutable ﬁle
+without being able to produce texts which would pass the in-
+tegrity check. This excludes symmetric integrity primitives
+such as Message Authentication Codes [19], and requires us
+to use the more computationally expensive digital signatures
+[19].
+An additional requirement that we impose on read-only-
+caps and read-write-caps is that they are short enough to
+be conveniently used by humans, for example by being em-
+bedded in URLs. This requirement is not common in cryp-
+tography, and satisfying it turns out to require some careful
+cryptographic constructions.
+4.2 Cryptographic Preliminaries
+In the description that follows a “secure hash”, denoted
+H, always means SHA256d [8]. SHA256d(x) is equal to
+SHA256(SHA256(x)). This construction prevents length-
+extension attacks [26].
+In addition, each time we use a secure hash function for a
+particular purpose (for example hashing a block of data to
+form a small identifer for that block, or hashing a master key
+to form a sub-key), we prepend to the input a tag speciﬁc
+to that purpose. This ensures that two uses of a secure hash
+function for diﬀerent purposes cannot result in the same
+value. This is necessary to ensure that the root of a Merkle
+Tree can match at most one ﬁle, and it is a good hygienic
+practice in any case [15] [23].
+“Merkle Tree” always means a binary Merkle Tree [20]
+using SHA256d as its secure hash, using one tag for the
+secure hash function to generate an internal node from its
+children and another tag for the secure hash function to
+generate a leaf from a segment of the ﬁle that the tree covers.
+“Encrypt” always means encrypt using AES-128 in CTR
+mode [18].
+4.3 Immutable Files
+An immutable ﬁle (Figure 1) is created exactly once and
+can be read repeatedly. To create an immutable ﬁle, a client
+chooses a symmetric encryption key, uses that key to encrypt
+the ﬁle, chooses erasure coding parametersK and N, erasure
+codes the ciphertext into N shares, and writes each share to
+a diﬀerent server.
+Users may opt to derive the encryption key from the secure
+hash of the plaintext of the ﬁle itself, a technique known
+as convergent encryption [7]. Convergent encryption allows
+
+two users to produce identical ciphertext in two independent
+writes of the same ﬁle. Since Tahoe coalesces storage of
+identical ciphertexts this can be a space savings. However,
+use of convergent encryption can undermine conﬁdentiality
+in some cases [30], and a measurement of ﬁles stored on
+allmydata.com showed less than 1% of ﬁles (by aggregate
+ﬁle size, not ﬁle count) are shared between users. To protect
+conﬁdentiality, Tahoe mixes in an added convergence secret
+which limits the scope of convergent encryption to users who
+share the same convergence secret.
+For immutable ﬁles, the verify-cap is derived from the ci-
+phertext of the ﬁle using secure hashes. We use a combina-
+tion of two diﬀerent secure hash structures to defend against
+two diﬀerent problems that could arise in ﬁle validity.
+The ﬁrst problem is that if the integrity check fails, the
+client needs to know which erasure code share or shares were
+wrong, so that it can reconstruct the ﬁle from other shares.
+If the integrity check applied only to the ciphertext, then
+the client wouldn’t know which share or shares to replace.
+Instead we compute a Merkle Tree over the erasure code
+shares. This allows the client to verify the correctness of
+each share.
+However, this Merkle Tree over the erasure code shares
+is not suﬃcient to guarantee a one-to-one mapping between
+verify-cap and ﬁle contents. This is because the initial cre-
+ator of the immutable ﬁle could generate some erasure code
+shares from one ﬁle and other erasure code shares from an-
+other ﬁle, and then including shares from both ﬁles in the
+set of N shares covered by the Merkle Tree. In this case, the
+reader would see a diﬀerent ﬁle depending on which subset
+of the shares they used to reconstruct the ﬁle [10].
+In order to ensure that there is a one-to-one mapping from
+verify-cap to ﬁle contents, we construct another Merkle Tree
+over the ciphertext itself. Since it is a Merkle Tree instead
+of a hash of the entire ﬁle contents, the reader can verify the
+correctness of part of the ﬁle without downloading the en-
+tire ﬁle. This allows streaming download, such as to watch
+a movie while it is downloading. It also allows the client
+to perform a simple Proof of Retrievability protocol [14] by
+downloading and verifying a randomly chosen subset of the
+ciphertext (this protocol is not deployed in the current re-
+lease of Tahoe, but is a work in progress).
+The roots of the two Merkle Trees are kept in a small block
+of data, a copy of which is stored on each server next to the
+shares. This structure is called the “Capability Extension
+Block” because its contents are logically part of the capa-
+bility itself, but in order to keep the capability as short as
+possible we store them on the servers and fetch them when
+needed.
+The verify-cap is the secure hash of the Capability Exten-
+sion Block.
+The read-cap to an immutable ﬁle is the the verify-cap
+and the symmetric encryption key.
+4.4 Mutable Files
+Each mutable ﬁle (Figure 2) is associated with a unique
+RSA key pair [27]. Authorized writers have access to the
+private key (the signing key, or SK) so that they can make
+digital signatures on the new versions of the ﬁle that they
+write.
+However, RSA keys are too large for humans to casually
+manipulate such as by embedding them in URLs – we use
+2048-bit (256 byte) RSA keys. In order to have small read-
+shares
+Merkle Tree
+AES-CTR
+SHA256d SHA256d
+SHA256d
+FEC
+salt
+encryption
+      key
+write key
+read key
+verifying (public) key
+signing (private) key
+encrypted signing key
+verify cap
+read-write cap
+verify cap
+write key
+read-only cap
+verify cap
+read key
+plaintext
+ciphertext
+SHA256d
+truncated
+SHA256d
+truncated SHA256d
+truncated
+SHA256d
+truncated
+AES-CTR
+share 1 share 2 share 3 share 4
+Figure 2: mutable ﬁle
+caps and write-caps we create small (16-byte) secrets cryp-
+tographically linked to the RSA keys in the following way.
+To write to a mutable ﬁle, a client ﬁrst computes thewrite
+key, W K = Htrunc(SK), where Htrunc denotes SHA256d
+with its output truncated to 16 bytes. It then computes the
+read key, RK = Htrunc(W K). Therefore anyone who has
+the write key can easily compute the read key, but knowledge
+of the read key does not confer useful information about the
+write key.
+A client which is writing a ﬁle generates a new random
+16 byte salt and computes the encryption key with EK =
+H(RK, salt).
+Using this encryption key, the client encrypts the plain-
+text to produce the ciphertext, erasure codes the ciphertext
+to form shares, and writes each share to a diﬀerent server,
+computing a Merkle Tree over the shares: ciphertext =
+Encrypt(EK, plaintext).
+Using the signing key SK, the client signs the root hash
+of the Merkle Tree, as well as the salt, the erasure coding
+parameters, the ﬁlesize, and a sequence number indicating
+that this version of the ﬁle contents supercedes the previous
+one.
+For mutable ﬁles, veriﬁcation involves checking a digital
+signature. A copy of the RSA public key – the verifying key
+or V K – for each ﬁle is stored in the clear along with the
+erasure coded shares of the ﬁle on each server.
+The verify-cap must provide the ability to check that the
+verifying key which is stored on the storage server is the
+right one. This is accomplished by making the verify-cap be
+the secure hash of the verifying key: V C = H(V K).
+The read-only-cap to a mutable ﬁle includes V C, and in
+addition contains the read key: RC = V C, RK.
+The read-write-cap to a mutable ﬁle includes V C, and
+in addition contains the write key: W C = V C, W K. The
+holder of a read-write-cap needs to get the ability to pro-
+duce digital signatures on new versions of the ﬁle. This is
+accomplished by storing the RSA signing key SK, encrypted
+
+with W K on the servers. This somewhat unusual arrange-
+ment means that the RSA signing key is encrypted with the
+truncation of the secure hash of itself.
+This is an instance key-dependent encryption [3] [12] [11],
+which is not as well-studied as we would like. However, we
+think that it would be surprising if there were a weakness in
+this construction which did not imply a weakness in the un-
+derlying standard primitives – RSA, AES-128, and SHA256.
+See 6.1 for a proposal to replace this nonstandard crypto-
+graphic construction with a diﬀerent nonstandard crypto-
+graphic construction with better performance properties.
+W K serves as both integrity check on SK (the client ver-
+iﬁes that the Htrunc(SK) = W K) and access control to
+the RSA signing key (the client uses W K to decrypt SK
+in order to use SK to produce digital signatures). It also
+serves to provide writers with access to RK, since RK =
+Htrunc(W K).
+4.5 Directories
+Capabilities can be used as the child links in directories. A
+directory could simply be a mutable ﬁle which contains a set
+of tuples of (child name, capability to child). If directories
+were implemented like this, then anyone given read access
+to the directory would be able to learn the child names and
+corresponding capabilities, thus enabling them to follow the
+links. Anyone given write access to the directory would be
+able to change the set of children.
+Tahoe doesn’t use this scheme though, because we want
+something in addition, the property of transitive read-only
+– users who have read-write access to the directory can get
+a read-write-cap to a child, but users who have read-only
+access to the directory can get only a read-only-cap to a
+child. It is our intuition that this property would be a good
+primitive for users to build on, and patterns like this are
+common in the capabilities community, e.g. the “sensory
+keys” of KeyKOS [13].
+In order to implement transitive read-only we include two
+slots for the caps for each child – one slot for a read-write-cap
+and one for a read-only-cap. All of the directory information
+is of course encrypted as usual when the directory is written
+as the contents of a Tahoe mutable ﬁle, but in addition the
+read-write-caps to the children are super-encrypted – they
+are encrypted separately by the writer before being stored
+inside the mutable ﬁle.
+5. FRESHNESS OF MUTABLE FILES AND
+DIRECTORIES
+We’ve shown how our use of cryptography makes it impos-
+sible for an attacker – even one who controls all of the servers
+– to violate the conﬁdentiality of the user, which would allow
+unauthorized people to learn the contents of ﬁles or directo-
+ries. We’ve also shown how our use of cryptography makes
+it impossible for an attacker – even one who controls all of
+the servers – to forge ﬁle or directory contents. However
+the digital signature does not prevent failing or malicious
+servers from returning an earlier, validly signed, version of
+the ﬁle contents.
+In order to make it more diﬃcult for servers to (either
+accidentally or maliciously) serve a stale version of a muta-
+ble ﬁle, Tahoe leverages the erasure coding scheme. Each
+version of a mutable ﬁle has a sequence number. The read
+protocol proceeds in two phases. In the ﬁrst phase, the
+reader requests the metadata about a share from each of
+K + E servers. K is the number of shares necessary to re-
+construct the ﬁle, and E is a constant conﬁgured into the
+Tahoe client for the number of “extra” servers to read from.
+In the current Tahoe client K is set to 3 and E is set to K.
+If after querying K + E servers, the client learns that
+there are at least K shares of the highest numbered version
+available, then the client is satisﬁed and proceeds to the
+second stage. If it learns about the existence of a higher
+version number but does not ﬁnd at least K shares for that
+version, then the client will continue query more servers for
+their metadata until it either locates at least K shares of the
+newest known version or it runs out of servers to query.
+Once the ﬁrst phase has ended, either because the client
+ran out of servers to ask or because it learned about at least
+K shares of the newest version that it learned about, then
+it proceeds to the next phase and downloads the shares.
+This scheme reduces the chance of incurring a stale read,
+either accidental or malicious, provided that enough of the
+servers are honest and have fresh data. Tahoe makes no at-
+tempt to enforce other consistency properties than freshness
+of mutable ﬁles. For example, it makes no attempt to en-
+force linearization of operations spanning more than a single
+ﬁle, as in Byzantine Fault-Tolerant ﬁlesystems such as [17]
+[9].
+6. FUTURE WORK
+6.1 ECDSA and Semi-Private Keys
+A performance problem with the RSA-based write capa-
+bilities is the generation of a new RSA key pair for each
+mutable ﬁle. On our modern commodity PC hardware, the
+process of generating a new 2048-bit RSA key pair takes
+between 0.8 seconds and 3.2 seconds.
+An alternative digital signature scheme which oﬀers fast
+key generation is DSA [24]. Creating a new DSA key is
+as easy as choosing an unguessable 96-bit secret s, using a
+Key Derivation Function to produce a 192-bit private key
+x = KDF (s) and then computing gx in some appropriate
+group for some generator g. On our hardware, generating a
+new DSA key pair takes less than one millisecond.
+Another potential improvement would be to use Elliptic
+Curve Cryptography (or ECC ) instead of traditional integer-
+based cryptography for the DSA group. ECC with similar
+conjectured security to our 2048-bit RSA keys would require
+only 192-bit ECC keys [16]. Such short keys could be suit-
+able for including directly in capabilities.
+However, observe that even with the use of short ECC
+keys, we cannot simply make the write-cap be the private
+key and make the verify-cap be the public key, because then
+the read-cap would be unspeciﬁed. We require three, not
+two, levels of privilege separation – write-caps, read-caps,
+and verify-caps. We require that the lower levels of privi-
+lege can be easily computed from the higher ones (to eﬃ-
+ciently diminish capabilities) but not, of course, the other
+way around, and we require that the write-cap enable its
+holder to create digital signatures and the read-cap enable
+its holder to check the validity of such signatures.
+This could be accomplished by including a separate secret
+in the read-cap, but then the read-cap would be too large
+to casually embed into URLs. A 192-bit secret, encoded in
+a suitable URL safe base-62 encoding, looks like this:
+http://hostname/2DM7XkGnnlFjIg8ozYy2pLo4qrkh6EY71
+
+signing (private) key
+semi-private key
+verifying (public) key
+read-write cap
+read-only cap
+verify cap
+shares
+Merkle Tree
+SHA256d SHA256d
+SHA256d
+FEC
+salt
+encryption
+      key
+plaintext
+ciphertext
+SHA256d
+truncated
+AES-CTR
+share 1 share 2 share 3 share 4
+Figure 3: mutable ﬁle with semi-private key
+Two cryptographic values (a 128-bit encryption secret and
+a 192-bit hash value) would look like this:
+http://hostname/ArpPguJIBJwtvm1F5JaoR6pWVVTF4eiNa
+YWL8e5iF78rq2OAdzZL2z
+Therefore we propose a novel cryptographic construction,
+the semi-private key . A semi-private key is one which is
+more private than the public key, and less private than the
+private key, and which can be used to derive the public key
+in order to check signatures.
+To implement semi-private keys in DSA, recall that the
+private key is x = KDF (s) and the public key is the value
+gx. Instead, let the private key be x = KDF (s), let the
+semi-private key be gx, let y = H(gx) and let the public key
+be gxy. The signing key is therefore xy. (Note that it is
+possible to iterate this process to produce semi-semi-private
+keys and semi-semi-semi-private keys, for as many levels of
+privilege separation as desired.)
+Using semi-private keys we can implement capabilities
+which are short, and which have a much simpler design:
+Figure 3.
+Intuitively, it would be surprising to us if digital signatures
+using this scheme were vulnerable to an attack which did
+not also defeat DSA itself. It seems closely related to the re-
+cent formulation of“The One-Up Problem for (EC)DSA”[4].
+However, we have not proven that this scheme is as secure as
+ECDSA so, like the key-dependent encryption scheme from
+section 4.4, we currently have only heuristic arguments to
+believe that this scheme is secure.
+7. DEPLOYMENT
+The ﬁrst beta of Allmydata.com was released April 3, 2008
+and the ﬁrst product was shipped May 5, 2008. At the time
+of this writing, October 17, 2008, allmydata.com operates
+64 servers, typically has about 340 clients connected at any
+time, and typically has about 300 users accessing the ﬁlesys-
+tem through a web front-end in a 24-hour period. There are
+about 6.5 million user ﬁles stored, with an aggregate size of
+about 9.5 TB. See Figure 4.
+Apr May Jun Jul Aug Sep Oct
+   0
+ 100
+ 200
+ 300
+ 400
+connected nodes
+connected nodes
+RRDTOOL / TOBI OETIKER
+Apr May Jun Jul Aug Sep Oct
+   0
+ 100
+ 200
+ 300
+ 400
+web users logged in
+web users
+RRDTOOL / TOBI OETIKER
+Apr May Jun Jul Aug Sep Oct
+ 0.0  
+ 2.0 M
+ 4.0 M
+ 6.0 M
+files
+files stored
+RRDTOOL / TOBI OETIKER
+Apr May Jun Jul Aug Sep Oct
+   0  
+   2 T
+   4 T
+   6 T
+   8 T
+  10 T
+total data bytes
+total data
+RRDTOOL / TOBI OETIKER
+Figure 4: storage grid statistics for allmydata.com
+
+8. CONCLUSIONS
+Tahoe, The Least-Authority Filesystem, is a practical se-
+cure, decentralized ﬁlesystem, using several techniques which
+have previously been analyzed in the theoretical literature
+but not widely deployed. Tahoe’s security is based on cryp-
+tographic capabilities for decentralized access control, which
+have proven to be ﬂexible enough to serve our requirements
+so far. It uses Reed-Solomon codes for fault-tolerance, which
+have been characterized as being asymptotically ineﬃcient
+in the literature but which are quite fast enough in prac-
+tice. Some non-standard cryptographic constructions were
+required to make cryptographic capabilities short enough to
+ﬁt conveniently into URLs.
+Tahoe is open source (http://allmydata.org) and is cur-
+rently in use in the allmydata.com backup service.
+9. ACKNOWLEDGMENTS
+Thanks to L. Amber Wilcox-O’Hearn, Kevin Reid, E.
+Dean Tribble, Ian Lynagh, and Niels Bakker for comments
+and suggestions. Thanks to Josh Wilcox for comments, sug-
+gestions, and diagrams. Thanks to Peter Secor for funding
+and managing this work, for comments, suggestions, and
+graphs.
+Thanks to Nathan Wilcox, Drew Perttula, and Christian
+Grothoﬀ for ﬁnding security ﬂaws in earlier versions of the
+Tahoe Least-Authority Filesystem.
+Thanks to allmydata.com for the development and open
+publication of this system.
+10. REFERENCES
+[1] allmydata.org web site, 2007.
+[2] R. Anderson. ‘trusted computing’ frequently asked
+questions, 2003. [Online; accessed 26-May-2008].
+[3] J. Black, P. Rogaway, and T. Shrimpton.
+Encryption-scheme security in the presence of
+key-dependent messages. In In Selected Areas in
+Cryptography, volume 2595 of LNCS , pages 62–75.
+Springer-Verlag, 2002.
+[4] D. R. L. Brown. One-up problem for (ec)dsa.
+Cryptology ePrint Archive, Report 2008/286, 2008.
+[5] J. W. Byers, M. Luby, M. Mitzenmacher, and A. Rege.
+A digital fountain approach to reliable distribution of
+bulk data. In SIGCOMM, pages 56–67, 1998.
+[6] J. B. Dennis and E. C. V. Horn. Programming
+semantics for multiprogrammed computations.
+Commun. ACM, 26(1):29–35, 1983.
+[7] J. R. Douceur, A. Adya, W. J. Bolosky, D. Simon, and
+M. Theimer. Reclaiming space from duplicate ﬁles in a
+serverless distributed ﬁle system. In ICDCS ’02:
+Proceedings of the 22 nd International Conference on
+Distributed Computing Systems (ICDCS’02) , page 617,
+Washington, DC, USA, 2002. IEEE Computer Society.
+[8] N. Ferguson and B. Schneier. Practical Cryptography.
+Wiley Publishing, Inc., 2003.
+[9] G. R. Goodson, J. J. Wylie, G. R. Ganger, and M. K.
+Reiter. Eﬃcient byzantine-tolerant erasure-coded
+storage. pages 135–144, 2004.
+[10] C. Grothoﬀ. Crisp advisory 2008-01: Uris do not refer
+to unique ﬁles in allmydata tahoe, July 2008.
+[11] I. Haitner and T. Holenstein. On the (im)possibility of
+key dependent encryption. Cryptology ePrint Archive,
+Report 2008/164, 2008.
+[12] S. Halevi and H. Krawczyk. Security under
+key-dependent inputs, 2007.
+[13] N. Hardy. Keykos architecture. SIGOPS Oper. Syst.
+Rev., 19(4):8–25, 1985.
+[14] A. Juels and J. Burton S. Kaliski. Pors: proofs of
+retrievability for large ﬁles. In CCS ’07: Proceedings of
+the 14th ACM conference on Computer and
+communications security, pages 584–597, New York,
+NY, USA, 2007. ACM.
+[15] J. Kelsey, B. Schneier, and D. Wagner. Protocol
+interactions and the chosen protocol attack. In In
+Proc. 1997 Security Protocols Workshop, pages
+91–104. Springer-Verlag, 1997.
+[16] A. Lenstra. Handbook of Information Security , chapter
+Key Lengths. Wiley, 2004.
+[17] J. Li and D. Mazi` eres. Beyond one-third faulty
+replicas in byzantine fault tolerant systems. In NSDI.
+USENIX, 2007.
+[18] H. Lipmaa, P. Rogaway, and D. Wagner. Comments to
+NIST concerning AES-modes of operations:
+CTR-mode encryption. In Symmetric Key Block
+Cipher Modes of Operation Workshop , Baltimore,
+Maryland, USA, 2000.
+[19] A. J. Menezes, S. A. Vanstone, and P. C. V. Oorschot.
+Handbook of Applied Cryptography. CRC Press, Inc.,
+Boca Raton, FL, USA, 1996.
+[20] R. C. Merkle. A digital signature based on a
+conventional encryption function. In CRYPTO ’87: A
+Conference on the Theory and Applications of
+Cryptographic Techniques on Advances in Cryptology,
+pages 369–378, London, UK, 1988. Springer-Verlag.
+[21] M. S. Miller. Robust Composition: Towards a Uniﬁed
+Approach to Access Control and Concurrency Control .
+PhD thesis, Johns Hopkins University, Baltimore,
+Maryland, USA, May 2006.
+[22] M. S. Miller, K. P. Yee, and J. Shapiro. Capability
+myths demolished. Technical report, Combex, Inc.,
+2003.
+[23] R. Needham. Prudent engineering practice for
+cryptographic protocols. IEEE Transactions on
+Software Engineering, 22:122–136, 1996.
+[24] NIST. The digital signature standard. Commun.
+ACM, 35(7):36–40, 1992.
+[25] J. S. Plank, L. Xu, J. Luo, C. D. Schuman, and
+Z. Wilcox-O’Hearn. A performance evaluation and
+examination of open-source erasure coding libraries for
+storage. 2009.
+[26] B. Preneel and P. C. V. Oorschot. Mdx-mac and
+building fast macs from hash functions. pages 1–14.
+Springer-Verlag, 1995.
+[27] R. L. Rivest, A. Shamir, and L. M. Adelman. A
+method for obtaining digital signatures and public-key
+cryptosystems. Technical Report MIT/LCS/TM-82,
+MIT, 1977.
+[28] L. Rizzo. the feasibility of software fec. Technical
+Report LR-970131, DEIT, 1997.
+[29] Wikipedia. Hushmail — Wikipedia, the free
+encyclopedia, 2008. [Online; accessed 26-May-2008].
+[30] Z. Wilcox-O’Hearn. convergent encryption
+reconsidered, 2008. [Online; accessed 18-Aug-2008].

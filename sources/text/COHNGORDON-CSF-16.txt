@@ -1,0 +1,1460 @@
+Post-Compromise Security
+Katriel Cohn-Gordon⋆, Cas Cremers ✉, and Luke Garratt
+Department of Computer Science, University of Oxford
+v1.4†, October 2019
+Abstract
+In this work we study communication with a party whose secrets have already been compromised. At ﬁrst sight,
+it may seem impossible to provide any type of security in this scenario. However, under some conditions, practically
+relevant guarantees can still be achieved. We call such guarantees “post-compromise security”.
+We provide the ﬁrst informal and formal deﬁnitions for post-compromise security, and show that it can be achieved
+in several scenarios. At a technical level, we instantiate our informal deﬁnitions in the setting of authenticated key
+exchange (AKE) protocols, and develop two new strong security models for two different threat models. We show
+that both of these security models can be satisﬁed, by proposing two concrete protocol constructions and proving they
+are secure in the models. Our work leads to crucial insights on how post-compromise security can (and cannot) be
+achieved, paving the way for applications in other domains.
+Index Terms
+Post-Compromise Security, Security Protocols, Key Exchange, Ratcheting, Future Secrecy, Threat Models.
+1. Introduction
+If all of a party’s secrets are compromised by an adversary, is there any hope of securely communicating with them in
+the future? The folklore answer is “no”: a party’s long-term secret key deﬁnes their identity, and anyone knowing an identity
+key can impersonate its owner. This applies broadly to protocols with different security models, including authenticated
+key exchange and messaging. In all cases, traditional deﬁnitions of protocol security rule out compromise-and-impersonate
+attacks as indefensible.
+These scenarios are a pressing practical concern; modern secure systems are designed assuming that some compromise
+might eventually occur, and aim instead to limit its scope. For example, devices frequently fall temporarily under adversarial
+control: later-removed malware, short-term physical access, and conﬁscation at a border crossing all describe scenarios where
+a potential adversary has access to a device which is then returned to the original owner. In the traditional paradigm, we
+cannot make security guarantees about these post-compromise cases.
+Deﬁnition 1 (informal). A protocol between Alice and Bob provides Post-Compromise Security (PCS) if Alice has a security
+guarantee about communication with Bob, even if Bob’s secrets have already been compromised.
+Our central thesis is that PCS is not just theoretically possible, but in fact practically implementable and already inﬂuencing
+the design of state-of-the-art protocols. We will describe PCS precisely, explain the limits of what can be achieved, and give
+formal security models that capture it. In practice, various cryptographic schemes aim to provide an informal version of
+such guarantees. However, without a formal analysis there are many unanswered questions: To what extent can we allow
+compromise? What must schemes do to achieve PCS? In what sense are some schemes fundamentally limited in their ability
+to achieve PCS? How does PCS apply to real-world protocols used today?
+Weak and Total Compromise. We distinguish between two forms of long-term key compromise: weak and total.
+Weak compromise corresponds to temporary adversarial control of long-term key operations, without actual theft of the
+long-term key. Such a situation can occur when an adversary has temporary access to a party’s hardware security module
+(HSM). A HSM is a physical computing device that safeguards long-term keys, providing cryptographic operations such as
+signing without allowing direct access to the key. It is commonly believed that if an adversary has only temporary access
+to a HSM but does not learn the long-term key itself, then once this access is revoked security can still be achieved. We
+This is the extended version of a paper appearing at the 29th IEEE Computer Security Foundations Symposium (CSF 2016).
+⋆ : Katriel Cohn-Gordon was supported by the EPSRC, through the Oxford Centre for Doctoral Training in Cyber Security.
+✉ : Corresponding author: Cas Cremers, cremers@cispa.saarland .
+† : A list of changes since the initial version from February 2016 can be found in Appendix A.
+
+concretely deﬁne this notion and show that such guarantees can indeed be proven formally. However, the application of a
+HSM to achieve PCS is non-trivial; we comment in particular that a recent TLS 1.3 proposal [25] does not have weak PCS.
+Total compromise is more severe, and corresponds to an adversary who learns the long-term keys themselves. The
+folklore that PCS is unachievable in this case is backed up by an informal argument, proceeding roughly as follows. An
+adversary learning the long-term key of some party (“Bob”) can run the same computation that Bob would perform, using
+the compromised key and generating new random numbers if needed. Since this is exactly what Bob would do, nobody can
+distinguish between the true key owner and the adversary’s impersonation of them.
+This informal proof of impossibility does not consider the case where the previously compromised agent later completes
+a subsequent session. Indeed, such a session might generate a new and uncompromised secret. If this secret is then used for
+authentication, the original compromise may not be sufﬁcient to mount the impersonation attack.
+Some protocols already maintain “key continuity” in this fashion. Examples include the telephony protocol ZRTP [10]
+and the instant messaging protocols OTR [6] and its asynchronous successor Axolotl [28]; the latter has been implemented
+in Signal, WhatsApp 1 and Langley’s Pond [27]. These protocols all implement a key rotation scheme, whereby each
+communication key is used to generate a successor and then deleted.
+For this case, we formally deﬁne a mechanism to synchronise and rotate keys between communicating parties, and show
+that it achieves PCS even after a full compromise of the long-term key. However, as we will show, there are subtleties
+involved where this can go wrong.
+Practical Implications. The secrecy guarantees offered by PCS after a total compromise are mostly with respect to a
+network-based attacker who lacks the capability or incentive to individually attack all of its targets’ devices, but who might
+be able to obtain their long-term keys. Concrete examples of such an attacker are a nation-state aiming to perform large
+scale surveillance across a wide range of platforms, or a network administrator of a company whose employees communicate
+amongst themselves using various platforms and operating systems.
+For such an attacker, older protocols that do not even offer (weak perfect) forward secrecy are an easy target if long-term
+keys can be compromised at some point in the future. The attacker can simply log all transmissions, and later use any
+long-term keys that she obtains to reveal the plain texts. Such attacks are believed to be common on the modern Internet.
+Protocols that offer (weak perfect) forward secrecy improve the situation, as they additionally ensure that the attacker
+cannot just log all transmissions and decrypt them later using long-term keys. Instead, she must actively interfere with any
+communications which she may want to decrypt later, signiﬁcantly increasing her required per-target resources. However,
+after obtaining a user’s long-term keys, she can still decide to target any of their subsequent communications, acting as an
+undetectable Man-in-the-Middle (MitM).
+Protocols with PCS after a total compromise, such as those we will deﬁne later, require the attacker to know two pieces
+of information in order to attack a particular session: the long-term key and the agent’s current memory contents. Thus, such
+protocols raise the bar even higher with two main new guarantees. First, even if she holds the long-term keys, the attacker
+can no longer decide to perform an active MitM at an arbitrary time, but only immediately following a state compromise.
+Even if she attacks a user and learns all of their secrets, as soon as the user completes an honest communication exchange
+with some peer, the attacker is locked out from that pair.
+Second, if the attacker does target a session immediately after a state compromise, she effectively has to commit to
+playing the role of active MitM between those two parties indeﬁnitely. (The reason is that her attack will cause the parties’
+local states to diverge, thus preventing them from communicating directly.) This effectively makes a periodic attack impossible
+for adversaries who wish to remain undetected: the only way to use the long-term keys for interception is to commit to the
+role of permanent active MitM. If we additionally consider that the protocols might be used over different networks over
+time, such attacks could be rendered effectively impossible.
+Contributions. We make the following contributions.
+1) We introduce the high-level notion of post-compromise security. This notion has wide applicability, and we use it to
+unify the potential security guarantees offered by HSMs and by regular key rotation.
+2) We instantiate post-compromise security in the context of authenticated key exchange (AKE), advancing the state of the
+art in AKE security models. Our models formally incorporate PCS, and are strictly stronger than (i.e., imply) the best
+known game-based deﬁnitions.
+3) We give two speciﬁc approaches to achieve PCS. The ﬁrst allows certain computations with the long-term key but does
+not reveal it fully. We prove that PCS can be achieved in this case by relatively standard protocols.
+4) The second approach permits the adversary to learn the long-term key of an agent before attempting an impersonation
+attack. We show that no stateless protocol can achieve this type of security, but by providing a generic protocol
+1. Open Whisper Systems originally designed TextSecure, a secure messaging system consisting of a custom key exchange (TripleDH) composed with a
+ratcheting scheme (Axolotl). The name refers both to the protocol and to the mobile app implementing it. TextSecure-the-app has since been replaced
+by “Signal”, TextSecure-the-protocol renamed to the “Signal Protocol”, and Axolotl renamed to the “Double Ratchet”. WhatsApp implements the Signal
+Protocol, and the Signal Protocol uses the Double Ratchet. We discuss this ecosystem further in Section 6.
+2
+
+test
+session
+test
+session
+compromise
+forward
+compromise
+post-compromise
+Figure 1: Attack scenarios considered by forward and post-compromise secrecy; “test” refers to the session under attack. Forward secrecy
+protects sessions against later compromise; Post-compromise secrecy protects sessions against earlier compromise.
+transformation show that stateful protocols can achieve it. Our transformation produces protocols that are robust to an
+unreliable network, which turns out to be non-trivial.
+5) We supplement our work with case studies showing the practical applicability of post-compromise security. We show
+with examples of OPTLS and TextSecure/Axolotl that practical protocols can fail to achieve PCS.
+Overview. We revisit related concepts in Section 2. In Section 3 we discuss the high-level design of security models and how
+to incorporate PCS. In Section 4 we recall concrete game-based AKE models, and in Section 5 we extend them formally.
+We discuss related work in Section 6 and conclude in Section 7. We provide proofs for all our formal statements.
+2. Related Concepts
+There are many techniques for maintaining security in the face of compromise. We take this opportunity to clarify some
+of the different terminology that has been used.
+Ratcheting. The term “ratcheting” has been used previously in the community, but has recently been popularised by Axolotl.
+It generally describes systems which iteratively apply a one-way function, but within that class often takes different meanings.
+The simplest ratcheting design generates a chain x↦→H(x)↦→H(H(x))↦→... , deleting old entries at each stage. This
+is the approach used by [20] and in the original SCIMP [29]; roughly speaking, it provides forward secrecy in the sense that
+past values cannot be computed from present ones, as in the ﬁrst row of Figure 1.
+Such designs do not provide security as per the second row of Figure 1, since from x all future values of Hn(x) are
+easily computable. Thus, Axolotl and the protocols of Section 5.2 additionally mix in in ephemeral values at each stage, so
+that each update requires knowledge of fresh information. Such systems can also be called “ratchets.”
+Finally, there are systems which mix in old values but do not ratchet; for example, the construction of [14] to resist
+compromised RNGs. The guarantees provided by such systems can be incomparable to those above.
+Future secrecy. To the best of our knowledge this term is not well-deﬁned; we believe that it is often intuitively used for
+what we call post-compromise security, but that the details are both crucial and subtle. There is no obviously-canonical way
+to dualise the deﬁnition of forward secrecy at a formal level, though intuitively it means a property as in Figure 1.
+Perrin [30] deﬁnes “future secrecy” to mean that “a leak of keys to a passive eavesdropper will be healed”—in other
+words, that an adversary who learns keys but does not interfere with network trafﬁc only learns secret data for a bounded
+time period. This makes sense intuitively, but a closer look reveals that it is in fact a form of forward secrecy. The key insight
+is that a passive adversary can perform their computations at any point, and so no extra advantage is gained by learning
+long-term keys before the initial messages. Indeed, such security can be achieved by a basic, unsigned Difﬁe-Hellman key
+exchange, meaning that it is more relevant in the context of lightweight or otherwise restricted classes of protocols.
+In more detail, suppose some protocol π has (weak) forward secrecy: no attacker can learn long-term keys and retroactively
+discover past session keys. Then π already satisﬁes the above form of future secrecy. Indeed, suppose for contradiction that
+some passive attacker A violates the future secrecy of π: it learns the long-term keys, eavesdrops on a particular session s,
+and subsequently can distinguish the session key of s from random. Since the eavesdropping does not depend on knowing the
+long-term keys, it is possible to exchange the order of these two operations, deﬁning an attacker A′ which ﬁrst eavesdrops
+and then reveals long-term keys. But A′ is then an attacker against forward secrecy, contradicting our assumption.
+Healing. ZRTP [10] uses the term “self-healing”. Again, we believe that this intuitive notion is challenging to capture
+formally, and that it is a form of post-compromise security. The difﬁculty arises when describing what is implied when a
+protocol is “healed”: clearly it is meant that the protocol is secure against certain classes of adversaries, but the precise
+deﬁnition of which attacks fall into the class is not clear.
+3
+
+Actor
+Peers
+Others
+Time
+Secure
+session
+(a) Classical adversary model. Abstract representation of the adversary’s capabilities during an attack. If Alice is communicating with Bob, classical
+models allow the adversary to compromise the long-term keys of everyone except Alice and Bob. This ability to compromise the long-term key of
+non-participants (“others”) is depicted in red (dark).
+Actor
+Peers
+Others
+Time
+Secure
+session
+(b) Adversary model with PFS. This ﬁgure depicts the capabilities of an adversary that can also compromise all long-term private keys after the end of
+the attacked session. Protocols secure under such a threat model are said to also offer perfect forward secrecy (PFS).
+Actor
+Peers
+Others
+Time
+Secure
+session
+(c) Adversary model with KCI/AKC. Later works also consider adversaries that can compromise the actor’s long-term private key at any time, and
+showed that a secure session can still be achieved. In AKE literature, such protocols are said to offer resilience against Key Compromise Impersonation
+(KCI).
+Figure 2: Existing adversary models for security protocols. Figure 2(a) represents a relatively weak model, and Figures 2(b) and 2(c)
+extend it with PFS and AKC.
+Actor
+Peers
+Others
+Time
+Secure
+session
+(a) Adversary model with PCS through limited compromise We denote with the orange box (the left side of the “peers” row) a limited form of
+compromise, which allows the adversary some extra power without revealing the long-term key.
+Actor
+Peers
+Others
+Time
+Secure
+session
+(b) Adversary model with PCS through state Another form of PCS can be achieved if the long-term key is compromised but there is at least one
+uncompromised session afterwards.
+Figure 3: Our stronger adversary models for security protocols, capturing the notion of post-compromise security.
+Bootstrapping. One can view our stronger form of PCS as a form of “bootstrapping”, whereby secrecy of one session key
+K is used to ensure secrecy of its successors. This is a valid intuition; however, it is important to note that it is not sufﬁcient
+simply to run a secure key exchange protocol which depends on K. The reason is that this protocol must remain secure
+when composed with the adversary’s earlier actions, which does not hold in general. (We show in Section 5.1 that OPTLS is
+a counterexample.)
+4
+
+3. Modelling PCS
+We now turn to the question of constructing a formal model for post-compromise security. In this section we discuss the
+design choices at a high level, applicable to multiple paradigms within protocol design.
+In§4, we instantiate our models concretely in the context of two-party AKE protocols.
+The execution of a protocol can be abstractly depicted as in Figure 2. Each agent (a row in the tables) performs actions
+over time that may lead to the creation of multiple concurrent sessions. To violate the security guarantee, the adversary must
+choose a particular agent and session to attack; we call the target agent the ‘actor’ and the particular session the ‘secure’ or
+‘test’ session. The secure session communicates with other agents (its peers) while other unrelated actors may also send and
+receive messages.
+These diagrams are an abstract representation of the model deﬁned formally in Section 5.2, and necessarily do not depict
+all of its technical details. In particular, we have not shown (i) adversary actions during the secure session, though they are
+permitted to a limited extent, or (ii) the effects of concurrency, which mean that sessions can cross the vertical lines.We also
+do not distinguish in the ﬁgures between long-term and ephemeral corruption.
+Our high-level goal is to design protocols that achieve security even against a powerful adversary. We always assume
+that the network is fully untrusted, and that messages may be modiﬁed, dropped or inserted in transit. In addition, we can
+give the adversary access to actors’ secret keys or random number generators. The more powers we grant to the adversary,
+the ‘stronger’ the security model and the more attacks the protocol can resist.
+A classical adversary model, depicted in Figure 2(a), is to grant the adversary access to the long-term keys of any party
+not involved in the secure session. Security in such a model requires the protocol to limit the scope of compromise: if
+Charlie’s key is revealed, Alice should still be able to communicate securely with Bob.
+We can strengthen it by allowing the adversary to compromise all long-term private keys after the end of the attacked
+session [12], as depicted in Figure 2(b). This corresponds to (perfect) forward secrecy, whereby once a session is completed
+even the long-term keys of all participants do not sufﬁce to recover the session key.
+We can also consider an adversary who compromises Alice’s private key, as depicted in Figure 2(c). (Recall that we
+have ﬁxed “Alice” as the actor of the secure session.) This corresponds to the notion of actor key compromise (AKC) [2],
+and was ﬁrst proposed in the AKE context as key compromise impersonation (KCI) [22], in which an adversary uses Alice’s
+private key to impersonate as others to Alice.
+Figure 2(c) depicts a modern, strong adversary model. It is clear that there is one more step we could take to further
+strengthen the model: to allow compromise in the ﬁnal region. This corresponds to our concept of post-compromise security,
+and in this work we will show that it is possible to satisfy security against adversaries which have some powers even in that
+region.
+We have already seen the following assertion.
+Claim (informal). Post-compromise security is not achievable after unrestricted compromise of the intended peer.
+The standard overapproximation is to rule out any compromise at all, as per Figure 2(c). To continue the colour analogy,
+however, Figures 3(a) and 3(b) show two ways in which a form of compromise can still be permitted: we can either colour
+nearly all of the post-compromise box red (dark), or we can colour all of it nearly red. We develop both of these ideas, and
+show that they naturally correspond to different approaches for achieving PCS.
+As a concrete running example, suppose Alice and Bob regularly authenticate each other by means of a simple signed
+DH protocol: Alice generates a random x and sends{gx}skA; Bob responds symmetrically. Alice’s authentication in this
+protocol relies on skA not being compromised: if it is ever leaked, or used to sign a malicious value, then no authentication
+guarantees can be made. Indeed, the adversary need only obtain a signature on gz for some z which she knows, and she can
+then impersonate Alice to Bob. Post-compromise security is a statement about the impossibility of such attacks.
+PCS via weak compromise. Figure 3(a) describes a limited form of compromise permissible against the peers of the secure
+session. The impersonation attack requires the adversary to use the long-term key value during the secure session. If the
+model allows some access to the key without revealing it to the adversary, and then revokes this access during the secure
+session, a PCS guarantee may still be achievable.
+Claim (informal). If the adversary is not granted the key itself, but instead limited access to it that is revoked during the
+secure session, then PCS can still be achieved.
+One interpretation of this limitation is the assumption of a form of trusted key storage, for instance in a hardware security
+module (HSM). The adversary may have temporary access to the HSM at any point, but without the ability to extract the
+key. If this access is then revoked, a well-designed protocol may regain its security guarantees.
+Another interpretation of the hsm query is as a Bleichenbacher oracle—indeed, Bleichenbacher’s original attack precisely
+allows the attacker to sign (i.e., decrypt) arbitrary data with the server private key, without revealing the key. PCS in this
+scenario corresponds to preventing precomputation, requiring instead that use of the long-term key depends on data from the
+5
+
+secure session. [21] remark that their attacks are more severe when deployed against QUIC precisely because it permits such
+precomputation.
+To continue our signed-DH example, suppose an adversary temporarily gains the ability to generate signatures with skA
+on arbitrary data. She can choose a random number z, compute a signature {gz}skA, and store it for later use. At any point
+in the future, she can use that signature to impersonate Alice—even without the ability to generate new signatures. Thus,
+our simple signed-DH protocol does not admit this form of PCS. We shall see later (Figure 4 and theorem 11) that adding
+an appropriate nonce challenge-response can prevent this attack.
+PCS via state. A more subtle option, as per Figure 3(b), is to colour only some of the box; that is, to allow the long-term
+key to be revealed before the secure session as long as some uncompromised session has taken place.
+The intuition is as follows. Suppose the secure session is between Alice and Bob, and the adversary already knows
+Alice’s long-term key. Suppose further that Alice and Bob have already completed a previous session, deriving some secret
+value v. If Alice’s actions in the secure session depend on v—a value from a previous session—then the adversary cannot
+necessarily impersonate her. Thus, one session can be used to augment the security of another.
+Claim (informal). If the adversary can compromise all but one exchange of messages before the secure session, then PCS
+can still be achieved.
+This approach is stateful: data from one session must be available to another. (Otherwise, even though Alice and Bob might
+establish a secret value unknown to the adversary, they could not use that value later for authentication purposes.)
+To continue our running example, we now have a scenario where the adversary knows skA and yet should still be
+prevented from impersonating Alice to Bob. To do so, we will modify the protocol to use two secrets to derive session keys:
+not just the long-term key skA, but also a secret value derived from the previous sessions. If, after a compromise, Alice
+and Bob manage to perform a single honest (non-compromised) session, the adversary will not have enough information
+to compute the subsequent secret values, and therefore cannot compute later session keys. We will cover the details in
+Section 5.2.
+4. Background on AKE Security Models
+To concretely instantiate our analysis of PCS in the domain of AKE protocols, we revisit existing AKE analyses. We
+refer the reader to e.g. [8, 14, 26] for complete deﬁnitions.
+The majority of security models for authenticated key exchange derive from [4]. Recent notable models are the CK
+model [12] and the eCK model [26], which introduce ephemeral key reveals under various names and can be extended [15]
+to cover other properties such as perfect forward secrecy. A related model was used for the proof of HMQV [13]. These
+models have consistently been applied to stateless protocols.
+State Reveals. The traditional way to model compromise of ephemeral keys (e.g. x in a Difﬁe-Hellman key exchange which
+sends gx) is to give the adversary a speciﬁc power to reveal them. This is natural, but requires designers explicitly to specify
+which values are considered compromisable. Moreover, the deﬁnition of security depends critically on this choice. For
+example, is x orH(sk,x ) the “ephemeral key” of a NAXOS-style AKE protocol sending gH(sk,x)? To avoid this speciﬁcation
+problem more recent models instead reveal the outputs of the random number generator, with which any intermediate value
+can be computed. We follow this trend, and use a randomness query instead of a speciﬁc ephemeral key reveal.
+Long- and short-term secrets. Security models generally distinguish between long-term secrets (e.g. asymmetric keys used
+to identify agents) and short-term secrets (e.g. ephemeral keys which are used and subsequently erased). The justiﬁcation is
+that practical scenarios exist in which one, but not the other, might be compromised. (Further discussion can be found in [1].)
+There is an ongoing debate about the practicality of this distinction, and in particular whether there are realistic scenarios
+in which an adversary might compromise an ephemeral key but not its owner’s long-term key. We view this debate as
+interesting but out of scope for the current paper, and follow academic tradition in distinguishing between randomness and
+corrupt queries.
+4.1. Notation and Assumptions
+We write v←x to denote the assignment of x to the variable v, and x←$X to denote that the variable x is assigned a
+value randomly chosen according to the distribution X. If S is a ﬁnite set, we write x←$S to mean that x is assigned
+a value chosen uniformly at random from S. We say that an algorithm is efﬁcient if its running time is polynomial in
+the length of its input, and that a function f(k) is negligible if for all c >0 there exists a k0 such that for all k > k0,
+|f(k)|< k−c. In the context of security protocols, we think of functions and bounds as being negligible in the security
+parameter(s) of a protocol.
+6
+
+Consider a (multiplicative) cyclic group G of order q with generator g. We make use of the decisional Difﬁe-Hellman
+(DDH) hardness assumption, which says that it is hard to distinguish (gx,gy,gxy) from (gx,gy,gz), i.e.,ϵDDH(D) is negligible
+in q for any efﬁcient D where
+ϵDDH(D) :=
+⏐⏐ Pr [x,y←$ Zq :D(gx,gy,gxy) = 1]
+− Pr [x,y,z ←$ Zq :D(gx,gy,gz) = 1]
+⏐⏐.
+We deﬁne a signature scheme (KGen, Sig, Vf) to be existentially unforgeable under adaptive chosen message attack
+(EUF-CMA) via the following game:
+Setup. The challenger runs KGen. It gives the adversary the resulting public key pk and keeps the private key sk to itself.
+Signature queries. The adversary issues signature queries m1,...,m q. To each query mi, the challenger responds by
+producing the signature σi of mi and sending σi to the adversary. These queries may be made adaptively.
+Output. Finally, the adversary outputs a pair (m,σ ). The adversary wins if σ is a valid signature of m according to Vf and
+(m,σ ) is not among the pairs (mi,σi) generated during the query phase.
+The signature scheme is deﬁned to be EUF-CMA if the probability of the adversary winning the above game is negligible
+in the security parameter.
+All hash functions in this paper are assumed to be random oracles. The random oracle model has been extensively studied
+and simpliﬁes the analysis of hash functions. It is known to admit theoretical attacks [11], though none are yet practical.
+4.2. Oracles and Queries
+We work in the tradition of Bellare and Rogaway [4], modelling agents (Alice, Bob, ...) as a collection of oracles Πs
+i,j
+representing player i talking to intended communication partner j in the sth session. The adversary, Eve, is a Probabilistic
+Polynomial-time Turing Machine (PPTM) with access to these “role oracles”, who communicate only with Eve and never
+with each other. As well as relaying messages, Eve has access to certain other powers which are formally implemented as
+“queries”. Many different queries have been studied [5, 12, 26] and used to model various security properties. A protocol in
+this context succeeds if (i) it is correct, in that the parties who intend to talk to each other (and only they) derive matching
+communication keys, and (ii) it is secure, so that Eve cannot distinguish the test session key from random.
+We use notation similar to [14]. Each user can execute any arbitrary number of instances of an AKE protocol π, called
+sessions. Sessions are uniquely identiﬁed by their agent and the order in which they are created, and take on the role of
+eitherInitiator orResponder. They are implemented by a PPTM whose memory contains both session-speciﬁc memory
+(denoted sts for each session s) and long-term user memory (denoted st ˆP and shared between all sessions).
+Session memory sts is described in Table 1 and is local to a particular session. In contrast, user memory st ˆP is shared
+amongst all sessions of the user ˆP , and consists of ˆP ’s public/private key pair (pk ˆP, sk ˆP ), the identities and corresponding
+public keys of all other users, as well as any other additional information required by the protocol. We assume that the
+protocol algorithm runs only one step of a session at a time, though many sessions may execute concurrently.
+A protocol π is speciﬁed by a key generation algorithm KGen and a protocol algorithm Ψ executed by each session
+oracle. This algorithm takes as input the current session, user state, and an incoming message, and returns an outgoing
+message as well as new session and user state values.
+To deﬁne protocol security a game is played in Φ. A setup algorithm ﬁrst generates user identiﬁers and keypairs, sets all
+session-speciﬁc variables to an initial value ⊥, initalises the user memory of each user including distributing all public keys,
+and initialises all other variables to ⊥. We choose not to model dynamic key registration for simplicity and because we do
+not anticipate it leading to any problems unique to the topics addressed in this paper. The adversary then plays the game
+with access to some subset Q⊆ Q of the queries listed in Table 2. Since unrestricted use of these queries can trivially
+break any session, we will impose some restrictions.
+Deﬁnition 2 (Matching and partial matching) . Let π be a protocol of h≥ 2 total messages, where, if h is even, the number
+of messages sent from both sides is equal and if h is odd, the initiator sends one extra message. Let s denote a session of π
+with sstatus = accept. We say that session s partially matches session s′ in status s′
+status⁄=⊥ if the following conditions
+hold, where ssend[1...l ] denotes the concatenation of the ﬁrst l messages sent by session s and srecv[1...l ] denotes the
+concatenation of the ﬁrst l messages received by s.
+• srole⁄=s′
+role∧sactor =s′
+peer∧speer =s′
+actor and either
+• srole =I∧ ssend[1...m ] =s′
+recv[1...m ]∧srecv[1...m ] =s′
+send[1...m ] with m = h
+2 if h is even and m = h−1
+2 if h is
+odd, or
+• srole =R∧ ssend[1... (m− 1)] = s′
+recv[1... (m− 1)]∧srecv[1...m ] = s′
+send[1...m ] with m = h
+2 if h is even and
+m = h+1
+2 if h is odd.
+If in addition (sstatus,s sent,s recv) = (s′
+status,s′
+recv,s′
+sent) then we say that s matches s′.
+If instead s′
+status⁄=⊥ and s′
+send =srecv then we say that s′ is an origin-session [15] for s.
+7
+
+Name Description
+sactor the identity of the user executing session s, where sactor∈P
+srole the role (initiator I or responderR) played by sactor in s
+speer the intended communication partner of sactor, where speer∈P
+skey the session key established during the session
+srand the randomness used in the session
+sstep the next step to be executed in the protocol
+sstatus the session status sstatus∈{ active, accepted, rejected}
+s.mi the ith message sent
+ssent all messages sent by sactor during the session
+srecv all messages received by sactor during the session
+TABLE 1: Contents of session memory for session s.
+Query Description
+create( ˆA,r, ˆB) create a new session oracle at ˆA with role r and peer ˆB; randomness is sampled for srand and Ψ executed to update the state and
+return a message
+send( ˆA,i, ˆm) execute Ψ on the ith session oracle of ˆA, update the state, and return the result
+corrupt( ˆA) reveal the long-term key of ˆA
+randomness( ˆA,i ) revealsrand, where s = ( ˆA,i )
+hsm( ˆA,... ) deﬁned in§5.1
+session-key( ˆA,i ) revealskey, where s = ( ˆA,i )
+cr-create( ˆA,r, ˆB,rnd ) create a session as with create, but set srand =rnd instead of sampling it afresh
+test-session(s) ﬂip a coin b←${0, 1} and return kb, where k1 =skey and k0←$ KGen
+guess(b′) end the game
+TABLE 2: The set Q of queries available to A.
+Deﬁnition 3 (Freshness predicate). A freshness predicate is a Boolean predicate which takes a session of some protocol π
+and a sequence of queries (including arguments and results).
+Deﬁnition 4 (AKE security model) . Let π be a protocol in Φ of h≥ 2 total messages, let Q denoteA’s set of queries, and
+let F be a freshness predicate. We call (Q,F ) an AKE security model .
+Deﬁnition 5 (Security game). Let π be a protocol of h≥ 2 total messages and X = (Q,F ) be an AKE security model. We
+deﬁne the experiment W (X) as follows:
+(i) The setup algorithm is executed.
+(ii) The adversary learns all public information (e.g., user identiﬁers and public keys) and then computes arbitrarily,
+performing a sequence of queries from the set Q\{ test-session, guess}.
+(iii) At some point during W (X), the query test-session(s) is issued on some session s that has accepted and satisﬁes F
+at the time the query is issued.
+(iv) The adversary may continue issuing queries from Q under the condition that s continues to satisfy F .
+(v) A outputs a bit b′ via the query guess(b′) as his guess for the bit b chosen during the test-session query. The game
+ends, andA wins iff b =b′.
+Following [8, 9], we split the security requirement into two parts: correctness (matching is correctly implemented and
+implies agreement on the derived key) and secrecy (the adversary cannot distinguish the derived key from random).
+Deﬁnition 6 (AKE correctness). A protocol π is said to be correct in the security model (Q, F) if, for all PPTM adversaries
+A, it holds that:
+(i) If completed sessions s and s′ match each other, then skey =s′
+key.
+(ii) Pr[Multiple-MatchπA
+W(X)(k)] is negligible, where Multiple-Match denotes the event that there exists a session admitting
+two matching sessions.
+Deﬁnition 7 (AKE security). A protocol π is said to be secure in the security model (Q, F) if, for all PPTM adversaries
+A, the W (X)-advantage
+Advπ,A
+W(X)(k) :=|Pr(b =b′)− 1/2|
+ofA is negligible in the security parameter.
+Models. We now have sufﬁcient machinery to specify a security model, through a set of queries and a freshness predicate.
+To demonstrate the concept, we provide an example of a relatively weak model suitable for protocols that are not designed
+to resist compromised random number generators.
+8
+
+Deﬁnition 8 (Basic security model) . The model Xbasic is deﬁned by Q ={create, send, corrupt, randomness, session-key,
+test-session, guess} and F =⋀5
+k=1Fk where
+(F1) No session-key(s) query has been issued.
+(F2) For all sessions s⋆ such that s⋆ matches s, no session-key(s⋆) query has been issued.
+(F3) No randomness(s) query has been issued.
+(F4) For all sessions s⋆ such that s⋆ partially matches s, no randomness(s⋆) query has been issued.
+(F5) If there exists no origin-session for session s, then no corrupt(speer) query has been issued before the create query
+creating session s or as long as sstatus = active and srecv is empty.
+It is a standard result that signed Difﬁe-Hellman (DH) is secure in this type of model under typical cryptographic assumptions.
+Theorem 9. For an EUF-CMA signature scheme (KGen, Sig, Vf), the signed DH protocol of Figure 4 is secure in the model
+Xbasic under the DDH assumption.
+Proof : This will follow from Theorem 11, in the next section.
+5. PCS in AKE
+This section will instantiate the informal deﬁnitions and claims from Section 3 using the game-based security models
+described in Section 4. We ﬁrst consider the case of weak compromise before returning to the full access case.
+5.1. Weak Compromise
+In order to model limited access to peers’ identity keys before the test session, we add a new query hsm(... ) to the
+model. This query will effectively act as a limited version of corrupt with which the adversary can attempt impersonation
+attacks.
+A model may additionally deﬁne a long-term key interfaceI, which is simply a function; we write (Q,F,I) for the
+model (Q,F ) with interfaceI. We deﬁne the query hsm(A;... ) to returnI(A, skA,... ), that is, it invokes the long-term
+key interface with the secret key of its ﬁrst argument, passing all other arguments through. We use the term “model” both
+whenI is deﬁned and where it is not (e.g. in other work). This is accomplished by setting I =id to be the identity function,
+so that hsm is equivalent to corrupt.
+Deﬁnition 10. Let pcs-hsm denote the trace predicate that
+(i) for all queries hsm(x,... ), x =speer; and
+(ii) all queries hsm(x,... ) were issued before the session s was created.
+For any model (Q,F ) with hsm /∈Q, we can deﬁne a PCS version of that model (Q∪{ hsm},F ∩ pcs-hsm) that is at least
+as strong.
+Informally, this predicate captures that the adversary is allowed to query hsm only on the peer to the test session, and
+then only before the creation of the test session. This is a strong model: suppose we permitted hsm queries after the creation
+of the test session. If security were still achievable in this model then the interface is not capturing a meaningful form of
+compromise, since even with access to it the adversary still cannot impersonate its owner. Moreover, permitting hsm queries
+against unrelated parties after the completion of the test session does not add any additional adversarial power, since the
+strictly stronger corrupt query is also permitted at those times.
+We can vary the security requirements by choosing I. Naturally, there is an impossibility result for stateless protocols
+in the case I = id. A protocol is stateless when the inputs to each session are limited to the long-term key and public
+information, and values computed in one session are not available to others. Here, the hsm query simply reveals the long-term
+key, so if the protocol carries no state across different sessions, the adversary can use hsm to reveal the long-term key,
+generate her own session randomness, and then simulate the computations of the peer for a successful impersonation attack.
+Is there a meaningful interface I such that security in a model (Q∪{ hsm},F∩ pcs-hsm,I) is achievable? Yes: a simple
+challenge-response signed DH protocol provides security in the model where I(X, skX,m ) = SigskX (m) is a signature with
+the long-term key of the target. That is, the adversary is given signatures by Bob on its choice of messages, and still is
+prevented from impersonating Bob.
+Theorem 11. LetI(A, skA,m ) = SigskA(m) be the signature algorithm of an EUF-CMA signature scheme (KGen, Sig, Vf),
+let π be the protocol in Figure 4, and recall Xbasic = (Q,F ) from Deﬁnition 8. Then π is secure in the model (Q∪
+{hsm},F ∩ pcs-hsm) under the DDH assumption.
+The proof of Theorem 11 is given in Appendix B. An applied reading of the result is the following: “If Alice’s signing key
+is stored in a hardware security module and used only for the protocol in Figure 4, then to impersonate Alice the adversary
+must have current access to the HSM.” Thus, the protocol achieves PCS under the weak model.
+9
+
+Alice Bob
+fresh na,x fresh nb,y
+na
+nb, Sigskb{ ˆA, ˆB,gy,na}
+Sigska{ ˆB, ˆA,gx,nb}
+session key h(gxy, ˆA, ˆB)
+Figure 4: A simple signed challenge-response DH protocol.
+TLS 1.3. Simply storing the long-term key in an HSM is not sufﬁcient for PCS. For example, there has been recent discussion
+on the speciﬁcation of TLS 1.3, the upcoming standard for secure communication over the Internet). One proposal, OPTLS
+[25], has servers generate and sign temporary public keys that are then used for a signature-free handshake. (Google’s QUIC
+also has this design.) After the client sends the initial hello message and DH share, the server responds with its hello, a
+server DH share gs, a signature on gs, and a MAC computed over some messages. Because servers typically possess certiﬁed
+RSA signature keys, OPTLS allows for the signing of gs with the server’s signature key. Thus, the server does not need to
+use a DH certiﬁcate. In one mode, the signature on gs covers both gs and a validity period through which a client can
+accept server authentication based on gs. This mode saves the cost of a per-session signature, but endows the server with the
+power of certiﬁcation abilities. This means that a signed gs is all that is required to impersonate the server. In the extreme
+case, an attacker with temporary HSM access could impersonate as a server supporting TLS 1.3, even when the real server
+does not even support it.
+The intuitive property of the protocol in Figure 4 that grants PCS is that access to the signing key before launching an
+attack on a session does not help the adversary. In OPTLS, this is not the case: these pre-signed keys effectively act as
+credentials for the server, and an adversary with temporary access to the signing key can issue fake ones that persist after
+access is revoked. This was brieﬂy discussed on the TLS mailing list [16, 24], mainly in the context of an attacker who
+compromises only an ephemeral key. We see that the existence of these credentials prevents OPTLS from satisfying PCS,
+even though it provides forward secrecy with an ephemeral DH exchange, and even if used with a TPM.
+5.2. Full Compromise
+Theorem 11 shows that a form of PCS can be achieved when the adversary’s access to the long-term key is restricted,
+allowing it only to query the interfaceI. However, there are many scenarios in which such a restriction cannot be implemented.
+Thus, an interesting case occurs when the adversary has full access to (i.e., learns) the long-term key. In this case, we
+considerI =id, or equivalently allow corrupt queries before the start of the test session.
+As discussed in Section 3, it is not hard to show that stateless protocols cannot meet this notion of security: an adversary
+can steal Alice’s keys and then perform the same computations as Alice. We show now that stateful protocols can resist
+such attacks.
+The intuition is as follows. Every time Alice and Bob complete a session, they derive two secret, independent values
+from the randomness, protocol state and messages: the session key and a token. The session key is the output of the protocol,
+as usual. The token is used in the key derivation for the next session completed with the same peer; thus, an adversary who
+wishes to simulate Alice’s computation must be able to derive the token in addition to all the other secret inputs. We call
+such a design a key refreshing protocol.
+Since a new token is generated every session, even a single uncompromised session implies secrecy of future keys;
+moreover, if the token is derived in the same manner as the session key, then it is afforded the same protection and can only
+be learnt by revealing an agent’s state. This is the core of our protocol transformation, though there are various subtleties
+that we discuss later.
+Modelling. Of course, this argument is informal. To make it precise we must deﬁne a formal security model, which speciﬁes
+exactly which actions the adversary is allowed to take. We proceed as follows. First, we deﬁne a minimal model ( KE-PCS)
+which only allows the attacker to make PCS attacks, and we formally prove that KE-PCS is not satisﬁable by stateless
+10
+
+protocols. Next, we provide two examples of adding PCS guarantees to existing models: ﬁrst to a standard eCK-like deﬁnition
+(eCKw, eCKw-PCS), and second to a strong model ( ΩAKE) for the class of all AKE protocols. Finally, we show that our
+models are achievable by specifying protocols that meet them.
+Recall that cr-create represents creation of a session with chosen randomness, so is a more powerful version of the
+randomness query, and that we model full state compromise through randomness queries against all past sessions.
+Deﬁnition 12 (Refreshed session). A session s is refreshed if there exists an “intermediate” session s′ with matching session
+s′′ such that
+(i) sactor =s′
+actor and speer =s′
+peer,
+(ii) s′ and s′′ both accept before the creation of s,
+(iii) at most one of corrupt(s′
+actor) and (randomness(s′) or cr-create(s′) creating session s′) have been issued, and
+(iv) at most one of corrupt(s′
+peer) and ( randomness(s′′) or cr-create(s′′) creating session s′′) have been issued.
+Deﬁnition 13 (KE-PCS). The model KE-PCS is deﬁned by (Q,F ) whereQ ={create, send, corrupt} and F =P1∧P2 as
+follows.
+(P1) the corrupt query occurs, if issued, against speer and before the creation of s
+(P2) if there is no origin-session for s, and the corrupt query was issued, then s is refreshed
+The model KE-PCS captures precisely (and only) the concept of full PCS, the blue area in Figure 3(b): if the adversary
+compromises the long term keys of the peer before the test session starts, and the test session is not refreshed, then it can
+impersonate the peer. (In this case there is no origin-session for the messages received by the test session.)
+Theorem 14. No stateless protocol is secure in KE-PCS.
+The KE-PCS model captures one particular aspect of protocol security. In order to give a comprehensive model, we can
+extend existing AKE models to include PCS guarantees. For example, we recall and extend the eCKw model [15]. This
+yields a practical model for key exchange protocols which captures eCK security as well as PCS.
+Deﬁnition 15 (eCKw, eCKw-PCS). Consider the clauses deﬁned in Deﬁnition 8 and Table 3. The models eCKw and
+eCKw-PCS are deﬁned by their freshness predicates as follows.
+F (eCKw) =F1∧F2∧F eCKw
+3 ∧F eCKw
+4 ∧F eCKw
+5
+F (eCKw-PCS) = ··· ∧ F KR
+5
+Remark 16. The models eCK [26] and eCKw differ only in the case that the adversary wishes to attack a session s admitting
+an origin-session s⋆ which is not a matching session for s. We use eCKw as our example since its presentation is closer to
+our own, but see no reason that the same arguments should not apply also to eCK.
+There are stronger models than eCKw, and we may naturally attempt to capture as many attacks as we can. Cremers and
+Feltz [14] deﬁne strong models for classes of protocols (Appendix C); in the spirit of their work, by including PCS attacks
+into their strongest model we can construct a strong model for the class of all AKE protocols. We follow their naming
+scheme, whereby the model ΩX is a strong model for the class X of protocols.
+Deﬁnition 17 (ΩAKE∩ISM). Consider the clauses deﬁned in Deﬁnition 8 and Table 3. The models ΩAKE∩ISM [14] and ΩAKE
+are deﬁned by their freshness predicates as follows.
+F (ΩAKE∩ISM) =F1∧F2∧F ISM
+3 ∧F ISM
+4 ∧F SL
+5
+F (ΩAKE) = ··· ∧ F KR
+5
+Rationale for the freshness conditions. The Ω models described in Appendix C are constructed as follows. First, impossibility
+results are proven for a class of protocols, by constructing adversaries which provably succeed against all protocols in the
+class. Second, these adversaries are ruled out through careful choice of a freshness predicate. For example, the predicate
+F eCKw
+3 rules out the class of adversaries which compromise both the randomness of the test session and the long-term key of
+its actor, since such adversaries are guaranteed always to succeed against stateless protocols. We take these strong models as
+our base models.
+The new predicate, F KR
+5 , encodes the PCS attacks captured by KE-PCS: if there is no origin-session for s (i.e., the
+adversary is impersonating its peer), and the key of speer has been revealed, then there must have been a “blue area” or key
+refreshing session allowing security to be re-established.
+The P1 and P2 predicates deﬁned in KE-PCS are much more restrictive than the Fj predicates we use subsequently,
+ruling out many attacks which a protocol could resist. Speciﬁcally, they limit the adversary to learning the key only of the
+peer to the test session. This is by design; KE-PCS is not intended as a strong model.
+11
+
+Name Deﬁnition
+F1 No session-key(s) query has been issued.
+F2 For all sessions s⋆ such that s⋆ matches s, no session-key(s⋆) query has been issued.
+F eCKw
+3 Not both queries corrupt(sactor) and ( randomness(s) or cr-create(.) creating session s) have been issued.
+F eCKw
+4 For all sessions s′ such that s′ is an origin-session for s, not both queries corrupt(speer) and ( randomness(s′) or cr-create(.) creating session
+s′) have been issued.
+F eCKw
+5 If there exists no origin-session for session s, then no corrupt(speer) query has been issued.
+F ISM
+3 Not all queries corrupt(sactor) as well as ( randomness or cr-create) queries on all ˆs with ˆsactor =sactor, where the query ( create or cr-create)
+creating session ˆs occurred before or at the creation of session s, have been issued.
+F ISM
+4 For all sessions s′ where s partially matches s′, not all queries corrupt(speer) as well as ( randomness or cr-create) queries on all sessions ˆs
+with ˆsactor =s′
+actor, where the query ( create or cr-create) creating session ˆs occurred before or at the creation of session s′, have been issued.
+F KR
+5 If there exists no origin-session for session s, and a corrupt(speer) query has been issued before creation of session s via a query ( create or
+cr-create) or as long as sstatus = active and srecv =ϵ, then s is refreshed.
+TABLE 3: Clauses of the freshness predicates for our AKE models. The predicates with superscript eCKw and ISM come from [15] and
+[14] respectively. The new predicate is the ﬁnal one, marked with superscript KR.
+ΩAKE
+ΩAKE∩ISM eCKw-PCS
+eCKw KE-PCS
+⁄=
+⁄=
+Figure 5: Relationship between the various models we deﬁne in this section. ΩAKE∩ISM and eCKω are from [14] and [15] respectively. We
+propose the other three modules in this work. Solid arrows denote inequality of security models ( ≤sec, Appendix C), dotted arrows denote
+incomparability (neither model implies the other), and dashed arrows denote our transformation. For example, in this set ΩAKE provides
+the strongest security guarantees.
+Satisﬁability of the Models. Deﬁning these models is of no use if they are not satisﬁable: for a model X to be interesting
+we must be able to prove that some nontrivial protocol is secure in X.
+In Section 5.1 we deﬁned a concrete protocol and proved it secure. Here, the construction required to ensure that state is
+synchronised between communicating parties, as well as correctly used in the key derivation, is signiﬁcantly more complex.
+Instead of giving a concrete protocol, therefore, we deﬁne a generic transformation π↦→π†.
+This transformation takes a three-message protocol π and converts it into a key refreshing protocol that achieves PCS
+(and possibly more). Speciﬁcally, if π is secure in ΩAKE∩ISM then we prove that π† is secure in ΩAKE.
+The use of state for authentication has a number of subtleties, and to deal with them our ﬁnal transformation is relatively
+complex. In particular, if Alice updates her state without explicitly authenticating her peer, she risks deleting a secret value
+that she needs to communicate with Bob. Thus, stateful implicitly authenticated protocols with PCS can have a severe
+denial-of-service ﬂaw. More precisely, we deﬁne the notion of robustness as follows.
+Deﬁnition 18 (Robustness). LetC( ˆA, ˆB) be the benign “correct execution” adversary who creates an initiator session at
+ˆA, relays its initial message to ˆB, returns the response to ˆA and continues until ˆA completes (including relaying the ﬁnal
+message to ˆB). A network adversary is any adversary who only issues create and send queries.
+A protocol π is robust if for any ˆA and ˆB,C causes a pair of matching sessions deriving the same key to be established
+at ˆA with ˆB and vice versa. It is post-network robust ifC( ˆA, ˆB) still induces a pair of matching sessions which derive the
+same session key when executed sequentially after any network adversary.
+Theorem 19. No correct one-round protocol which is secure in KE-PCS is post-network robust.
+This theorem implies that any one-round protocol that achieves security in KE-PCS is vulnerable to a denial of service in
+which an adversary with temporary network control can prevent any two parties from ever communicating again. This is in
+12
+
+Let π be a three-message protocol ˆA
+m1
+−−→ˆB
+m2
+−−→ˆA
+m3
+−−→ˆB. Assume that public DH keys are distributed for all participants, and that π
+computes a pre-master secret from which session keys are derived. We deﬁne π† as a modiﬁcation of π as follows.
+• For each agent ˆB we deﬁne new global state variables IS
+ˆB, ˆA and stR
+ˆB.potential ˆA (for each communication partner ˆA). The ﬁrst
+stores a single value and the second a possibly empty list of values. Initially, IS
+ˆA, ˆB is set to gab for all ˆA, ˆB.
+• In a session s between parties ˆA and ˆB, each message ˆA
+mj
+−−→ˆB is replaced by ⟨mj,µj⟩ where µj = MAC(mj; IS
+ˆA, ˆB), and each
+message ˆB
+m′
+j
+−−→ˆA is replaced by ⟨m′
+j,µ′
+j⟩ where µ′
+j = MAC(m′
+j; IS
+ˆB, ˆA).
+• Upon receiving⟨m1,µ 1⟩, ˆB acts as follows:
+– If µ1 = MAC(m1; IS
+ˆB, ˆA), ˆB continues to the next step.
+– If not, ˆB checks for each value is∈stR
+ˆB.potential ˆA whether µ1 = MAC(m1;is). If this holds for some value is, ˆB replaces
+IS
+ˆB, ˆA←is, empties stR
+ˆB.potential ˆA←∅ , and continues to the next step.
+– Otherwise, ˆB rejects.
+• The new value IS
+ˆB, ˆA
+new ← KDF(σ, IS
+ˆB, ˆA, 1) is appended to stR
+ˆB.potential ˆA.
+• The pre-master secret pms← KDF(σ) is replaced by pms′← KDF(σ, IS
+ˆB, ˆA, 0).
+• ˆB computes
+m2
+−−→and sends⟨m2,µ 2⟩
+• ˆA veriﬁes µ2 using its intermediate secret, and rejects if the veriﬁcation fails. Otherwise, it updates IS
+ˆA, ˆB ← IS
+ˆA, ˆB
+new =
+KDF(σ, IS
+ˆA, ˆB, 1), and sends ⟨m3,µ 3⟩.
+• ˆB veriﬁes µ3 against the potential value from the current session, and if the veriﬁcation passes and it would accept then it ﬁrst sets
+IS
+ˆB, ˆA←IS
+ˆB, ˆA
+new and stR
+ˆB.potential ˆA←∅ .
+(a) Deﬁnition of the PCS transform π↦→π†.
+Alice, session 1 Bob, session 1
+IS
+m1,µ 1
+potential state
+m2,µ 2
+IS′
+update state to IS′
+m3,µ 3
+Alice, session 2 Bob, session 2
+m′
+1,µ′
+1 IS′
+update state to IS′
+m′
+2,µ′
+2
+update state to IS′′
+m′
+3,µ′
+3
+update state to IS′′
+(b) Example trace of a transformed protocol. We show two sessions between Alice and Bob: in the ﬁrst, the ﬁnal message is dropped so Bob does not
+update to IS′. In the second, Bob recalls IS′ from earlier (represented by the dotted line) and performs the earlier missed update.
+Figure 6: Two-round, robust PCS transform.
+13
+
+stark contrast to the world of stateless protocols, where if the ﬁrst session run by C accepts with some probability, then any
+subsequent session also accepts with the same probability.
+We give the ﬁnal version of the protocol transform, which handles these and other issues, in Figure 6(a). In Figure 6(b)
+we show an example execution that illustrates the robustness mechanism. We refer the reader to the appendices for a full
+explanation of the issues and justiﬁcation of the transform design. The intuition is that it adds explicit authentication (through
+a MAC applied to each message and requiring knowledge of the current IS), in such a way that Alice only updates an
+intermediate secret if she can be conﬁdent that Bob can derive the new value. The security of the modiﬁed protocol π†
+follows from adding an intermediate secret in the KDF, and continuously updating it as sessions take place 2. Our construction
+additionally depends on the (weak) perfect forward secrecy of π. Because π† also has this property, the attacker cannot
+compute the secrets added in the refreshed session, even if it has one of the long-term keys.
+Theorem 20. Let π be a stateless protocol.
+(i) If π is secure in eCK w then π† is secure in eCK w-PCS.
+(ii) If π is secure in ΩAKE∩ISM, then π† is secure in ΩAKE.
+(iii) If π is robust then π† is post-network robust.
+The proof proceeds in several stages and is included in the appendices. We ﬁrst give a simpler transformation π↦→ π∗,
+which replaces the session key derivation K← KDF(pms) with K← KDF(0,pms, IS) and generates a new IS ←
+KDF(1,pms, IS). Assuming it is hard to invert the KDF, we show that an adversary who can compute the IS output by
+a session can also compute the session key of that session. Next, we show that due to the “chaining” of IS values, it is
+hard for the adversary to derive the IS of a refreshed session. From these observations we can prove security of the simpler
+transformation in e.g. ΩAKE.
+Next, we consider an intermediate protocol π∗
+MAC, which adds the MAC values µj to the messages but does not maintain
+the buffer of potential new state values. We show that the addition of the MACs does not weaken the security of the protocol,
+and therefore that π∗
+MAC is also secure in ΩAKE. Finally, to complete the security proof we show that the transformed protocol
+π† is at least as secure as π∗
+MAC, by a direct reduction.
+Results in the computational setting are generally negative, in the sense that they prove that the adversary cannot
+distinguish between certain values. Robustness is not a property of this form, and therefore the standard game-hopping
+techniques are not immediately applicable. We instead construct a security argument to prove item (iii), showing that certain
+syntactic invariants imply that parties must remain synchronised. Roughly, we prove an invariant that if one party updates
+the state s↦→s′ then the other party “knows” s′, in the sense that s′ is either its current state or present in its buffer of
+potential updates. By construction of the protocol algorithm, this sufﬁces to show that the correct-execution adversary C
+indeed induces matching sessions.
+6. Related Work
+There is relatively little work on related phenomena. The concept of “key continuity” appears in various Internet Drafts
+[10, 19], but there is little formal work in the academic literature to mirror these discussions.
+Various protocols appear to implement some sort of key continuity (or pCS) features, including OTR [17], ZRTP [10],
+and even many SSH [31] implementations via the known-hosts feature. However, existing analyses of these protocols do not
+cover this aspect.
+Bowers et al. [7] deﬁne a notion of “drifting keys”, in which devices randomly modify their long-term key over time,
+such that a trusted veriﬁer can detect the discrepancies caused by an attacker with a slightly-incorrect key. This type of
+protocol detects the adversary but does not prevent the compromise. Nevertheless, we view their work as providing a type of
+PCS.
+Itkis [20] describes forward secrecy for primitives as part of a more general theory of “key evolution”, in which keys are
+constantly rotated. This gives a type of PCS, though applying not to protocols but to the cryptographic primitives themselves.
+Stateful protocols. Cremers and Feltz [14] consider protocols that use shared state to pool randomness between different
+sessions, but do not consider synchronisation of state between agents. Our work builds on theirs.
+There has not been much analysis of stateful AKE, but state is used in various other primitives: stateful symmetric
+encryption is well-known, and asymmetric encryption is also discussed in the literature [3]. State is of course used within
+sessions—for example, ACCE [23] provides security to the message channel in the sense of stateful length-hiding authenticated
+encryption. It is also used heavily at the application layer, particularly in the web context.
+2. In fact, protocols transformed from eCKw are secure in a stronger model than eCKw-PCS: the intermediate secret acts as a weak entropy pool, sharing
+randomness across sessions. This weak pooling is not very practical, however, since a stronger version is achievable with minimal overhead.
+14
+
+TextSecure/Axolotl. The Axolotl (now Double) ratchet works roughly as follows. As Alice and Bob communicate, they
+share a dynamically changing “root key” rk, similar to our intermediate secrets. Each sent message is accompanied by a DH
+share, and the root key is updated as rk← KDF(H(gxiyj, rk)), where gxi and gyj are the most recently sent DH shares.
+Messages are themselves encrypted with keys derived from the most recent root key, which acts as synchronised state; as
+such, Axolotl’s design includes a PCS-like mechanism.
+The (recently discontinued) TextSecure messaging app used Axolotl, and one might therefore expect it to achieve PCS.
+It did not, however, because of its implementation of multi-device messaging: TextSecure shared long-term keys across all
+devices but maintained a separate Axolotl chain for each, allowing an adversary to impersonate Bob by claiming to be a
+previously-unseen device after a compromise.
+In more detail, the design of the protocol was that each device on a given user’s account stored a copy of the user’s
+long-term key, but otherwise did not share state. For Alice to send a message to Bob she would send it separately to each
+of Bob’s devices. Thus, an attacker who learned Bob’s long-term key could register a new device on Bob’s account, and
+Alice would accept the new device as valid, since the correct identity key was used to set it up. Hence, if Bob’s key is
+compromised then he could be impersonated to anybody. In particular, relating to the deﬁnition of PCS, the scenario would
+be the following: First, the attacker learns Bob’s (long-term) identity key. Next, Alice and Bob have a key refreshing (honest)
+session. If PCS were to be achieved, the attacker would now be locked out. However, the attacker can now register a new
+device for Bob using only the identity key, and this enables the attacker to impersonate Bob again even though the session
+under attack has been refreshed. Thus, PCS is not achieved. As a consequence, it is not clear if the “ratcheting” mechanism
+in TextSecure provided any additional security guarantees above and beyond those of a strong AKE protocol, though it
+certainly provided message transport with fewer round-trips.
+A previous analysis of TextSecure [18] reported an unknown key share attack. Because the analysis in [18] does not
+consider any security after the peer’s compromise, it does not cover PCS.
+7. Conclusions
+In hindsight, post-compromise security seems a highly desirable feature of communication systems, and it is perhaps
+surprising that it has not been formalised before. Devices are frequently compromised, and post-compromise security is an
+achievable property in a scenario that has not been previously considered. Our technical contributions in the domain of AKE
+protocols demonstrate what might be achieved by post-compromise secure protocols, and how this can be achieved.
+We showed that the use of a hardware security module to store keys can allow the effects of a compromise to be undone,
+so that an adversary can no longer carry out impersonation attacks. There are relatively simple protocols which achieve this
+level of security, although not all protocols do.
+We then considered the more general case that the adversary learns the secret key, and deﬁned a model in which the
+adversary can do so as long as an unattacked session is permitted to complete. We observed that in this scenario stateless
+protocols cannot prevent impersonation. However, some stateful protocols can do so: we gave a generic transformation
+producing stateful protocols, and proved that its outputs are secure in our models. Not all key refreshing protocols necessarily
+achieve PCS, however, and we showed that indeed the protocol in TextSecure did not.
+As the notion of post-compromise security applies more widely than to just AKE protocols, we expect related areas also
+to pick up on this concept and harden their constructions. This requires additional formal work, but should proceed along
+the lines sketched here. We remark in particular that our ﬁrst model is directly relevant to users who want the beneﬁts of
+storing keys in HSMs.
+In addition to the long-term possibilities of extending our work to other domains, there are other direct avenues of future
+work:
+1) We considered only the case of a signature HSM; that is, a key storage interface which produces only signature with
+the long-term key. Of course, most HSMs perform a wide range of operations. A natural extension of our work would
+consider a more general interface to the key, inspired perhaps by the PKCS#11 standard.
+Such an extension comprises a ‘balancing act’ between applicability and ease of proof. For example, Difﬁe-Hellman-style
+protocols often require key derivation operations of the form (−)sk. The interaction between such an interface and the
+Difﬁe-Hellman computations of the session key is subtle.
+In the spirit of strong models, we also foresee an interesting avenue of research investigating the limits of HSM-style
+queries. For example, is there a natural class of interfaces for which no PCS is possible?
+2) We considered a concrete protocol and proved it secure in the presence of a signature interface. A natural extension of
+this question is to search for necessary or sufﬁcient conditions for arbitrary protocols to meet this goal. For example, it
+is clear that the signature should contain some fresh data.
+3) A feature of Axolotl [30] which we did not discuss is that it sends messages with zero round trips. An interesting
+question is the extent to which the ratcheting mechanism is necessary to achieve this, and how the security goals for a
+0-RTT protocol interact with PCS.
+15
+
+References
+[1] David Basin and Cas Cremers. “Know Your Enemy: Compromising Adversaries in Protocol Analysis”. In: ACM
+Trans. Inf. Syst. Secur. 17.2 (Nov. 2014), 7:1–7:31. ISSN : 1094-9224. DOI: 10.1145/2658996. (Visited on 04/11/2016).
+[2] David Basin, Cas Cremers, and Marko Horvat. “Actor Key Compromise: Consequences and Countermeasures”. In:
+Computer Security Foundations Symposium (CSF). July 2014, pp. 244–258. DOI: 10.1109/CSF.2014.25.
+[3] Mihir Bellare, Tadayoshi Kohno, and Victor Shoup. “Stateful Public-key Cryptosystems: How to Encrypt with One
+160-bit Exponentiation”. In: Proceedings of the 13th ACM Conference on Computer and Communications Security .
+CCS ’06. New York, NY , USA: ACM, 2006, pp. 380–389. DOI: 10.1145/1180405.1180452. (Visited on 11/10/2015).
+[4] Mihir Bellare and Phillip Rogaway. “Entity Authentication and Key Distribution”. In: Advances in Cryptology –
+CRYPTO ’93. LNCS 773. Springer Berlin Heidelberg, Jan. 1, 1994, pp. 232–249. DOI: 10.1007/3-540-48329-2 21.
+(Visited on 05/21/2014).
+[5] Simon Blake-Wilson, Don Johnson, and Alfred Menezes. “Key Agreement Protocols and Their Security Analysis”. In:
+Proceedings of the 6th IMA International Conference on Cryptography and Coding . London, UK: Springer-Verlag,
+1997, pp. 30–45.
+[6] Nikita Borisov, Ian Goldberg, and Eric Brewer. “Off-the-record Communication, or, Why Not to Use PGP”. In:
+Proceedings of the 2004 ACM Workshop on Privacy in the Electronic Society . WPES ’04. New York, NY , USA:
+ACM, 2004, pp. 77–84. DOI: 10.1145/1029179.1029200. (Visited on 06/22/2015).
+[7] K.D. Bowers et al. “Drifting Keys: Impersonation detection for constrained devices”. In: 2013 Proceedings IEEE
+INFOCOM. 2013 Proceedings IEEE INFOCOM. Apr. 2013, pp. 1025–1033. DOI: 10.1109/INFCOM.2013.6566892.
+[8] Christina Brzuska et al. “Composability of Bellare-rogaway Key Exchange Protocols”. In: CCS. ACM, 2011, pp. 51–62.
+DOI: 10.1145/2046707.2046716. (Visited on 07/27/2015).
+[9] Christina Brzuska et al. Less is More: Relaxed yet Composable Security Notions for Key Exchange . 242. 2012. URL:
+http://eprint.iacr.org/2012/242 (visited on 08/18/2015).
+[10] Jon Callas, Alan Johnston, and Philip Zimmermann. ZRTP: Media Path Key Agreement for Unicast Secure RTP . Apr.
+2011. URL: https://tools.ietf.org/html/rfc6189#page-107 (visited on 02/10/2016).
+[11] Ran Canetti, Oded Goldreich, and Shai Halevi. The Random Oracle Methodology, Revisited . 011. 1998. URL:
+http://eprint.iacr.org/1998/011 (visited on 04/08/2014).
+[12] Ran Canetti and Hugo Krawczyk. “Analysis of key-exchange protocols and their use for building secure channels”. In:
+EUROCRYPT. V ol. 2045. LNCS. Springer-Verlag, 2001, pp. 453–474.
+[13] Cas Cremers. Formally and Practically Relating the CK, CK-HMQV, and eCK Security Models for Authenticated Key
+Exchange. 253. 2009. URL: http://eprint.iacr.org/2009/253 (visited on 07/27/2015).
+[14] Cas Cremers and Michele Feltz. On the Limits of Authenticated Key Exchange Security with an Application to Bad
+Randomness. Cryptology ePrint Archive, Report 2014/369, 2014. URL: https://eprint.iacr.org/2014/369.
+[15] Cas Cremers and Mich `ele Feltz. “Beyond eCK: perfect forward secrecy under actor compromise and ephemeral-key
+reveal”. English. In: Designs, Codes and Cryptography (2013), pp. 1–36. DOI: 10.1007/s10623-013-9852-1.
+[16] Daniel Kahn Gillmor. [TLS] OPTLS: Signature-less TLS 1.3 . Nov. 2, 2014. URL: https : / / www. ietf . org / mail -
+archive/web/tls/current/msg14423.html (visited on 02/11/2016).
+[17] Mario Di Raimondo, Rosario Gennaro, and Hugo Krawczyk. “Secure Off-the-record Messaging”. In: Proceedings
+of the 2005 ACM Workshop on Privacy in the Electronic Society . WPES ’05. New York, NY , USA: ACM, 2005,
+pp. 81–89. DOI: 10.1145/1102199.1102216. (Visited on 01/30/2014).
+[18] Tilman Frosch et al. How Secure is TextSecure? 904. 2014. URL: http://eprint.iacr.org/2014/904 (visited on 11/07/2014).
+16
+
+[19] Peter Gutmann. Key Management through Key Continuity (KCM) . 2008. URL: https://tools.ietf.org/html/draft-gutmann-
+keycont-01 (visited on 02/10/2016).
+[20] Gene Itkis. “Forward Security: Adaptive Cryptography – Time Evolution”. In: Handbook of Information Security .
+V ol. 3. John Wiley and Sons, 2006.
+[21] Tibor Jager, J ¨org Schwenk, and Juraj Somorovsky. “On the Security of TLS 1.3 and QUIC Against Weaknesses in
+PKCS#1 V1.5 Encryption”. In: Proceedings of the 22Nd ACM SIGSAC Conference on Computer and Communications
+Security. CCS ’15. ACM, 2015, pp. 1185–1196. DOI: 10.1145/2810103.2813657. (Visited on 10/19/2015).
+[22] Mike Just and Serge Vaudenay. “Authenticated Multi-Party Key Agreement”. In: Proceedings of the International
+Conference on the Theory and Applications of Cryptology and Information Security: Advances in Cryptology .
+ASIACRYPT ’96. Springer-Verlag, 1996, pp. 36–49. URL: http://dl.acm.org/citation.cfm?id=647093.716554 (visited on
+02/09/2016).
+[23] Florian Kohlar, Sven Sch ¨age, and J ¨org Schwenk. On the Security of TLS-DH and TLS-RSA in the Standard Model .
+367. 2013. URL: https://eprint.iacr.org/2013/367 (visited on 07/27/2015).
+[24] Hugo Krawczyk. [TLS] OPTLS: Signature-less TLS 1.3 . Nov. 12, 2014. URL: https://www.ietf.org/mail-archive/web/
+tls/current/msg14592.html (visited on 02/11/2016).
+[25] Hugo Krawczyk and Hoeteck Wee. The OPTLS Protocol and TLS 1.3 . 978. 2015. URL: https://eprint.iacr.org/2015/978
+(visited on 02/01/2016).
+[26] B.A. LaMacchia, K. Lauter, and A. Mityagin. “Stronger Security of Authenticated Key Exchange”. In: ProvSec.
+V ol. 4784. LNCS. Springer, 2007, pp. 1–16. DOI: 10.1007/978-3-540-75670-5 1.
+[27] Adam Langley. Pond. 2014. URL: https://pond.imperialviolet.org/ (visited on 06/22/2015).
+[28] Moxie Marlinspike. Advanced cryptographic ratcheting. Nov. 26, 2013. URL: https://whispersystems.org/blog/advanced-
+ratcheting/ (visited on 02/09/2016).
+[29] Vinnie Moscaritolo, Gary Belvin, and Phil Zimmermann. Silent Circle Instant Messaging Protocol Speciﬁcation . Dec.
+2012. URL: https://silentcircle.com/scimp-protocol (visited on 07/15/2015).
+[30] Trevor Perrin. trevp/axolotl. GitHub. 2014. URL: https://github.com/trevp/axolotl (visited on 06/22/2015).
+[31] Tatu Ylonen and Chris Lonvick. The Secure Shell (SSH) Transport Layer Protocol . 2006. URL: https://tools.ietf.org/
+html/rfc4253 (visited on 02/10/2016).
+17
+
+Appendix A.
+List of Changes
+• v1.4, October 2019: Dropped ‘On’ from title to avoid confusion: the term “post-compromise security” was originally
+introduced in this version v1.0 of this work. Some minor changes to the title page for clarity.
+• v1.3, October 2016: Typo ﬁxed in a freshness condition in Table 3 (thanks to Colin Boyd).
+• v1.2, August 2016: added “Practical Implications” subsection to Section 1.
+• v1.1, May 2016: described Related Concepts. Improved intuitive descriptions throughout, and technical updates for
+clarity.
+• v1.0, February 2016: initial version.
+Appendix B.
+Proofs for the Restricted-Compromise Model
+Theorem 11. LetI(A, skA,m ) = SigskA(m) be the signature algorithm of an EUF-CMA signature scheme (KGen, Sig, Vf),
+let π be the protocol in Figure 4, and recall Xbasic = (Q,F ) from Deﬁnition 8. Then π is secure in the model (Q∪
+{hsm},F ∩ pcs-hsm) under the DDH assumption.
+Proof sketch : Denote the event of the adversary winning in Game i by Si. Assume the adversary always selects a test session s
+where sactor = ˆA is the initiator. The other case is similar. For the adversary to win, the test session must have accepted. Let the
+transcript of messages sent and received be as in Figure 4.
+Game 0: This is the original security game.
+Game 1: This is the original security game except it aborts if two nonces ever collide or if two ephemeral DH shares ever collide.
+This is a standard gamehop, and we see that | Pr(S0)− Pr(S1)| is negligible.
+Game 2: This game is identical to Game 1 except it aborts if the challenger fails to correctly guess the test session s before the
+game begins. This is another standard game hop.
+Game 3: This game is identical to game 2 except it aborts if the adversary ever queries hsm( ˆB, ˆA,gy,na) (for the unique gy
+received by ˆA in the second message of s and the unique nonce na selected by ˆA in the initial message of s). As access to the
+hsm query is revoked before na is even generated by ˆA, the probability that the adversary will query hsm on the random string
+na is negligible. Hence | Pr(S2)− Pr(S3)| is negligible.
+Game 4: This game is identical to Game 3 except it aborts if the received signature Sigskb{ ˆA, ˆB,gy,na} for actor ˆA in session s
+is forged, where speer = ˆB. Since the signature scheme is EUF-CMA, previous signatures, either from other protocol runs or the
+hsm query, will not give the adversary non-negligible advantage in making this forgery. Hence | Pr(S3)− Pr(S4)| is negligible.
+By Game 3 and Game 2, we must have that the signature is genuinely created by ˆB in a (or several) session(s), since it
+cannot be forged or found via the hsm query. Also, since the ephemeral DH value gy is unique by Game 1, the session s′ the
+signature was created in is unique.
+Game 5: This game is identical to Game 4 except it aborts if the challenger does not successfully guess s′ such that speer = ˆA
+and ˆB selected gy in session s′ to send to ˆA in session s. This is a standard game hop.
+Game 6: This game is identical to Game 5 except we replace gxy as computed in the test session key of s and (possibly s′ if the
+last message is forwarded) by gz. This is a standard game hop based on the decisional Difﬁe-Hellman assumption. The hop is
+allowed since the only two sessions that could compute gxy cannot be queried by the adversary.
+As the session key contains the hash of gz for random z, the session key is indistinguishable from random. Thus,the adversary
+cannot possibly have any non-negligible advantage in winning this game. By our hops, the protocol is secure in the original
+security game.
+Appendix C.
+Strong Models for Protocol Classes
+We here recall some deﬁnitions from Cremers and Feltz [14], including the concept of a strong model for a protocol class.
+Deﬁnition 21. Let secure(M,π ) be a predicate that is true if and only if the protocol π is secure in security model M,
+and let Π be a class of AKE protocols. We say that a security model M′ is at least as strong as a security model M with
+respect to Π, denoted by M≤Π
+Sec M′, if
+∀π∈ Π,secure (M′,π ) =⇒ secure(M,π )
+We say that M and M′ are incomparable if M⁄≤Π
+Sec M′∧M′⁄≤Π
+Sec M.
+18
+
+Deﬁnition 22 (Protocol classes) . We deﬁne AKE as the class of all protocols of h≥ 2 total messages for which the
+probability that two sessions of the same user output in all protocol steps identical messages is negligible.
+The subclass ISM of AKE (for “initial state modiﬁcation”) consists of all protocols in AKE that only access and update
+user memory upon creation of sessions.
+The subclass SL of ISM consists of all stateless protocols; that is, those for which stˆp = proj3(Ψ(1k,sts,st ˆp,m )) for
+all (k,sts,st ˆP,m ), where proj3 is projection onto the third coordinate.
+Each of these classes admits different strong models: attacks which can be prevented in a larger class may always work
+in a smaller one. For example, we have already seen the impossibility result that stateless protocols cannot achieve key
+indistinguishability if the long-term key of the peer to the test session has been revealed.
+[14, Theorem 2] states ﬁve generic attacks against protocols in AKE∩ SL, and rules them out in the security model below
+(there denoted Ω−
+AKE). The ﬁrst pair of attacks are clear: the adversary directly queries the session key of the test session or
+its partner. The second pair correspond to an adversary which corrupts all secret inputs to a party and thereby simulates its
+computation. In the ﬁnal attack the adversary corrupts some party and then impersonates them to the test session.
+Deﬁnition 23 (ΩAKE∩SL). The ΩAKE∩SL model is deﬁned by (Q,F ) whereF =F1∧F2∧F SL
+3 ∧F SL
+4 ∧F SL
+5 and the Fj are
+as in Table 3 and as follows:
+(F SL
+3 ) Not both queries corrupt(sactor) and ( randomness(s) or cr-create(.) creating session s) have been issued.
+(F SL
+4 ) For all sessions s′ such that s is partially matching s′, not both queries corrupt(speer) and ( randomness(s′) or
+cr-create(.) creating session s′) have been issued.
+(F SL
+5 ) If there exists no origin-session for session s, then no corrupt(speer) query has been issued before creation of session
+s via a ( create or cr-create) query or as long as sstatus = active and srecv =ϵ.
+A similar impossibility result, analogous to [14, Corollary 3], applies to protocols in ISM. Since in this class randomness is
+shared between parties, it sufﬁces for at least one previous session to have uncorrupted randomness.
+Deﬁnition 24 (ΩAKE∩ISM). The model ΩAKE∩ISM is deﬁned by (Q,F ) whereF =F1∧F2∧F ISM
+3 ∧F ISM
+4 ∧F SL
+5 and the
+clauses are as per Table 3.
+We remark that the translation from an impossibility result to a strong model is not unique. An impossibility result gives
+speciﬁc adversaries which can attack any protocol in a class, and a corresponding strong model rules out those adversaries
+but as few others as possible. In particular, if an attack is not as generic as thought, the corresponding freshness predicate
+will rule out more adversaries than strictly necessary—for example, the “generic” PCS adversary only attacks the ﬁrst
+session, but the ﬁnal clause of the freshness predicate rules out any compromise before the test session.
+We now deﬁne some models for use in subsequent proofs.
+Deﬁnition 25. We deﬁne the following freshness predicates.
+(F KR
+3 ) If both queries corrupt(sactor) and (randomness(s) or cr-create creating sessions) have been issued, thens is refreshed.
+item For all sessions s′ such that s is partially matching s′, if both queries corrupt(speer) and (randomness(s′) or
+cr-create creating session s′) have been issued, then s′ is refreshed.
+(F KR
+4 ) If there exists no origin-session for session s, and a corrupt(speer) query has been issued before creation of session s
+via a query ( create or cr-create) or as long as sstatus = active and srecv =ϵ, then s is refreshed.
+We deﬁne the following models by their freshness predicates.
+F (Smin) =F1∧F2∧F SL
+3 ∧F SL
+4 ∧F KR
+5
+F (SSL) =F1∧F2∧F KR
+3 ∧F KR
+4 ∧F KR
+5
+The difference between F (Smin) and F (eCKw-PCS) is only in F4: the former restricts compromise only on sessions s⋆
+which partially match the test session s, while the latter restricts compromise on any s⋆ which is an origin-session for s.
+Since a partially matching session for s is an origin session for s, we see that F (eCKw-PCS) =⇒ F (Smin). Likewise, it is
+clear that F (Smin) =⇒ F (SSL), since the latter again allows strictly more adversarial actions. Hence:
+Lemma 26. It holds that eCK w-PCS≤secSmin≤secSSL.
+C.1. Pooling of Randomness
+The key difference between the above models is in the treatment of the third and fourth clauses of the freshness predicate,
+which describe the security of sessions where both an agent’s long-term key and local randomness are compromised.
+Speciﬁcally, this situation is forbidden in SL since there they comprise the only secret inputs to the session key computation,
+but there is more than one natural way to lift the restriction outside of SL.
+19
+
+A protocol which stores the randomness of all past sessions (or some derived value e.g. a hash or seeded PRNG) needs
+only one of these to be uncorrupted to maintain session key secrecy. This is the intuition behind ΩAKE∩ISM. However, because
+it only stores local secrets, the state does not help authenticate its peer.
+A protocol which stores state synchronised with its peer can use that state for improved authentication. Because the
+state depends on previous random values, it can also provide some guarantees if the local randomness for a session is
+compromised. These guarantees are weaker in two ways, though:
+(i) because the secret is per-peer, if the randomness of a session with Bob is compromised then only a previous session
+with Bob can help, and
+(ii) because the peer also knows the secret, it could also be leaked by them.
+Concretely, letA denote the adversary which honestly relays three sessions: s1 : Alice↔ Bob, s2 : Alice↔ Charlie and
+s3 : Alice↔ Bob, then queries corrupt(Alice), randomness(s1) and randomness(s3). This adversary is valid in ΩAKE∩ISM
+since there was at least one previous session with uncorrupted randomness, but invalid in SSL since that session was not
+with Bob. Conversely, the generic impersonation attack is valid in SSL but succeeds against any protocol in ISM.
+This demonstrates that the models ΩAKE∩ISM andSSL are incomparable. But once state is shared between sessions, there
+is no obvious reason not to pool randomness as well as maintain a shared secret, giving stronger guarantees if the local
+RNG is weak. Such protocols’ guarantees are given by ΩAKE.
+Appendix D.
+Robustness
+Theorem 14. No stateless protocol is secure in KE-PCS.
+Proof : The only secret inputs to the protocol algorithm of a stateless protocol are the session randomness and the long-term key. It
+follows that the simple corrupt-and-impersonate adversary has the same success probability as the corrupted agent.
+One-round protocols with post-compromise secrecy are necessarily not robust to an unreliable network. The intuitive reason
+is that if the initiator sends a message m but receives no reply, she cannot tell whether
+(i) m was lost before delivery, or
+(ii) m was received by Bob but the response lost.
+For a one-round protocol, the latter case has Bob accept a session with an intermediate secret that Alice does not know,
+which clearly will cause trouble with future sessions.
+We now formalise this argument. By a benign adversary we mean one which acts as a wire, faithfully relaying every
+message in order to its intended peer.
+Theorem 19. No correct one-round protocol which is secure in KE-PCS is post-network robust.
+Proof : We give an explicit adversary in KE-PCS against Π. The adversary corrupts some agent Bob, then completes an honest
+session between Alice and Bob, meaning that Bob’s state may change. The adversary then uses the previous state value, which it
+learnt from the corruption, to impersonate Bob to Alice in a subsequent session. We must argue (i) that this adversary does not
+contradict freshness, which holds because of the intermediate session; and also (ii) that it wins the security game, which we show
+with an explicit reduction to robustness.
+Pick two targets ˆA and ˆB. Since Π is post-network robust, the correct-execution adversary C =C( ˆB, ˆA) induces matching
+sessions at ˆA and ˆB, with the ﬁnal protocol message sent ˆA→ ˆB. (Otherwise useC( ˆA, ˆB). Our adversaryA begins by executing
+C; that is, it simulates its execution, and whenever C issues a query A issues the same query, and returns the response to C.
+Next,A issues a corrupt( ˆB) query, and uses the response to set up a simulated ˆB-oracle Σ, initialising it with the setup
+algorithm used by the game. If ˆB is the initiator then it simulates a create(Σ, ˆA) query; if the responder then it additionally
+simulates a send(Σ,m 1, ˆA) query where m1 was the initial message sent by C above. (This ensures that the state of Σ is
+equidistributed with that of ˆB, required for Case 2 below.)
+Now,A uses Σ to impersonate ˆB to ˆA: it executesC for a second time, except redirecting all send( ˆB,... ) queries made byC
+to Σ. That is, A stores the current state stΣ in its memory, and whenever C issues a send( ˆB,... ) queryA computes Ψ(stΣ,... )
+and returns its output as the result of the query. All other send queries are faithfully invoked by A.
+Let s be the session created at ˆA by this execution. Note that s must complete, and therefore has status s.status ∈
+{accept, reject}. We consider these cases separately.
+Case 1: s accepts. We argue that s is fresh, and that it derives a key matching the key in st Σ.
+To show that s is fresh there are two conditions in the freshness predicate. The ﬁrst is that the only queries were issued
+against ˆB before the key refreshing session; this is true. The second is that s is refreshed; that is, that there exist two matching
+sessions at ˆA and ˆB, accepted before the creation of s, for which not both corrupt and ( randomness or cr-create) queries have
+been issued. This is indeed true: the two sessions created by C satisfy this condition. Hence s is fresh.
+A may therefore issue test-session(s), and compare the result to the session key in the memory of the unique session s′ at
+the simulated ˆB-oracle. Since the protocol is correct and s matches s′, we must have that s.key =s′.key with high probability,
+and hence the adversary can easily win. In this case the theorem is proved.
+20
+
+Let π be a protocol whose session keys are derived as KDF (pms). Let s denote the ith completed session that has had
+actor ˆA and peer ˆB, and let IS
+ˆA, ˆB
+i denote the ith intermediate secret ˆA has stored for ˆB in st ˆA. The protocol π is modiﬁed
+as follows:
+• The session key k← KDF(σ) that ˆA computes in session s is replaced by k← KDF(σ,IS
+ˆA, ˆB
+i−1, 0).
+• The next intermediate secret for peer ˆB that ˆA computes is IS
+ˆA, ˆB
+i ← KDF(σ,IS
+ˆA, ˆB
+i−1, 1).
+• Upon session acceptance, IS
+ˆA, ˆB
+i is stored in st ˆA, replacing IS
+ˆA, ˆB
+i−1 which is erased.
+Actor ˆB computes intermediate secrets and session keys identically, and the initial intermediate secret IS
+ˆPi, ˆPj
+0 for any two
+parties ˆPi, ˆPj is publicly set to 0.
+Figure 7: Deﬁnition of the one-round PCS transform π↦→π∗
+Case 2: s rejects. We argue that the marginal distribution at ˆA could also be induced by a network adversary.
+Consider the network adversary C′ which is equal to C except that the ﬁnal message ˆA→ ˆB is dropped. Consider the
+distributions of messages sent to ˆA by (C′;C) and byA. The ﬁrst message is sampled from the distribution of initial messages at
+ˆB, possibly with the additional but equal ﬁrst message. Subsequent messages from the ﬁrst session at ˆB are sampled from equal
+distributions, since Π∈ IFSM implies that st ˆB is not updated by intermediate messages. The ﬁrst message from C (resp. Σ) is
+sampled from still the same distribution, since the ﬁnal message was not delivered and hence the state at ˆB was not updated.
+Subsequent messages from C (resp. Σ) are sampled from equal distributions, again because Π∈ IFSM implies that st ˆB is not
+updated by intermediate messages. By this equality of distributions, we have that the session induced by C in (C′;C) also rejects
+and thereforeC did not create a pair of matching sessions. Since C′ is a network adversary, Π is not post-network robust. In this
+case the theorem is proved.
+Sequential precomposition with any adversary has no effect on the output distribution of role oracles in a stateless protocol.
+We therefore have
+Corollary 27. Any robust stateless protocol is post-Adv robust, but there exist robust protocols in ISM which are not even
+post-benign robust.
+Appendix E.
+PCS Transform
+E.1. One-round PCS transform
+In this section, we present a generic transform to turn a protocol π in the class ISM into a protocol π⋆ not in ISM.
+First, for simplicity and intuition, we provide a generic construction and proof of security in the case of π being a
+one-round protocol. We show that π⋆ achieves security in strong PCS models, but is not robust in the sense that parties
+can fall permanently out of sync with a unreliable network. Indeed, we prove that this is always the case with a one-round
+protocol and therefore a trade-off between security and efﬁciently must always occur.
+However, the proof technique for our one-round protocol transform allows us to then provide a security proof for a
+two-round protocol. Our two-round protocol transform is more complicated in that it involves MACs and potential vs actual
+intermediate secrets in memory, but the basic intuition of sharing and updating an intermediate secret is the same. We prove
+that this protocol can be robust and achieve PCS.
+Proof : We construct the adversaryAπ against protocol π as follows.Aπ runs as a challenger, implementing users executing protocol
+~π against adversaryA~π. WhenA~π makes a create, cr-create, send, randomness or corrupt query,Aπ asks the same query as
+an adversary against π and forwards the reply back to A~π. WhenA~π makes a session-key query,Aπ asks the same query as an
+adversary against π, receives reply pms and then forwards KDF(pms) back toA~π. WhenA~π asks a test-session query,Aπ
+asks the same query as an adversary against π, receives reply kb and forwards KDF(kb) back toA~π. Finally,Aπ outputs the
+same guess b′ asA~π. SinceA~π is a successful adversary, the test session for Aπ is fresh. Moreover,Aπ makes the correct guess
+for b whenA~π does. AsA~π succeeds with non-negligible probability, so does A. Therefore, if ~π is insecure, then so is π.
+We deﬁne a new protocol π⋆ with the same messages as π but with a different key derivation in Figure 7. If ˆA and ˆB
+are synchronised—that is, they have the same intermediate secret for each other—then they will derive equal session keys
+from an honest session.
+We show ﬁrst that π⋆ is at least as secure as π, and second that π⋆ additionally meets security in the PCS models.
+Lemma 28. If π is secure in model X⋆, then so is π⋆.
+21
+
+Proof : We prove the contrapositive. That is, we prove that if π⋆ is insecure in model X⋆, then so is π. For an adversary Aπ⋆
+in model X⋆ that succeeds against protocol π⋆ with non-negligible probability, consider adversary Aπ, also in model X⋆, but
+against protocol π.Aπ proceeds in an almost identical way to Aπ⋆ except for minor differences. Aπ ignores intermediate secrets,
+e.g., whereAπ⋆ computes KDF(σ, IS, 0),Aπ instead computes KDF(σ). WhereAπ⋆ uses a session-key(s) query to reveal key
+k⋆ = KDF(σ, IS, 0) whichAπ⋆ then uses in later computations, Aπ uses the same session-key(s) query to reveal a different
+session keyk = KDF(σ) whichAπ uses instead (subject to the condition of Aπ ignoring intermediate secrets as already speciﬁed).
+Subject to these conditions, Aπ executes the same trace as Aπ⋆. Denote the test session for Aπ⋆ (resp.Aπ) against protocol π⋆
+(resp. π) by sπ⋆ (resp. sπ). Similarly let the test session key kπ⋆ (resp. kπ) be computed as KDF(σπ⋆, IS, 0) (resp. KDF(σπ)).
+AsAπ⋆ is a successful adversary, sπ⋆ is fresh. By the construction of Aπ and the freshness conditions in X⋆, sπ is also fresh.
+As session keys are not used to compute any other terms in the protocol, and as intermediate secrets are only used to compute
+other intermediate secrets or session keys, for all intents and purposes Aπ implements the same attack as Aπ⋆. IfAπ⋆ wins
+againstπ⋆ by querying KDF(σπ⋆, IS, 0), thenAπ⋆ must have deduced the input tuple (σπ⋆, IS, 0), and in particular σπ⋆, which
+is a function of only the key exchange. But since Aπ has the same trace as Aπ⋆,Aπ is able to deduce σπ and kπ. Therefore,
+if the adversary Aπ⋆ succeeds against π⋆ with this strategy, then Aπ can succeed against π. If on the other hand Aπ⋆ wins
+against π⋆ while never querying KDF(σπ⋆, IS, 0), then as the KDF is a random oracle, the only possibility is that this is a key
+replication attack. Clearly if Aπ⋆ can do this, then so can Aπ.
+Before we prove the main theorem of this section (Theorem 31), we make the following observation. Suppose an adversary
+has to derive an intermediate secret ISi = KDF(σ,ISi−1, 1). As the KDF is a random oracle, the only way of doing so is
+by evaluating the KDF on the input (σ,ISi−1, 1). If the adversary can do this, then she can also compute the session key
+that comes with the same session as ISi, as k = KDF(σ,ISi−1, 0). If the adversary can compute a session key, then she
+does not need to use a session-key query on the session (or any matching session). Note we do not have circular reasoning
+here as session keys are never used to compute anything in the protocol, including intermediate secrets. This leads us to the
+following two lemmata which we will use in addition to Lemma 28 to prove Theorem 31.
+Lemma 29 is cumbersome to write, but states intuitively that computing an intermediate secret from a session with
+uncompromised state is as difﬁcult as computing the session key of that session.
+Lemma 29. Take either (i) Ω = eCKw and KR = eCKw-PCS or (ii) Ω = Ω AKE∩ISM and KR = Ω AKE. Consider all
+adversariesAπ⋆ in KR against protocol π⋆ such that the test session s ofAπ⋆ is refreshed and consider sessions s′ and s′′
+as in the deﬁnition of s being refreshed. Denote the intermediate secret computed by sactor (and possibly speer if synchronised)
+in s′ (and possibly s′′) by ISi. So in other words, ISi = KDF(σi−1,ISi−1, 1) for some key exchange information σi−1
+and previous intermediate secret ISi−1. If protocol π is secure in Ω, then the probability of adversary Aπ⋆ computing the
+intermediate secret ISi is negligible.
+Proof : Assume for contradiction that an adversary Aπ⋆ exists that can compute ISi with non-negligible probability. Recall the
+observation that if Aπ⋆ can compute ISi, thenAπ⋆ can also compute the session key of the same session s′. Therefore we can
+assume without loss of generality that Aπ⋆ does not issue a session-key(s’) (or, if synchronised, a session-key(s”) query).
+Consider adversaryAπ against (secure) protocol π in Ω that copiesAπ⋆ apart from in two ways: (i) Aπ ignores intermediate
+secrets in the same way as in the proof of Lemma 28 and (ii) Aπ makes the same queries as adversary Aπ⋆ except whereAπ⋆
+queries test-session(s),Aπ⋆ instead queries test-session(s′), andAπ does not necessarily make the same guess query asAπ⋆.
+We see that since Aπ⋆ always makes a test session refreshed, it follows that s′ in fresh. Therefore if Aπ⋆ can compute ISi with
+non-negligible probability, thenAπ can compute the test session key and succeed against π in Ω with non-negligible probability.
+But π is secure in Ω, which is a contradiction.
+Lemma 30 generalises this result to a sequence of intermediate secrets, since they are chained together inside random oracle
+invocations. It states intuitively that if an intermediate secret comes from a refreshed session, then the adversary is unable to
+compute any subsequent intermediate secret derived from it.
+Lemma 30. Take either (i) Ω = eCKw and KR = eCKw-PCS or (ii) Ω = Ω AKE∩ISM and KR = Ω AKE. Consider all
+adversariesAπ⋆ in KR against protocol π⋆ such that the test session s ofAπ⋆ is refreshed and consider sessions s′ and s′′
+as in the deﬁnition of s being refreshed. Denote the intermediate secrets sactor stores for speer as IS0,IS 1,IS 2... where
+the intermediate secret computed in session s′ is ISi and the intermediate secret used in the computation of the test session
+key of session s is ISj (so j≥i). If π is secure in Ω, then the probability of adversary Aπ⋆ computing the intermediate
+secretISj is negligible.
+Proof : We see that ISj = KDF(σj−1,ISj−1, 1) for some key exchange information σj−1. Intermediate secrets are never sent or
+received, so forAπ⋆ to compute ISj,Aπ⋆ must compute the input ISj−1 (as well as σj−1). But ISj−1 = KDF(σj−2,ISj−2, 1)
+for some key exchange information σj−2, and so on. By induction we see that for Aπ⋆ to compute ISj,Aπ⋆ must compute ISi.
+But by Lemma 29 this can only be done with negligible probability.
+We are now ready to prove Theorem 31.
+Theorem 31. For any protocol π∈ AKE∩ ISM,
+22
+
+(i) If π is secure in eCK w, then π⋆ is secure in eCK w-PCS
+(ii) If π is secure in ΩAKE∩ISM, then π⋆ is secure in ΩAKE
+The high-level proof structure is as follows. For both (ii) and (i) we have already shown that π⋆ is at least as secure as π by
+Lemma 28, so all that remains is to cover the cases of additional adversarial behaviour allowed against π⋆ but disallowed
+against π. In these additional cases, we argue as in Lemma 29 and Lemma 30 that a refreshed session protects the necessary
+intermediate secret and thus the test session key.
+Proof : IfA creates a fresh test session we say it is valid.
+(ii): Since the ΩAKE model is identical to the ΩAKE∩ISM model except for the difference in the 5 th predicate, it follows by Lemma
+28 that π⋆ will be secure in ΩAKE if we can show that for all adversaries A that are valid in ΩAKE but not in ΩAKE∩ISM,A
+can only defeat π⋆ with negligible probability. In other words, such an adversary A must create a test session s for which no
+origin session exists, and also issue a corrupt(speer) query. We can rule out the case that A wins by doing this as well as never
+computing the test session key k = KDF(σj,ISj, 0) by the same arguments as before. Now, by the 5 th predicate in ΩAKE, the
+test session s must be refreshed, so there exists two other sessions s′ and s′′ as in the deﬁnition of s being refreshed. To compute
+the KDF on the inputs ( σj,ISj, 0) required for the test session key, the adversary needs the intermediate secret ISj, but this
+cannot be computed with non-negligible probability by Lemma 30.
+(i): Consider adversaryA inSSL againstπ⋆. Denote the test session by s with test session key k = KDF(σj,ISj, 0). We partition
+into the events (i) V , (ii) Vc∩Tc
+0 , (iii) Vc∩T0∩S and (iv) Vc∩T0∩Sc; where V,T 0 and S are deﬁned by:
+V A is a valid adversary in ΩAKE∩SL.
+T0 There exists an origin session for the test session.
+S A issues a corrupt(sactor) and a ( randomness(s) or cr-create(s)) query.
+Event V . This case is covered by Lemma 28.
+Event Vc∩T0∩Sc. IfA is a valid adversary in ΩAKE but not in ΩAKE∩SL, then it must be because of the difference in the 3 rd,
+4th or 5 th freshness predicates as the 1 st and 2 nd are identical. If an origin session also exists, it must be because of the 3 rd or 4 th
+predicates. IfA also does not issue a corrupt(sactor) and a randomness(s) (or cr-create(s)) query, then the difference must be in
+the 4 th predicate. In this case, since A is still a valid adversary in ΩAKE, it must be the case that there exists a session s′ such
+that s is partially matching s′, where the queries corrupt(speer) as well as ( randomness(s′) or cr-create(s′)) have been issued,
+where s′ is refreshed. By analogous reasoning to Lemma 29 and Lemma 30, the intermediate secret ISj used in the computation
+of the test session key k is safe, so we are done.
+Event Vc∩T0∩S. IfA is a valid adversary in ΩAKE but not in ΩAKE∩SL, then it must be because of the difference in the 3 rd,
+4th or 5 th freshness predicates as the 1 st and 2 nd are identical. If an origin session also exists, it must be because of the 3 rd or 4 th
+predicates. If it is because of the 4 th, see the analysis of event Vc∩T0∩Sc. If it is (possibly also) because of the difference in
+the 3 rd predicate, then by the 3 rd predicate ofSSL, s must be refreshed. By analogous reasoning to Lemma 29 and Lemma 30, the
+intermediate secret ISj used in the computation of the test session key k is safe, so we are done.
+Event Vc∩Tc
+0 . IfA is a valid adversary in ΩAKE but not in ΩAKE∩SL, then it must be because of the difference in the 3 rd, 4 th
+or 5 th freshness predicates as the 1 st and 2 nd are identical. If it is because of the difference between the 3 rd and 4 th predicates, see
+the analysis of Event Vc∩T0∩S. If it is (possibly also) because of the difference in the 5 th predicate, then this case is covered
+by analogous reasoning to (ii).
+A useful corollary of Theorem 31 is that one can use it to reverse engineer proofs of security; real-world protocols that use
+synchronised state may be complex and lack proofs of security, but if they are of the same form as π⋆ then it will sufﬁce to
+prove the security of the simpler corresponding protocol of the same form as π.
+E.2. Two-Round PCS Transform
+The previous PCS transform was not robust when applied to multiple-round protocols. We give an alternative transform,
+speciﬁc to two-round protocols, which does achieve robustness. Again, it converts a protocol π subject to some restrictions
+into a protocol π† not in ISM.
+Intuitively, the major obstacle to robustness is related to the two generals’ problem: if Alice updates her state, the next
+message might be dropped. However, since we postcondition on the fact that C’s messages are completed unaltered, we
+solve this by allowing the ﬁrst message to play the role of the dropped one. We therefore build a protocol transform (·)†
+which is closely related to (·)⋆, but (i) the initial messages are authenticated with the current state, (ii) secrets are tied to
+the particular protocol role of each party, and (iii) there is logic to handle the case where a ﬁnal message was dropped.
+Speciﬁcally, each party maintains separate initiator and responder states; the latter contains not only the current IS value but
+also a collection of potential ones, corresponding to sessions which might have been accepted by initiator ˆA. Upon receipt of
+the ﬁnal protocol message, the responder ˆB updates its state and deletes all other potential values. However, in case this ﬁnal
+message was dropped, it also checks incoming initial messages against the current potential states and updates if necessary.
+23
+
+The formal description of π† was depicted in Figure 6(a), and its message ﬂows in Figure 6(b). It assumes that public
+DH keys are distributed for all parties, and that π as before computes a pre-master secret from which session keys are
+derived.
+Theorem 20. Let π be a stateless protocol.
+(i) If π is secure in eCK w then π† is secure in eCK w-PCS.
+(ii) If π is secure in ΩAKE∩ISM, then π† is secure in ΩAKE.
+(iii) If π is robust then π† is post-network robust.
+The high-level argument for Theorem 20 is as follows. We alter the protocol π⋆ in minor steps until it becomes protocol π†,
+arguing about the security of each protocol along the way. First, we transform π into π⋆ to gain the claimed extra security
+by Theorem 31. We then consider an intermediate protocol π⋆
+MAC and show it is at least as secure as π⋆. Finally, we show
+that π† is at least as secure as π⋆
+MAC. At the end, we will have shown that π† is at least as secure as π⋆
+MAC, which is at least
+as secure as π⋆, which is secure in the required model by Theorem 31.
+Proof sketch : We only prove that security in ΩAKE∩ISM implies security in ΩAKE; the other implication is analogous.
+First transform π into π⋆ using the PCS transform of Section E. By Theorem 31, π⋆ is secure in ΩAKE.
+Next, transform π⋆ intoπ⋆
+MAC, which is identical to π⋆ except each message mj is replaced with⟨mj,µj⟩ as in the transform
+above. Note that π⋆
+MAC is not robust as it does not use a global stR
+ˆB.potential ˆA variable as in the transform above. However, π⋆
+MAC
+is also secure in ΩAKE; if an adversary can succeed against π⋆
+MAC in ΩAKE with non-negligible probability, then essentially the
+same attack works on π⋆. If the attack requires the test session being fresh and refreshed, then we can apply the random oracle
+assumption and use the hash inside a HMAC to show that no extra information is gained from π⋆
+MAC overπ⋆. Hence by Lemma
+30 the attack must not involve the adversary gaining any knowledge of the IS, and as such the same attack (but ignoring the
+MACs) can work against π⋆. If on the other hand the attack works with the test session not being refreshed, then no security of
+the IS is guaranteed and so the MAC is superﬂuous information. As such, an attack of this type on π⋆
+MAC implies an attack on π⋆.
+So any attack on π⋆
+MAC can be translated onto an attack on π⋆. Thus π⋆
+MAC is secure in ΩAKE.
+To proveπ† is at least as secure as π⋆
+MAC, we assume the existence of a successful adversary Aπ† against π† and use it to
+construct a successful adversary Aπ⋆
+MAC against π⋆
+MAC. For the queries send, create and cr-create, naive forwarding of queries and
+replies in the simulation will fail, since the list of potential IS values is used in π† to compute the MAC values.
+For example, consider the case where ˆA and ˆB engage in two pairs of sessions, where in both ˆA is the initiator and ˆB the
+responder. IfAπ† does not send the ﬁnal message of the ﬁrst session ˆA→ ˆB, then the messages in the second session will differ.
+Indeed, π† is precisely designed to detect this message loss and update anyway, so it will send a MAC with the new state; while
+π⋆
+MAC will not and therefore will use the old state.
+But this is not a problem, because while simulating Aπ†,Aπ⋆
+MAC can make an additional send( ˆB,·) to ˆB to complete the
+original session. The update procedures in π⋆
+MAC and π† are identical, so this causes the states to agree before the construction of
+the ﬁnal message.
+This will perfectly simulate ˆB’s reply, as if ˆB’s state updated because of the stR
+ˆB.potential ˆA variable. It is not difﬁcult to
+check the other cases, or that the simulation can still work if Api† ever decides to go back and ﬁnish a session that Aπ⋆
+MAC
+automatically ﬁnished. The other queries can be simulated in the normal way. This shows that π† is secure in ΩAKE.
+We now give a symbolic argument for robustness. Let π be a stateless robust protocol, and π† its transform. Let #(t) denote
+the number of invocations of the KDF in the construction of a term t.
+Lemma 32. For any network adversary A, if at some time during the execution of A we have two values st1,st 2∈
+stR
+ˆB.potential ˆA, then #(st1) = #(st2)
+Proof : A value st′ is added to a non-empty stR
+ˆB.potential ˆA just when a message gx, MAC(stR
+ˆB, ˆA;·) is received; since st′ =
+KDF (...,st ) we have that #(st′) = 1 + #(st). Thus we have the stronger invariant that #(st′) = 1 + #(stR
+ˆB, ˆA) at all times,
+which proves the lemma.
+Lemma 33. If stI
+ˆA, ˆB =st1 and stR
+ˆB, ˆA =st2, then #(st1)≥ #(st2).
+Proof : Every state update st↦→st′ increases #(st) by one; we thus need to show only that ˆA performs this update before ˆB, but
+this indeed holds by induction on the trace length. If the ﬁnal event in the trace updates stR
+ˆB, ˆA then we have equality:
+(i) if it was receipt of the third protocol message then ˆB receives a message from ˆA with state st and updates its state to st
+(ii) if it was receipt of the ﬁrst protocol message then the same still holds.
+Thus for all traces we have the inequality.
+Corollary 34. #(stI
+ˆA, ˆB)− #(stR
+ˆB, ˆA)∈{ 0, 1}
+Proof : We need only show that ˆA cannot update twice without an intermediate update by ˆB; the result then follows since each
+responder update restores equality. But this holds easily: ˆA updates state only when receiving a message m from ˆB with the new
+24
+
+ˆA ˆB
+time k′
+stI
+ˆA, ˆB =IS𝓁
+time t′
+stR
+ˆB.potential ˆA←IS′
+𝓁
+empty stR
+ˆB.potential ˆA
+time k
+time t
+stI
+ˆA, ˆB↦→IS′
+𝓁
+Figure 8: Time ordering of events in the proof of Lemma 35.
+state, and thus #(stI) can be at most one ahead of #(stR) at the time m was sent, and hence certainly no further ahead.
+Lemma 35. If stI
+ˆA, ˆB = IS at some time t, then either(i) stR
+ˆB, ˆA = IS at time t, or (ii) IS∈stR
+ˆB.potential ˆA at time t.
+Proof by symbolic argument : Note that state is linear; that is, that there is only one possible value of stR
+ˆA, ˆB at a given time. We
+ﬁrst claim that the state never repeats; that is, if stI
+ˆA, ˆB = IS at times t1 <t 2 then stI
+ˆA, ˆB = IS at all times t1≤t≤t2. This
+holds by case analysis on the rules which change the state, all of which make the change st↦→KDF (...,st ) and therefore the
+number of function symbols in the state term only increases.
+Now, let Sn be the statement that the lemma holds for all traces of length ≤n. We prove Sn for all n by induction. The
+base case is trivial; for the inductive case, we need only consider the rules which may change either the I or theR state, since if
+the ﬁnal rule does not change either state then the induction hypothesis applies to the truncated trace.
+Update initiator state. Suppose therefore that we update stI
+ˆA, ˆB : IS𝓁↦→ IS′
+𝓁⁄= ISr = stR
+ˆB, ˆA at time t. By explicit key
+conﬁrmation we have that IS′
+𝓁∈stR
+ˆB.potential ˆA, added at some time t′ <t . If it was never removed then we are done, so suppose
+that it was removed by sending a message m to ˆB at some time t′ <k<t ; choose the earliest possible k>t ′. Finally, since the
+message causing it to be added must have been sent with state IS𝓁 at some time k′, we have k′ <t′ <k<t . The removal can
+be upon ˆB’s receipt of either the ﬁrst or the third protocol message, so there are two cases to consider.
+Third. Suppose that m is the third and ﬁnal protocol message, causing stR
+ˆB.potential ˆAto be emptied as part of the pre-accept
+computation. We derive a contradiction from Lemma 32: suppose #(IS𝓁) =n, so that #(IS′
+𝓁) =n + 1. The construction of the
+third protocol message m occurs only when ˆA changes state; by linearity, since stI
+ˆA, ˆB =IS𝓁 at k′ and k it must be so for all
+times between k′ and k. Therefore, m was constructed at ˆA before k′, say with state st such that x := #(st)<n .
+Now, since k was chosen as early as possible, we have that IS𝓁∈ stR
+ˆB.potential ˆA at time k since it was not removed
+beforehand. Since m is only accepted if the new state is currently in stR
+ˆB.potential ˆA, we have that st∈ stR
+ˆB.potential ˆA. By
+Lemma 32, therefore, n = #(IS𝓁) = #(st)<n , which is a contradiction.
+First. Suppose that m is the ﬁrst protocol message, causing stR
+ˆB.potential ˆAto be emptied because it is sent with a state
+st∈stR
+ˆB.potential ˆA. Again by Lemma 32, since IS′
+𝓁∈stR
+ˆB.potential ˆA we must have that #(st) = n + 1. This is impossible,
+since the ﬁnal event in the trace has ˆA update to IS′
+𝓁 and therefore it sent no messages with such a state.
+Update responder state. Suppose that the ﬁnal rule, invoked at time t, changes the responder state. Let t′ be the time of the
+last change to stI
+ˆA, ˆB, setting it say to IS𝓁, so that the induction hypothesis holds at time t′ <t . Thus we have either stR
+ˆB, ˆA =IS𝓁
+or IS𝓁∈stR
+ˆB.potential ˆA. By Corollary 34 we must have that #(stR
+ˆB, ˆA) changes from #(IS𝓁)− 1 to #(IS𝓁), since the corollary
+holds both before and after the change. The only messages that trigger such a change are sent by ˆA with a state st having
+#(st) = #(IS𝓁), and hence since states are linear st = IS𝓁. It follows that stR
+ˆB, ˆA = stI
+ˆA, ˆB after the update, satisfying the
+conclusion of the lemma.
+Theorem 36. If π∈ SL is robust then the transformed protocol π† is post-network robust.
+25
+
+The high-level argument here is as follows. For robustness it sufﬁces to show that if the initiator has some state IS then the
+corresponding responder either has the same state or derived it in a previous session and did not erase it. Since updates
+occur upon receipt of a message depending on the previous state, parties can never move more than one update out of sync.
+We therefore just need to show that required states are not erased by the responder before they are needed. This comes
+down to a careful case analysis on the triggers for such an erasure.
+Proof : If π† is not post-network robust, then by deﬁnition this means that there exists some network adversary A such that, after
+A terminates, either(i) the running of C (the benign adversary that causes a pair of matching sessions between ˆA and ˆB and
+then terminates) does not result in ˆA and ˆB deriving the same session key, or (ii) C is unable to even create a matching session
+between ˆA and ˆB. The latter case is ruled out by Corollary 34. The former case is dealt with by Lemma 35: the initial message
+sent byC has a state which is already known to ˆB, and hence by construction the protocol accepts and derives equal session keys.
+26

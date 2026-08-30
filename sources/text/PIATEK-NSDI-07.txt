@@ -1,0 +1,1358 @@
+Do incentives build robustness in BitTorrent?
+Michael Piatek∗ Tomas Isdal∗ Thomas Anderson∗ Arvind Krishnamurthy∗ Arun V enkataramani†
+Abstract
+A fundamental problem with many peer-to-peer systems
+is the tendency for users to “free ride”—to consume re-
+sources without contributing to the system. The popular
+ﬁle distribution tool BitTorrent was explicitly designed to
+address this problem, using a tit-for-tat reciprocity strat-
+egy to provide positive incentives for nodes to contribute
+resources to the swarm. While BitTorrent has been ex-
+tremely successful, we show that its incentive mecha-
+nism is not robust to strategic clients. Through perfor-
+mance modeling parameterized by real world traces, we
+demonstrate that all peers contribute resources that do
+not directly improve their performance. We use these re-
+sults to drive the design and implementation of BitTyrant,
+a strategic BitTorrent client that provides a median 70%
+performance gain for a 1 Mbit client on live Internet
+swarms. We further show that when applied universally,
+strategic clients can hurt average per-swarm performance
+compared to today’s BitTorrent client implementations.
+1 Introduction
+A fundamental problem with many peer-to-peer systems
+is the tendency of users to “free ride”—consume re-
+sources without contributing to the system. In early peer-
+to-peer systems such as Napster, the novelty factor suf-
+ﬁced to draw plentiful participation from peers. Sub-
+sequent peer-to-peer systems recognized and attempted
+to address the free riding problem; however, their ﬁxes
+proved to be unsatisfactory, e.g., “incentive priorities” in
+Kazaa could be spoofed; currency in MojoNation was
+cumbersome; and the AudioGalaxy Satellite model of
+“always-on” clients has not been taken up. More re-
+cently, BitTorrent, a popular ﬁle distribution tool based
+on a swarming protocol, proposed a tit-for-tat (TFT)
+strategy aimed at incenting peers to contribute resources
+to the system and discouraging free riders.
+The tremendous success of BitTorrent suggests that
+TFT is successful at inducing contributions from ratio-
+nal peers. Moreover, the bilateral nature of TFT allows
+for enforcement without a centralized trusted infrastruc-
+ture. The consensus appears to be that “incentives build
+robustness in BitTorrent” [3, 17, 2, 11].
+In this paper, we question this widely held belief. To
+this end, we ﬁrst conduct a large measurement study of
+real BitTorrent swarms to understand the diversity of Bit-
+∗Dept. of Computer Science and Engineering, Univ. of Washington
+†Dept. of Computer Science, Univ. of Massachusetts Amherst
+Torrent clients in use today, realistic distributions of peer
+upload capacities, and possible avenues of strategic peer
+behavior in popular clients. Based on these measure-
+ments, we develop a simple model of BitTorrent to corre-
+late upload and download rates of peers. We parametrize
+this model with the measured distribution of peer upload
+capacities and discover the presence of signiﬁcant altru-
+ism in BitTorrent, i.e., all peers regularly make contribu-
+tions to the system that do not directly improve their per-
+formance. Intrigued by this observation, we revisit the
+following question: can a strategic peer game BitTor-
+rent to signiﬁcantly improve its download performance
+for the same level of upload contribution?
+Our primary contribution is to settle this question in
+the afﬁrmative. Based on the insights gained from our
+model, we design and implement BitTyrant, a modiﬁed
+BitTorrent client designed to beneﬁt strategic peers. The
+key idea is to carefully select peers and contribution rates
+so as to maximize download per unit of upload band-
+width. The strategic behavior of BitTyrant is executed
+simply through policy modiﬁcations to existing clients
+without any change to the BitTorrent protocol. We eval-
+uate BitTyrant performance on real swarms, establish-
+ing that all peers, regardless of upload capacity, can sig-
+niﬁcantly improve download performance while reduc-
+ing upload contributions. For example, a client with
+1 Mb/s upload capacity receives a median 70% perfor-
+mance gain from using BitTyrant.
+How does use of BitTyrant by many peers in a swarm
+affect performance? We ﬁnd that peers individually ben-
+eﬁt from BitTyrant’s strategic behavior, irrespective of
+whether or not other peers are using BitTyrant. Peers not
+using BitTyrant can experience degraded performance
+due to the absence of altruisitic contributions. Taken to-
+gether, these results suggest that “incentives do not build
+robustness in BitTorrent”.
+Robustness requires that performance does not de-
+grade if peers attempt to strategically manipulate the sys-
+tem, a condition BitTorrent does not meet today. Al-
+though BitTorrent peers ostensibly make contributions to
+improve performance, we show that much of this contri-
+bution is unnecessary and can be reallocated or withheld
+while still improving performance for strategic users.
+Average download times currently depend on signiﬁcant
+altruism from high capacity peers that, when withheld,
+reduces performance for all users.
+In addition to our primary contribution, BitTyrant, our
+N SD I’07:4thUS ENIX Symposium on Networked SystemsDesign& Implementation US ENI X Association 1
+
+efforts to measure and model altruism in BitTorrent are
+independently noteworthy. First, although modeling Bit-
+Torrent has seen a large body of work (see Section 6),
+our model is simpler and still sufﬁces to capture the
+correlation between upload and download rates for real
+swarms. Second, existing studies recognizing altruism
+in BitTorrent consider small simulated settings or few
+swarms that poorly capture the diversity of deployed Bit-
+Torrent clients, peer capacities, churn, and network con-
+ditions. Our evaluation is more comprehensive. We use
+trace driven modeling to drive the design of BitTyrant,
+which we then evaluate on more than 100 popular, real
+world swarms as well as synthetic swarms on PlanetLab.
+Finally, we make BitTyrant available publicly as well as
+source code and anonymized traces gathered in our large-
+scale measurement study.
+The remainder of this paper is organized as fol-
+lows. Section 2 provides an overview of the BitTor-
+rent protocol and our measurement data, which we use
+to parametrize our model. Section 3 develops a simple
+model illustrating the sources and extent of altruism in
+BitTorrent. Section 4 presents BitTyrant, a modiﬁed Bit-
+Torrent client for strategic peers, which we evaluate in
+Section 5. In Section 6, we discuss related work and
+conclude in Section 7.
+2 BitTorrent overview
+This section presents an overview of the BitTorrent pro-
+tocol, its implementation parameters, and the measure-
+ment data we use to seed our model.
+2.1 Protocol
+BitTorrent focuses on bulk data transfer. All users in a
+particular swarm are interested in obtaining the same ﬁle
+or set of ﬁles. In order to initially connect to a swarm,
+peers download a metadata ﬁle, called a torrent, from
+a content provider, usually via a normal HTTP request.
+This metadata speciﬁes the name and size of the ﬁle to
+be downloaded, as well as SHA-1 ﬁngerprints of the data
+blocks (typically 64–512 KB) that comprise the content
+to be downloaded. These ﬁngerprints are used to verify
+data integrity. The metadata ﬁle also speciﬁes the address
+of a tracker server for the torrent, which coordinates
+interactions between peers participating in the swarm.
+Peers contact the tracker upon startup and departure as
+well as periodically as the download progresses, usually
+with a frequency of 15 minutes. The tracker maintains a
+list of currently active peers and delivers a random subset
+of these to clients, upon request.
+Users in possession of the complete ﬁle, called seeds,
+redistribute small blocks to other participants in the
+swarm. Peers exchange blocks and control information
+with a set of directly connected peers we call the lo-
+cal neighborhood . This set of peers, obtained from the
+Figure 1: Cumulative distribution of raw bandwidth ca-
+pacity for BitTorrent peers as well as the “equal split” ca-
+pacity distribution for active set peers, assuming clients
+use the reference implementation of BitTorrent.
+tracker, is unstructured and random, requiring no special
+join or recovery operations when new peers arrive or ex-
+isting peers depart. The control trafﬁc required for data
+exchange is minimal: each peer transmits messages in-
+dicating the data blocks they currently possess and mes-
+sages signaling their interest in the blocks of other peers.
+We refer to the set of peers to which a BitTorrent client
+is currently sending data as its active set. BitTorrent uses
+a rate-based TFT strategy to determine which peers to in-
+clude in the active set. Each round, a peer sends data to
+unchoked peers from which it received data most rapidly
+in the recent past. This strategy is intended to provide
+positive incentives for contributing to the system and in-
+hibit free-riding. However, clients also send data to a
+small number of randomly chosen peers who have not
+“earned” such status. Such peers are said to be optimisti-
+cally unchoked. Optimistic unchokes serve to bootstrap
+new peers into the TFT game as well as to facilitate dis-
+covery of new, potentially better sources of data. Peers
+that do not send data quickly enough to earn reciproca-
+tion are removed from the active set during a TFT round
+and are said to be choked.
+Modulo TCP effects and assuming last-hop bottleneck
+links, each peer provides an equal share of its available
+upload capacity to peers to which it is actively sending
+data. We refer to this rate throughout the paper as a peer’s
+equal split rate . This rate is determined by the upload
+capacity of a particular peer and the size of its active
+set. In the ofﬁcial reference implementation of BitTor-
+rent, active set size is proportional to √upload capacity
+(details in Appendix); although in other popular BitTor-
+rent clients, this size is static.
+2.2 Measurement
+BitTorrent’s behavior depends on a large number of pa-
+rameters: topology, bandwidth, block size, churn, data
+availability, number of directly connected peers, active
+TFT transfers, and number of optimistic unchokes. Fur-
+thermore, many of these parameters are a matter of pol-
+N SD I’07:4thUS ENIX Symposium on N etworkedSystemsDesign& Implementation U SENIX Association 2
+
+Implementation Percentage share
+Azureus 47%
+BitComet 20%
+µtorrent 15%
+BitLord 6%
+Unknown 3%
+Reference 2%
+Remaining 7%
+Table 1: BitTorrent implementation usage as drawn from
+measurement data.
+icy unspeciﬁed by the BitTorrent protocol itself. These
+policies may vary among different client implementa-
+tions, and defaults may be overridden by explicit user
+conﬁguration. To gain an understanding of BitTorrent’s
+behavior and the diversity of implementations in the
+wild, we ﬁrst conducted a measurement study of live Bit-
+Torrent swarms to ascertain client characteristics.
+By making use of the opportunistic measurement tech-
+niques presented by Madhyastha et al. [14], we gather
+empirical measurements of BitTorrent swarms and hosts.
+Our measurement client connected to a large number of
+swarms and waited for an optimistic unchoke from each
+unique peer. We then estimated the upload capacity of
+that client using the multiQ tool [10]. Previous char-
+acterizations of end-host capacities of peer-to-peer par-
+ticipants were conducted by Saroiu, et al. [18]. We up-
+date these results using more recent capacity estimation
+tools. We observed 301,595 unique BitTorrent IP ad-
+dresses over a 48 hour period during April, 2006 from
+3,591 distinct ASes across 160 countries. The upload ca-
+pacity distribution for typical BitTorrent peers is given in
+Figure 1 along with the distribution of equal split rates
+that would arise from peers using the reference BitTor-
+rent implementation with no limit on upload rates.
+3 Modeling altruism in BitTorrent
+In this section, we examine two questions relevant to un-
+derstanding how incentives impact performance in Bit-
+Torrent: how much altruism is present, and what are the
+sources of altruism? The ﬁrst question suggests whether
+or not strategizing is likely to improve performance while
+the second informs design. Answering these questions
+for real world swarms is complicated by the diversity of
+implementations and a myriad of conﬁguration parame-
+ters. Here, we take a restricted view and develop a model
+of altruism arising from our observed capacity distribu-
+tion and the default parameter settings of the reference
+implementation of BitTorrent.
+We make several assumptions to simplify our analysis
+and provide a conservative bound on altruism. Because
+our assumptions are not realistic for all swarms, our mod-
+eling results are not intended to be predictive. Rather, our
+results simply suggest potential sources of altruism and
+the reasons they emerge in BitTorrent swarms today. We
+exploit these sources of altruism in the design of our real
+world strategic client, discussed in Section 4.
+• Representative distribution: The CDF shown in Fig-
+ure 1 is for the bandwidth capacity of observed IP ad-
+dresses over many swarms. The distribution of a typ-
+ical swarm may not be identical. For instance, high
+capacity peers tend to ﬁnish more quickly than low
+capacity peers, but they may also join more swarms
+simultaneously. If they join only a single swarm and
+leave shortly after completion, the relative proportion
+of low capacity peers would increase over the lifetime
+of a swarm.
+• Uniform sizing: Peers, other than the modiﬁed client,
+use the active set sizing recommended by the reference
+BitTorrent implementation. In practice, other BitTor-
+rent implementations are more popular (see Table 1)
+and have different active set sizes. As we will show,
+aggressive active set sizes tend to decrease altruism,
+and the reference implementation uses the most ag-
+gressive strategy among the popular implementations
+we inspected. As a result, our model provides a con-
+servative estimate of altruism.
+• No steady state : Active sets are comprised of peers
+with random draws from the overall upload capacity
+distribution. If churn is low, over time TFT may match
+peers with similar equal split rates, biasing active set
+draws. We argue in the next section that BitTorrent is
+slow to reach steady-state, particularly for high capac-
+ity peers.
+• High block availability : Swarm performance is lim-
+ited by upload capacity, i.e., peers will always be able
+to ﬁnd interesting data to download. We ﬁnd that al-
+though the reference BitTorrent implementation is de-
+signed to ensure high availability of interesting blocks,
+in practice, static active set sizing in some clients may
+degrade block availability for high capacity peers.
+These assumptions allow us to model altruism in Bit-
+Torrent in terms of the upload capacity distribution only.
+The model is built on expressions for the probability
+of TFT reciprocation, expected download rate, and ex-
+pected upload rate. In this section, we focus on the main
+insights provided by our model. The precise expressions
+are listed in detail in the Appendix.
+3.1 Tit-for-tat matching time
+Since our subsequent modeling results assume that
+swarms do not reach steady state, we ﬁrst examine the
+convergence properties of the TFT strategy used to match
+peers of similar capacity. By default, the reference Bit-
+Torrent client optimistically unchokes two peers every
+30 seconds in an attempt to explore the local neighbor-
+hood for better reciprocation pairings. Since all peers are
+N SD I’07:4thUS ENIX Symposium on Networked SystemsDesign& Implementation US ENI X Association 3
+
+Figure 2: Assuming a peer set of inﬁnite size, the ex-
+pected time required for a new peer to discover enough
+peers of equal or greater equal split capacity to ﬁll its
+active set.
+performing this exploration concurrently, every 30 sec-
+onds a peer can expect to explore two candidate peers
+and be explored by two candidate peers. Since we know
+the equal split capacity distribution, we can express the
+probability of ﬁnding a peer with equal or greater equal
+split capacity—in a given number of 30 second rounds.
+Taking the expectation and multiplying it by the size of
+the active set gives an estimate of how long a new peer
+will have to wait before ﬁlling its active set with such
+peers.
+Figure 2 shows this expected time for our observed
+bandwidth distribution. These results suggest that TFT
+as implemented does not quickly ﬁnd good matches for
+high capacity peers, even in the absence of churn. For
+example, a peer with 6,400 KB/s upload capacity would
+transfer more than 4 GB of data before reaching steady
+state. In practice, convergence time is likely to be even
+longer. We consider a peer as being “content” with a
+matching once its equal split is matched or exceeded by a
+peer. However, one of the two peers in any matching that
+is not exact will be searching for alternates and switching
+when they are discovered, causing the other to renew its
+search. The long convergence time suggests a potential
+source of altruism: high capacity clients are forced to
+peer with those of low capacity while searching for better
+peers via optimistic unchokes.
+3.2 Probability of reciprocation
+A node Q sends data only to those peers in its active
+transfer set, reevaluated every 10 seconds. If a peer P
+sends data to Q at a rate fast enough to merit inclusion
+in Q’s active transfer set, P will receive data during the
+next TFT round, and we say Q reciprocates with P .
+Reciprocation from Q to P is determined by two fac-
+tors: the rate at which P sends data to Q and the rates
+at which other peers send data to Q. If all other peers in
+Q’s current active set send at rates greater than P , Q will
+not reciprocate with P .
+Figure 3 gives the probability of reciprocation in terms
+Figure 3: Reciprocation probability for a peer as a func-
+tion of raw upload capacity as well as reference BitTor-
+rent equal split bandwidth. Reciprocation probability is
+not strictly increasing in raw rate due to the sawtooth in-
+crease in active set size (see Table 2 in Appendix).
+of both raw upload capacity and, more signiﬁcantly, the
+equal split rate. The sharp jump in reciprocation prob-
+ability suggests a potential source of altruism in BitTor-
+rent: equal split bandwidth allocation among peers in the
+active set. Beyond a certain equal split rate ( ∼14 KB/s in
+Figure 3), reciprocation is essentially assured, suggesting
+that further contribution may be altruistic.
+3.3 Expected download rate
+Each TFT round, a peer P receives data from both TFT
+reciprocation and optimistic unchokes. Reciprocation is
+possible only from those peers in P ’s active set and de-
+pends on P ’s upload rate, while optimistic unchokes may
+be received from any peer in P ’s local neighborhood, re-
+gardless of upload rate. In the reference BitTorrent client,
+the number of optimistic unchoke slots defaults to 2 and
+is rotated randomly. As each peer unchokes two peers
+per round, the expected number of optimistic unchokes
+P will receive is also two for a ﬁxed local neighborhood
+size.
+Figure 4 gives the expected download throughput for
+peers as a function of upload rate for our observed band-
+width distribution. The sub-linear growth suggests sig-
+niﬁcant unfairness in BitTorrent, particularly for high ca-
+pacity peers. This unfairness improves performance for
+the majority of low capacity peers, suggesting that high
+capacity peers may be able to better allocate their upload
+capacity to improve their own performance.
+3.4 Expected upload rate
+Having considered download performance, we turn next
+to upload contribution. Two factors can control the up-
+load rate of a peer: data availability and capacity limit.
+When a peer is constrained by data availability, it does
+not have enough data of interest to its local neighborhood
+to saturate its capacity. In this case, the peer’s upload ca-
+pacity is wasted and utilization suffers. Because of the
+dependence of upload utilization on data availability, it
+is crucial that a client downloads new data at a rate fast
+N SD I’07:4thUS ENIX Symposium on N etworkedSystemsDesign& Implementation U SENIX Association 4
+
+Figure 4: Expectation of download performance as a
+function of upload capacity. Although this represents a
+small portion of the spectrum of observed bandwidth ca-
+pacities, ∼80% of samples are of capacity ≤ 200 KB/s.
+enough, so that the client can redistribute the downloaded
+data and saturate its upload capacity. We have found that
+indeed this is the case in the reference BitTorrent client
+because of the square root growth rate of its active set
+size.
+In practice, most popular clients do not follow this dy-
+namic strategy and instead make active set size a conﬁg-
+urable, but static, parameter. For instance, the most pop-
+ular BitTorrent client in our traces, Azureus, suggests a
+default active set size of four—appropriate for many ca-
+ble and DSL hosts, but far lower than is required for high
+capacity peers. We explore the impact of active set sizing
+further in Section 4.1.
+3.5 Modeling altruism
+Given upload and download throughput, we have all the
+tools required to compute altruism. We consider two def-
+initions of altruism intended to reﬂect two perspectives
+on what constitutes strategic behavior. We ﬁrst consider
+altruism to be simply the difference between expected
+upload rate and download rate. Figure 5 shows altruism
+as a percentage of upload capacity under this deﬁnition
+and reﬂects the asymmetry of upload contribution and
+download rate discussed in Section 3.3. The second def-
+inition is any upload contribution that can be withdrawn
+without loss in download performance. This is shown in
+Figure 6.
+In contrast to the original deﬁnition, Figure 6 suggests
+that all peers make altruistic contributions that could
+be eliminated. Sufﬁciently low bandwidth peers almost
+never earn reciprocation, while high capacity peers send
+much faster than the minimal rate required for recipro-
+cation. Both of these effects can be exploited. Note
+that low bandwidth peers, despite not being reciprocated,
+still receive data in aggregate faster than they send data.
+This is because they receive indiscriminate optimistic un-
+chokes from other users in spite of their low upload ca-
+pacity.
+Figure 5: Expected percentage of upload capacity which
+is altruistic as deﬁned by Equation 5 as a function of rate.
+The sawtooth increase is due to the sawtooth growth of
+active set sizing and equal split rates arising from integer
+rounding (see Table 2).
+Figure 6: Expected percentage of upload capacity which
+is altruistic when deﬁned as upload capacity not resulting
+in direct reciprocation.
+3.6 Validation
+Our modeling results suggest that at least part of the al-
+truism in BitTorrent arises from the sub-linear growth
+of download throughput as a function of upload rate.
+We validate this key result using our measurement data.
+Each time a BitTorrent client receives a complete data
+block from another peer, it broadcasts a ‘have’ mes-
+sage indicating that it can redistribute that block to other
+peers. By averaging the rate of have messages over the
+duration our measurement client observes a peer, we can
+infer the peer’s download rate. Figure 7 shows this in-
+ferred download rate as a function of equal split rate, i.e.,
+the throughput seen by the measurement client when op-
+timistically unchoked. This data is drawn from our mea-
+surements and includes 63,482 peers.
+These results indicate an even higher level of altruism
+than that predicted by our model (Figure 4). Note that
+equal split rate, the parameter of Figure 7, is a conserva-
+tive lower bound on total upload capacity, shown in Fig-
+ure 4, since each client sends data to many peers simulta-
+neously. For instance, peers contributing ∼250 KB/s to
+our measurement client had an observed download rate
+of 150 KB/s. Our model suggests that such contribution,
+even when split among multiple peers, should induce a
+N SD I’07:4thUS ENIX Symposium on Networked SystemsDesign& Implementation US ENI X Association 5
+
+Figure 7: Measured validation of sub-linear growth in
+download throughput as a function of rate. Each point
+represents an average taken over all peers with measured
+equal split capacity in the intervals between points.
+download rate of more than 200 KB/s. We believe this
+underestimate is due to more conservative active set sizes
+in practice than those assumed in our model.
+4 Building BitTyrant: A strategic client
+The modeling results of Section 3 suggest that altruism
+in BitTorrent serves as a kind of progressive tax. As
+contribution increases, performance improves, but not
+in direct proportion. In this section, we describe the
+design and implementation of BitTyrant, a client opti-
+mized for strategic users. We chose to base BitTyrant
+on the Azureus client in an attempt to foster adoption, as
+Azureus is the most popular client in our traces.
+If performance for low capacity peers is disproportion-
+ately high, a strategic user can simply exploit this unfair-
+ness by masquerading as many low capacity clients to
+improve performance [4]. Also, by ﬂooding the local
+neighborhood of high capacity peers, low capacity peers
+can inﬂate their chances of TFT reciprocation by domi-
+nating the active transfer set of a high capacity peer. In
+practice, these attacks are mitigated by a common client
+option to refuse multiple connections from a single IP
+address. Resourceful peers might be able to coordinate
+multiple IP addresses, but such an attack is beyond the
+capabilities of most users. We focus instead on practical
+strategies that can be employed by typical users.
+The unfairness of BitTorrent has been noted in previ-
+ous studies [2, 5, 7], many of which include protocol re-
+designs intended to promote fairness. However, a clean-
+slate redesign of the BitTorrent protocol ignores a differ-
+ent but important incentives question: how to get users
+to adopt it? As shown in Section 3, the majority of Bit-
+Torrent users beneﬁt from its unfairness today. Designs
+intended to promote fairness globally at the expense of
+the majority of users seem unlikely to be adopted. Rather
+than focus on a redesign at the protocol level, we focus
+on BitTorrent’s robustness to strategic behavior and ﬁnd
+that strategizing can improve performance in isolation
+while promoting fairness at scale.
+4.1 Maximizing reciprocation
+The modeling results of Section 3 and the operational
+behavior of BitTorrent clients suggest the following three
+strategies to improve performance.
+• Maximize reciprocation bandwidth per connection :
+All things being equal, a node can improve its per-
+formance by ﬁnding peers that reciprocate with high
+bandwidth for a low offered rate, dependent only on
+the other peers of the high capacity node. The recipro-
+cation bandwidth of a peer is dependent on its upload
+capacity and its active set size. By discovering which
+peers have large reciprocation bandwidth, a client can
+optimize for a higher reciprocation bandwidth per con-
+nection.
+• Maximize number of reciprocating peers: A client can
+expand its active set to maximize the number of peers
+that reciprocate until the marginal beneﬁt of an addi-
+tional peer is outweighed by the cost of reduced recip-
+rocation probability from other peers.
+• Deviate from equal split: On a per-connection basis, a
+client can lower its upload contribution to a particular
+peer as long as that peer continues to reciprocate. The
+bandwidth savings could then be reallocated to new
+connections, resulting in an increase in the overall re-
+ciprocation throughput.
+The modeling results indicate that these strategies are
+likely to be effective. The largest source of altruism
+in our model is unnecessary contribution to peers in a
+node’s active set. The reciprocation probability shown in
+Figure 3 indicates that strategically choosing equal split
+bandwidth can reduce contribution signiﬁcantly for high
+capacity peers with only a marginal reduction in recip-
+rocation probability. A peer with equal split capacity of
+100 KB/s, for instance, could reduce its rate to 15 KB/s
+with a reduction in expected probability of reciprocation
+of only 1%. However, reducing from 15 KB/s to 10 KB/s
+would result in a decrease of roughly 40%.
+The reciprocation behavior points to a performance
+trade-off. If the active set size is large, equal split
+capacity is reduced, reducing reciprocation probability.
+However, an additional active set connection is an addi-
+tional opportunity for reciprocation. To maximize per-
+formance, a peer should increase its active set size un-
+til an additional connection would cause a reduction in
+reciprocation across all connections sufﬁcient to reduce
+overall download performance.
+If the equal split capacity distribution of the swarm is
+known, we can derive the active set size that maximizes
+the expected download rate. For our observed bandwidth
+distribution, Figure 8 shows the download rate as a func-
+tion of the active set size for a peer with 300 KB/s upload
+capacity as well as the active set size that maximizes it.
+The graph also implicitly reﬂects the sensitivity of recip-
+N SD I’07:4thUS ENIX Symposium on N etworkedSystemsDesign& Implementation U SENIX Association 6
+
+Figure 8: Left: The expected download performance of a client with 300 KB/s upload capacity for increasing active
+set size. Right: The performance-maximizing active set size for peers of varying rate. The strategic maximum is linear
+in upload capacity, while the reference implementation of BitTorrent suggests active size ∼ √rate. Although several
+hundred peers may be required to maximize throughput, most trackers return fewer than 100 peers per request.
+rocation probability to equal split rate.
+Figure 8 is for a single strategic peer and suggests that
+strategic high capacity peers can beneﬁt much more by
+manipulating their active set size. Our example peer with
+upload capacity 300 KB/s realizes a maximum down-
+load throughput of roughly 450 KB/s. However, increas-
+ing reciprocation probability via active set sizing is ex-
+tremely sensitive—throughput falls off quickly after the
+maximum is reached. Further, it is unclear if active set
+sizing alone would be sufﬁcient to maximize reciproca-
+tion in an environment with several strategic clients.
+These challenges suggest that any a priori active set
+sizing function may not sufﬁce to maximize download
+rate for strategic clients. Instead, they motivate the dy-
+namic algorithm used in BitTyrant that adaptively mod-
+iﬁes the size and membership of the active set and the
+upload bandwidth allocated to each peer (see Figure 9).
+In both BitTorrent and BitTyrant, the set of peers that
+will receive data during the next TFT round is decided by
+the unchoke algorithm once every 10 seconds. BitTyrant
+differs from BitTorrent as it dynamically sizes its active
+set and varies the sending rate per connection. For each
+peer p, BitTyrant maintains estimates of the upload rate
+required for reciprocation, up, as well as the download
+throughput, dp, received when p reciprocates. Peers are
+ranked by the ratio dp/up and unchoked in order until the
+sum of up terms for unchoked peers exceeds the upload
+capacity of the BitTyrant peer.
+The rationale underlying this unchoke algorithm is
+that the best peers are those that reciprocate most for the
+least number of bytes contributed to them, given accurate
+information regarding up and dp. Implicit in the strategy
+are the following assumptions and characteristics:
+• The strategy attempts to maximize the download rate
+for a given upload budget. The ranking strategy cor-
+responds to the value-density heuristic for the knap-
+sack problem. In practice, the download beneﬁt ( dp)
+and upload cost ( up) are not known a priori. The up-
+For each peer p, maintain estimates of expected download
+performance dp and upload required for reciprocation up.
+Initialize up and dp assuming the bandwidth
+distribution in Figure 2.
+dp is initially the expected equal split capacity of p.
+up is initially the rate just above the step in the
+reciprocation probability.
+Each round, rank order peers by the ratio dp/up and unchoke
+those of top rank until the upload capacity is reached.
+d0
+u0
+, d1
+u1
+, d2
+u2
+, d3
+u3
+, d4
+u4| {z }
+choose k | Pk
+i=0 ui ≤ cap
+,. . .
+At the end of each round for each unchoked peer:
+If peer p does not unchoke us: up← (1 + δ)up
+If peer p unchokes us: dp← observed rate.
+If peer p has unchoked us for the last r rounds:
+up← (1− γ)up
+Figure 9: BitTyrant unchoke algorithm
+date operation dynamically estimates these rates and,
+in conjunction with the ranking strategy, optimizes
+download rate over time.
+• BitTyrant is designed to tap into the latent altruism in
+most swarms by unchoking the most altruistic peers.
+However, it will continue to unchoke peers until it ex-
+hausts its upload capacity even if the marginal utility
+is sub-linear. This potentially opens BitTyrant itself to
+being cheated, a topic we return to later.
+• The strategy can be easily generalized to handle con-
+current downloads from multiple swarms. A client can
+optimize the aggregate download rate by ordering the
+dp/up ratios of all connections across swarms, thereby
+N SD I’07:4thUS ENIX Symposium on Networked SystemsDesign& Implementation US ENI X Association 7
+
+dynamically allocating upload capacity to all peers.
+User-deﬁned priorities can be implemented by using
+scaling weights for the dp/up ratios.
+The algorithm is based on the ideal assumption
+that peer capacities and reciprocation requirements are
+known. We discuss how to predict them next.
+Determining upload contributions: The BitTyrant
+unchoke algorithm must estimate up, the upload contri-
+bution to p that induces reciprocation. We initialize up
+based on the distribution of equal split capacities seen
+in our measurements, and then periodically update it de-
+pending on whether p reciprocates for an offered rate.
+In our implementation, up is decreased by γ = 10% if
+the peer reciprocates for r =3 rounds, and increased by
+δ = 20% if the peer fails to reciprocate after being un-
+choked during the previous round. We use small multi-
+plicative factors since the spread of equal split capacities
+is typically small in current swarms. Although a natu-
+ral ﬁrst choice, we do not use a binary search algorithm,
+which maintains upper and lower bounds for upload con-
+tributions that induce reciprocation, because peer recip-
+rocation changes rapidly under churn and bounds on
+reciprocation-inducing uploads would eventually be vi-
+olated.
+Estimating reciprocation bandwidths: For peers that
+unchoke the BitTyrant client, dp is simply the rate at
+which data was obtained from p. Note that we do not
+use a packet-pair based bandwidth estimation technique
+as suggested by Bharambe [2], but rather consider the
+average download rate over a TFT round. Based on our
+measurements, not presented here due to space limita-
+tions, we ﬁnd that packet-pair based bandwidth estimates
+do not accurately predict peers’ equal split capacities due
+to variability in active set sizes and end-host trafﬁc shap-
+ing. The observed rate over a longer period is the only
+accurate estimate, a sentiment shared by Cohen [3].
+Of course, this estimate is not available for peers that
+have not uploaded any data to the BitTyrant client. In
+such cases, BitTyrant approximates dp for a given peer
+p by measuring the frequency of block announcements
+from p. The rate at which new blocks arrive at p provides
+an estimate of p’s download rate, which we use as an es-
+timate of p’s total upload capacity. We then divide the
+estimated capacity by the Azureus recommended active
+set size for that rate to estimate p’s equal split rate. This
+strategy is likely to overestimate the upload capacities
+of unobserved peers, serving to encourage their selection
+from the ranking of dp/up ratios. At present, this pref-
+erence for exploration may be advantageous due to the
+high end skew in altruism. Discovering high end peers
+is rewarding: between the 95 th and 98 th percentiles, re-
+ciprocation throughput doubles. Of course, this strategy
+may open BitTyrant itself to exploitation, e.g., if a peer
+rapidly announces false blocks. We discuss how to make
+BitTyrant robust in Sections 4.3 and 5.
+4.2 Sizing the local neighborhood
+Existing BitTorrent clients maintain a pool of typically
+50–100 directly connected peers. The set is sized to be
+large enough to provide a diverse set of data so peers can
+exchange blocks without data availability constraints.
+However, the modeling results of Section 4.1 suggest
+that these typical local neighborhood sizes will not be
+large enough to maximize performance for high capacity
+peers, which may need an active set size of several hun-
+dred peers to maximize download throughput. Maintain-
+ing a larger local neighborhood also increases the num-
+ber of optimistic unchokes received.
+To increase the local neighborhood size in BitTyrant,
+we rely on existing BitTorrent protocol mechanisms and
+third party extensions implemented by Azureus. We re-
+quest as many peers as possible from the centralized
+tracker at the maximum allowed frequency. Recently,
+the BitTorrent protocol has incorporated a DHT-based
+distributed tracker that provides peer information and is
+indexed by a hash of the torrent. We have increased the
+query rate of this as well. Finally, the Azureus imple-
+mentation includes a BitTorrent protocol extension for
+gossip among peers. Unfortunately, the protocol exten-
+sion is push-based; it allows for a client to gossip to its
+peers the identity of its other peers but cannot induce
+those peers to gossip in return. As a result, we cannot
+exploit the gossip mechanism to extract extra peers.
+A concern when increasing the size of the local neigh-
+borhood is the corresponding increase in protocol over-
+head. Peers need to exchange block availability infor-
+mation, messages indicating interest in blocks, and peer
+lists. Fortunately, the overhead imposed by maintaining
+additional connections is modest. In comparisons of Bit-
+Tyrant and the existing Azureus client described in Sec-
+tion 5, we ﬁnd that average protocol overhead as a per-
+centage of total ﬁle data received increases from 0.9% to
+1.9%. This suggests that scaling the local neighborhood
+size does not impose a signiﬁcant overhead on BitTyrant.
+4.3 Additional cheating strategies
+We now discuss more strategies to improve download
+performance. We do not implement these in BitTyrant
+as they can be thwarted by simple ﬁxes to clients. We
+mention them here for completeness.
+Exploiting optimistic unchokes: The reference Bit-
+Torrent client optimistically unchokes peers randomly.
+Azureus, on the other hand, makes a weighted random
+choice that takes into account the number of bytes ex-
+changed with a peer. If a peer has built up a deﬁcit in
+the number of traded bytes, it is less likely to be picked
+for optimistic unchokes. In BitTorrent today, we observe
+N SD I’07:4thUS ENIX Symposium on N etworkedSystemsDesign& Implementation U SENIX Association 8
+
+that high capacity peers are likely to have trading deﬁcits
+with most peers. A cheating client can exploit this by dis-
+connecting and reconnecting with a different client iden-
+tiﬁer, thereby wiping out the past history and increasing
+its chances of receiving optimistic unchokes, particularly
+from high capacity peers. This exploit becomes ineffec-
+tive if clients maintain the IP addresses for all peers en-
+countered during the download and keep peer statistics
+across disconnections.
+Downloading from seeds: Early versions of BitTor-
+rent clients used a seeding algorithm wherein seeds up-
+load to peers that are the fastest downloaders, an algo-
+rithm that is prone to exploitation by fast peers or clients
+that falsify download rate by emitting ‘have’ messages.
+More recent versions use a seeding algorithm that per-
+forms unchokes randomly, spreading data in a uniform
+manner that is more robust to manipulation.
+Falsifying block availability: A client would prefer
+to unchoke those peers that have blocks that it needs.
+Thus, peers can appear to be more attractive by falsi-
+fying block announcements to increase the chances of
+being unchoked. In practice, this exploit is not very ef-
+fective. First, a client is likely to consider most of its
+peers interesting given the large number of blocks in a
+typical swarm. Second, false announcements could lead
+to only short-term beneﬁt as a client is unlikely to con-
+tinue transferring once the cheating peer does not satisfy
+issued block requests.
+5 Evaluation
+To evaluate BitTyrant, we explore the performance im-
+provement possible for a single strategic peer in synthetic
+and current real world swarms as well as the behavior
+of BitTyrant when used by all participants in synthetic
+swarms.
+Evaluating altruism in BitTorrent experimentally and
+at scale is challenging. Traditional wide-area testbeds
+such as PlanetLab do not exhibit the highly skewed band-
+width distribution we observe in our measurements, a
+crucial factor in determining the amount of altruism.
+Alternatively, fully conﬁgurable local network testbeds
+such as Emulab are limited in scale and do not incorpo-
+rate the myriad of performance events typical of opera-
+tion in the wide-area. Further, BitTorrent implementa-
+tions are diverse, as shown in Table 1.
+To address these issues, we perform two separate eval-
+uations. First, we evaluate BitTyrant on real swarms
+drawn from popular aggregation sites to measure real
+world performance for a single strategic client. This pro-
+vides a concrete measure of the performance gains a user
+can achieve today. To provide more insight into how Bit-
+Tyrant functions, we then revisit these results on Planet-
+Lab where we evaluate sensitivity to various upload rates
+Figure 10: CDF of download performance for 114 real
+world swarms. Shown is the ratio between download
+times for an existing Azureus client and BitTyrant. Both
+clients were started simultaneously on machines at UW
+and were capped at 128 KB/s upload capacity.
+and evaluate what would happen if BitTyrant is univer-
+sally deployed.
+5.1 Single strategic peer
+To evaluate performance under the full diversity of real-
+istic conditions, we crawled popular BitTorrent aggrega-
+tion websites to ﬁnd candidate swarms. We ranked these
+by popularity in terms of number of active participants,
+ignoring swarms distributing ﬁles larger than 1 GB. The
+resulting swarms are typically for recently released ﬁles
+and have sizes ranging from 300–800 peers, with some
+swarms having as many as 2,000 peers.
+We then simultaneously joined each swarm with a Bit-
+Tyrant client and an unmodiﬁed Azureus client with rec-
+ommended default settings. We imposed a 128 KB/s up-
+load capacity limit on each client and compared comple-
+tion times. This represents a relatively well provisioned
+peer for which Azureus has a recommended active set
+size. A CDF of the ratio of original client completion
+time to BitTyrant completion time is given in Figure 10.
+These results demonstrate the signiﬁcant, real world per-
+formance boost that users can realize by behaving strate-
+gically. The median performance gain for BitTyrant is a
+factor of 1.72 with 25% of downloads ﬁnishing at least
+twice as fast with BitTyrant. We expect relative perfor-
+mance gains to be even greater for clients with greater
+upload capacity.
+These results provide insight into the performance
+properties of real BitTorrent swarms, some of which limit
+BitTyrant’s effectiveness. Because of the random set of
+peers that BitTorrent trackers return and the high skew
+of real world equal split capacities, BitTyrant cannot al-
+ways improve performance. For instance, in BitTyrant’s
+worst-performing swarm, only three peers had average
+equal split capacities greater than 10 KB/s. In contrast,
+the unmodiﬁed client received eight such peers. Total
+download time was roughly 15 minutes, the typical min-
+imum request interval for peers from the tracker. As a re-
+N SD I’07:4thUS ENIX Symposium on Networked SystemsDesign& Implementation US ENI X Association 9
+
+Figure 11: Download times and sample standard devia-
+tion comparing performance of a single BitTyrant client
+and an unmodiﬁed Azureus client on a synthetic Planet-
+Lab swarm.
+sult, BitTyrant did not recover from its initial set of com-
+paratively poor peers. To some extent, performance can
+be based on luck with respect to the set of initial peers
+returned. More often than not, BitTyrant beneﬁts from
+this, as it always requests a comparatively large set of
+peers from the tracker.
+Another circumstance for which BitTyrant cannot sig-
+niﬁcantly improve performance is a swarm whose ag-
+gregate performance is controlled by data availability
+rather than the upload capacity distribution. In the wild,
+swarms are often hamstrung by the number of peers seed-
+ing the ﬁle—i.e., those with a complete copy. If the ca-
+pacity of these peers is low or if the torrent was only
+recently made available, there may simply not be enough
+available data for peers to saturate their upload capac-
+ities. In other words, if a seed with 128 KB/s capac-
+ity is providing data to a swarm of newly joined users,
+those peers will be able to download at a rate of at most
+128 KB/s regardless of their capacity. Because many
+of the swarms we joined were recent, this effect may
+account for the 12 swarms for which download perfor-
+mance differed by less than 10%.
+These scenarios can hinder the performance of Bit-
+Tyrant, but they account for a small percentage of our
+observed swarms overall. For most real swarms today,
+users can realize signiﬁcant performance beneﬁts from
+the strategic behavior of BitTyrant.
+Although the performance improvements gained from
+using BitTyrant in the real world are encouraging, they
+provide little insight into the operation of the system at
+scale. We next evaluate BitTyrant in synthetic scenar-
+ios on PlanetLab to shed light on the interplay between
+swarm properties, strategic behavior, and performance.
+Because PlanetLab does not exhibit the highly skewed
+bandwidth distribution observed in our traces, we rely on
+application level bandwidth caps to artiﬁcially constrain
+the bandwidth capacity of PlanetLab nodes in accor-
+dance with our observed distribution. However, because
+PlanetLab is often oversubscribed and shares bandwidth
+equally among competing experiments, not all nodes are
+capable of matching the highest values from the observed
+distribution. To cope with this, we scaled by 1/10 th both
+the upload capacity draws from the distribution as well as
+relevant experimental parameters such as ﬁle size, initial
+unchoke bandwidth, and block size. This was sufﬁcient
+to provide overall ﬁdelity to our intended distribution.
+Figure 11 shows the download performance for a sin-
+gle BitTyrant client as a function of rate averaged over six
+trials with sample standard deviation. This experiment
+was hosted on 350 PlanetLab nodes with bandwidth ca-
+pacities drawn from our scaled distribution. Three seeds
+with combined capacity of 128 KB/s were located at UW
+serving a 5 MB ﬁle. We did not change the default seed-
+ing behavior, and varying the combined seed capacity
+had little impact on overall swarm performance after ex-
+ceeding the average upload capacity limit. To provide
+synthetic churn with constant capacity, each node’s Bit-
+Tyrant client disconnected immediately upon completion
+and reconnected immediately.
+The results of Figure 11 provide several insights into
+the operation of BitTyrant.
+• BitTyrant does not simply improve performance, it
+also provides more consistent performance across
+multiple trials. By dynamically sizing the active set
+and preferentially selecting peers to optimistically un-
+choke, BitTyrant avoids the randomization present
+in existing TFT implementations, which causes slow
+convergence for high capacity peers (Section 3.1).
+• There is a point of diminishing returns for high ca-
+pacity peers, and BitTyrant can discover it. For clients
+with high capacity, the number of peers and their avail-
+able bandwidth distribution are signiﬁcant factors in
+determining performance. Our modeling results from
+Section 4.1 suggest that the highest capacity peers may
+require several hundred available peers to fully max-
+imize throughput due to reciprocation. Real world
+swarms are rarely this large. In these circumstances,
+BitTyrant performance is consistent, allowing peers to
+detect and reallocate excess capacity for other uses.
+• Low capacity peers can beneﬁt from BitTyrant. Al-
+though the most signiﬁcant performance beneﬁt comes
+from intelligently sizing the active set for high capac-
+ity peers (see Figure 8), low capacity peers can still im-
+prove performance with strategic peer selection, pro-
+viding them with an incentive to adopt BitTyrant.
+• Fidelity to our speciﬁed capacity distribution is con-
+sistent across multiple trials. Comparability of exper-
+iments is often a concern on PlanetLab, but our re-
+sults suggest a minimum download time determined
+by the capacity distribution that is consistent across
+trials spanning several hours. Further, the consistent
+performance of BitTyrant in comparison to unmodi-
+N SD I’07:4thUS ENIX Symposium on N etworkedSystemsDesign& Implementation U SENIX Association 10 
+
+ﬁed Azureus suggests that the variability observed is
+due to policy and strategy differences and not Planet-
+Lab variability.
+5.2 Many BitTyrant peers
+Given that all users have an individual incentive to be
+strategic in current swarms, we next examine the perfor-
+mance of BitTyrant when used by all peers in a swarm.
+We consider two types of BitTyrant peers: strategic and
+selﬁsh. Any peer that uses the BitTyrant unchoking al-
+gorithm (Figure 9) is strategic. If such a peer also with-
+holds contributing excess capacity that does not improve
+performance, we say it is both strategic and selﬁsh. Bit-
+Tyrant can operate in either mode. Selﬁsh behavior may
+arise when users participate in multiple swarms, as dis-
+cussed below, or simply when users want to use their up-
+load capacity for services other than BitTorrent.
+We ﬁrst examine performance when all peers are
+strategic, i.e., use BitTyrant while still contributing ex-
+cess capacity. Our experimental setup included 350
+PlanetLab nodes with upload capacities drawn from our
+scaled distribution simultaneously joining a swarm dis-
+tributing a 5 MB ﬁle with combined seed capacity of
+128 KB/s. All peers departed immediately upon down-
+load completion. Initially, we expected overall perfor-
+mance to degrade since high capacity peers would ﬁnish
+quickly and leave, reducing capacity in the system. Sur-
+prisingly, performance improved and altruism increased.
+These results are summarized by the CDFs of completion
+times comparing BitTyrant and the unmodiﬁed Azureus
+client in Figure 12. These results are consistent with
+our model. In a swarm where the upload capacity distri-
+bution has signiﬁcant skew, high capacity peers require
+many connections to maximize reciprocation. BitTyrant
+reduces bootstrapping time and results in high capacity
+peers having higher utilization earlier, increasing swarm
+capacity.
+Although BitTyrant can improve performance, such
+improvement is due only to more effective use of altruis-
+tic contribution. Because BitTyrant can detect the point
+of diminishing returns for performance, these contribu-
+tions can be withheld or reallocated by selﬁsh clients.
+Users may choose to reallocate capacity to services other
+than BitTorrent or to other swarms, as most peers par-
+ticipate in several swarms simultaneously [7]. While
+all popular BitTorrent implementations support down-
+loading from multiple swarms simultaneously, few make
+any attempt to intelligently allocate bandwidth among
+them. Those that do so typically allocate some amount
+of a global upload capacity to each swarm individu-
+ally, which is then split equally among peers in statically
+sized active sets. Existing implementations cannot accu-
+rately detect when bandwidth allocated to a given swarm
+should be reallocated to another to improve performance.
+In contrast, BitTyrant’s unchoking algorithm transitions
+naturally from single to multiple swarms. Rather than al-
+locate bandwidth among swarms, as existing clients do,
+BitTyrant allocates bandwidth among connections, opti-
+mizing aggregate download throughput over all connec-
+tions for all swarms. This allows high capacity BitTyrant
+clients to effectively participate in more swarms simul-
+taneously, lowering per-swarm performance for low ca-
+pacity peers that cannot.
+To model the effect of selﬁsh BitTyrant users, we re-
+peated our PlanetLab experiment with the upload capac-
+ity of all high capacity peers capped at 100 KB/s, the
+point of diminishing returns observed in Figure 11. A
+CDF of performance under the capped distribution is
+shown in Figure 12. As expected, aggregate performance
+decreases. More interesting is the stable rate of diminish-
+ing returns BitTyrant identiﬁes. As a result of the skewed
+bandwidth distribution, beyond a certain point peers that
+contribute signiﬁcantly more data do not see signiﬁcantly
+faster download rates. If peers reallocate this altruis-
+tic contribution, aggregate capacity and average perfor-
+mance are reduced, particularly for low capacity peers.
+This is reﬂected in comparing the performance of sin-
+gle clients under the scaled distribution (Figure 11) and
+single client performance under the scaled distribution
+when constrained (Figure 12). The average completion
+time for a low capacity peer moves from 314 to 733 sec-
+onds. Average completion time for a peer with 100 KB/s
+of upload capacity increases from 108 seconds to 190.
+While BitTyrant can improve performance for a single
+swarm, there are several circumstances for which its use
+causes performance to degrade.
+• If high capacity peers participate in many swarms or
+otherwise limit altruism, total capacity per swarm de-
+creases. This reduction in capacity lengthens down-
+load times for all users of a single swarm regardless
+of contribution. Although high capacity peers will see
+an increase in aggregate download rate across many
+swarms, low capacity peers that cannot successfully
+compete in multiple swarms simultaneously will see a
+large reduction in download rates. Still, each individ-
+ual peer has an incentive to be strategic as their per-
+formance improves relative to that of standard clients,
+even when everyone is strategic or selﬁsh.
+• New users experience a lengthy bootstrapping period.
+To maximize throughput, BitTyrant unchokes peers
+that send fast. New users without data are boot-
+strapped by the excess capacity of the system only.
+Bootstrapping time may be reduced by reintroducing
+optimistic unchokes, but it is not clear that selﬁsh
+peers have any incentive to do so.
+• Peering relationships are not stable. BitTyrant was de-
+signed to exploit the signiﬁcant altruism that exists in
+N SD I’07:4thUS ENIX Symposium on Networked SystemsDesign& Implementation US ENI X Association 11 
+
+Figure 12: Left: CDFs of completion times for a 350 node PlanetLab experiment. BitTyrant and the original,
+unmodiﬁed client assume all users contribute all of their capacity. Capped BitTyrant shows performance when high
+capacity, selﬁsh peers limit their contribution to the point of diminishing returns for performance. Right: The impact
+of selﬁsh BitTyrant caps on performance. Download times at all bandwidth levels increase (cf. Figure 11) and high
+capacity peers gain little from increased contribution. Error bars give sample standard deviation over six trials.
+BitTorrent swarms today. As such, it continually re-
+duces send rates for peers that reciprocate, attempt-
+ing to ﬁnd the minimum rate required. Rather than
+attempting to ramp up send rates between high capac-
+ity peers, BitTyrant tends to spread available capacity
+among many low capacity peers, potentially causing
+inefﬁciency due to TCP effects [16].
+To work around this last effect, BitTyrant advertises
+itself at connection time using the Peer ID hash. With-
+out protocol modiﬁcation, BitTyrant peers recognize one
+another and switch to a block-based TFT strategy that
+ramps up send rates until capacity is reached. BitTyrant
+clients choke other BitTyrant peers whose block request
+rates exceeds their send rates. By gradually increasing
+send and request rates to other BitTyrant clients, fairness
+is preserved while maximizing reciprocation rate with
+fewer connections. In this way, BitTyrant provides a de-
+ployment path leading to the conceptually simple strat-
+egy of block-based TFT by providing a short-term in-
+centive for adoption by all users—even those that stand
+to lose from a shift to block-based reciprocation.
+We do not claim that BitTyrant is strategyproof, even
+when extended with block-based TFT, and leave open for
+future work the question of whether further strategizing
+can be effective. However, a switch to block-based TFT
+among mutually agreeing peers would place a hard limit
+on altruism and limit the range of possible strategies.
+6 Related work
+Modeling and analysis of BitTorrent’s current incentive
+mechanism and its effect on performance has seen a
+large body of work since Cohen’s [3] seminal paper.
+Our effort differs from existing work in two fundamental
+ways. First is the conclusion: we refute popular wis-
+dom that BitTorrent’s incentive mechanism makes it ro-
+bust to strategic peer behavior. Second is the method-
+ology: most existing studies consider small or simulated
+settings that poorly capture the diversity of deployed Bit-
+Torrent clients, strategic peer behavior, peer capacities,
+and network conditions. In contrast, we explore BitTor-
+rent’s strategy space with our implementation of a strate-
+gic client and evaluate it using analytical modeling, ex-
+periments under realistic network conditions, and testing
+in the wild.
+The canonical TFT strategy was ﬁrst evaluated by Ax-
+elrod [1], who showed using a competition that the strat-
+egy performs better than other submissions when there
+are many repeated games, persistent identities, and no
+collusion. Qiu and Srikant [17] speciﬁcally study Bit-
+Torrent’s rate-based TFT strategy. They show that if
+peers strategically limit their upload bandwidth (but split
+it equally) while trying to maximize download, then, un-
+der some bandwidth distributions, the system converges
+to a Nash equilibrium where all peers upload at their ca-
+pacity. These results might lead one to believe that Bit-
+Torrent’s incentive mechanism is robust as it incentivizes
+users to contribute their entire upload capacities. Unfor-
+tunately, our work shows that BitTorrent fails to attain
+such an equilibrium for typical ﬁle sizes in swarms with
+realistic bandwidth distributions and churn, which Bit-
+Tyrant exploits through strategic peer and rate selection.
+Bharambe et al. [2] simulate BitTorrent using a syn-
+thetically generated distribution of peer upload capaci-
+ties. They show the presence of signiﬁcant altruism in
+BitTorrent and propose two alternate peer selection al-
+gorithms based on (i) matching peers with similar band-
+width, and (ii) enforcing TFT at the block level, a strat-
+egy also proposed by [9]. Fan et al. propose strate-
+gies for assigning rates to connections [5], which when
+adopted by all members of a swarm would lead to fair-
+ness and minimal altruism. The robustness of these
+mechanisms to strategic peer behavior is unclear. More
+importantly, these proposals appear to lack a convinc-
+ing evolution path—a peer adopting these strategies to-
+N SD I’07:4thUS ENIX Symposium on N etworkedSystemsDesign& Implementation U SENIX Association 12 
+
+day would severely hurt its download throughput as the
+majority of deployed conformant clients will ﬁnd such a
+peer unattractive. In contrast, we demonstrate that Bit-
+Tyrant can drastically reduce altruism while improving
+performance for a single strategic client today, incenting
+its adoption.
+Shneidman et al. [19] identify two forms of strategic
+manipulation based on Sybil attacks [4] and a third based
+on uploading garbage data. Liogkas et al. [12] propose
+downloading only from seeds and also identify an ex-
+ploit based on uploading garbage data. Locher et al.
+investigate similar techniques, i.e., ignoring rate limits
+of tracker requests to increase the number of available
+peers and connecting to as many peers as possible [13].
+However, there exist straightforward ﬁxes to minimize
+the impact of such “byzantine” behavior. A third exploit
+by Liogkas et al. involves downloading only from the
+fastest peers, but the strategy does not take into account
+the upload contribution required to induce reciprocation.
+In contrast, BitTyrant maximizes download per unit of
+upload bandwidth and can drastically reduce its upload
+contribution by varying the active set size and not shar-
+ing its upload bandwidth uniformly with active peers.
+Hales and Patarin [8] argue that BitTorrent’s robust-
+ness is not so much due to its TFT mechanism, but more
+due to human or sociological factors that cause swarms
+with a high concentration of altruistic peers to be pre-
+served over selﬁsh ones. They further claim that releas-
+ing selﬁsh clients into the wild may therefore not degrade
+performance due to the underlying natural selection. V al-
+idating this hypothesis requires building and releasing a
+strategic and selﬁsh client—one of our contributions.
+Massoulie and V ojnovic [15] model BitTorrent as a
+“coupon replication” system with a particular focus on
+efﬁciently locating the last few coupons. One of their
+conclusions is that altruism is not necessary for BitTor-
+rent to be efﬁcient. However, their study does not ac-
+count for strategic behavior on the part of peers.
+Other studies [2, 7, 11] have pointed out the presence
+of signiﬁcant altruism in BitTorrent or suggest preserv-
+ing it [11]. In contrast, we show that the altruism is not
+a consequence of BitTorrent’s incentive mechanism and
+can in fact be easily circumvented by a strategic client.
+7 Conclusion
+We have revisited the issue of incentive compatibility
+in BitTorrent and arrived at a surprising conclusion: al-
+though TFT discourages free riding, the bulk of BitTor-
+rent’s performance has little to do with TFT. The dom-
+inant performance effect in practice is altruistic contri-
+bution on the part of a small minority of high capac-
+ity peers. More importantly, this altruism is not a con-
+sequence of TFT; selﬁsh peers—even those with mod-
+est resources—can signiﬁcantly reduce their contribution
+and yet improve their download performance. BitTorrent
+works well today simply because most people use client
+software as-is without trying to cheat the system.
+Although we have shown that selﬁshness can hurt
+swarm performance, whether or not it will do so in prac-
+tice remains unclear. The public release of BitTyrant
+provides a test. Perhaps users will continue to donate
+their excess bandwidth, even after ensuring the maxi-
+mum yield for that bandwidth. Perhaps users will be-
+have selﬁshly, causing a shift to a completely different
+design with centrally enforced incentives. Perhaps strate-
+gic behavior will induce low bandwidth users to invest
+in higher bandwidth connections to compensate for their
+worse performance, yielding better overall swarm perfor-
+mance in the long run. Time will tell. These uncertainties
+leave us with the still open question: do incentives build
+robustness in BitTorrent?
+The BitTyrant source code and distribution are pub-
+licly available at:
+http://BitTyrant.cs.washington.edu/
+Acknowledgments
+We thank our shepherd, Jinyang Li, and the anonymous
+reviewers for their comments. This work was supported
+by NSF CNS-0519696 and the ARCS Foundation.
+References
+[1] R. Axelrod. The Evolution of Cooperation . Basic Books,
+1985.
+[2] A. Bharambe, C. Herley, and V . Padmanabhan. Analyz-
+ing and Improving a BitTorrent Network’s Performance
+Mechanisms. In Proc. of INFOCOM, 2006.
+[3] B. Cohen. Incentives build robustness in BitTorrent. In
+Proc. of IPTPS, 2003.
+[4] J. R. Douceur. The Sybil attack. In Proc. of IPTPS, 2002.
+[5] B. Fan, D.-M. Chiu, and J. Liu. The Delicate Tradeoffs in
+BitTorrent-like File Sharing Protocol Design. In Proc. of
+ICNP, 2006.
+[6] GNU Scientiﬁc Library. http://www.gnu.org/
+software/gsl/.
+[7] L. Guo, S. Chen, Z. Xiao, E. Tan, X. Ding, and X. Zhang.
+Measurements, analysis, and modeling of BitTorrent-like
+systems. In Proc. of IMC, 2005.
+[8] D. Hales and S. Patarin. How to Cheat BitTorrent and
+Why Nobody Does. Technical Report UBLCS 2005-12,
+Computer Science, University of Bologna, 2005.
+[9] S. Jun and M. Ahamad. Incentives in BitTorrent induce
+free riding. In Proc. of P2PECON, 2005.
+[10] S. Katti, D. Katabi, C. Blake, E. Kohler, and J. Strauss.
+MultiQ: Automated detection of multiple bottleneck ca-
+pacities along a path. In Proc. of IMC, 2004.
+[11] A. Legout, G. Urvoy-Keller, and P . Michiardi. Rarest
+First and Choke Algorithms are Enough. In Proc. of IMC,
+2006.
+[12] N. Liogkas, R. Nelson, E. Kohler, and L. Zhang. Exploit-
+ing BitTorrent for fun (but not proﬁt). In Proc. of IPTPS,
+2006.
+N SD I’07:4thUS ENIX Symposium on Networked SystemsDesign& Implementation US ENI X Association 13 
+
+Label Deﬁnition Meaning
+ω 2 Number of simultaneous optimistic unchokes per peer
+λ 80 Local neighborhood size (directly connected peers)
+b(r) Figure 1 Probability of upload capacity rate r
+B(r)
+∫r
+0 b(r)dr Cumulative probability of a upload capacity rate r
+active(r) ⌊
+√
+0.6r⌋− ω Size (in peers) of the active transfer set for upload capacity rate r
+split(r) r
+active(r)+ω Per-connection upload capacity for upload capacity rate r
+s(r) Figure 1 Probability of an equal split rate r using mainline active(r) sizing
+S(r)
+∫r
+0 s(r)dr Cumulative probability of an equal-split rate r
+Table 2: Functions used in our model and their default settings in the ofﬁcial BitTorrent client.
+[13] T. Locher, P . Moor, S. Schmid, and R. Wattenhofer. Free
+Riding in BitTorrent is Cheap. In Proc. of HotNets, 2006.
+[14] H. V . Madhyastha, T. Isdal, M. Piatek, C. Dixon, T. An-
+derson, A. Krishnamurthy, and A. V enkataramani. iPlane:
+An information plane for distributed services. In Proc. of
+OSDI, 2006.
+[15] L. Massouli ´e; and M. V ojnovi´c. Coupon replication sys-
+tems. SIGMETRICS Perform. Eval. Rev. , 33(1):2–13,
+2005.
+[16] R. Morris. TCP behavior with many ﬂows. In Proc. of
+ICNP, 1997.
+[17] D. Qiu and R. Srikant. Modeling and performance anal-
+ysis of BitTorrent-like peer-to-peer networks. In Proc. of
+SIGCOMM, 2004.
+[18] S. Saroiu, P . K. Gummadi, and S. D. Gribble. A measure-
+ment study of peer-to-peer ﬁle sharing systems. In Proc.
+of Multimedia Computing and Networking , 2002.
+[19] J. Shneidman, D. Parkes, and L. Massouli ´e. Faithfulness
+in internet algorithms. In Proc. of PINS, 2004.
+A Modeling notes
+All numerical evaluation was performed with the GSL
+numerics package [6]. Refer to Section 3 for assump-
+tions and Table 2 for deﬁnitions.
+Upload / download : Probability of reciprocation for a
+peer P with upload capacity rP from Q with rQ:
+p recip(rP ,r Q)=1 − (1 − S(rP ))active(rQ ) (1)
+Expected reciprocation probability for capacity r:
+recip(r)=
+∫
+b(x)p recip(r, x)dx (2)
+Expected download and upload rate for capacity r:
+D(r) = active( r)
+[∫
+b(x)p recip(r, x)split(x)dx
+]
++
+ω
+[∫
+b(x)split(x)dx
+]
+(3)
+U(r)=m i n
+(
+r, (active(r)+ ω)D (r)
+)
+(4)
+Altruism: Altruism when deﬁned as the difference be-
+tween upload contribution and download reward
+altruism gap(r)=m a x
+(
+0, U(r) − D(r)
+)
+(5)
+Altruism per connection when deﬁned as upload contri-
+bution not resulting in direct reciprocation.
+altruism conn(r)=∫ (
+b(x)
+(
+(1 − p recip(r, x))split(r)+ (6)
+p recip(r, x) max(0, split(r) − split(x))
+) )
+dx
+Total altruism not resulting in direct reciprocation.
+altruism(r) = (active( r)+ ω)altruism conn(r) (7)
+Convergence: Probability of a peer with rate r discover-
+ing matched TFT peer in n iterations:
+c(r, n)=1 − S(r)n 2ω (8)
+Time to populate active set with matched peers given up-
+load capacity r. Note, s = split( r), and T = 30s is the
+period after which optimistic unchokes are switched.
+convergence time(r)= (9)
+T · active(r)
+(
+c(s, 1)+
+∞∑
+n=2
+nc (s, n)
+n−1∏
+i=1
+(1 − c(s, i))
+)
+Unchoke probability: The distribution of number of op-
+timistic unchokes is binomial with success probability ω
+λ .
+Because overhead is low,λ ≫ active(r) in BitTyrant,w e
+approximate λ − active(r) by λ. The expected number
+of optimistic unchokes per round is ω.
+Pr [unchokes = x]=
+( λ
+x
+) ( ω
+λ
+) x (
+1 − ω
+λ
+) (λ−x)
+(10)
+∴ E[unchokes]= λ ω
+λ = ω
+N SD I’07:4thUS ENIX Symposium on N etworkedSystemsDesign& Implementation U SENIX Association 14 

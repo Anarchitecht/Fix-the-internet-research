@@ -1,0 +1,1413 @@
+Eﬃcient veriﬁable delay functions
+Benjamin Wesolowski
+École Polytechnique Fédérale de Lausanne
+EPFL IC LACAL, Station 14, CH-1015 Lausanne, Switzerland
+Abstract. We construct a veriﬁable delay function (VDF). A VDF is a
+function whose evaluation requires running a given number of sequential
+steps, yet the result can be eﬃciently veriﬁed. They have applications
+in decentralised systems, such as the generation of trustworthy public
+randomness in a trustless environment, or resource-eﬃcient blockchains.
+To construct our VDF, we actually build atrapdoor VDF. A trapdoor
+VDF is essentially a VDF which can be evaluated eﬃciently by parties
+who know a secret (the trapdoor). By setting up this scheme in a way
+that the trapdoor is unknown (not even by the party running the setup,
+so that there is no need for a trusted setup environment), we obtain
+a simple VDF. Our construction is based on groups of unknown order
+such as an RSA group, or the class group of an imaginary quadratic ﬁeld.
+The output of our construction is very short (the result and the proof of
+correctness are each a single element of the group), and the veriﬁcation
+of correctness is very eﬃcient.
+1 Introduction
+We describe a function that is slow to compute and easy to verify: averiﬁable
+delay function(henceforth, VDF) in the sense of [4]1. These functions should be
+computable in a prescribed amount of time∆, but not faster (thetime measures
+an amount of sequential work, that is work that cannot be performed faster by
+running on a large number of parallel cores), and the result should be easy to
+verify (i.e., for a costpolylog(∆)). These special functions are used in [15] (under
+the name ofslow-timed hash functions) to construct a trustworthy randomness
+beacon: a service producing publicly veriﬁable random numbers, which are guar-
+anteed to be unbiased and unpredictable. These randomness beacons, introduced
+by Rabin in [17], are a valuable tool in a public, decentralised setting, as it is not
+trivial for someone to ﬂip a coin and convince their peers that the outcome was
+not rigged. A number of interesting applications of VDFs have recently emerged
+— see [4] for an overview. Most notably, they can be used to design resource-
+eﬃcient blockchains, eliminating the need for massively power-consuming mining
+farms. VDFs play a key role in the Chia blockchain design (chia.net), and the
+Ethereum Foundation (ethereum.org) and Protocol Labs (protocol.ai) are
+1 The paper [4] was developed independently of the present work, yet we adopt their
+terminology for veriﬁable delay functions, for the sake of uniformity.
+
+teaming up to investigate the technology of VDFs which promise to play a key
+role in their respective platforms.
+There is thereby a well-motivated need for an eﬃcient construction. This
+problem was left open in [4], and we address it here with a new, simple, and
+eﬃcient VDF.
+1.1 Contribution
+An eﬃcient construction. The starting point of our construction is the time-
+lock puzzle of Rivest, Shamir and Wagner [18]: given as input an RSA group
+(Z/NZ)×, whereN is a product of two large, secret primes, a random element
+x∈ (Z/NZ)×, and a timing parametert, computex2t
+. Without the factorisation
+ofN, this task requirest sequential squarings in the group. More generally, one
+could work with any groupG of unknown order. This construction is only a
+time-lock puzzle and not a VDF, because given an outputy, there is no eﬃcient
+way to verify thaty =x2t
+.
+The new VDF construction consists in solving an instance of the time-lock
+puzzle of [18], and computing a proof of correctness, which allows anyone to
+eﬃciently verify the result. Fix a timing parameter∆, a security levelk (say,
+128, 192, or 256), and a groupG. Our construction has the following properties:
+1. It is∆-sequential (meaning that it requires∆ sequential steps to evaluate)
+assuming the classic time-lock assumption of [18] in the groupG.
+2. It is sound (meaning that one cannot produce a valid proof for an incorrect
+output) under some group theoretic assumptions onG, believed to be true
+for RSA groups and class groups of quadratic imaginary number ﬁelds.
+3. Theoutputandtheproofofcorrectnessareeachasingleelementofthegroup
+G (also, the output can be recovered from the proof and a2k-bit integer; so
+it is possible to transmit a single group element and a small integer instead
+of 2 group elements).
+4. The veriﬁcation of correctness requires essentially two exponentiations in the
+group G, with exponents of bit-length2k.
+5. The proof can be produced inO(∆/ log(∆)) group operations.
+For applications where a lot of these proofs need to be stored, widely dis-
+tributed, and repeatedly veriﬁed, having very short and eﬃciently veriﬁable
+proofs is invaluable.
+Following discussions about the present work at the August 2018 workshop
+at Stanford hosted by the Ethereum Foundation and the Stanford Center for
+Blockchain Research, we note that our construction features two other useful
+properties: the proofs can beaggregated and watermarked. Aggregating consists
+in producing a single short proof that simultaneously proves the correctness of
+several VDF evaluations. Watermarking consists in tying a proof to the evalua-
+tor’s identity; in a blockchain setting, this allows to give credit (and a reward) to
+the party who spent time and resources evaluating the VDF. These properties
+2
+
+are discussed in Section 7.
+Note that the method we describe to compute the proof requires an amount
+O(∆/ log(∆)) group operations. Hence, there is an interval between the guaran-
+teed sequential work∆ and the total work(1 +ε)∆, whereε = O(1/ log(∆)).
+For practical parameters, thisε is in the order of0.05, and this small part of
+the computation is easily parallelizable, so that the total evaluation time with
+s cores is around (1 + 1/(20s))∆. This gap should be of no importance since
+anyways, computational models do not capture well small constant factors with
+respect to real-world running time. Precise timing is unlikely to be achievable
+without resorting to trusted hardware, thus applications of VDFs are designed
+not to be too sensitive to these small factors.
+If despite these facts it is still problematic in some application to know the
+output of the VDF slightly before having the proof, it is possible to eliminate
+this gap by artiﬁcially considering the proof as part of the output (the output is
+now a pair of group elements, and the proof is empty). The resulting protocol is
+still∆-sequential (trivially), and as noted in Remark 5, it is also sound. We also
+propose a second method in Section 4.3 which allows to exponentially reduce
+the overhead of the proof computation at the cost of lengthening the resulting
+proof by a few group elements.
+Trapdoor veriﬁable delay function.The construction proposed is actually atrap-
+door VDF, from which we can derive an actual VDF. A party, Alice, holds a
+secret key sk (the trapdoor), and an associated public keypk. Given a piece of
+datax, a trapdoor VDF allows to compute an outputy fromx such that anyone
+can easily verify that eithery has been computed by Alice (i.e., she used her
+secret trapdoor), or the computation ofy required an amount of time at least
+∆ (where, again, time is measured as an amount of sequential work). The veri-
+ﬁcation thaty is the correct output of the VDF for inputx should be eﬃcient,
+with a costpolylog(∆).
+Deriving a veriﬁable delay function.Suppose that a public keypk for a trapdoor
+VDF is given without any known associated secret key. This results in a simple
+VDF, where the evaluation requires a prescribed amount of time∆ for everyone
+(because there is no known trapdoor).
+Now,howtopubliclygenerateapublickeywithoutanyknownassociatedpri-
+vate key? In the construction we propose, this amounts to the public generation
+of a group of unknown order. A standard choice for such groups are RSA groups,
+but it is hard to generate an RSA number (a product of two large primes) with a
+strong guarantee that nobody knows the factorisation. It is possible to generate
+a random number large enough that with high probability it is divisible by two
+large primes (as done in [19]), but this approach severely damages the eﬃciency
+of the construction, and leaves more room for parallel optimisation of the arith-
+metic modulo a large integer, or for specialised hardware acceleration. It is also
+possible to generate a modulus by a secure multiparty execution of the RSA key
+3
+
+generation procedure among independent parties, each contributing some secret
+random seeds (as done in [6]). However, in this scenario, a third party would
+have to assume that the parties involved in this computation did not collude to
+retrieve the secret. We propose to use the class group of an imaginary quadratic
+order. One can easily generate an imaginary quadratic order by choosing a ran-
+dom discriminant, and when the discriminant is large enough, the order of the
+class group cannot be computed. These class groups were introduced in cryptog-
+raphy by Buchmann and Williams in [9], exploiting the diﬃculty of computing
+their orders (and the fact that this order problem is closely related to the discrete
+logarithm and the root problems in this group). To this day, the best known al-
+gorithms for computing the order of the class group of an imaginary quadratic
+ﬁeld of discriminantd are still of complexityL|d|(1/2) under the generalised Rie-
+mann hypothesis, for the usual functionLt(s) = exp
+(
+O
+(
+log(t)s log log(t)1−s))
+,
+as shown in [14] and [20].
+Circumventing classic impossibility results.Finally, we further motivate the no-
+tion oftrapdoor VDF by showing that it constitutes an original tool to circum-
+vent classic impossibility results. We illustrate this in Section 8 with a simple
+and eﬃcient identiﬁcation protocol with surprising zero-knowledge and deniabil-
+ity properties.
+1.2 Time-sensitive cryptography and related work
+Rivest, Shamir and Wagner [18] introduced in 1996 the use oftime-locks for
+encryptingdatathatcanbedecryptedonlyinapredeterminedtimeinthefuture.
+This was the ﬁrst time-sensitive cryptographic primitive taking into account the
+parallel power of possible attackers. Other timed primitives appeared in diﬀerent
+contexts: Bellare and Goldwasser [1,2] suggestedtime capsulesfor key escrowing
+in order to counter the problem of early recovery. Boneh and Naor [7] introduced
+timed commitments: a hiding and binding commitment scheme, which can be
+forced openby a procedure of determined running time. More recently, and as
+already mentioned, the notion of slow-timed hash function was introduced in
+[15] as a tool to provide trust to the generation of public random numbers.
+Veriﬁable delay functions.These slow-timed hash functions were recently revis-
+ited and formalised by Bonehet al. in [4] under the name of veriﬁable delay
+functions. The function proposed in [15],sloth, is not asymptotically eﬃciently
+veriﬁable: the veriﬁcation procedure (givenx and y, verify that sloth(x) = y)
+is faster than the evaluation procedure (givenx, compute the value sloth(x))
+only by a constant factor. The authors of [4] proposed practical constructions
+that achieve an exponential gap between evaluation and veriﬁcation, but do not
+strictly achieve the requirements of a VDF. For one of them, the evaluation
+requires an amount polylog(∆) of parallelism to run in parallel time∆. The
+other one is insecure against an adversary that can run a large (but feasible)
+pre-computation, so the setup must be regularly updated. The new construction
+we propose does not suﬀer these disadvantages.
+4
+
+Pietrzak’s veriﬁable delay function.Independently from the present work, an-
+other eﬃcient VDF was proposed in [16]. The author describes an elegant con-
+struction, provably secure under the classic time-lock assumption of [18] when
+implemented over an RSA group(Z/NZ)× where N is a product of two safe
+primes. The philosophy of [16] is close to our construction: it consists in solving
+the puzzle of [18] (for a timing parameter∆), and computing a proof of correct-
+ness. Their proofs can be computed withO(
+√
+∆ log(∆)) group multiplications.
+However, the proofs obtained are much longer (they consist ofO(log(∆)) group
+elements, versus a single group element in our construction), and the veriﬁcation
+procedure is less eﬃcient (it requiresO(log(∆)) group exponentiations, versus
+essentially two group exponentiations in our construction — for exponents of
+bit-length the security levelk in both cases).
+In the example given in [18], the groupG is an RSA group for a 2048 bit
+modulus, and the time ∆ is set to 240 sequential squarings in the group, so
+the proofs are 10KB long. In comparison, in the same setting, our proofs are
+0.25KB long.
+1.3 Notation
+Throughout this paper, the integerk denotes a security level (typically128, 192,
+or 256), and the mapH :{0, 1}∗→{ 0, 1}2k denotes a secure cryptographic hash
+function. For simplicity of exposition, the functionH is regarded as a map from
+A∗ to{0, 1}2k, where A∗ is the set of strings over some alphabetA such that
+{0, 1} ⊂A. The alphabet A contains at least all nine digits and twenty-six
+letters, and a special character ⋆. Given two strings s1,s 2 ∈ A∗, denote by
+s1||s2 their concatenation, and bys1|||s2 their concatenation separated by⋆.
+The function int :{0, 1}∗→ Z≥0 maps x∈{ 0, 1}∗ in the canonical manner
+to the non-negative integer with binary representationx. The function bin :
+Z≥0→{ 0, 1}∗ maps any non-zero integer to its binary representation with no
+leading 0-characters, and bin(0) = 0.
+2 Trapdoor veriﬁable delay functions
+Let ∆ : Z>0→ R>0 be a function of the (implicit) security parameterk. This
+∆ is meant to represent a time duration, and what is precisely meant bytime is
+explained in Section 3 (essentially, it measures an amount of sequential work).
+A party, Alice, has a public keypk and a secret keysk. Letx be a piece of data.
+Alice, thanks to her secret keysk, is able to quickly evaluate a functiontrapdoorsk
+onx. On the other hand, other parties knowing onlypk can computeevalpk(x) in
+time∆, but not faster (and important parallel computing power does not give a
+substantial advantage in going faster; remember that∆ measures the sequential
+work), such that the resulting valueevalpk(x) is the same astrapdoorsk(x).
+More formally, a trapdoor VDF consists of the following components (very
+close to the classic VDF deﬁned in [4]):
+5
+
+keygen→ (pk, sk) isakeygenerationprocedure,whichoutputsAlice’spublickey
+pk and secret keysk. As usual, the public key should be publicly available,
+and the secret key is meant to be kept secret.
+trapdoorsk(x,∆ )→ (y,π ) takes as input the datax∈X (for some input space
+X),andusesthesecretkey sktoproducetheoutput y fromx,anda(possibly
+empty) proofπ. The parameter∆ is the amount of sequential work required
+to compute the same outputy without knowledge of the secret key.
+evalpk(x,∆ )→ (y,π ) is a procedure to evaluate the function onx using only the
+public key pk, for a targeted amount of sequential work∆. It produces the
+output y from x, and a (possibly empty) proofπ. This procedure is meant
+to be infeasible in time less than∆ (this will be expressed precisely in the
+security requirements).
+verifypk(x,y,π,∆ )→ true or false is a procedure to check ify is indeed the cor-
+rect output forx, associated to the public keypk and the evaluation time∆,
+possibly with the help of the proofπ.
+Note that the security parameterk is implicitly an input to each of these
+procedures. Given any key pair(pk, sk) generated by thekeygen procedure, the
+functionality of the scheme is the following. Given any inputx and time param-
+eter ∆, let (y,π )← evalpk(x,∆ ) and (y′,π′)← trapdoorsk(x,∆ ). Then,y = y′
+and the proceduresverifypk(x,y,π,∆ ) and verifypk(x,y′,π′,∆ ) both output true.
+We also require the protocol to besound, as in [4]. Intuitively, we want that
+ify′ is not the correct output ofevalpk(x,∆ ) then verifypk(x,y′,∆ ) outputs false.
+We however allow the holder of the trapdoor to generate misleading valuesy′.
+Deﬁnition 1 (Soundness).A trapdoor VDF is sound if any polynomially
+bounded algorithm solves the followingsoundness-breaking game with negligible
+probability (ink): given as input the public keypk, output a messagex, a value
+y′ and a proofπ′ such thaty′⁄= evalpk(x,∆ ), and verifypk(x,y′,π′,∆ ) = true.
+The second security property is that the correct output cannot be produced
+in time less than∆ without knowledge of the secret keysk. This is formalised in
+thenextsectionviathe ∆-evaluation racegame.AtrapdoorVDFis ∆-sequential
+if any polynomially bounded adversary wins the∆-evaluation race game with
+negligible probability.
+3 Wall-clock time and computational assumptions
+Primitives such as veriﬁable delay functions or time-lock puzzles wish to deal
+withthedelicatenotionofreal-worldtime.Thissectiondiscusseshowtoformally
+handle this concept, and how it translates in practice.
+3.1 Theoretical model
+A precise notion of wall-clock time is diﬃcult to capture formally. However, we
+can get a ﬁrst approximation by choosing a model of computation, and deﬁning
+6
+
+time as an amount of sequential work in this model. A model of computation is
+a set of allowable operations, together with their respective costs. For instance,
+working with circuits with gates∨,∧ and¬ which each have cost1, the notion of
+time complexity of a circuitC can be captured by its depthd(C), i.e., the length
+of the longest path inC. The time-complexity of a boolean functionf is then
+the minimal depth of a circuit implementingf, but this does not reﬂect the time
+it might take to actually computef in the real world where one is not bound
+to using circuits. A random access machine might perform better, or maybe a
+quantum circuit.
+A good model of computation for analysing the actual time it takes to solve
+a problem should contain all the operations that one could use in practice (in
+particular the adversary). From now on, we suppose the adversary works in a
+model of computation M. We do not deﬁne exactlyM, but only assume that
+it allows all operations a potential adversary could perform, and that it comes
+with a cost functionc and a time-cost functiont. For any algorithmA and input
+x, the costC(A,x ) measures the overall cost of computingA(x) (i.e., the sum of
+the costs of all the elementary operations that are executed), while the time-cost
+T (A,x ) abstracts the notion of time it takes to runA(x) in the model M. For
+the model of circuits, one could deﬁne the cost as the size of the circuit and the
+time-cost as its depth. For concreteness, one can think of the modelM as the
+model of parallel random-access machines.
+All forthcoming security claims are (implicitly) made with respect to the
+model M. The time-lock assumption of Rivest, Shamir and Wagner [18] can be
+expressed as Assumption 1 below.
+Deﬁnition 2 ((δ,t )-time-lock game).Letk∈ Z>0 be a diﬃculty parameter,
+andA be an algorithm playing the game. The parametert is a positive integer,
+and δ : Z>0→ R>0 is a function. The(δ,t )-time-lock gamegoes as follows:
+1. An RSA modulusN is generated at random by an RSA key-generation pro-
+cedure, for the security parameterk;
+2. A(N ) outputs an algorithmB;
+3. An elementg∈ Z/NZ is generated uniformly at random;
+4. B(g) outputs h∈ Z/NZ.
+Then,A wins the game ifh =g2t
+mod N and T (B,g )<tδ (k).
+Assumption 1 (Time-lock assumption)There is a cost functionδ : Z>0→
+R>0 such that the following two statements hold:
+1. There is an algorithmS such that for any modulusN generated by an RSA
+key-generation procedure with security parameterk, and any elementg ∈
+Z/NZ, the output ofS(N,g ) is the square ofg, andT (S, (N,g ))<δ (k);
+2. For anyt∈ Z>0, no algorithmA of polynomial cost2 wins the(δ,t )-time-lock
+game with non-negligible probability (with respect to the diﬃculty parame-
+ter k).
+2 i.e., C(A,g ) = O(f (len(g))) for a polynomialf, with len(g) the binary length ofg.
+7
+
+The functionδ encodes the time-cost of computing a single modular squaring,
+and Assumption 1 expresses that without knowledge of the factorisation ofN,
+there is no faster way to compute g2t
+mod N than performing t sequential
+squarings.
+With this formalism, we can ﬁnally express the security notion of a trapdoor
+VDF.
+Deﬁnition 3 (∆-evaluation race game).LetA be a party playing the game.
+The parameter∆ : Z>0→ R>0 is a function of the (implicit) security parameter
+k. The∆-evaluation race gamegoes as follows:
+1. The random procedurekeygen is run and it outputs a public keypk;
+2. A(pk) outputs an algorithmB;
+3. Some data x∈ Xis generated according to some random distribution of
+min-entropy at leastk;
+4. BO(x) outputs a valuey, whereO is an oracle that outputs the evaluation
+trapdoorsk(x′,∆ ) on any inputx′⁄=x.
+Then,A wins the game ifT (B,x )<∆ and evalpk(x,∆ ) outputs y.
+Deﬁnition 4 (∆-sequential). A trapdoor VDF is∆-sequential if any polyno-
+mially bounded player (with respect to the implicit security parameter) wins the
+above∆-evaluation race game with negligible probability.
+Observe that it is useless to allowA to adaptively ask for oracle evalua-
+tions of the VDF during the execution ofA(pk): for any datax′, the procedure
+evalpk(x′,∆ ) produces the same output astrapdoorsk(x′,∆ ), so any such request
+can be computed by the adversary in timeO(∆).
+Remark 1. Suppose that the input x is hashed as H(x) (by a secure crypto-
+graphic hash function) before being evaluated (as is the case in the construction
+we present in the next section), i.e.
+trapdoorsk(x,∆ ) = tsk(H(x),∆ ),
+for some proceduret, and similarly foreval and verify. Then, it becomes unnec-
+essary to give toB access to the oracleO. We give a proof in Appendix A when
+H is modeled as a random oracle.
+Remark 2. At the third step of the game, the bound on the min-entropy is ﬁxed
+to k. The exact value of this bound is arbitrary, but forbidding low entropy is
+important: ifx has a good chance of falling in a small subset ofX, the adversary
+can simply precompute the VDF for all the elements of this subset.
+3.2 Timing assumptions in the real world
+Given an algorithm, or even an implementation of this algorithm, its actual run-
+ning time will depend on the hardware on which it is run. If the algorithm is
+8
+
+executed independently on several single-core general purpose CPUs, the vari-
+ations in running time between them will be reasonably small as overclocking
+records on clock-speeds barely achieve 9GHz (cf. [10]), only a small factor higher
+than a common personal computer. Assuming the computation is not parallelis-
+able, using multiple CPUs would not allow to go faster. However, specialized
+hardware could be built to perform a certain computation much more eﬃciently
+than on any general purpose hardware.
+For these reasons, the theoretical model developed in Section 3.1 has a lim-
+ited accuracy. To resolve this issue, and evaluate precisely the security of a
+timing assumption like Assumption 1, one must estimate the speed at which
+the current state of technology allows to perform a certain task, given a possi-
+bly astronomical budget. To this end, the Ethereum Foundation and Protocol
+Labs [13] are currently investigating extremely fast hardware implementations
+of RSA multiplication, and hope to construct a piece of hardware close enough
+to today’s technological limits, with the goal of using the present construction
+in their future platforms. Similarly, the Chia Network has opened a competition
+in the near future for very fast multiplication in the class group of a quadratic
+imaginary ﬁeld.
+4 Construction of the veriﬁable delay function
+Let x∈ A∗ be the input at which the VDF is to be evaluated. Alice’s secret
+key sk is the order of a ﬁnite groupG, and her public key is a description of
+G allowing to compute the group multiplication eﬃciently. We also assume that
+any elementg of G can eﬃciently be represented in a canonical way as binary
+strings bin(g). Also part of Alice’s public key is a hash functionHG : A∗→G.
+Example 1 (RSA setup).A natural choice of setup is the following: the groupG
+is (Z/NZ)× where N =pq for a pair of distinct prime numbersp and q, where
+the secret key is(p− 1)(q− 1) and the public key isN, and the hash function
+HG(x) = int(H(“residue”||x)) mod N (where H is a secure cryptographic
+hash function). For a technical reason explained later in Remark 4, we actually
+need to work in(Z/NZ)×/{±1}, and we call this theRSA setup.
+Example 2 (Class group setup).For a public setup where we do not want the
+private key to be known by anyone, one could chooseG to be the class group
+of an imaginary quadratic ﬁeld. The construction is simple. Choose a random,
+negative, square-free integer d, of large absolute value, and such thatd≡ 1
+mod 4. Then, letG = Cl(d) be the class group of the imaginary quadratic ﬁeld
+Q(
+√
+d). Just as we wish, there is no known algorithm to eﬃciently compute the
+order of this group. The multiplication can be performed eﬃciently, and each
+class can be represented canonically by its reduced ideal. Note that the even
+part of|Cl(d)| can be computed if the factorisation ofd is known. Therefore one
+should choosed to be a negative prime, which ensures that|Cl(d)| is odd. See [8]
+for a review of the arithmetic in class groups of imaginary quadratic orders, and
+a discussion on the choice of cryptographic parameters.
+9
+
+Consider a targeted evaluation time given by∆ = tδ for a timing parame-
+tert, whereδ is the time-cost (i.e., the amount of sequential work) of computing
+a single squaring in the groupG (as done in Assumption 1 for the RSA setup).
+To evaluate the VDF on inputx, ﬁrst letg =HG(x). The basic idea (which
+ﬁnds its origins in [18]) is that for anyt∈ Z>0, Alice can eﬃciently compute
+g2t
+with two exponentiations, by ﬁrst computinge = 2t mod|G|, followed by
+ge. The running time is logarithmic int. Any other party who does not know
+|G| can also computeg2t
+by performingt sequential squarings, with a running
+time tδ. Therefore anyone can computey = g2t
+but only Alice can do it fast,
+and any other party has to spend a time linear int. However, verifying that
+the published valuey is indeedg2t
+is long: there is no shortcut to the obvious
+strategy consisting in recomputingg2t
+and checking if it matches. To solve this
+issue, we propose the following public-coin succinct argument, for proving that
+y = g2t
+. The input of the interaction is(G,g,y,t ). Let Primes(2k) denote the
+set containing the22k ﬁrst prime numbers.
+1. The veriﬁer samples a prime𝓁 uniformly at random fromPrimes(2k).
+2. The prover computesπ =g⌊2t/𝓁⌋ and sends it to the veriﬁer.
+3. The veriﬁer computesr = 2t mod 𝓁, (the least positive residue of2t modulo
+𝓁), and accepts ifg,y,π ∈G and π𝓁gr =y.
+Now, it might not be clear how Alice or a third party should computeπ =
+g⌊2t/𝓁⌋. For Alice, it is simple: she can computer = 2t mod 𝓁. Then we have
+⌊2t/𝓁⌋ = (2t−r)/𝓁, and since she knows the order of the group, she can compute
+q = (2 t−r)/𝓁 mod|G| and π = gq. We explain in Section 4.1 how anyone
+else can compute π without knowing|G|, with a total of O(t/ log(t)) group
+multiplications.
+This protocol is made non-interactive using the Fiat-Shamir transformation,
+by letting 𝓁 = Hprime(bin(g)|||bin(y)), where Hprime is a hash function which
+sends any string s to an element of Primes(2k). We assume in the security
+analysis below that this function is a uniformly distributed random oracle. The
+procedures trapdoor, verify and eval are fully described in Algorithms 1, 2 and 3
+respectively.
+Remark 3. Instead of hashing the inputx into the groupG as g =HG(x), one
+could simply consider x∈ G. However, the functionx↦→ x2t
+being a group
+homomorphism, bypassing the hashing step has undesirable consequences. For
+instance, givenx2t
+, one can compute(xα)2t
+for any integerα at the cost of only
+an exponentiation byα.
+Veriﬁcation.It is straightforward to check that the veriﬁcation conditionπ𝓁gr =
+y holds if the evaluator is honest. Now, what can a dishonest evaluator do? That
+question is answered formally in Section 6, but the intuitive idea is easy to
+understand. We will show that givenx, ﬁnding a pair(y,π ) diﬀerent from the
+honest one amounts to solve a root-ﬁnding problem in the underlying groupG
+10
+
+Data: a public keypk = (G,HG) and a secret keysk =|G|, some input
+x∈A∗, a targeted evaluation time∆ =tδ.
+Result: the outputy, and the proofπ.
+g←HG(x)∈G;
+e← 2t mod|G|;
+y←ge;
+𝓁←Hprime(bin(g)|||bin(y));
+r← least residue of2t modulo 𝓁;
+q← (2t−r)𝓁−1 mod|G|;
+π←gq;
+return (y,π );
+Algorithm 1: trapdoorsk(x,t )→ (y,π )
+(supposedly hard for anyone who does not know the secret order of the group).
+As a result, only Alice can produce misleading proofs.
+Consider the above interactive succinct argument, and suppose that the ver-
+iﬁer accepts, i.e.,π𝓁gr = y, wherer is the least residue of2t modulo 𝓁. Since
+r = 2t−𝓁⌊2t/𝓁⌋, the veriﬁcation condition is equivalent to
+yg−2t
+=
+(
+πg−⌊2t/𝓁⌋
+)𝓁
+.
+Before the generation of𝓁, the left-hand sideα =yg−2t
+is already determined.
+Once 𝓁 is revealed, the evaluator is able to computeβ =πg−⌊2t/𝓁⌋, which is an
+𝓁-th root ofα. For a prover to succeed with good probability, he must be able
+to extract𝓁-th roots ofα for arbitrary values of𝓁. This is hard in our groups of
+interest, unlessα =β = 1G, in which case(y,π ) is the honest output.
+Remark 4. Observe that in the RSA setup, this task is easy ifα = ±1, i.e.
+y =±g2t
+. It is however a diﬃcult problem, given an RSA modulusN, to ﬁnd an
+elementα mod N other than±1 from which𝓁-th roots can be extracted for any
+𝓁. This explains why we need to work in the groupG = (Z/NZ)×/{±1} instead
+of (Z/NZ)× in the RSA setup. This problem is formalized (and generalised to
+other groups) in Deﬁnition 6.
+4.1 Computing the proof π in O(t/ log(t)) group operations
+In this section, we describe how to compute the proofπ = g⌊2t/𝓁⌋ with a total
+ofO(t/ log(t)) group multiplications. First, we mention a very simple algorithm
+to compute π, which simply computes the long division⌊2t/𝓁⌋ on the ﬂy, as
+pointed out by Boneh, Bünz and Fisch [5], but requires betweent and 2t group
+operations. It is given in Algorithm 4.
+Wenowdescribehowtoperformthesamecomputationwithonly O(t/ log(t))
+group operations. Fix a parameterκ. The idea is to express⌊2t/𝓁⌋ in base 2κ as
+⌊2t/𝓁⌋ =
+∑
+i
+bi2κi =
+2κ−1∑
+b=0
+b
+( ∑
+i such that bi=b
+2κi
+)
+.
+11
+
+Data: a public keypk = (G,HG), some inputx∈A∗, a targeted evaluation
+time ∆ =tδ, a VDF outputy and a proofπ.
+Result: true if y is the correct evaluation of the VDF atx, false otherwise.
+g←HG(x);
+𝓁←Hprime(bin(g)|||bin(y));
+r← least residue of2t modulo 𝓁;
+if π𝓁gr =y then
+return true;
+else
+return false;
+end
+Algorithm 2: verifypk(x,y,π,t )→ true or false
+Data: a public keypk = (G,HG), some inputx∈A∗, a targeted evaluation
+time ∆ =tδ.
+Result: the output valuey and a proofπ.
+g←HG(x)∈G;
+y←g2t
+; // via t sequential squarings
+𝓁←Hprime(bin(g)|||bin(y));
+π←g⌊2t/𝓁⌋ ; // following the simple Algorithm 4, or the faster
+Algorithm 5
+return (y,π );
+Algorithm 3: evalpk(x,t )→ (y,π )
+Similarly to Algorithm 4, each coeﬃcientbi can be computed as
+bi =
+⌊ 2κ(2t−κ(i+1) mod 𝓁)
+𝓁
+⌋
+,
+where 2t−κ(i+1) mod 𝓁 denotes the least residue of2t−κ(i+1) modulo𝓁. For each
+κ-bits integerb∈{ 0,..., 2κ− 1}, letIb ={i|bi =b}. We get
+g⌊2t/𝓁⌋ =
+2κ−1∏
+b=0
+(∏
+i∈Ib
+g2κi
+)b
+. (1)
+Suppose ﬁrst that all the valuesg2κi
+have been memorised (from the sequen-
+tial computation of the valuey = g2t
+). Then, each product∏
+i∈Ib
+g2κi
+can be
+computed in|Ib| group multiplications (for a total of∑
+b|Ib| = t/κ multiplica-
+tions), and the full product (1) can be deduced with aboutκ2κ additional group
+operations. In total, this strategy requires aboutt/κ +κ2κ group operations.
+Choosing, for instance,κ = log(t)/2, we get aboutt· 2/ log(t) group operations.
+Of course, this would require the storage oft/κ group elements.
+We now show that the memory requirement can easily be reduced to, for
+instance, O(
+√
+t) group elements, for essentially the same speedup. Instead of
+memorising eachκ element of the sequenceg2i
+, only memorise everyκγ element
+12
+
+Data: an elementg in a groupG (with identity 1G), a prime number𝓁 and a
+positive integert.
+Result: g⌊2t/𝓁⌋.
+x← 1G∈G;
+r← 1∈ Z;
+for i← 0 to T− 1 do
+b←⌊ 2r/𝓁⌋∈{ 0, 1}∈ Z;
+r← least residue of2r modulo 𝓁;
+x←x2gb;
+end
+return x;
+Algorithm 4:Simple algorithm to computeg⌊2t/𝓁⌋, with an on-the-ﬂy long
+division [5].
+(i.e., the elementsg20
+,g 2κγ
+,g 22κγ
+,... ), for some parameterγ (we will show that
+γ = O(
+√
+t) is suﬃcient). For each integerj, letIb,j ={i∈ Ib| i≡ j mod γ}.
+Now,
+g⌊2t/𝓁⌋ =
+2κ−1∏
+b=0
+
+
+γ−1∏
+j=0
+∏
+i∈Ib,j
+g2κi
+
+
+b
+=
+γ−1∏
+j=0
+
+
+2κ−1∏
+b=0
+
+ ∏
+i∈Ib,j
+g2κ(i−j)
+
+
+b
+
+2κj
+.
+In each factor of the ﬁnal product,i−j is divisible byγ, sog2κ(i−j)
+is one
+of the memorised values. A straightforward approach allows to compute this
+product with a total amount of group operations aboutt/κ +γκ2κ, yet one
+can still do better. Writeyb,j =∏
+i∈Ib,j
+g2κ(i−j)
+, and splitκ into two halves, as
+κ1 =⌊κ/2⌋ and κ0 =κ−κ1. Now, observe that for each indexj,
+2κ−1∏
+b=0
+yb
+b,j =
+2κ1−1∏
+b1=0
+(2κ0−1∏
+b0=0
+yb12κ0 +b0,j
+)b12κ0
+·
+2κ0−1∏
+b0=0
+(2κ1−1∏
+b1=0
+yb12κ0 +b0,j
+)b0
+The right-hand side provides a way to compute the product with a total of about
+2(2κ +κ2κ/2) (instead ofκ2κ as in the more obvious strategy). The full method is
+summarised in Algorithm 5 (on page 29), and requires aboutt/κ +γ2κ+1 group
+multiplications.
+The algorithm requires the storage of about t/(κγ) + 2κ group elements.
+Choosing, for instance,κ = log(t)/3 andγ =
+√
+t, we get aboutt· 3/ log(t) group
+operations, with the storage of about
+√
+t group elements. This algorithm can
+also be parallelised.
+4.2 A practical bandwidth and storage improvement
+Typically, anevaluator would compute the outputy and the proofπ, and send
+the pair (y,π ) to the veriﬁers. Each veriﬁer would compute the Fiat-Shamir
+13
+
+challenge
+𝓁←Hprime(bin(g)|||bin(y)),
+then checky =π𝓁g2t mod 𝓁. Instead, it is possible for the evaluator to transmit
+(𝓁,π ), which has almost half the size (typically,𝓁 is in the order of hundreds of
+bits while group elements are in the order of thousands of bits). The veriﬁers
+would recover
+y←π𝓁g2t mod 𝓁,
+and then verify that𝓁 =Hprime(bin(g)|||bin(y)). The two strategies are equiva-
+lent, but the second divides almost by 2 the bandwidth and storage footprint.
+4.3 A trade-oﬀ between proof shortness and prover eﬃciency
+The evaluation of the VDF, i.e., the computation ofy =g2t
+, takes timeT =δt,
+where δ is the time of one squaring in the underlying group. As demonstrated
+in Section 4.1, the proofπ can be computed inO(t/ log(t)) group operations.
+Say that the total time of computing the proof is a fractionT/ω; considering
+Algorithm5,onecanthinkof ω = 20,areasonablevalueforpracticalparameters.
+One potential issue with the proposed VDF is that the computation ofπ can
+only start after the evaluation of the VDF outputg2t
+is completed. So after the
+completion of the VDF evaluation, there still remains a total amountT/ω of
+work to compute the proof. We calloverhead these computations that must be
+done after the evaluation ofy =g2t
+. Even though this part of the computation
+can be parallelised, it might be advantageous for some applications to reduce
+the overhead to a negligible amount of work.
+We show in the following that using only two parallel threads, the overhead
+can be reduces to a total cost of aboutT/ωn, at the cost of lengthening the proofs
+to n group elements (instead of a single one), andn− 1 small prime numbers.
+Note that the value of ω varies with T, yet for simplicity of exposition, we
+assume that it is constant in the following analysis (a reasonable approximation
+for practical purposes).
+The idea is to start proving some intermediate results before the full evalua-
+tion is over. For instance, considert1 =t ω
+ω+1. Run the evaluator, and when the
+intermediate valueg1 =g2t1
+is reached, store it (but keep the evaluator running
+in parallel), and compute the proofπ1 for the statementg1 =g2t1
+. The computa-
+tion of this proof takes time aboutδt1/ω =T/ (ω + 1), which is the time it takes
+to ﬁnish the full evaluation (i.e., going fromg1 toy =g2t
+=g2t/(ω+1)
+1 ). Therefore,
+the evaluation ofy and the ﬁrst proofπ1 ﬁnish at the same time. It only remains
+to produce a proofπ2 for the statementy =g2t/(ω+1)
+1 , which can be done in total
+time δt
+ω(ω+1)≤T/ω 2. Therefore the overhead is at mostT/ω 2. At ﬁrst glance, it
+seems the veriﬁcation requires the triple(g1,π 1,π 2), but in fact, the valueg1 can
+be recovered fromπ1 and the prime number𝓁1 = Hprime(bin(g)|||bin(g1)) via
+g1 =π𝓁
+1gt1 mod 𝓁, as done is Section 4.2. Therefore, the proof can be compressed
+to (𝓁1,π 1,π 2).
+14
+
+More generally, one could split the computation inton segments of length
+ti =tωn−i ω−1
+ωn−1, fori = 1,...,n . We have thatt =∑n
+i=1ti, andti =ti−1/ω, so
+during the evaluation of each segment (apart from the ﬁrst), one can compute
+the proof corresponding to the previous segment. The overhead is only the proof
+of the last segment, which takes timeT ω−1
+ω(ωn−1)≤ T/ωn. The proof consists of
+the n intermediate proofs and then− 1 intermediate prime challenges.
+5 Analysis of the sequentiality
+In this section, the proposed construction is proven to be(tδ)-sequential, mean-
+ing that no polynomially bounded player can win the associated(tδ)-evaluation
+race game with non-negligible probability (in other words, the VDF cannot be
+evaluated in time less thantδ). For the RSA setup, it is proved under the classic
+time-lock assumption of Rivest, Shamir and Wagner [18] (formalised in Assump-
+tion 1), and more generally, it is secure for groups where a generalisation of this
+assumption holds (Assumption 2).
+5.1 Generalised time-lock assumptions
+The following game generalises the classic time-lock assumption to arbitrary
+families of groups of unknown orders.
+Deﬁnition 5 (Generalised(δ,t )-time-lockgame). Consider a sequence(Gk)k∈Z>0,
+where each Gk is a set of ﬁnite groups (supposedly of unknown orders), associ-
+ated to a “diﬃculty parameter”k. Letkeygen be a procedure to generate a random
+group from Gk, according to the diﬃcultyk.
+Fix the diﬃculty parameterk∈ Z>0, and letA be an algorithm playing the
+game. The parametert is a positive integer, andδ : Z>0→ R>0 is a function.
+The (δ,t )-time-lock gamegoes as follows:
+1. A groupG is generated bykeygen;
+2. A(G) outputs an algorithmB;
+3. An elementg∈G is generated uniformly at random;
+4. B(g) outputs h∈G.
+Then,A wins the game ifh =g2t
+and T (B,g )<tδ (k).
+Assumption 2 (Generalised time-lock assumption)The generalised time-
+lock assumption for a given family of groups(Gk)k∈Z>0 is the following. There
+is a cost functionδ : Z>0→ R>0 such that the following two statements hold:
+1. There is an algorithmS such that for any groupG∈ Gk (for the diﬃculty
+parameterk), and any elementg∈G, the output ofS(G,g ) is the square of
+g, andT (S, (G,g ))<δ (k);
+2. For anyt∈ Z>0, no algorithmA of polynomial cost wins the(δ,t )-time-lock
+game with non-negligible probability (with respect to the diﬃculty parame-
+ter k).
+15
+
+The functionδ encodes the time-cost of computing a single squaring in a group
+of Gk, and Assumption 2 expresses that without more speciﬁc knowledge about
+these groups (such as their orders), there is no faster way to computeg2t
+than
+performing t sequential squarings.
+5.2 Sequentiality in the random oracle model
+Proposition 1 (tδ-sequentialityofthetrapdoorVDFintherandomor-
+acle model).LetA be a player winning with probabilitypwin the (tδ)-evaluation
+race game associated to the proposed construction, assumingHG and Hprime
+are random oracles andA is limited to q oracle queries3. Then, there is a
+player C for the (generalised) (δ,t )-time-lock game, with winning probability
+p≥ (1−q/2k)pwin, and with same running time asA (up to a constant fac-
+tor4).
+Proof. BuildC as follows. Upon receiving the groupG,C starts runningA on
+input G. The random oraclesHG andHprime are simulated in a straightforward
+manner, maintaining a table of values, and generating a random outcome for any
+new request (with distribution uniform inG and in Primes(2k) respectively).
+WhenA(G) outputs an algorithmB,C generates a randomx∈X (according to
+the same distribution as the(tδ)-evaluation race game). Ifx has been queried by
+the oracle already,C aborts; this happens with probability at mostq/2k, since
+the min-entropy of the distribution of messages in the(tδ)-evaluation race game
+is at leastk. Otherwise,C outputs the following algorithmB′. When receiving
+as input the challengeg,B′ adds g to the table of oracleHG, for the inputx
+(i.e., HG(x) = g). As discussed in Remark 1, we can assume that the algorithm
+B does not call the oracletrapdoorsk(−,y,∆ ). ThenB′ can invokeB on inputx
+while simulating the oraclesHG andHprime. WheneverB outputsy,B′ outputsy,
+whichequals g2t
+whenevery isthecorrectevaluationoftheVDFat x.Weassume
+that simulating the oracle has a negligible cost, soB′(g) has essentially the
+same time-cost asB(x). Then,C wins the (δ,t )-time-lock game with probability
+p≥pwin(1−q/2k). ⊓ ⊔
+6 Analysis of the soundness
+In this section, the proposed construction is proven to be sound, meaning that
+no polynomially bounded player can produce a misleading proof for an invalid
+outputoftheVDF.FortheRSAsetup,itisprovedunderanewnumbertheoretic
+assumption expressing that it is hard to ﬁnd an integeru⁄= 0,±1 for which𝓁-th
+3 In this game, the output ofA is another algorithmB. When we say thatA is limited
+to q queries, we limit the total number of queries byA andB combined. In other
+words, ifA did x≤q queries, then its outputB is limited toq−x queries.
+4 Note that this constant factor does not aﬀect the chances ofC to win the (δ,t )-
+time-lock game, since it concerns only the running time ofC itself and not of the
+algorithm output byC(G)
+16
+
+roots modulo an RSA modulusN can be extracted for arbitrary𝓁-values sampled
+uniformly at random fromPrimes(2k), when the factorisation ofN is unknown.
+More generally, the construction is sound if a generalisation of this assumptions
+holds in the group of interest.
+6.1 The root ﬁnding problem
+The following game formalises the root ﬁnding problem.
+Deﬁnition 6 (The root ﬁnding gameGroot). LetA be a party playing the
+game. Theroot ﬁnding gameGroot(A) goes as follows: ﬁrst, thekeygen procedure
+is run, resulting in a groupG which is given toA (G is supposedly of unknown
+order). The playerA then outputs an elementu of G. An integer𝓁 is sampled
+uniformly from Primes(2k) and given toA. The playerA outputs an integerv
+and wins the game ifv𝓁 =u⁄= 1G.
+In the RSA setup, the groupG is the quotient(Z/NZ)×/{±1}, whereN is a
+product of two random large prime numbers. It is not known if this problem can
+easily be reduced to a standard assumption such as the diﬃculty of factoring
+N or the RSA problem, for which the best known algorithms have complexity
+LN (1/3).
+Similarly, in the class group setting, this problem is not known to reduce to a
+standard assumption, but it is closely related to the order problem and the root
+problem (which are tightly related to each other, see [3, Theorem 3]), for which
+thebestknownalgorithmshavecomplexity L|d|(1/2)wheredisthediscriminant.
+We now prove that to win this gameGroot, it is suﬃcient to win the following
+gameGroot
+X , which is more convenient for our analysis.
+Deﬁnition 7 (The oracle root ﬁnding gameGroot
+X ). LetA be a party playing
+the game. LetX be a function that takes as input a groupG and a string s
+in A∗, and outputs an element X(G,s ) ∈ G. LetO : A∗ → Primes(2k) be
+a random oracle with the uniform distribution. The player has access to the
+random oracleO. The oracle root ﬁnding gameGroot
+X (A,O) goes as follows:
+ﬁrst, thekeygen procedure is run and the resulting groupG is given toA. The
+playerA then outputs a strings∈ A∗, and an elementv ofG. The game is won
+if vO(s) =X(G,s )⁄= 1G.
+Lemma 1. If there is a functionX and an algorithmA limited to q queries
+to the oracleO winning the gameGroot
+X (A,O) with probabilitypwin, there is an
+algorithmB winning the gameGroot(B) with probability at leastpwin/(q + 1), and
+same running time, up to a small constant factor.
+Proof. LetA be an algorithm limited toq oracle queries, and winning the game
+with probabilitypwin. Build an algorithmA′ which does exactly the same thing
+asA, but with possibly additional oracle queries at the end to make sure the
+output strings′ is always queried to the oracle, and the algorithm always does
+exactly q + 1 (distinct) oracle queries.
+17
+
+Build an algorithmB playing the gameGroot, usingA′ as follows. Upon
+receiving pk = G,B starts runningA′ on input pk. The oracleO is simulated
+as follows. First, an integeri∈{ 1, 2,...,q + 1} is chosen uniformly at random.
+For the ﬁrsti− 1 (distinct) queries fromA′ toO, the oracle value is chosen
+uniformly at random fromPrimes(2k). When theith strings∈ A∗ is queried
+to the oracle, the algorithmB outputs u =X(G,s ), concluding the ﬁrst round
+of the gameGroot. The game continues as the integer𝓁 is received (uniform in
+Primes(2k)). This 𝓁 is then used as the value for theith oracle queryO(s),
+and the algorithmA′ can continue running. The subsequent oracle queries are
+handled like the ﬁrsti− 1 queries, by picking random primes inPrimes(2k).
+Finally,A′ outputs a strings′∈ A∗ and an elementv of G. To conclude the
+gameGroot(B),B returns v.
+SinceO simulates a random oracle with uniform outputs inPrimes(2k),A′
+outputs with probabilitypwin a pair (s′,v ) such thatvO(s′) = X(G,s′)⁄= 1G;
+denote this eventwinA′. Ifs =s′, this condition is exactlyv𝓁 =u⁄= 1G, where
+u =X(G,s ) is the output for the ﬁrst round ofGroot, andO(s) = 𝓁 is the input
+for the second round. If these conditions are met, the gameGroot(B) is won.
+Therefore
+Pr[B winsGroot]≥pwin· Pr [s =s′|winA′].
+LetQ ={s1,s 2,...,s q+1} be the q + 1 (distinct) strings queried toO byA′,
+indexed in chronological order. By construction, we haves = si. Letj be such
+that s′ =sj (recall thatA′ makes sure thats′∈Q ). Then,
+Pr [s =s′|winA′] = Pr [i =j|winA′]
+The integeri is chosen uniformly at random in{1, 2,...,q + 1}, and the values
+given toA′ are independent fromi (the oracle values are all independent random
+variables). SoPr [i =j|winA′] = 1/(q+1). ThereforePr[B winsGroot]≥pwin/(q+
+1). SinceB mostly consists in runningA and simulating the random oracle, it is
+clear than both have the same running time, up to a small constant factor.⊓ ⊔
+6.2 Soundness in the random oracle model
+Proposition 2 (Soundness of the trapdoor VDF in the random oracle
+model). LetA be a player winning with probabilitypwin the soundness-breaking
+game associated to the proposed scheme, assumingHG and Hprime are random
+oracles andA is limited toq oracle queries5. Then, there is a playerD for the
+root ﬁnding gameGroot with winning probabilityp≥pwin/(q + 1), and with same
+running time asA (up to a constant factor).
+Proof. Instead of directly buildingD, we build an algorithmD′ playing the game
+Groot
+X (D′,O), and invoke Lemma 1. Deﬁne the functionX as follows. Recall that
+5 In this game, the output ofA is another algorithmB. When we say thatA is limited
+to q queries, we limit the total number of queries byA andB combined. In other
+words, ifA did x≤q queries, then its outputB is limited toq−x queries.
+18
+
+for any groupG that we consider in the construction, each elementg∈G admits
+a canonical binary representationbin(g). For any such groupG, any elements
+g,h∈G, let
+X(G, bin(g)|||bin(h)) = h/g2t
+,
+and letX(G,s ) = 1G for any other strings. When receivingpk,D′ starts run-
+ningA with input pk. The oracleHG is simulated by generating random values
+in the straightforward way, andHprime is set to be exactly the oracleO. The
+algorithmA outputs a messagex, and pair (y,π )∈G×G (if it is not of this
+form, abort). Outputs = bin(HG(x))|||bin(y) and v =π/HG(x)⌊2t/O(s)⌋. IfA
+won the simulated soundness-breaking game, the procedure did not abort, and
+vO(s) = X(G,s )⁄= 1G, soD′ wins the game. HenceD′ has winning probabil-
+itypwin. SinceA was limited toq oracle queries,D′ also does not do more thanq
+queries. Applying Lemma 1, there is an algorithmD winning the gameGroot(B)
+with probabilityp≥pwin(1−ε)/(q + 1). ⊓ ⊔
+Remark 5. Theconstructionremainssoundifinsteadofconsideringtheoutput y
+andtheproof π,weconsidertheoutputtobethepair (y,π ),withanemptyproof.
+The winning probability ofD in Proposition 2 becomesp≥pwin(1−ε)/(q + 1),
+where ε = negl
+(
+k
+log log(|G|) log(q)
+)
+, by accounting for the unlikely event that the
+large random primeO(s) is a divisor of|G|.
+7 Aggregating and watermarking proofs
+In this section, we present two useful properties of the VDF: the proofs can be ag-
+gregated, and watermarked. The methods of this section follow from discussions
+at the August 2018 workshop at Stanford hosted by the Ethereum Foundation
+and the Stanford Center for Blockchain Research. The author wishes to thank
+the participants for their contribution.
+7.1 Aggregation
+If the VDF is evaluated at multiple inputs, it is possible to produce a single proof
+~π∈ G that simultaneously proves the validity of all the outputs. Suppose that
+n inputs are given,x1,...,x n. For each indexi, letgi =HG(xi). The following
+public-coin interactive succinct argument allows to prove that a given list(yi)n
+i=1
+satisﬁesyi =g2t
+i :
+1. The veriﬁer samples a prime𝓁 uniformly at random fromPrimes(2k), andn
+uniformly random integers(αi)n
+i=1 of k bits.
+2. The prover computes
+~π =
+( n∏
+i=1
+gαi
+i
+)⌊2t/𝓁⌋
+and sends it to the veriﬁer.
+19
+
+3. The veriﬁer computesr = 2t mod 𝓁, (the least positive residue of2t modulo
+𝓁), and accepts if
+~π𝓁
+( n∏
+i=1
+gαi
+i
+)r
+=
+n∏
+i=1
+yαi
+i .
+The single group element~π serves as proof for the whole list ofn statements
+yi =g2t
+i : it is an aggregated proof. The protocol can be made non-interactive by
+a Fiat-Shamir transformation: let
+s = bin(g1)|||bin(g2)|||... |||bin(gn)|||bin(y1)|||bin(y2)|||... |||bin(yn),
+and let𝓁 =Hprime(s), and for each indexi, letαi = int(H(bin(i)|||s)) (whereH
+is a secure cryptographic hash function). For simplicity, we prove the soundness
+in the interactive setup (the non-interactive soundness then follows from the
+Fiat-Shamir heuristic).
+Remark 6. One could harmlessly ﬁxα1 = 1 , leaving onlyαi to be chosen at
+random for i > 1. We present the protocol as above for simplicity, to avoid
+dealing withi = 1 as a special case in the proof below.
+Theorem 1. If there is a malicious proverP breaking the soundness of the
+above interactive succinct argument with probabilityp, then there is a playerB
+winning the root ﬁnding gameGroot with probability at least(p2− 2−k)/3, with
+essentially the same running time asP.
+Proof. LetI ={0, 1,..., 2k− 1}, and letZ =In−1× Primes(2k). Let Z =
+(α2,...,α n,𝓁 ) be a uniformly distributed random variable inZ, and letα1 and
+α′
+1 be two independent, uniformly distributed random variables inI. Let win
+and win′ be the events thatP breaks soundness when given(α1,α 2,...,α n,𝓁 )
+and (α′
+1,α 2,...,α n,𝓁 ) respectively. We wish to estimate the probability of the
+event double_win = win∧win′∧(α1⁄=α′
+1). Observe that conditioning overZ =z
+for an arbitrary, ﬁxedz∈Z , the eventswin and win′ are independent and have
+same probability, so
+Pr[win∧ win′] = 1
+|Z|
+∑
+z∈Z
+Pr[win∧ win′|Z =z] = 1
+|Z|
+∑
+z∈Z
+Pr[win|Z =z]2.
+From the Cauchy-Schwarz inequality, we get
+1
+|Z|
+∑
+z∈Z
+Pr[win|Z =z]2≥
+(
+1
+|Z|
+∑
+z∈Z
+Pr[win|Z =z]
+)2
+= Pr[win]2 =p2.
+We conclude thatPr[win∧ win′]≥p2, and therefore,Pr[double_win]≥p2− 2−k.
+With these probabilities at hand, we can now construct the playerB for the
+root ﬁnding gameGroot. RunP, which outputs valuesgi and yi. If yi = g2t
+i
+20
+
+for all i, abort. Up to some reindexing, we can now assumey1 ⁄= g2t
+1 . Draw
+α1,α′
+1,α 2,...,α n uniformly at random fromI. Deﬁne
+x0 =y1/g2t
+1 , x1 =
+n∏
+i=1
+(yαi
+i /g2t
+i )αi, x2 = (y1/g2t
+1 )α′
+1
+n∏
+i=2
+(yαi
+i /g2t
+i )αi.
+Letbbeauniformlyrandomelementof {0, 1, 2}.Thealgorithm B outputsxb.We
+get back a challenge𝓁. Run the proverP twice, independently, for the challenges
+(α1,α 2,...,α n,𝓁 ) and (α′
+1,α 2,...,α n,𝓁 ), and suppose that both responses break
+soundness, and α1 ⁄= α′
+1 (i.e., the event double_win occurs). If x1 ⁄= 1 G or
+x2⁄= 1G, the winning responses fromP allow to extract an𝓁-th root of eitherx1
+orx2 respectively. Otherwise, we havex1 =x2, which implies thatxα1−α′
+1
+0 = 1G,
+sox0 is an element of order dividingα1−α′
+1, and one can easily extract any𝓁-th
+root ofx0. In conclusion, under the eventdouble_win, one can always extract
+an𝓁-th root of eitherx0,x1 orx2, so the total winning probability of algorithm
+B is at least(p2− 2−k)/3. ⊓ ⊔
+7.2 Watermarking
+When using a VDF to build a decentralised randomness beacon (e.g., as a back-
+boneforanenergy-eﬃcientblockchaindesign),peoplewhospenttimeandenergy
+evaluating the VDF should be rewarded for their eﬀort. Since the output of the
+VDF is supposed to be unique, it is hard to reliably identify the person who
+computed it. A naive attempt of the evaluator to sign the output would not
+prevent theft: since the output is public, a dishonest party could as easily sign
+it and claim it their own.
+Let the evaluator’s identity be given as a stringid. One proposed method
+(see [12]) essentially consists in computing the VDF twice: once on the actual
+input, and once on a combination of the input with the evaluator’s identityid.
+Implemented carefully, this method could allow to reliably reward the evaluators
+for their work, but it also doubles the required eﬀort. In the following, we sketch
+two cost-eﬀective solutions to this problem.
+The ﬁrst cost-eﬀective approach consists in having the evaluator prove that
+he knows some hard-to-recover intermediate value of the computation of the
+VDF. Since the evaluation of our proposed construction requires computing in
+sequence the elementsgi = g2i
+for i = 1,...,t , and only the ﬁnal valuey = gt
+of the sequence is supposed to be revealed, one can prove that they performed
+the computation by proving that they knowgt−1 (it is a square root ofy, hence
+the fastest way for someone else to recover it would be to recompute the full
+sequence). A simple way to do so would be for the evaluator to reveal the value
+cid = gpid
+t−1 (a certiﬁcate), wherepid = Hprime(id). The validity of the certiﬁcate
+can be checked via the equationypid = c2
+id. The security claim is the following:
+given the inputx, the outputy, the proofπ, and the certiﬁcatecid, the cost for
+an adversary with identiﬁerid′ (distinct from id) to produce a valid certiﬁcate
+21
+
+cid′ is as large as actually recomputing the output of the VDF by themself.
+The above method is cost-eﬀective as it does not require the evaluator to
+perform much more work than evaluating the VDF. However, it makes the out-
+put longer by adding an extra group element: the certiﬁcate. Another approach
+consists in producing a single group element that plays simultaneously the role
+of the proof and the certiﬁcate. This element is awatermarked proof, tied to
+the evaluator’s identity. This can be done easily with our construction. In the
+evaluation procedure (Algorithm 3), replace the deﬁnition of the prime𝓁 by
+Hprime(id|||bin(g)|||bin(y)) (and the corresponding change must be made in the
+veriﬁcation procedure). The resulting proofπid is now inextricably tied toid. In-
+formally, the security claim is the following: given the inputx, the outputy, and
+the watermarked proofπid, the cost for an adversary with identiﬁerid′ (distinct
+from id) to produce a valid proofπid′ is about as large as reevaluating the VDF
+altogether. Indeed, a honest prover, after having computed the outputy, can
+computeπid at a reduced cost thanks to some precomputed intermediate values.
+But an adversary does not have these intermediate values, so they would have
+to computeπid′ from scratch. This is an exponentiation inG, with exponent of
+bit-length close tot; without any intermediate values, it requires in the order of
+t sequential group operations, which is the cost of evaluating the VDF.
+8 Circumventing impossibility results with timing
+assumptions
+In addition to the applications mentioned in the introduction, we conclude this
+paper by showing that atrapdoor VDF also constitutes a new tool for circum-
+venting classic impossibility results. We illustrate this through a simple identiﬁ-
+cation protocol constructed from a trapdoor VDF, where a party, Alice, wishes
+to identify herself to Bob by proving that she knows the trapdoor. Thanks to
+the VDF timing properties, this protocol features surprising zero-knowledge and
+deniability properties challenging known impossibility results.
+As this discussion slightly deviates from the crux of the article (the construc-
+tion of a trapdoor VDF), most of the details are deferred to Appendices B and C,
+and this section only introduces the main ideas. As in the rest of the paper, the
+parameter k is the security level. The identiﬁcation protocol goes as follows:
+1. Bob chooses a challengec∈{ 0, 1}k uniformly at random. He sends it to
+Alice, along with a time limit∆, and starts a timer.
+2. Alice responds by sending the evaluation of the VDF on inputc (with time
+parameter∆), together with the proof. She can respond fast using her trap-
+door.
+3. Upon receiving the response, Bob stops the timer. He accepts if the veriﬁ-
+cation of the VDF succeeds and the elapsed time is smaller than∆.
+Remark 7. We present here only an identiﬁcation protocol, but it is easy to
+turn it into an authentication protocol for a messagem by having Alice use the
+concatenation c||m as input to the VDF.
+22
+
+Since only Alice can respond immediately thanks to her secret, Bob is convinced
+of her identity. Since anyone else can compute the response to the challenge in
+time ∆, the exchange is perfectly simulatable, hence perfectly zero-knowledge.
+It is well-known (and in fact clear from the deﬁnition) that a classic interactive
+zero-knowledge proof cannot have only one round (this would be a challenge-
+response exchange, and the simulator would allow to respond to the challenge
+in polynomial time, violating soundness). The above protocol avoids this im-
+possibility thanks to a modiﬁed notion of soundness, ensuring that only Alice
+can respondfast enough. This is made formal in Appendix B, via the notion of
+zero-knowledge timed challenge-response protocol.
+Remark 8. Note that this very simple protocol is also eﬃcient: the “time-lock”
+evaluation of the VDF does not impact any of the honest participants, it is
+only meant to be used by the simulator. Only the trapdoor evaluation and the
+veriﬁcation are actually executed.
+Finally, this protocol has strong deniability properties. Indeed, since anyone
+can produce in time∆ a response to any challenge, any transcript of a conversa-
+tion that is older than time∆ could have been generated by anyone. In fact the
+protocol ison-line deniableagainst any judge that suﬀers a communication delay
+larger than∆/2. Choosing∆ to be as short as possible (while retaining sound-
+ness) yields a strongly deniable protocol. Full on-line deniability is known to be
+impossible in a PKI (see [11]), and this delay assumption provides a new way to
+circumvent this impossibility. This is discussed in more detail in Appendix C.
+Acknowledgements
+The author wishes to thank a number of people with whom interesting discus-
+sions helped improve the present work, in alphabetical order, Dan Boneh, Justin
+Drake, Alexandre Gélin, Novak Kaluđerović, Arjen K. Lenstra and Serge Vau-
+denay. Finalisation of this work has been partially funded by the ERC Advanced
+Grant 740972 (ALGSTRONGCRYPTO).
+References
+1. M. Bellare and S. Goldwasser. Encapsulated key escrow. Technical report, 1996.
+2. M. Bellare and S. Goldwasser. Veriﬁable partial key escrow. InProceedings of the
+4th ACM Conference on Computer and Communications Security, CCS ’97, pages
+78–91, New York, NY, USA, 1997. ACM.
+3. I. Biehl, J. Buchmann, S. Hamdy, and A. Meyer. A signature scheme based on the
+intractability of computing roots. Designs, Codes and Cryptography, 25(3):223–
+236, 2002.
+4. D. Boneh, J. Bonneau, B. Bünz, and B. Fisch. Veriﬁable delay functions. In E. F.
+Brickell, editor,Advances in Cryptology – CRYPTO 2018, pages 757–788. Springer,
+2018.
+5. D. Boneh, B. Bünz, and B. Fisch. A survey of two veriﬁable delay functions. Cryp-
+tology ePrint Archive, Report 2018/712, 2018. https://eprint.iacr.org/2018/712.
+23
+
+6. D. Boneh and M. Franklin. Eﬃcient generation of shared rsa keys. InAnnual
+International Cryptology Conference, pages 425–439. Springer, 1997.
+7. D. Boneh and M. Naor. Timed commitments. In M. Bellare, editor,Advances in
+Cryptology – CRYPTO 2000, volume 1880 ofLecture Notes in Computer Science,
+pages 236–254. Springer Berlin Heidelberg, 2000.
+8. J. Buchmann and S. Hamdy. A survey on iq cryptography. InIn Proceedings of
+Public Key Cryptography and Computational Number Theory, pages 1–15, 2001.
+9. J. Buchmann and H. C. Williams. A key-exchange system based on imaginary
+quadratic ﬁelds.Journal of Cryptology, 1(2):107–118, 1988.
+10. CPU-Z OC world records. http://valid.canardpc.com/records.php, 2018.
+11. Y.Dodis,J.Katz,A.Smith,andS.Walﬁsh. Composability and On-Line Deniability
+of Authentication, pages 146–162. Springer Berlin Heidelberg, Berlin, Heidelberg,
+2009.
+12. J. Drake. Ethereum 2.0 randomness. August 2018 workshop at Stanford hosted by
+the Ethereum Foundation and the Stanford Center for Blockchain Research, 2018.
+https://docs.google.com/presentation/d/13OAGL42yzOvQUKvJJ0EBsAAne25yA7sv9RC8FfPhtyo.
+13. J. Drake. Minimal VDF randomness beacon. Ethereum Research post, 2018.
+https://ethresear.ch/t/minimal-vdf-randomness-beacon/3566.
+14. J. L. Hafner and K. S. McCurley. A rigorous subexponential algorithm for compu-
+tation of class groups.Journal of the American mathematical society, 2(4):837–850,
+1989.
+15. A. K. Lenstra and B. Wesolowski. Trustworthy public randomness with sloth,
+unicorn and trx.International Journal of Applied Cryptology, 2016.
+16. K. Pietrzak. Simple veriﬁable delay functions. Cryptology ePrint Archive, Report
+2018/627, Version 20180626:145529, 2018. https://eprint.iacr.org/2018/627.
+17. M. O. Rabin. Transaction protection by beacons.Journal of Computer and System
+Sciences, 27(2):256 – 267, 1983.
+18. R. L. Rivest, A. Shamir, and D. A. Wagner. Time-lock puzzles and timed-release
+crypto. 1996.
+19. T. Sander. Eﬃcient accumulators without trapdoor extended abstract. InInterna-
+tional Conference on Information and Communications Security, pages 252–262.
+Springer, 1999.
+20. U. Vollmer. Asymptotically fast discrete logarithms in quadratic number ﬁelds.
+In International Algorithmic Number Theory Symposium (ANTS), pages 581–594.
+Springer, 2000.
+A Proof of Remark 1
+Model H as a random oracle. Suppose that
+trapdoorH
+sk (x,∆ ) = tsk(H(x),∆ ),
+evalH
+pk(x,∆ ) = epk(H(x),∆ ),and
+verifypk(x,y,∆ ) = vpk(H(x),y,∆ ),
+for procedurest,e and v that do not have access toH.
+LetA be a player of the∆-evaluation race game. Assume that the output
+B ofA is limited to a numberq of queries toO and H. We are going to build
+24
+
+an algorithmA′ that wins with same probability asA when its outputB′ is not
+given access toO.
+Let (Yi)q
+i=1 be a sequence of random hash values (i.e., uniformly distributed
+randomvaluesin {0, 1}2k).Firstobserve thatAwins the∆-evaluation racegame
+with the same probability if the last step runs the algorithmBO′,H′
+instead of
+BO,H, where
+1. H′ is the following procedure: for any new requested inputx, ifx has pre-
+viously been requested byA toH then outputH′(x) = H(x); otherwise set
+H′(x) to be the next unassigned value in the sequence(Yi);
+2. O′ is an oracle that on inputx outputs tsk(H′(x),∆ ).
+With this observation in mind, we buildA′ as follows. On input pk,A′
+ﬁrst runsAH which outputsAH (pk) = B. Let X be the set of inputs of the
+requests thatA made toH. For anyx∈ X,A′ computes and stores the pair
+(H(x), evalpk(x,∆ ))inalist L.Inaddition,itcomputesandstores (Yi,e pk(Yi,∆ ))
+for eachi = 1,...,q , and adds them toL.
+Consider the following procedureO′: on input x, look for the pair of the
+form (H′(x),σ ) in the listL, and outputσ. The output ofA′ is the algorithm
+B′ =BO′,H′
+. It does not require access to the oracleO anymore: all the potential
+requests are available in the list of precomputed values. Each call toO is replaced
+by a lookup in the listL, soB′ has essentially the same running time asB.
+ThereforeA′ wins the∆-evaluation race game with same probability asA even
+when its outputB′ is not given access to a evaluation oracle.
+B Timed challenge-response identiﬁcation protocols
+A timed challenge-response identiﬁcation protocol has four procedures:
+keygen→ (pk, sk) is a key generation procedure, which outputs a prover’s public
+key pk and secret keysk.
+challenge→c which outputs a random challenge.
+respondsk(c,∆ )→r is a procedure that uses the prover’s secret key to respond
+to the challengec, for the time parameter∆.
+verifypk(c,r,∆ )→ true or false is a procedure to check ifr is a valid response to
+c, for the public keypk and the time parameter∆.
+The security levelk is implicitly an input to each of these procedures. The
+keygen procedure is used the generate Alice’s public and secret keys, then the
+identiﬁcation protocol is as follows:
+1. Bob generates a randomc with the procedurechallenge. He sends it to Alice,
+along with a time limit∆, and starts a timer.
+2. Alice respondsr = respondsk(c,∆ ).
+3. Bob stops the timer. He accepts ifverifypk(c,r,∆ ) = true and the elapsed
+time is smaller than∆.
+25
+
+Given a time parameter∆, a∆-response race gameand an associated notion
+of ∆-soundness can be deﬁned in a straightforward manner as follows.
+Deﬁnition 8 (∆-response race game).LetA be a party playing the game.
+The parameter∆ : Z>0→ R>0 is a function of the (implicit) security parameter
+k. The∆-response race gamegoes as follows:
+1. The random procedurekeygen is run and it outputs a public keypk;
+2. A(pk) outputs an algorithmB;
+3. A random challengec is generated according to the procedurechallenge;
+4. BO(c) outputs a valuer, whereO is an oracle that outputs the evaluation
+respondsk(c′,∆ ) on any inputc′⁄=c.
+Then,A wins the game ifT (B,c )<∆ and verifypk(c,r,∆ ) = true.
+Deﬁnition 9 (∆-soundness). A timed challenge-response identiﬁcation pro-
+tocol is∆-sound if any polynomially bounded player (with respect to the implicit
+security parameter) wins the above∆-response race game with negligible proba-
+bility.
+It is as immediate to verify that a sound and∆-sequential VDF gives rise to
+a ∆-sound identiﬁcation protocol (via the construction of Section 8). Similarly,
+the completeness of the identiﬁcation protocol (that a honest run of the proto-
+col terminates with a successful veriﬁcation) is straightforward to derive from
+the fact that the veriﬁcation of a valid VDF output always outputstrue. There
+simply is one additional requirement: if the procedurerespondsk(c,∆ ) requires
+computation time at leastϵ1, and the channel of communication has a transmis-
+sion delay at leastϵ2, we must haveϵ1 + 2ϵ2 < ∆. Finally thezero-knowledge
+property is deﬁned as follows.
+Deﬁnition 10 (Zero-knowledge).A timed challenge-response identiﬁcation
+protocol is (perfectly, computationally, or statistically) zero-knowledge if there
+is an algorithmS that on input k, ∆, pk and a random challenge(k,∆ ) pro-
+duces an output (perfectly, computationally, or statistically) indistinguishable
+from respondsk(c,k,∆ ), and the running time ofS is polynomial ink.
+In a classical cryptographic line of though, this zero-knowledge property is
+too strong to provide any soundness, since an adversary can respond to the
+challenge with a running time polynomial in the security parameter of Alice’s
+secret key. This notion starts making sense when the complexity of the algorithm
+S is governed by another parameter, here∆, independent from Alice’s secret.
+For the protocol derived from a VDF, the zero-knowledge property is ensured
+by the fact that anyone can compute Alice’s response to the challenge in time
+polynomial ink, with the procedureeval.
+26
+
+C Local identiﬁcation
+The challenge-response identiﬁcation protocol derived from a VDF in Section 8
+is totally deniable against a judge, Judy, observing the communication from a
+long distance. The precise deﬁnition of on-line deniability is discussed in [11]. We
+refer the reader there for the details, but the high level idea is as follows. Alice
+is presumably trying to authenticate her identity to Bob. Judy will rule whether
+or not the identiﬁcation was attempted. Judy interacts with an informant who is
+witnessing the identiﬁcation and who wants to convince Judy that it happened.
+This informant could also be a misinformant, who is not witnessing any iden-
+tiﬁcation, but tries to deceive Judy into believing it happened. The protocol is
+on-line deniable if no eﬃcient judge can distinguish whether she is talking to an
+informant or a misinformant. The (mis)informant is allowed to corrupt Alice or
+Bob, at which point he learns their secret keys and controls their future actions.
+When some party is corrupted, Judy learns about it.
+Itisshownin[11]thatthisstrongdeniabilitypropertyisimpossibletoachieve
+in a PKI. To mitigate this issue, they propose a secure protocol in a relaxed
+setting, allowing incriminating aborts. We propose an alternative relaxation of
+the setting, where Judy is assumed to be far away from Alice and Bob (more
+precisely: the travel time of a message between Alice and Bob is shorter than
+between Alice (or Bob) and Judy6). For example, consider a building whose
+access is restricted to authorised card holders. Suppose the card holders do not
+want anyone other than the card reader to get convincing evidence that they are
+accessing the building (even if the card reader is corrupted, it cannot convince
+anyone else). Furthermore, Alice herself cannot convince anyone that the card
+reader ever acknowledged her identiﬁcation attempt. In this context, the card
+and the card reader beneﬁt from very eﬃcient communications, while a judge
+farther away would communicate with an additional delay. An identiﬁcation
+protocol can exploit this delay to become deniable, and this is achieved by the
+timed challenge-response identiﬁcation protocol derived from a VDF.
+The idea is the following. Suppose that the distance between Alice and Judy
+is long enough to ensure that the travel time of a message from Alice to Judy is
+larger than∆/2. Then, Judy cannot distinguish a legitimate response of Alice
+that took some time to reach her from a response forged by a misinformant that
+is physically close to Judy.
+More precisely, considering an informantI who established a strategy with
+Judy, we can show that there is a misinformantM that Judy cannot distinguish
+from I. First of all, Bob cannot be incriminated since he is not using a secret
+key. It all boils down to tracking the messages that depend on Alice’s secret key.
+6 A message does not travel directly from Alice (or Bob) to Judy, since Judy is only
+communicating with the (mis)informant. What is measured here is the sum of the de-
+lay between Alice and the (mis)informant and the delay between the (mis)informant
+and Judy. There is no constraint on the location of the (mis)informant, but we as-
+sume a triangular inequality: he could be close to Alice and Bob, in which case his
+communications with Judy suﬀer a delay, or he could be close to Judy, in which case
+his interactions with Alice and Bob are delayed.
+27
+
+Consider a run of the protocol with the informantI. Lett0 be the point in time
+where Alice computeds = trapdoorsk(c,∆ ). The delay implies two things:
+1. The challenge c is independent of anything Judy sent after point in time
+t0−∆/2.
+2. The ﬁrst message Judy receives that can depend ons (and therefore the ﬁrst
+message that depends on Alice’s secret) arrives aftert0 +∆/2.
+From Point 1, at timet0−∆/2, the misinformant (who is close to Judy) can
+already generatec (following whichever procedureI and Judy agreed on), and
+start evaluating evalpk(c,∆ ). The output is ready at timet0 +∆/2, so from
+Point 2, the misinformant is on time to send to Judy messages that should
+depend on the signatures.
+In practice.The protocol is deniable against a judge at a certain distance away
+from Alice and Bob, and the minimal value of this distance depends on∆. An
+accurate estimation of this distance would require in the ﬁrst place an equally
+accurate estimation of the real time∆ (in seconds) a near-optimal adversary
+would need to forge the response. This non-trivial task relates to the discussion
+of Section 3.2.
+Assuming reasonable bounds for∆ have been established, one can relate the
+distance and the communication delay in a very conservative way through the
+speed of light. We want Judy to stand at a suﬃcient distance to ensure that
+any message takes at least∆/2 s to travel between them, so Judy should be
+at least c∆/2 m away, wherec ≈ 3.00× 108 m/s is the speed of light. For
+security against a judge standing100 m away, one would require∆≈ 0.66 µs.
+Alice should be able to respond to Bob’s challenge in less time than that. At
+this point, it seems unreasonable to assume that such levels of precision can be
+achieved (although in principle, distance bounding protocols do deal with such
+constraints), yet it remains interesting that such a simple and eﬃcient protocol
+provides full deniability against a judge that suﬀers more serious communication
+delays.
+28
+
+Data: an elementg in a groupG (with identity 1G), a prime number𝓁, a
+positive integert, two parametersκ,γ > 0, and a table of precomputed
+valuesCi =g2iκγ
+, fori = 0,..., ⌈t/(κγ)⌉.
+Result: g⌊2t/𝓁⌋.
+// define a function get_block such that ⌊2t/𝓁⌋ = ∑
+i get_block(i)2κi
+get_block← the function that on inputi returns⌊2κ(2t−κ(i+1) mod 𝓁)/𝓁⌋;
+// split κ into to halves
+κ1←⌊κ/2⌋;
+κ0←κ−κ1;
+x← 1G∈G;
+for j←γ− 1 to 0 (descending order) do
+x←x2κ
+;
+for b∈{ 0,..., 2κ− 1} do
+yb← 1G∈G;
+end
+for i← 0,..., ⌈t/(κγ)⌉− 1 do
+b← get_block(iγ +j); // this could easily be optimised by
+computing the blocks iteratively as in Algorithm 4 (but
+computing blocks of κ bits and taking steps of κγ bits),
+instead of computing them one by one.
+yb←yb·Ci;
+end
+for b1∈{ 0,..., 2κ1− 1} do
+z← 1G∈G;
+for b0∈{ 0,..., 2κ0− 1} do
+z←z·yb12κ0 +b0;
+end
+x←x·zb12κ0
+;
+end
+for b0∈{ 0,..., 2κ0− 1} do
+z← 1G∈G;
+for b1∈{ 0,..., 2κ1− 1} do
+z←z·yb12κ0 +b0;
+end
+x←x·zb0;
+end
+end
+return x;
+Algorithm 5:Faster algorithm to computeg⌊2t/𝓁⌋, given some precomputa-
+tions.
+29

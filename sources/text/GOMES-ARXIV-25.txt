@@ -1,0 +1,1454 @@
+Rateless Bloom Filters: Set Reconciliation for Divergent Replicas
+with Variable-Sized Elements
+Pedro Gomes
+University of Porto
+Porto, Portugal
+pedromgomes29@gmail.com
+Carlos Baquero
+University of Porto
+Porto, Portugal
+cbm@fe.up.pt
+ABSTRACT
+Set reconciliation protocols typically make two critical assump-
+tions: they are designed for fixed-sized elements and they are opti-
+mized for when the difference cardinality,d, is very small. When
+adapting to variable-sized elements, the current practice is to syn-
+chronize fixed-size element digests. However, when the number
+of differences is considerable, such as after a network partition,
+this approach can be inefficient. Our solution is a two-stage hybrid
+protocol that introduces a preliminary Bloom filter step, specifically
+designed for this regime. The novelty of this approach, however,
+is in solving a core technical challenge: determining the optimal
+Bloom filter size without knowingd. Our solution is the Rateless
+Bloom Filter (RBF), a dynamic filter that naturally adapts to arbi-
+trary symmetric differences, closely matching the communication
+complexity of an optimally configured static filter without requiring
+any prior parametrization. Our evaluation in sets of variable-sized
+elements shows that for Jaccard indices below85%, our RBF-IBLT
+hybrid protocol reduces the total communication cost by up to over
+20%compared to the state-of-the-art.
+1 INTRODUCTION
+Set reconciliation is a fundamental problem in distributed systems.
+Two replicas, Alice and Bob, hold sets𝑆𝐴 and𝑆𝐵 of elements, re-
+spectively. Their goal is to communicate efficiently to find the
+differences between their sets so that both replicas can obtain the
+set union,𝑆𝐴∪𝑆 𝐵. This problem has wide-ranging applications,
+including cloud storage for synchronizing files between replicas,
+distributed databases for anti-entropy protocols, and blockchain
+networks for transaction dissemination.
+While the problem is often simplified in the literature to fo-
+cus on sets of fixed-sized elements, real-world synchronization is
+more complex, frequently involving variable-sized elements such
+as files, Bitcoin transactions, and database records. This makes han-
+dling variable-sized elements a more general and practical problem
+than what is typically considered. The common approach to adapt
+fixed-size algorithms to this more general problem is to first create
+fixed-sized digests (e.g., hashes) of the elements and then apply set
+reconciliation to these digests. The mismatched digests are then
+used to identify the variable-sized elements that must be exchanged.
+In this work, we present an evaluation of state-of-the-art set rec-
+onciliation methods applied to fixed-sized digests of variable-sized
+elements. We also introduce a new two-stage algorithm that com-
+bines Bloom filters with rateless Invertible Bloom Lookup Tables
+(IBLTs). We demonstrate that for a considerable number of differ-
+ences, the addition of a preliminary Bloom filter step significantly
+reduces communication overhead when compared to existing meth-
+ods. Our method is particularly effective for scenarios of moderate
+similarity, which are critical after major network events like black-
+outs or extended replica downtime.
+A core challenge with this two-stage approach is how to con-
+figure the Bloom filter, as the optimal configuration depends on
+the unknown cardinality of the set difference. We solve this by
+introducing rateless Bloom filters, inspired by rateless IBLTs. In
+our method, nodes continuously stream small Bloom filter with a
+single hash function, and the receiver signals the sender to stop
+when the optimal point of communication has been reached. This
+technique leverages prior work on Bloom joins by Mullin [9](1990)
+but is adapted for the set reconciliation problem. As we will show,
+our method achieves a communication cost very close to that of
+an optimally configured static Bloom filter, without any need for a
+priori set difference cardinality estimations.
+In summary, we make the following contributions:
+• We propose a rateless Bloom filter approach, an adaptation
+of Mullin’s multi-filter Bloomjoin for the set reconciliation
+problem.
+• We evaluate rateless Bloom filters against standard Bloom
+filters and show that our approach follows the communi-
+cation cost of an optimally configured static Bloom filter
+without requiring any a priori knowledge of the set differ-
+ences.
+• We provide a novel evaluation of state-of-the-art set rec-
+onciliation algorithms for variable-sized elements, demon-
+strating that for Jaccard indices below85%, our approach
+transmits up to over20%less data than the state-of-the-art
+algorithm with the lowest communication cost.
+2 MOTIV ATION
+While set reconciliation is a well-studied problem, state-of-the-art
+algorithms typically operate under two restrictive assumptions:
+first, that the symmetric difference cardinality, 𝑑, is very small
+compared to the total set sizes; and second, that all set elements are
+of a fixed size. The common practice of adapting these algorithms
+for variable-sized elements by hashing them first fundamentally
+alters their properties.
+While for state-of-the-art methods in fixed-sized element set
+reconciliation the elements are sent embedded in the transmitted
+data structures, for variable-sized elements this is not the case. The
+reconciliation protocol is applied to fixed-size digests, which only
+serve to identify the differing elements. The actual variable-sized
+elements must then be transmitted in a separate step. As such,
+for variable-sized elements and unlike for fixed-size elements, both
+state-of-the-art set reconciliation algorithms and Bloom filters serve
+the same purpose: to identify the elements to be exchanged. The
+arXiv:2510.27614v1  [cs.DS]  31 Oct 2025
+
+Pedro Gomes and Carlos Baquero
+question then becomes which is more space-efficient for this iden-
+tification phase. For considerable symmetric differences, a Bloom
+filter can be more efficient. For example, the communication cost
+of using 64-bit digests with PinSketch is at least𝑑× 64bits, while a
+Bloom filter’s communication cost is usually just a few bits per ele-
+ment (e.g.,𝑛× 5). Depending on how small𝑑 is compared to𝑛, Bloom
+filters can be more space-efficient than PinSketch in identifying the
+differing elements.
+While very high similarity (small𝑑) is expected during routine
+anti-entropy operations, we argue that scenarios with moderate
+similarity are not only relevant but critical. These are the precise
+conditions under which our method provides the most benefit:
+when the differences are smaller than the whole state, but large
+enough that it makes sense to use Bloom filters. This sweet spot
+exists after major events like network partitions, such as the 2025
+Iberian Peninsula blackout which lasted for over ten hours, or
+extended replica downtime, whether due to planned datacenter
+maintenance or the inherent churn of nodes in P2P networks. In
+these situations, an efficient set reconciliation protocol is crucial
+for quickly bringing disconnected replicas up to date.
+A core limitation of using Bloom filters for reconciliation is the
+existence of false positives, which prevent a guaranteed recon-
+ciliation. Prior work, such as Graphene[ 10] and ConflictSync[4],
+has demonstrated that combining Bloom filters with more robust
+reconciliation protocols can result in lower communication costs.
+However, the optimal configuration of the Bloom filter is dependent
+on the unknown set difference cardinality. While Graphene han-
+dles this by leveraging its specific use case (block dissemination) to
+make assumptions about set differences, more general applications
+lack this a priori knowledge. ConflictSync shows that the optimal
+Bloom filter size increases with the number of differences but does
+not provide a mechanism for configuring the filter. This exposes
+a critical research gap: a rateless method in which the Bloom fil-
+ter size naturally adapts to the set difference cardinality without
+relying on prior knowledge or estimations.
+Additionally, Graphene and ConflictSync were evaluated within
+their specialized domains (blockchain transaction dissemination
+and CRDT synchronization, respectively), rather than as a general
+set reconciliation protocol. As such, they are compared against the
+state-of-the-art methods within their given domains, and are not
+evaluated as a generic set reconciliation solution against state-of-
+the-art set reconciliation methods.
+Set reconciliation methods are also typically evaluated for sets
+of fixed-size elements, stating that applying these algorithms to
+variable-sized elements is just a question of synchronizing the fixed-
+size digests and using those to obtain the corresponding elements.
+However, no prior work has provided a comprehensive evaluation
+of state-of-the-art set reconciliation solutions on sets of variable-
+sized elements.
+Similar to the hybrid protocols like Graphene and ConflictSync,
+we introduce a set reconciliation protocol that leverages the com-
+bined strengths of Bloom filters and IBLTs. However, we address the
+critical research gap by introducing Rateless Bloom Filters (RBFs).
+RBFs naturally adapt to arbitrary symmetric differences with per-
+formance closely matching an optimally configured Bloom filter,
+entirely removing the need for prior estimation or parametrization
+0 1 0 0 1 0 1 0 1 0 1 0
+x1 x2
+Inserting
+Figure 1: Insertion into a standard Bloom filter (𝑚= 12,𝑘= 3).
+Elements𝑥 1 and𝑥 2 are inserted.
+0 1 0 0 1 0 1 0 1 0 1 0
+(True Positive)
+x1
+(True Negative)
+y1
+(False Positive)
+y2
+Lookup
+Figure 2: Lookup in a standard Bloom filter. 𝑥1 is a true posi-
+tive,𝑦 1 is a true negative, and𝑦 2 is a false positive.
+ofd. Furthermore, we benchmark this novel protocol against state-
+of-the-art set reconciliation protocols in a comprehensive evalua-
+tion focused on the crucial, yet neglected, scenario of variable-sized
+elements.
+3 BACKGROUND
+3.1 Bloom filters
+A Bloom filter [1] is a space-efficient randomized data structure
+for approximate set membership queries. It represents a set of 𝑛
+elements using a bit array of size𝑚, initially with all bits set to 0.
+The structure employs𝑘 independent hash functions, each mapping
+an element to a position within the bit array.
+To insert an element, the bits at the𝑘 positions determined by
+the hash functions are set to 1. As illustrated in Figure 1, with
+𝑚= 12and 𝑘= 3, the insertion of elements𝑥1 and𝑥2 sets specific
+bits to 1. An element’s membership is queried by checking if all𝑘
+corresponding bits are set to 1. If any of these bits is 0, the element
+is provably not in the set, ensuring no false negatives. However,
+multiple insertions can set all the bits for an element that was never
+added, leading to a false positive.
+Figure 2 demonstrates the lookup process. The element𝑥1, which
+was previously inserted, correctly yields a positive result. The ele-
+ment𝑦1, never inserted, correctly yields a negative result because
+at least one of its corresponding bits is 0. However, element𝑦2, also
+never inserted, results in a false positive because the bits it maps to
+were all set to 1 by the insertions of𝑥 1 and𝑥 2.
+A variant, the Partitioned Bloom filter[8], partitions the bit array
+into𝑘 equal-sized blocks of𝑚/𝑘 bits. Each of the𝑘 hash functions
+then maps an element exclusively to a position within one of these
+specific partitions. This structure can be viewed as an AND compo-
+sition of𝑘 independent single-hash filters. This composite nature,
+
+Rateless Bloom Filters: Set Reconciliation for Divergent Replicas with Variable-Sized Elements
+where the large filter is derived from smaller filters, is fundamental
+to our approach.
+3.2 Optimal Bloom filter Semijoins
+In a distributed database system, a join between two relations often
+needs to be performed across different nodes. A naive approach
+for this is for one node to send its entire relation to the other,
+where the join is then computed locally. However, it is inefficient to
+transmit tuples for which there is no join partner on the other side. A
+semijoin is a technique that reduces a relation to contain only tuples
+whose join key values find a match on the other relation, thereby
+ensuring that no useless tuples are transmitted. This problem can
+be framed as a set membership test: a site needs to send a tuple
+only if its join key belongs to the set of join keys of the other
+relation. A naive approach is to send the entire set of distinct join
+keys from one of the relations, but this is space-inefficient. A better,
+more space-efficient idea is to use Bloom filters. This approach is
+called a Bloomjoin [7]. False positives can be handled by simply
+transmitting all the tuples that test positive against the filter, which
+will necessarily include all the true positives. The cost of false
+positives is simply an additional communication cost.
+The central problem is how to configure the Bloom filter’s false
+positive rate (FPR). If the join keys have high similarity, the Bloom
+filter is counterproductive as most tuples will test positive anyway.
+If the join keys have a low similarity, the Bloom filter is a very good
+idea and should be configured with a low FPR. For intermediate
+cases, the optimal FPR varies depending on the set difference, a
+value that is hard to know a priori.
+The idea in Mullin’s 1990 work [9] was to avoid this problem by
+not sending one large, static Bloom filter with a potentially inade-
+quate FPR. Instead, the sender transmits a sequence of small Bloom
+filters, and the receiver, after processing each one, determines the
+optimal point to terminate the transmission and signals the sender
+to stop.
+The receiver’s role is to decide whether the optimal communi-
+cation point has been reached. With each small Bloom filter, some
+number of false positives are revealed as true negatives. This num-
+ber of eliminated tuples decreases with each additional filter. The
+receiver, knowing the average size of a tuple and the size of each
+small Bloom filter, can compute the number of tuples that could be
+transmitted using the same number of bits. Eventually, the number
+of tuples that become true negatives by receiving the latest filter
+will be smaller than the number of tuples that could have been
+transmitted with the same number of bits. At this point, it would
+have been more efficient to simply transmit the revealed false posi-
+tives than to send the new Bloom filter. The receiver notifies the
+sender to stop, having reached a near-optimal communication cost
+without any a priori knowledge of the set difference.
+3.3 Rateless Set Reconciliation
+3.3.1 Invertible Bloom Lookup Tables (IBLTs).An Invertible Bloom
+Lookup Table (IBLT) [6] is a probabilistic data structure that extends
+the functionality of a traditional Bloom filter. While a Bloom filter
+can only test for the presence of an element, an IBLT is designed
+to allow for the reconstruction of the original set of elements with
+high probability.
+Each cell in an IBLT is a tuple of three fields:
+• idSum: The bitwise XOR sum of the IDs of all elements
+that map to this cell.
+• hashSum: The bitwise XOR sum of the hashes of all ele-
+ments that map to this cell.
+•count: The number of elements that map to this cell.
+Elements are inserted into an IBLT by applying a set of𝑘 indepen-
+dent hash functions, similar to a Bloom filter. For each of the 𝑘
+resulting cell indices, the element’s ID and hash are XORed into
+the cell’sidSumandhashSum, respectively, and thecountis incre-
+mented. Element removal uses the exact same XOR operations but
+decrements thecount. The use of XOR ensures that adding and then
+removing an element leaves a cell’sidSumandhashSumunchanged.
+A cell is considered pure if it contains exactly one element. This
+can be verified with overwhelming probability by checking if the
+hash of theidSummatches thehashSum. This check fails with over-
+whelming probability for cells containing two or more elements.
+When a pure cell is found, the element is identified and peeled
+away by removing its contribution from all cells it maps to. This
+peeling process can create new pure cells, leading to a cascading
+decoding effect. The process continues until all elements are recov-
+ered (when all cells become empty) or until no more pure cells can
+be found, at which point decoding fails.
+As illustrated in Figure 3, an IBLT is used to encode a set with
+elements𝑥0,𝑥 1,𝑥 2,𝑥 3. The cells highlighted in red are pure, as their
+countis 1, and the hash of theiridSummatches thehashSum. This
+confirms that elements𝑥1 and𝑥3 are in the set. After identifying𝑥1
+and𝑥3, the elements can be removed from the cells to which they
+map, which in turn causes other cells to become pure (e.g., the first
+and last cell), allowing a cascading decoding process to recover the
+remaining elements.
+x0  x1
+h(x0)  h(x1)
+2
+x0  x2
+h(x0)  h(x2)
+2
+x0  x2
+h(x0)  h(x2)
+2
+x1
+h(x1)
+1
+x1  x3
+h(x1)  h(x3)
+2
+x3
+h(x3)
+1
+x2  x3
+h(x2)  h(x3)
+2
+idSum
+hashSum
+count
+x0 x1 x2 x3
+Figure 3: An example IBLT.
+3.3.2 Set reconciliation with IBLTs.IBLTs provide an efficient mech-
+anism for set reconciliation [ 3]. The sender constructs an IBLT
+IBLT𝐴 from its set and transmits it to the receiver. The receiver sim-
+ilarly computes IBLT𝐵 from its local set. Both are then combined
+to construct a new IBLT representing the symmetric difference,
+IBLT𝐵Δ𝐴, by performing a cell-wise combination:
+idSum𝐵Δ𝐴[𝑖]=idSum 𝐵[𝑖]⊕idSum 𝐴[𝑖]
+hashSum𝐵Δ𝐴[𝑖]=hashSum 𝐵[𝑖]⊕hashSum 𝐴[𝑖]
+count𝐵Δ𝐴[𝑖]=count 𝐵[𝑖]−count 𝐴[𝑖]
+Due to the properties of XOR, any element present in both sets will
+cancel out, leaving the combined IBLT with only the XOR sums
+and counts of elements unique to either set.
+
+Pedro Gomes and Carlos Baquero
+IBL T for Set A
+22480
+57904...
+30537
+37000
+78508...
+30594
+61651
+31785...
+30578
+98578
+11381...
+30554
+85924
+45757...
+30277
+42815
+48611...
+30641
+idSum
+hashSum
+count
+1 2
+IBL T for Set B
+119154
+70175...
+30538
+71210
+71395...
+30595
+95858
+42420...
+30578
+1968
+64817...
+30554
+85926
+13870...
+30276
+42814
+61750...
+30640
+idSum
+hashSum
+count
+100002 100003
+Combined IBL T (Symmetric Difference)
+100002
+64403...
+1
+100002
+64403...
+1
+100001
+71868...
+0
+100002
+10438...
+0
+2
+13829...
+-1
+1
+32575...
+-1
+idSum
+hashSum
+count
+100002 100003 1 2
+Figure 4: Set reconciliation with IBLTs.
+The receiver then decodes this difference IBLT. A key insight is
+that the ‘count’ field in the combined IBLT indicates the origin of
+an element in a pure cell: a count of 1 signifies an element exclusive
+to the receiver’s set (𝐵\𝐴 ), while a count of -1 indicates an element
+exclusive to the sender’s set (𝐴\𝐵 ). The peeling algorithm proceeds
+as before, with a modification: when an element is recovered with
+a count of -1, its contribution is added to the IBLT to remove its
+effect, whereas for a count of 1, its contribution is subtracted.
+As depicted in Figure 4, two IBLTs,IBLT𝐴 and IBLT𝐵, are used to
+reconcile two large sets. Set𝐴 contains elements from 1 to 100001,
+and Set𝐵 contains elements from 3 to 100003. This example high-
+lights the space-efficiency of IBLTs. Despite the large size of the
+original sets (approximately 100,000 elements each), the IBLTs are
+sized in proportion to the cardinality of the symmetric difference,
+which in this case is small ( 𝑑= 4), consisting of elements 1, 2,
+100002, and 100003. The IBLTs shown in the figure have only 6
+cells.
+The combined IBLT at the bottom of the figure represents the
+symmetric difference. The peeling algorithm is then applied. Cells
+with index 0, 1, 4, and 5 are pure, allowing for the identification and
+recovery of elements 1, 2, and 100002. From their respective ‘count‘
+values, we can determine that 1 and 2 are exclusive to the sender
+(count of -1), while 100002 is exclusive to the receiver (count of 1).
+After peeling away the identified elements, only 100003 remains in
+the combined IBLT, which can then be recovered.
+3.3.3 Set reconciliation with rateless IBLTs.The concept of rateless
+set reconciliation [12] provides an elegant solution to the problem of
+an unknown symmetric difference size. Instead of a fixed-size IBLT,
+a party can generate a virtually endless stream of IBLT cells. The
+opposing party simply consumes this stream until it has received
+enough cells to successfully decode the symmetric difference.
+This is achieved by changing the way we map elements to cells
+such that we can generate an infinite sequence: instead of using𝑘
+hash functions, this approach uses a pseudo-random number gener-
+ator (PRNG). The PRNG, seeded with an element’s hash, determin-
+istically generates a sequence of cell mappings for that element. By
+streaming these cells, the receiver can process them as they arrive.
+Since both parties use the same PRNG seeded by the same element
+hashes, the cell mappings are identical on both sides, ensuring that
+common elements cancel out as expected.
+The key insight is that the PRNG can be designed to produce
+mappings that follow a specific probability distribution. Theoretical
+analysis and Monte Carlo simulations show that with an appropri-
+ate distribution, the number of cells required for decoding is directly
+proportional to the size of the symmetric difference,𝑑. On average,
+the number of cells needed is approximately1.72𝑑 for small𝑑 and
+approaches1.35𝑑as𝑑becomes large.
+This rateless approach eliminates the need for any prior estima-
+tion of𝑑, simplifying the protocol, reducing latency, and guarantee-
+ing that the communication overhead is only as large as necessary
+to resolve the actual set difference.
+4 ADAPTING MULLIN’S COST MODEL FOR
+SET RECONCILIATION
+To address the problem of selecting an optimal static Bloom filter
+size for an unknown symmetric difference𝑑, we propose a rateless
+Bloom filter approach inspired by rateless IBLTs. Our protocol de-
+fines a conceptual, infinite partitioned Bloom filter and continuously
+streams its partitions (also referred to as slices) from the sender to
+the receiver. The receiver processes this stream and, at each step,
+evaluates a cost-based decision to terminate the transmission.
+In Mullin’s pioneering work on Bloom joins, the communication
+was turn-based. The sender would generate and transmit a small
+Bloom filter, configured with a single hash function and an optimal
+density of1/ln(2) bits per element. The receiver would then process
+this filter, decide whether to stop, and if not, request another.
+This concept of small, one-hash filters can be directly seen as
+a variant of a partitioned Bloom filter. Each𝑘 partitions (or slices)
+transmitted in sequence form a complete partitioned Bloom filter
+with𝑘 hash functions. This allows our approach to leverage the
+extensive work done on this Bloom filter variant.
+In our work, the sender does not wait for a confirmation be-
+fore sending additional slices. Instead, it continuously generates
+and streams them until it receives a signal to stop. This design
+significantly decreases latency by avoiding the round-trip delay
+between the sender and receiver. The trade-off is a small, potential
+communication overhead if slices are transmitted unnecessarily
+due to network latency between the receiver’s decision to stop and
+the sender receiving that signal.
+The core of our method is the adaptation of Mullin’s cost-based
+decision model for the set reconciliation problem. The total com-
+munication cost is the sum of the costs to identify the elements
+exclusive to each replica’s set:
+Total Cost=Cost(𝐴\𝐵)+Cost(𝐵\𝐴)
+The cost for a single-direction identification is composed of the
+Bloom filter size and the cost of transmitting the remaining false
+
+Rateless Bloom Filters: Set Reconciliation for Divergent Replicas with Variable-Sized Elements
+positives:
+Cost(𝐴\𝐵)=|BF 𝐵|+𝐶 𝑒𝑙𝑒𝑚×|FP 𝐴\𝐵|
+and
+Cost(𝐵\𝐴)=|BF 𝐴|+𝐶 𝑒𝑙𝑒𝑚×|FP 𝐵\𝐴|
+The𝐶𝑒𝑙𝑒𝑚 term represents the communication overhead for a single
+element in the final reconciliation step. For a protocol like PinSketch,
+this is the size of a single digest (e.g., 64 bits). For rateless IBLTs,
+it is the size of an IBLT cell multiplied by the average number of
+cells needed per element. The receiver continuously computes the
+cost-benefit of each additional Bloom filter partition. The stream is
+stopped when the number of new true negatives that are detected
+by a new partition becomes less than the number of elements that
+could be reconciled by the set reconciliation protocol using an
+equivalent number of bits.
+5 HYBRID RATELESS SET RECONCILIATION
+The description of Rateless Bloom filters so far has been generic,
+as they can be combined with many different set reconciliation
+protocols. In this work, we combine rateless Bloom filters with
+rateless IBLTs, resulting in a protocol which we call Hybrid Rateless
+Set Reconciliation. The reason for this alignment is simple: any
+other state-of-the-art set reconciliation protocol (like PinSketch)
+requires an estimate of the symmetric difference cardinality,𝑑. This
+would mean that after exchanging the rateless Bloom filters, we
+would need to obtain an estimate for the number of false positives
+(the new𝑑′). In contrast, rateless IBLTs require no such estimate
+and naturally adapt to the true value of𝑑′. As the entire purpose
+of this work is to eliminate the need for set difference cardinality
+estimations, we believe these two algorithms align nicely to create
+a fully self-adapting protocol.
+As was already explained, the estimated cost per false positive
+is the size of an IBLT cell multiplied by the expected number of
+cells per difference. We use1.35as the expected number of cells per
+difference in the cost calculation, as this is the value the ratio con-
+verges to. We denote the cost per element in the final reconciliation
+phase as𝐶𝑒𝑙𝑒𝑚 .
+The full synchronization protocol is shown in Algorithm 1. The
+protocol is executed in three distinct phases: two sequential Bloom
+filter-based identification phases followed by a final, precise IBLT-
+based reconciliation phase.
+5.1 Phase 1: Unidirectional RBF Streaming
+The protocol initiates with replica𝐴 continuously generating and
+streaming Bloom filter slices. Following the established optimal
+parameterization for Bloom filters[1], the total filter size𝑚 required
+for maximum information density is𝑚=(𝑛·𝑘)/ln( 2), where𝑛 is
+the set size and𝑘 is the number of hash functions. Adopting the
+settings used by Mullin [9], we configure each slice with a single
+hash function (𝑘= 1) and a slice size𝑚 defined by the following
+optimal value:𝑚=𝑛/ln(2).
+Each slice, indexed by 𝑖, is then generated using the function
+generateSlice(𝑆,𝑖) , which produces a Bloom filter representation
+of set𝑆 using a single hash function. Specifically, each element𝑥∈𝑆
+is inserted into the slice by setting the bit at position𝐻(𝑥∥𝑖)mod𝑚 ,
+where𝐻 is a hash function and∥ denotes concatenation. This design
+avoids the need for both replicas to agree in advance on a fixed
+set of hash functions, as the slice index effectively acts as a hash
+function selector. Conceptually, an infinite sequence of Bloom filter
+slices is defined for a given set, and replica𝐴 continuously streams
+growing prefixes of this sequence.
+Replica B uses these slices to iteratively partition its local set𝑆𝐵
+into𝑆com
+𝐵 (suspected common elements that pass the membership
+test) and𝑆TN
+𝐵 (elements that are confirmed not to be in𝑆𝐴, i.e. true
+negatives). Initially, all elements are considered suspected common.
+With each new slice, the ‘partition‘ function is invoked to refine this
+categorization. The function partition(𝑆𝑐𝑜𝑚
+𝐵 , RBF𝑆𝐴[𝑖]) tests all
+elements in a set against the received Bloom filter slice, returning a
+tuple of two subsets: the first for elements that pass the membership
+test (and remain in the ‘suspected common‘ set), and the second
+for elements that fail the test (and are moved to the ‘true negatives‘
+set).
+The second subset corresponds to the newly revealed negatives.
+The stream from replica 𝐴 is terminated based on a cost-based
+stopping criterion. When the condition |𝑆new_TN
+𝐵 |<𝑚/𝐶 𝑒𝑙𝑒𝑚 is
+verified, it signifies that the cost of a new𝑚-bit slice (𝑚) exceeds the
+cost of reconciling those elements directly using set reconciliation
+(the number of newly revealed true negatives,|𝑆new_TN
+𝐵 |, multiplied
+by the cost to reconcile an element in the final phase, 𝐶𝑒𝑙𝑒𝑚 ). At
+this point, replica𝐴is signaled to stop.
+5.2 Phase 2: Bidirectional Partitioning
+Upon receiving the stop signal, replica𝐵 constructs and streams a
+new RBF over its ‘suspected common‘ elements to replica𝐴. This
+enables𝐴 to apply the same partitioning procedure to its own set
+𝑆𝐴, producing subsets𝑆com
+𝐴 and𝑆TN
+𝐴 . This bidirectional exchange
+ensures that both replicas have identified a common set of elements
+and a set of local true negatives.
+5.3 Phase 3: Rateless IBLT Reconciliation
+The final phase uses rateless set reconciliation to identify and re-
+solve the false positives within the sets of suspected common ele-
+ments,𝑆com
+𝐴 and𝑆com
+𝐵 . Reconciliation is performed over the fixed-
+size hashes of the elements. For details on how to efficiently gener-
+ate, decode, and verify IBLTs, consult the background section.
+When replica𝐵 decodes the IBLT difference and identifies the
+hashes of the elements it is missing from𝐴, it cannot recover the
+original elements locally. Therefore, it transmits these hashes back
+to𝐴, which then responds with the actual elements corresponding
+to those hashes. These elements are the false positives from the RBF
+phases. The algorithm concludes with each replica performing a
+final set union operation, incorporating the true negatives and false
+positives from its peer, thereby ensuring full set synchronization.
+6 EV ALUATION
+This section presents a comprehensive experimental evaluation of
+our proposed rateless Bloom filter protocol. For the sake of repro-
+ducibility, the full source code and all data used in our experiments
+have been made publicly available.
+For clarity in data presentation, the y-axis scales of our figures
+are adjusted dynamically to best illustrate the characteristics of
+
+Pedro Gomes and Carlos Baquero
+Algorithm 1Hybrid Rateless Set Synchronization:
+1:durable state:𝑆 𝐴,𝑆𝐵
+2:local state at B:𝑆 com
+𝐵 ←𝑆 𝐵,𝑆 TN
+𝐵 ←∅
+3:local state at A:𝑆 com
+𝐴 ←𝑆 𝐴,𝑆 TN
+𝐴 ←∅
+4:whileB has not signaled stopdo
+5:send 𝐴,𝐵(RBFStream,𝑖,generateSlice(𝑆 𝐴,𝑖))
+6:𝑖←𝑖+1
+7:end while
+8:procedureOnReceive 𝐴,𝐵(RBFStream,𝑖,RBF 𝑆𝐴[𝑖])
+9:(𝑆 com
+𝐵 ,𝑆 new_TN
+𝐵 )←partition(𝑆 com
+𝐵 ,RBF𝑆𝐴[𝑖])
+10:𝑆 TN
+𝐵 ←𝑆 TN
+𝐵 ∪𝑆 new_TN
+𝐵
+11:𝑚←|𝑆 𝐴|/ln(2)
+12:if|𝑆 new_TN
+𝐵 |<𝑚/𝐶 𝑒𝑙𝑒𝑚 then
+13:whileA has not signaled stopdo
+14:send 𝐵,𝐴(RBFStream,𝑗,generateSlice(𝑆 com
+𝐵 ,𝑗))
+15:𝑗←𝑗+1
+16:end while
+17:end if
+18:end procedure
+19:procedureOnReceive 𝐵,𝐴(RBFStream,𝑗,RBF 𝑆com
+𝐵
+[𝑗])
+20:(𝑆 com
+𝐴 ,𝑆 new_TN
+𝐴 )←partition(𝑆 com
+𝐴 ,RBF𝑆com
+𝐵
+[𝑗])
+21:𝑆 TN
+𝐴 ←𝑆 TN
+𝐴 ∪𝑆 new_TN
+𝐴
+22:𝑚←|𝑆 com
+𝐵 |/ln(2)
+23:if|𝑆 new_TN
+𝐴 |<𝑚/𝐶 𝑒𝑙𝑒𝑚 then
+24:𝐻 𝐴←{hash(𝑠)|𝑠∈𝑆 com
+𝐴 }
+25:whileB has not signaled stopdo
+26:send 𝐴,𝐵(IBLTStream,𝑘,generateIBLTCell(𝐻 𝐴,𝑘))
+27:𝑘←𝑘+1
+28:end while
+29:end if
+30:end procedure
+31:procedureOnReceive 𝐴,𝐵(IBLTStream,𝑘,IBLT 𝐻𝐴[𝑘])
+32:𝐻 𝐵←{hash(𝑠)|𝑠∈𝑆 com
+𝐵 }
+33:IBLT Δ[𝑘]←generateIBLTCell(𝐻 𝐵,𝑘)⊕IBLT 𝐻𝐴[𝑘]
+34:ifIBLT Δ is decodablethen
+35:(𝐻 𝐴\𝐵,𝐻𝐵\𝐴)←decode(IBLT Δ)
+36:𝑆 FP
+𝐵 ←{𝑠|𝑠∈𝑆 com
+𝐵 ∧hash(𝑠)∈𝐻 𝐵\𝐴}
+37:send 𝐵,𝐴(FinalUpdate,𝑆 TN
+𝐵 ,𝑆 FP
+𝐵 ,𝐻𝐴\𝐵)
+38:end if
+39:end procedure
+40:procedureOnReceive 𝐵,𝐴(FinalUpdate,𝑆 TN
+𝐵 ,𝑆 FP
+𝐵 ,𝐻𝐴\𝐵)
+41:𝑆 FP
+𝐴 ←{𝑠|𝑠∈𝑆 com
+𝐴 ∧hash(𝑠)∈𝐻 𝐴\𝐵}
+42:𝑆 𝐴←𝑆 𝐴∪𝑆 TN
+𝐵 ∪𝑆 FP
+𝐵
+43:send 𝐴,𝐵(FinalUpdate,𝑆 TN
+𝐴 ,𝑆 FP
+𝐴)
+44:end procedure
+45:procedureOnReceive 𝐴,𝐵(FinalUpdate,𝑆 TN
+𝐴 ,𝑆 FP
+𝐴 )
+46:𝑆 𝐵←𝑆 𝐵∪𝑆 TN
+𝐴 ∪𝑆 FP
+𝐴
+47:end procedure
+each metric. Therefore, readers should note that the scales may
+vary across plots when making comparisons.
+6.1 Experimental Setup
+This section details the methodology used to evaluate our protocol’s
+performance against state-of-the-art set reconciliation algorithms.
+Our entire evaluation was conducted in a controlled simulation
+environment to ensure reproducibility and accurate measurement of
+both communication and computational overheads. All experiments
+were executed on a single machine to eliminate network latency
+and variability, with communication costs calculated by measuring
+the serialized byte size of all inter-replica messages.
+A fundamental principle of set reconciliation protocols is that
+they must eventually transmit the differing elements to each replica,
+which constitutes a theoretical minimum communication cost. All
+state-of-the-art methods, with the exception of full state transfer,
+are designed to achieve this. As such, the total amount of mis-
+matched state data transmitted is a constant across all algorithms
+for a given set of differences. The only variable component is the
+size of themetadatarequired to identify the changed elements.
+Our evaluation, therefore, focuses on minimizing this variable cost.
+The distribution of element sizes does not affect the metadata
+cost. Bloom filters are inherently independent of element size, as
+they operate by setting a fixed number of bits based on an element’s
+hash rather than storing the element itself. Similarly, other state-of-
+the-art set reconciliation algorithms operate on fixed-size digests
+of elements. The size of these digests is chosen to minimize hash
+collisions with high probability, regardless of the original element
+size distribution. While different element size distributions exist
+in real-world scenarios and could affect the overall impact of the
+metadata cost, the relative comparison of algorithms remains unaf-
+fected. For these experiments, we used a uniform distribution over
+the interval[5,80]bytes.
+Instructions on how to reproduce all experiments can be found
+in our public repository.1
+6.1.1 Workload and Methodology.For each experiment, we gen-
+erated two replica sets, 𝑆𝐴 and𝑆𝐵, each with a fixed cardinality
+of 100,000 distinct items. The differences between these sets were
+distributed symmetrically such that|𝑆𝐴\𝑆𝐵|=|𝑆 𝐵\𝑆𝐴|. The total
+number of differing elements,𝑑=|𝑆 𝐴\𝑆𝐵|+|𝑆 𝐵\𝑆𝐴|, was precisely
+controlled to achieve a target similarity𝑠, defined by the Jaccard
+index, which is standard in the literature:
+𝑠=𝐽(𝑆 𝐴,𝑆𝐵)= |𝑆𝐴∩𝑆𝐵|
+|𝑆𝐴∪𝑆𝐵|
+In our experiments, we plotted all metrics against the number
+of differing elements 𝑑. The values of 𝑑 were chosen such that
+the similarity between the sets ranges from 0% to 100%, in 5%
+increments.
+To ensure the statistical validity of our results, for each data
+point (i.e., each number of differing elements), we executed the
+experiment 30 times with different randomly generated sets. The
+plots present the average value for each metric, with a shaded
+surface area showing the±1standard deviation.
+6.1.2 Metrics.We quantified the performance of each algorithm
+using the following key metrics:
+1https://github.com/pedrogomes29/rbf
+
+Rateless Bloom Filters: Set Reconciliation for Divergent Replicas with Variable-Sized Elements
+• Transmitted Metadata:The total data size of all informa-
+tion required to detect the differing elements.
+• Total Transmitted Data:The sum of the transmitted meta-
+data and the serialized state data of the differing elements.
+• Communication Overhead:The ratio of the total trans-
+mitted data to the theoretical minimum communication
+cost (i.e., the cost of simply transmitting the differing ele-
+ments). This metric is undefined for a similarity of 100%, as
+the minimum cost is zero.
+• Encoding Time:The time required for a replica to con-
+struct the data structures for transmission.
+• Decoding Time:The time required for a replica to process
+the received data structures and identify the mismatched
+elements.
+• Computation Time:The sum of the encoding and decod-
+ing times, representing the total computational cost of the
+reconciliation protocol.
+6.2 Static Bloom Filters vs Rateless Bloom
+Filters
+In this experiment, we evaluate the communication and computa-
+tional costs of our proposed rateless Bloom filter (RBF) against two
+classes of static Bloom filters (SBFs). The first class consists of SBFs
+with fixed false positive rates (𝜖), representing common configu-
+rations an application might blindly choose. The second, denoted
+as Optimal SBF, serves as a theoretical performance baseline. This
+optimal baseline was obtained by generating all SBF configurations
+with false positive rates from0.5%to50%in0 .5%increments and
+selecting the configuration with the minimum communication cost
+for each level of set difference cardinality. This comparison allows
+us to evaluate the practical efficiency of our adaptive RBF against
+both potentially unoptimized static configurations and the (full
+knowledge) theoretical lower bound of a static approach.
+6.2.1 Transmitted Metadata and Communication Overhead.The
+transmitted metadata graph in Figure 5a illustrates the core ad-
+vantage of a rateless design. As depicted, the rateless Bloom filter
+(RBF) consistently traces the theoretical minimum of an optimal
+static Bloom filter (SBF). This demonstrates that our RBF closely
+approximates the performance of a standard Bloom filter whose
+false positive rate is perfectly tuned for each specific similarity
+level, without any need for parameterization or prior estimation of
+set difference cardinalities. In contrast, while a static Bloom filter’s
+metadata cost is fixed regardless of set difference, its rigid design
+incurs a significant penalty for inadequately chosen false positive
+rates. For completely dissimilar sets (maximum difference cardi-
+nality), a Bloom filter with a high false positive rate of 𝜖= 25%
+transmits over7× more metadata compared to our rateless filter.
+Conversely, for highly similar states (minimal differences), a Bloom
+filter configured for a low false positive rate of 𝜖= 1%transmits
+over4×more metadata.
+These differences in transmitted metadata directly impact the
+communication overhead. As shown in Figure 5b, our rateless
+Bloom filter consistently follows the most efficient static configura-
+tion for any given point in the set difference space. Static config-
+urations, on the other hand, face significant overheads when not
+optimized for the specific level of set divergence. This highlights
+the practical limitations of static designs in real-world scenarios
+where set differences can vary widely.
+6.2.2 Computation Time.The encoding and decoding times of the
+protocols, depicted in Figures 5c and 5d, reveal a more nuanced
+perspective on performance. While communication overhead is a
+primary metric, the computational efficiency determines practical
+feasibility.
+Encoding Time.The encoding time graph in Figure 5c shows a
+non-linear behavior for the static Bloom filter configurations, char-
+acterized by an initial increase, a peak, and a subsequent decrease.
+This can be explained by the computational complexity of the rec-
+onciliation process. Replica A constructs a Bloom filter over its
+entire set𝑆𝐴. Replica B constructs a Bloom filter over the elements
+of its set𝑆𝐵 that test positive. Both replicas then build a Rateless
+IBLT over their respective positive partitions. The dominant cost
+for this process is the construction of the Rateless IBLT, which is
+an𝑂(𝑛log𝑑) operation. Here,𝑛 represents the number of elements
+in the positive partition of the local set, and 𝑑 is the number of
+false positives remaining in both sets. This complexity arises from
+inserting𝑛 elements into a Rateless IBLT of size𝑂(𝑑) , with each
+insertion being an𝑂(log𝑑)operation.
+The distinct shape of the encoding time curves is the result of two
+competing dynamics. As the number of differences increases, the
+size of the set intersection decreases, which causes the number of
+true positives to decrease, lowering𝑛. However, some of these true
+positives which are now negative will test positive, resulting in an
+increase in the number of false positives. Initially, the logarithmic
+growth in𝑑 dominates the linear decrease in𝑛, causing the encoding
+time to rise. A maximum is reached when these two forces balance,
+after which the linear decrease in𝑛 becomes the dominant factor,
+causing the overall computation time to decrease for high levels of
+set difference.
+Furthermore, the encoding time is directly impacted by the false
+positive rate,𝜖, of the initial Bloom filter. A higher𝜖 results in more
+false positives, thus increasing both 𝑑 and𝑛, and consequently
+shifting the entire encoding time curve upwards. This behavior also
+explains the performance of the Optimal SBF. For small differences,
+its optimal 𝜖 is high, aligning its performance with the high- 𝜖
+SBF curves. As differences increase, its optimal 𝜖 decreases, and
+its curve converges toward the performance of low-𝜖 SBFs. The
+Rateless Bloom Filter (RBF) exhibits the same adaptive behavior,
+as its effective false positive rate decreases as the filter becomes
+larger for higher set differences. Consequently, the RBF consistently
+approximates the performance of the idealized Optimal SBF.
+Decoding Time.The decoding time, presented in Figure 5d, is
+a composite metric reflecting two primary computational costs:
+testing all elements against the received Bloom filter and the subse-
+quent decoding of the Rateless IBLT. The complexity of decoding
+the Rateless IBLT is𝑂(𝑑log𝑑) , where𝑑 is the number of false pos-
+itives remaining after the Bloom filter stage. Unlike Bloom filter
+operations whose cost is tied to the total set cardinality, the IBLT
+decoding cost is proportional only to the number of differences,
+which can be significantly smaller than the full set cardinality.
+For static configurations, a higher false positive rate (𝜖) corre-
+sponds to a smaller Bloom filter and fewer hash functions, leading
+
+Pedro Gomes and Carlos Baquero
+0 25 k 50 k 75 k 100 k 125 k 150 k 175 k 200 k
+Set Difference Cardinality
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+1.50
+1.75Metadata (MB)
+SBF + RIBLT [ε = 1%]
+SBF + RIBLT [ε = 10%]
+SBF + RIBLT [ε = 25%]
+RBF + RIBLT
+Optimal SBF + RIBLT
+(a) Transmitted metadata
+0 25 k 50 k 75 k 100 k 125 k 150 k 175 k 200 k
+Set Difference Cardinality
+1.0
+1.2
+1.4
+1.6
+1.8
+2.0Communication Overhead
+SBF + RIBLT [ε = 1%]
+SBF + RIBLT [ε = 10%]
+SBF + RIBLT [ε = 25%]
+RBF + RIBLT
+Optimal SBF + RIBLT (b) Communication overhead
+0 25 k 50 k 75 k 100 k 125 k 150 k 175 k 200 k
+Set Difference Cardinality
+0
+200
+400
+600
+800
+1000Encoding Time (ms)
+SBF + RIBLT [ε = 1%]
+SBF + RIBLT [ε = 10%]
+SBF + RIBLT [ε = 25%]
+RBF + RIBLT
+Optimal SBF + RIBLT
+(c) Encoding Time
+0 25 k 50 k 75 k 100 k 125 k 150 k 175 k 200 k
+Set Difference Cardinality
+25
+50
+75
+100
+125
+150
+175
+200Decoding Time (ms)
+SBF + RIBLT [ε = 1%]
+SBF + RIBLT [ε = 10%]
+SBF + RIBLT [ε = 25%]
+RBF + RIBLT
+Optimal SBF + RIBLT (d) Decoding Time
+Figure 5: Static Bloom Filters vs. Rateless Bloom filters
+to a lower computational cost for the initial Bloom filter opera-
+tions. However, as the number of differences grows, the number
+of false positives, 𝑑, also increases, and the cost of decoding the
+IBLT becomes the dominant factor. The lower the false positive
+rate, the fewer the false positives, and as a result, the decoding cost
+increases less for lower false positive rates. A particularly interest-
+ing observation is the behavior of the𝜖= 1%configuration, where
+the decoding cost remains nearly constant. This is because the in-
+creasing cost of IBLT decoding is balanced by a decreasing cost
+of testing elements against the second-stage Bloom filter, whose
+size shrinks as the number of elements that test positive in the first
+Bloom filter decreases. The Optimal SBF’s decoding time follows
+the lowest decoding time of the three static configurations. This
+is because the optimal false positive rate for transmitted data and
+decoding time both follow the same pattern: it starts at high false
+positive rates and decreases as the number of differences increases.
+The decoding time of our Rateless Bloom Filter (RBF), presented
+in Figure 5d, exhibits a non-monotonic behavior, initially increas-
+ing and then decreasing. This decoding time is characterized by a
+notably higher absolute cost, particularly for a low number of dif-
+ferences. We hypothesize this is due to the computational overhead
+associated with the iterative nature of the rateless approach, which
+has less locality compared to a standard Bloom filter’s single-pass
+partitioning. For small set differences, where the𝑂(𝑑log𝑑) decod-
+ing cost of the Rateless IBLT is minimal, the difference between the
+Bloom filter decoding times becomes more pronounced. A similar
+overhead is likely present in the encoding phase but is less notice-
+able as that operation is dominated by the asymptotically more
+expensive𝑂(𝑛log𝑑)complexity of constructing the IBLT.
+The complex shape of the RBF decoding curve is a result of a
+larger decrease in the cost of the second Bloom filter operation,
+which outweighs the concurrent increase in the Rateless IBLT de-
+coding cost. As the number of differences increases, the𝑂(𝑑log𝑑)
+factor becomes the dominant component for both RBF and Optimal
+SBF, causing their decoding times to converge. Ultimately, since
+encoding time is the most expensive operation for all configura-
+tions, the RBF’s larger decoding cost has a limited impact on the
+total computation time.
+
+Rateless Bloom Filters: Set Reconciliation for Divergent Replicas with Variable-Sized Elements
+6.2.3 Conclusion.In conclusion, our Rateless Bloom Filter offers
+an adaptive and robust solution for set reconciliation. It consis-
+tently traces the theoretical minimum of an optimally configured
+SBF, avoiding the suboptimal communication costs of misconfig-
+ured Bloom filters without requiring any set difference cardinality
+estimations or parameterization. While the RBF does incur a slightly
+larger computational time, this overhead has a limited impact on
+the total computation time. Standard Bloom filters remain a viable
+option in specific scenarios where the set difference cardinality can
+be efficiently and accurately estimated (e.g., if one set is a subset
+of the other), allowing the use of an optimally configured SBF. Fur-
+thermore, if the number of differences is known to be very large
+(e.g., Jaccard index≤ 50%), the communication cost of the𝜖= 1%
+configuration is practically the same as that of the RBF and the
+Optimal SBF, making it a competitive choice.
+6.3 Hybrid Rateless Set Reconciliation vs
+State-Of-The-Art
+We now compare our proposed Hybrid Rateless Set Reconciliation
+protocol (RBF + RIBLT) against three state-of-the-art algorithms:
+PinSketch [2], Parity Bitmap Sketch (PBS) [5], and Rateless IBLTs
+(RIBLT) [12].
+We select these methods because they represent the state-of-the-
+art protocols operating on fixed-size elements:
+• PinSketchis the algorithm that represents the minimal
+(fixed sized) communication cost. For fixed-size elements,
+the communication cost corresponds to the number of dif-
+fering elements times the element size, achieving an optimal
+communication complexity ofO(𝑑) . However, its high de-
+coding complexity ofO(𝑑 2) makes it generally untractable
+for practical use cases where𝑑 is not guaranteed to be small.
+• PBShas a higher communication overhead than PinSketch
+but maintains anO(𝑑) communication complexity. Cru-
+cially, it improves tractability with a linear decoding com-
+plexity ofO(𝑑) . PBS is an interactive protocol that can
+require multiple communication rounds, introducing addi-
+tional latency.
+• RIBLT(Rateless IBLT) also exhibits a higher communica-
+tion overhead than PinSketch, maintaining anO(𝑑) com-
+plexity. Its decoding complexity isO(𝑑log𝑑) , which, while
+larger than PBS, is still tractable for large𝑑 (unlikeO(𝑑 2)).
+A significant practical limitation shared by both PinSketch and PBS
+is the mandatory requirement for an accurate, pre-estimated value
+of the set difference cardinality 𝑑 to correctly parameterize the
+algorithm. Our Hybrid RBF + RIBLT protocol, along with the pure
+RIBLT, eliminates this requirement entirely, making them adaptive
+to unknown set divergence.
+PinSketch, PBS, and RIBLT are allO(𝑑) protocols for metadata
+cost. In contrast, our hybrid RBF + RIBLT approach, which in-
+volves the exchange of Bloom filters, introduces an O(𝑛) com-
+ponent, where 𝑛 is the total set cardinality. However, the small
+constants present in Bloom filters make them competitive with the
+state-of-the-art methods when𝑑 is not extremely small compared
+with𝑛.
+As just explained, PinSketch and PBS require an estimate for𝑑.
+Additionally, PBS requires parameter tuning based on this estimate.
+We define the experimental conditions as follows:
+• PinSketchis included solely as a communication base-
+line representing the theoretical minimum. Due to its un-
+tractableO(𝑑 2) decoding complexity, this algorithm is not
+reasonable for the use case we focus on in this work. In
+order to evaluate how Hybrid Rateless Set Reconciliation
+performs against the minimum possible metadata size when
+synchronizing the fixed-size digests, in this experiment we
+assume an oracle provides the algorithm with the exact
+value of𝑑.
+• PBSis simulated as it would be used in a real-world set-
+ting, following the approach in the PBS experiments by
+leveraging it’s open source implementation. We use a ToW
+estimator to obtain the estimate for𝑑 and performed param-
+eter tuning consistent with the original PBS experiments
+(ensuring a99%probability of finishing within 3 rounds,
+with 5 differences per group on average).
+6.3.1 Full range of similarity.
+Transmitted Metadata and Communication Overhead.Figures 6b
+and 6a present the communication performance. Focusing first on
+the threeO(𝑑) SOTA algorithms, their Communication Overhead
+remains practically constant, independent of 𝑑. This is expected
+as the metadata required per recovered difference does not vary
+significantly. In PinSketch, the metadata is the size of one digest
+per difference. For Rateless IBLTs, the expected metadata size is
+between1.35𝑑 and1.72𝑑 symbols (peaking at smaller𝑑 values and
+converging to1.35𝑑), and since the overhead is normalized by the
+minimal communication possible, it appears constant.
+As expected, PinSketch has the lowest communication overhead
+among the SOTA methods. Between RIBLT and PBS, RIBLT has the
+higher overhead. The expected number of symbols to synchronize
+𝑑 differences is1 .35− 1.72𝑑. Furthermore, each symbol requires
+a fixed-size hashSum and a count field. In our implementation,
+the idSum (digest) and hashSum are both 64 bits to ensure low
+collision probability. Even ignoring the 64-bit count field (which
+could potentially be smaller), the expected communication overhead
+of RIBLTs is2 .7− 3.48× larger than PinSketch. PBS has a lower
+communication overhead, measured as1 .54− 2.08× higher than
+PinSketch [5].
+Hybrid Rateless Set Reconciliation (RBF + RIBLT), due to its
+O(𝑁) Bloom filter component, initially has a high communication
+overhead. In fact, for the highest similarities (95%≤similarity≤
+100%), our protocol’s overhead is even higher than that of RIBLT.
+The next experiment will focus on this region of high similarity to
+understand this trade-off.
+However, over the total spectrum of differences, the small con-
+stants of the Bloom filter allow the RBF + RIBLT to scale very
+efficiently. When the similarity is lower than85%( 𝑑≈ 18k), Hy-
+brid Rateless Set Reconciliation becomes the most communication-
+efficient protocol, outperforming even the oracle-parameterized
+PinSketch baseline, the minimum for fixed-size element set reconcil-
+iation algorithms. we will show that PinSketch is too computation-
+ally expensive to be used in practice even for moderate values of𝑑.
+
+Pedro Gomes and Carlos Baquero
+0 50 k 100 k 150 k 200 k
+Set Difference Cardinality
+1.0
+1.2
+1.4
+1.6
+1.8Communication Overhead
+PinSketch
+RIBLT
+PBS
+RBF + RIBLT
+(a) Communication Overhead
+0 50 k 100 k 150 k 200 k
+Set Difference Cardinality
+0
+2
+4
+6Metadata (MB)
+PinSketch
+RIBLT
+PBS
+RBF + RIBLT (b) Transmitted metadata
+0 50 k 100 k 150 k 200 k
+Set Difference Cardinality
+0
+500
+1000
+1500Encoding Time (ms)
+RIBLT
+PBS
+RBF + RIBLT (c) Encoding Time
+0 50 k 100 k 150 k 200 k
+Set Difference Cardinality
+0
+200
+400
+600
+800Decoding Time (ms)
+RIBLT
+PBS
+RBF + RIBLT (d) Decoding Time
+Figure 6: Hybrid Rateless Set Reconciliation vs State-Of-The-Art: Full range
+0 25 k 50 k 75 k 100 k 125 k 150 k 175 k 200 k
+Set Difference Cardinality
+0
+2
+4
+6
+8
+10
+12
+14
+16Transmitted (MB)
+PinSketch
+RIBLT
+PBS
+Full State Transfer
+RBF + RIBLT
+Figure 7: Hybrid Rateless Set Reconciliation vs State-Of-The-
+Art: Full range - Transmitted total
+Thus, RBF + RIBLT results in the least communication cost among
+all computationally tractable algorithms for a similarity lower than
+90%(𝑑≈ 12k). Additionally, it maintains the practical advantage
+over PBS (the second best) of not requiring any estimation of𝑑or
+parameter tuning.
+Figure 6b clearly illustrates the difference in metadata transmis-
+sion: RBF + RIBLT leads to much smaller metadata transmissions as
+the number of differences grows compared to the state-of-the-art
+protocols, achieving up to a92%reduction in metadata transfer.
+Note that these four reconciliation algorithms are ultimately tasked
+with transmitting the same differing state (the elements themselves).
+Hence, the only variable cost we can minimize is the metadata re-
+quired to identify these differences, a cost which our algorithm
+reduces by up to92%.
+Figure 7 shows how this impacts the total transmitted data, which
+includes the fixed cost of the differing variable-sized elements. For
+comparison, we also plot the performance of a Full State Transfer
+algorithm, where Replica A sends its entire state to B, which then
+computes and sends back the missing differences. The purpose
+of including this baseline is to evaluate whether reconciliation
+protocols remain advantageous for very large differences.
+The total transmitted data analysis leads to two main observa-
+tions: First, Hybrid Rateless Set Reconciliation leads to a reduction
+in transmitted data of approximately20%for large differences com-
+pared to PinSketch, the state-of-the-art minimum for synchronizing
+fixed-size element digests. This reduction is larger than30%when
+compared to the computationally tractable SOTA algorithms (PBS
+and RIBLT). As noted previously, RBF + RIBLT also performs best
+for similarities below85%.
+Second, we observe how the algorithms compare to Full State
+Transfer. PBS results in more total data transfer than Full State
+Transfer for similarities below30%, while for PinSketch, the crossover
+point is at20%similarity. For Hybrid Rateless Set Reconciliation,
+Full State Transfer is only more efficient for the very lowest simi-
+larities, and even in those cases, the additional overhead of RBF +
+RIBLT is very low, performing practically equally.
+Computation Time.The computational cost of the reconcilia-
+tion protocols is analyzed through Encoding Time (Figure 6c) and
+Decoding Time (Figure 6d). We do not include the computation
+time for PinSketch in these full-range graphs because its O(𝑑 2)
+complexity makes it untractable for large values of 𝑑, as we will
+demonstrate in the high-similarity experiment.
+The Encoding Time in Figure 6c shows that pure RIBLT has a
+higher cost than PBS. However, a key advantage of RIBLT is that
+its encoding process can be amortized over set updates: since the
+RIBLT relies on a universal sequence of symbols, a large prefix can
+be precomputed and maintained by inserting or deleting elements
+as the set is updated. In contrast, the data structures in PBS must be
+built using parameters dependent on the specific estimate of𝑑 for a
+given reconciliation attempt, meaning they cannot be precomputed.
+Furthermore, the PBS encoding time shown does not account for the
+computation time necessary for obtaining the estimate of𝑑 or for
+parameter tuning, in accordance with the original PBS experiments
+whose source code we leveraged.
+The encoding time for Hybrid Rateless Set Reconciliation (RBF +
+RIBLT) is initially higher than PBS, but as the number of differences
+becomes large, RBF + RIBLT becomes more efficient than PBS.
+For large differences, RBF + RIBLT offers both less encoding time
+and a lower communication cost than PBS. While comparing pure
+RIBLT and RBF + RIBLT encoding time is less relevant if RIBLT is
+amortized, we can see that if encoding cannot be amortized, pure
+RIBLT exhibits a high encoding time, consistently larger than RBF
++ RIBLT.
+For Decoding Times (Figure 6d), PBS’s linear complexityO(𝑑)
+is theoretically faster than RIBLT’sO(𝑑log𝑑) , which is reflected
+in the graph. The decoding time for RBF + RIBLT is initially higher
+
+Rateless Bloom Filters: Set Reconciliation for Divergent Replicas with Variable-Sized Elements
+than PBS but becomes smaller as𝑑 grows large. This once again
+confirms that for large 𝑑, RBF + RIBLT is superior, being both
+computationally less expensive and having a lower communication
+cost than PBS.
+If we consider the total computation time and amortize RIBLT’s
+encoding cost (treating it as 0), the total computation time for RI-
+BLTs would be smaller than PBS’s total cost. The total computation
+time for RBF + RIBLT is initially higher than both PBS and amor-
+tized RIBLT but becomes the lowest as𝑑increases.
+6.3.2 High similarity.In this experiment, we focus on similarities
+between 85% and 100% with 0.5% increments. This is precisely the
+range of similarities in which hybrid rateless set reconciliation is not
+the best performing algorithm, and the purpose of this experiment
+is to visualize what the overhead is.
+Transmitted Metadata and Communication Overhead.Figure 8a
+shows communication overhead. The comparison between PinS-
+ketch, PBS, and RIBLT in terms of data transfer is largely indepen-
+dent of the experiment range. The focus here is on the trade-off
+introduced by RBF + RIBLT. This figure confirms that for very small
+𝑑 (e.g. corresponding to a similarity of0.5%), the communication
+overhead for RBF + RIBLT is significantly higher than state-of-the-
+art methods. This initial overhead is due to transmitting the Bloom
+filter of sizeO(𝑁), where𝑁is much larger than the small𝑑.
+Figure 8b shows the metadata costs. When synchronizing identi-
+cal states (𝑑= 0), RBF + RIBLT has a much larger (percentage-wise)
+metadata cost, sending close to50 KB while other algorithms re-
+quire only a few bytes to detect convergence. This makes it clear
+that RBF + RIBLT is not the ideal choice for anti-entropy protocols
+where extremely small differences (if any) are expected between
+frequent synchronization rounds.
+However, as𝑑 increases, the introduction of RBFs quickly be-
+comes beneficial. For similarities below97 .5%(𝑑≈ 2.5k), RBF +
+RIBLT is already more communication-efficient than pure RIBLT.
+Furthermore, as was shown in the full-range experiment, RBF +
+RIBLT outperforms PBS below90%similarity and then PinSketch
+below85%similarity. For the critical use case of synchronizing
+potentially very dissimilar states (e.g., bringing an outdated replica
+back online after a network partition), the additional cost of using
+RBF + RIBLT is never more than approximately75 KB compared
+to the best-performing SOTA algorithm in this regime (PinSketch).
+This is dramatically better than the additional2 MB of metadata
+transfer incurred by PinSketch when compared to RBF + RIBLT at
+completely dissimilar states.
+This adaptability is the core advantage of RBF + RIBLT. If a
+general estimate of 𝑑 (e.g., extremely small, small, moderate, or
+high) is known, one can choose the best performing algorithm
+for that range. If, however, one must choose a single algorithm to
+synchronize states of unknown and possibly high divergence, RBF
++ RIBLT provides excellent adaptability, achieving the best overall
+worst-case communication overhead.
+Decoding Time with PinSketch.Figure 9 shows the decoding times
+including PinSketch. The graph demonstrates the intractability of
+PinSketch’sO(𝑑 2) decoding complexity, making the decoding time
+of all other algorithms appear negligible. For a similarity of90%
+(𝑑≈ 12.5k), PinSketch’s decoding time is already approximately
+100s. In most practical use cases, the network could transfer orders
+of magnitude more data in100 s than the total transmitted data
+difference between PinSketch and the worst-performing communi-
+cation protocol. We conclude that PinSketch is only practical if the
+number of differences is extremely small, such as in highly frequent
+anti-entropy protocols with a low update rate, which is not the
+primary use case we address in this work.
+Computation Time without PinSketch.We now analyze the en-
+coding and decoding times for the three computationally tractable
+algorithms. Figure 8c shows that PBS has a significantly lower en-
+coding time, ranging between0and100 ms. RBF + RIBLT has an
+encoding time mostly between600 ms and800 ms after an initial
+jump. This jump, also seen in pure RIBLT, is due to the first symbols
+having the highest encoding time per symbol (as the probability of
+mapping to symbol𝑖 isO( 1/𝑖)), causing a sharp increase when𝑑
+moves from zero to a positive value. As before, the encoding time
+for pure RIBLT is higher than both RBF + RIBLT and PBS, but its
+cost can be amortized on updates.
+The Decoding Time (Figure 8d) is the lowest for PBS ( O(𝑑) ),
+followed by RIBLT (O(𝑑log𝑑) ), and then RBF + RIBLT. We also
+note that the computation time is largely dominated by the en-
+coding time, which is almost an order of magnitude greater than
+the corresponding decoding time for each algorithm and similarity
+level.
+Considering the trade-offs, the value of𝑑 where Hybrid Rateless
+Set Reconciliation becomes the preferred choice over PBS depends
+on the specific CPU and network capabilities of the deployment
+environment. For similarities above90%, PBS has both lower com-
+putational time and lower communication cost. For similarities
+between60%and90%, PBS maintains a lower computational time
+but has a higher communication cost. For similarities below60%,
+RBF + RIBLT is superior in terms of both communication cost and
+computation cost. As the similarity decreases from90%to60%, the
+computational difference decreases while the communication dif-
+ference in favor of RBF + RIBLT increases, but the exact crossover
+point remains hardware dependent.
+7 RELATED WORK
+Set reconciliation techniques are fundamentally characterized by
+an inherent trade-off between communication overhead and com-
+putational complexity. Early methods like PinSketch [ 2], which
+leverage error-correcting codes by treating the differing elements
+as errors, achieve near-optimal𝑂(𝑑) communication (where𝑑 is
+the difference cardinality) but suffer from high 𝑂(𝑑 2) decoding
+complexity. The Invertible Bloom Lookup Table (IBLT) [6] solved
+this computational bottleneck with efficient 𝑂(𝑑) encoding and
+decoding. However, IBLTs are probabilistic and must be signifi-
+cantly overprovisioned to ensure a low failure rate, increasing the
+overall communication cost. The Parity Bitmap Sketch (PBS) [ 5]
+balances PinSketch’s communication efficiency with IBLT’s low
+O(d) computational complexity. It achieves this by employing a
+divide-and-conquer strategy that partitions sets with large differ-
+ences into numerous subsets (each with an expected𝑂( 1) difference
+cardinality), making the otherwise high𝑂(𝑑 2) decoding complexity
+of the underlying error-correcting codes computationally tractable.
+Graphene [10] uses a combination of Bloom Filters (BFs) and IBLTs,
+
+Pedro Gomes and Carlos Baquero
+0 5 k 10 k 15 k
+Set Difference Cardinality
+1.5
+2.0
+2.5
+3.0Communication Overhead
+PinSketch
+RIBLT
+PBS
+RBF + RIBLT
+(a) Communication Overhead
+0 5 k 10 k 15 k
+Set Difference Cardinality
+0
+200
+400
+600Metadata (kB)
+PinSketch
+RIBLT
+PBS
+RBF + RIBLT (b) Transmitted metadata
+0 5 k 10 k 15 k
+Set Difference Cardinality
+0
+250
+500
+750
+1000
+1250Encoding Time (ms)
+RIBLT
+PBS
+RBF + RIBLT (c) Encoding Time
+0 5 k 10 k 15 k
+Set Difference Cardinality
+0
+20
+40
+60
+80Decoding Time (ms)
+RIBLT
+PBS
+RBF + RIBLT (d) Decoding Time
+Figure 8: Hybrid Rateless Set Reconciliation vs State-Of-The-Art: High Similarity
+0 5 k 10 k 15 k
+Set Difference Cardinality
+0
+50
+100
+150
+200Decoding Time (s)
+PinSketch
+RIBLT
+PBS
+RBF + RIBLT
+Figure 9: Hybrid Rateless Set Reconciliation vs State-Of-The-
+Art - Decoding Time with PinSketch
+where the IBLT corrects BF false positives. The combined commu-
+nication cost is lower than using either of the data structures in
+isolation.
+A critical, shared limitation of PinSketch, IBLTs, and PBS is the
+necessity of estimating the difference cardinalitydprior to rec-
+onciliation. This requirement results in an initial communication
+overhead for estimation and risks protocol failure if the sketch is
+insufficiently overprovisioned. Graphene [10] estimates𝑑 without
+requiring an additional communication step by assuming the trans-
+mitter’s set is a subset of the receiver’s. This assumption is valid in
+their specific domain, but it makes Graphene unsuitable for general
+symmetric difference reconciliation.
+The challenge of parameter estimation is fundamentally ad-
+dressed by rateless techniques. Rateless IBLTs (RIBLTs) [ 12] ex-
+tend the concept by streaming a coded sequence until successful
+decoding is achieved, thereby eliminating the need for adestimate.
+ConflictSync [4] uses a BF/RIBLT combination to overcome the
+high communication cost of RIBLTs for large𝑑, but it lacks a robust
+methodology for correctly parameterizing the initial Bloom Filters.
+The idea of streaming streaming small BFs [11] was previously
+introduced in the context of set reconciliation. However, BFs are
+exchanged interactively until convergence is achieved, lacking a
+mechanism to efficiently transition to a robust O(d) set reconcilia-
+tion method when the BFs exhibit diminishing returns.
+8 CONCLUSION AND FUTURE WORK
+Previous research on set reconciliation has often neglected the chal-
+lenge of variable-sized elements, stating that the problem can be
+reduced to synchronizing fixed-size element digests. In contrast,
+this work demonstrates the significant practical benefits of design-
+ing reconciliation protocols tailored for variable-sized elements.
+Our results show that by leveraging Bloom Filters within our hy-
+brid approach, we achieve a communication cost reduction of over
+20%compared to PinSketch, the state-of-the-art method for low-
+est communication complexity. When considering only algorithms
+that are computationally tractable with large differences, this re-
+duction increases to over30%. We also introduce Rateless Bloom
+Filters (RBFs), a novel adaptive Bloom filter that closely matches
+the performance of an optimally configured standard Bloom Filter,
+yet requires no prior parametrization or estimate of the unknown
+set difference cardinalityd.
+Despite these advances, our current approach is suboptimal for
+replicas with extremely high similarity (Jaccard index above85%),
+as initial RBF slices consume excessive bandwidth relative to the
+small differenced. An interesting area of future work is inverting
+the protocol: initiating reconciliation with RIBLTs. From observing
+a given prefix, we can analyze the cell counts to derive a statistical
+estimate of the set intersection. If the divergence is expected to be
+large, this allows us to efficiently switch to RBFs.
+
+Rateless Bloom Filters: Set Reconciliation for Divergent Replicas with Variable-Sized Elements
+REFERENCES
+[1] Burton H Bloom. 1970. Space/time trade-offs in hash coding with allowable
+errors.Commun. ACM13, 7 (1970), 422–426.
+[2] Yevgeniy Dodis, Leonid Reyzin, and Adam Smith. 2004. Fuzzy extractors: How
+to generate strong keys from biometrics and other noisy data. InInternational
+conference on the theory and applications of cryptographic techniques. Springer,
+523–540.
+[3] David Eppstein, Michael T Goodrich, Frank Uyeda, and George Varghese. 2011.
+What’s the difference? Efficient set reconciliation without prior context.ACM
+SIGCOMM Computer Communication Review41, 4 (2011), 218–229.
+[4] Pedro Silva Gomes, Miguel Boaventura Rodrigues, and Carlos Baquero. 2025.
+ConflictSync: Bandwidth Efficient Synchronization of Divergent State.arXiv
+preprint arXiv:2505.01144(2025).
+[5] Long Gong, Ziheng Liu, Liang Liu, Jun Xu, Mitsunori Ogihara, and Tong Yang.
+2020. Space-and computationally-efficient set reconciliation via parity bitmap
+sketch (PBS).arXiv preprint arXiv:2007.14569(2020).
+[6] Michael T Goodrich and Michael Mitzenmacher. 2011. Invertible bloom lookup
+tables. In2011 49th Annual Allerton Conference on Communication, Control, and
+Computing (Allerton). IEEE, 792–799.
+[7] Lothar F. Mackert and Guy M. Lohman. 1998.R* optimizer validation and
+performance evaluation for distributed queries. Morgan Kaufmann Publishers Inc.,
+San Francisco, CA, USA, 351–361.
+[8] James K Mullin. 1983. A second look at Bloom filters.Commun. ACM26, 8 (1983),
+570–571.
+[9] James K. Mullin. 2002. Optimal semijoins for distributed database systems.IEEE
+Transactions on Software Engineering16, 5 (2002), 558–560.
+[10] A Pinar Ozisik, Gavin Andresen, Brian N Levine, Darren Tapp, George Bissias,
+and Sunny Katkuri. 2019. Graphene: Efficient interactive set reconciliation
+applied to blockchain propagation. InProceedings of the ACM Special Interest
+Group on Data Communication. 303–317.
+[11] Magnus Skjegstad and Torleiv Maseng. 2011. Low complexity set reconciliation
+using Bloom filters. InProceedings of the 7th ACM ACM SIGACT/SIGMOBILE
+International Workshop on Foundations of Mobile Computing. 33–41.
+[12] Lei Yang, Yossi Gilad, and Mohammad Alizadeh. 2024. Practical rateless set
+reconciliation. InProceedings of the ACM SIGCOMM 2024 Conference. 595–612.

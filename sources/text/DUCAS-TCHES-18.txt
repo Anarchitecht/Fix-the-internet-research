@@ -1,0 +1,1556 @@
+CRYSTALS-Dilithium: A Lattice-Based Digital
+Signature Scheme
+Léo Ducas 1, Eike Kiltz 2, Tancrède Lepoint 3, Vadim Lyubashevsky 4,
+Peter Schwabe5, Gregor Seiler 6 and Damien Stehlé 7
+1 CWI, Netherlands
+2 Ruhr Universität Bochum, Germany
+3 SRI International, USA
+4 IBM Research – Zurich, Switzerland
+5 Radboud University, Netherlands
+6 IBM Research – Zurich, Switzerland
+7 ENS de Lyon, France
+Abstract. In this paper, we present the lattice-based signature schemeDilithium,
+which is a component of the CRYSTALS (Cryptographic Suite for Algebraic Lattices)
+suite that was submitted to NIST’s call for post-quantum cryptographic standards.
+The design of the scheme avoids all uses of discrete Gaussian sampling and is easily
+implementable in constant-time. For the same security levels, our scheme has a public
+key that is2.5X smaller than the previously most eﬃcient lattice-based schemes that
+did not use Gaussians, while having essentially the same signature size. In addition to
+the new design, we signiﬁcantly improve the running time of the main component of
+many lattice-based constructions – the number theoretic transform. Our AVX2-based
+implementation results in a speed-up of roughly a factor of 2 over the previously best
+algorithms that appear in the literature. The techniques for obtaining this speed-up
+also have applications to other lattice-based schemes.
+Keywords: Lattice Cryptography·Digital Signatures·Constant-Time Implementa-
+tion·AVX2
+1 Introduction
+Cryptography based on the hardness of lattice problems is seen as a very promising
+replacement of traditional cryptography after the eventual coming of quantum computers.
+In this paper, we present a new digital signature schemeDilithium, whose security is based
+on the hardness of ﬁnding short vectors in lattices. We also present its complete optimized
+implementation, as well as a detailed security analysis of the underlying problems upon
+which it is based. Our scheme was designed with the following criteria in mind:
+Simple to implement securely. The most compact lattice-based signature schemes
+[DDLL13, DLP14] crucially require the generation of secret randomness from the dis-
+crete Gaussian distribution. Generating such samples in a way that is secure against
+side-channel attacks is highly non-trivial and can easily lead to insecure implementations, as
+demonstrated in [BHLY16, EFGT17, PBY17]. While it may be possible that a very careful
+implementation can prevent such attacks, it is unreasonable to assume that a universally-
+deployed scheme containing many subtleties will always be expertly implemented.Dilithium
+therefore only uses uniform sampling, as was originally proposed in [Lyu09, GLP12, BG14].
+Furthermore all other operations (such as polynomial multiplication and rounding) are
+easily implemented in constant time.
+Licensed under Creative Commons License CC-BY 4.0.
+IACR Transactions on Cryptographic Hardware and Embedded Systems ISSN 2569-2925,
+Vol. 2018, No. 1, pp. 238–268
+DOI:10.13154/tches.v2018.i1.238-268
+
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 239
+Gen
+01 A←Rk×𝓁
+q
+02 (s1, s2)←S𝓁
+η×S k
+η
+03 t := As1 + s2
+04 return (pk = (A, t), sk = (A, t, s1, s2))
+Sign(sk, M )
+05 z :=⊥
+06 while z =⊥do
+07 y←S𝓁
+γ1−1
+08 w1 := HighBits(A y, 2γ2)
+09 c∈B60 := H(M‖w1)
+10 z := y + cs1
+11 if‖z‖∞≥γ1−βor‖LowBits(A y−cs2, 2γ2)‖∞≥γ2−β, then z :=⊥
+12 return σ= (z, c)
+Verify(pk, M,σ= (z, c))
+13 w′
+1 := HighBits(Az−ct, 2γ2)
+14 if return J‖z‖∞<γ1−βK and Jc = H (M‖w′
+1)K
+Figure 1: Template for our signature scheme.
+Be conservative with parameters. Since we are aiming for long-term security, we have
+analyzed the applicability of lattice attacks from a very favorable, to the attacker, viewpoint.
+In particular, we are considering quantum algorithms that require virtually as much space
+as time. Such algorithms are currently unrealistic, and there seem to be serious obstacles in
+removing the space requirement, but we are allowing for the possibility that improvements
+may occur in the future.
+Minimize the size of public key + signature. Since many applications require the
+transmission of both the public key and the signature (e.g. certiﬁcate chains), we designed
+our scheme to minimize the sum of these parameters. Under the restriction that we
+avoid discrete Gaussian sampling, to the best of our knowledge,Dilithium has the smallest
+combination of signature and public key sizes of any post-quantum signature scheme.
+Be modular – easy to vary security.The two operations that constitute nearly the
+entirety of the signing and veriﬁcation procedures are expansion of an XOF (we use
+SHAKE-128 and SHAKE-256), and multiplication in the polynomial ringZq[X]/(X n + 1).
+Highly eﬃcient implementations of our algorithm will therefore need to optimize these
+operations and make sure that they run in constant time. For all security levels, our
+scheme uses the same ring withq = 223−213 + 1 and n = 256. Varying security simply
+involves doing more/less operations over this ring and doing more/less expansion of the
+XOF. In other words, once an optimized implementation is obtained for some security
+level, it is almost trivial to obtain an optimized implementation for a higher/lower level.
+1.1 Overview of the Basic Approach
+The design of the scheme is based on the “Fiat-Shamir with Aborts” approach [Lyu09]
+and bears most resemblance to the schemes proposed in [GLP12, BG14]. For readers
+who are unfamiliar with the general framework of such signature schemes, we present a
+simpliﬁed (and less eﬃcient) version of our scheme in Fig. 1. This version is essentially a
+slightly modiﬁed version of the scheme from [BG14]. We will now go through each of its
+components to give the reader an idea of how such schemes work.
+
+240 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+Key Generation. The key generation algorithm generates ak×𝓁matrix A each of whose
+entries is a polynomial in the ringRq = Zq[X]/(X n + 1). As previously mentioned, we will
+always haveq = 223−213 + 1 and n = 256. Afterwards, the algorithm samples random
+secret key vectorss1 and s2. Each coeﬃcient of these vectors is an element ofRq with
+small coeﬃcients – of size at mostη. Finally, the second part of the public key is computed
+as t = As1 + s2. All algebraic operations in this scheme are assumed to be over the
+polynomial ringRq.
+Signing Procedure. The signing algorithm generates a masking vector of polynomialsy
+with coeﬃcients less thanγ1. The parameterγ1 is set strategically – it is large enough
+that the eventual signature does not reveal the secret key (i.e. the signing algorithm
+is zero-knowledge), yet small enough so that the signature is not easily forged. The
+signer then computes A yand sets w1 to be the “high-order” bits of the coeﬃcients in
+this vector. In particular, every coeﬃcientw in A ycan be written in a canonical way
+as w = w1·2γ2 + w0 where|w0|≤γ2; w1 is then the vector comprising all thew1’s.
+The challengec is then created as the hash of the message andw1. The output c is a
+polynomial inRq with exactly 60±1’s and the rest0’s. The reason for this distribution is
+that c has small norm and comes from a domain of size> 2256. The potential signature is
+then computed asz = y +cs1.
+If z were directly output at this point, then the signature scheme would be insecure
+due to the fact that the secret key would be leaked. To avoid the dependency ofz on
+the secret key, we use rejection sampling. The parameterβis set to be the maximum
+possible coeﬃcient ofcsi. Since c has 60±1’s and the maximum coeﬃcient insi is η, it’s
+easy to see thatβ≤60η. If any coeﬃcient ofz is larger thanγ1−β, then we reject and
+restart the signing procedure. Also, if any coeﬃcient of the low-order bits ofAz−ct is
+greater thanγ2−β, we restart. The ﬁrst check is necessary for security, while the second
+is necessary for both security and correctness. The while loop in the signing procedure
+keeps being repeated until the preceding two conditions are satisﬁed. The parameters are
+set such that the expected number of repetitions is between4 and 7.
+Veriﬁcation. The veriﬁer ﬁrst computesw′
+1 to be the high-order bits ofAz−ct, and then
+accepts if all the coeﬃcients ofz are less thanγ1−βand ifc is the hash of the message and
+w′
+1. Let us look at why veriﬁcation works, in particular as to whyHighBits(Az−ct, 2γ2) =
+HighBits(A y, 2γ2). The ﬁrst thing to notice is thatAz−ct = A y−cs2. So all we really
+need to show is that
+HighBits(A y, 2γ2) = HighBits(A y−cs2, 2γ2). (1)
+The reason for this is that a valid signature will have‖LowBits(A y−cs2, 2γ2)‖∞<γ2−β.
+And since we know that the coeﬃcients ofcs2 are smaller thanβ, we know that adding
+cs2 is not enough to cause any carries by increasing any low-order coeﬃcient to have
+magnitude at leastγ2. Thus Eq. (1) is true and the signature veriﬁes correctly.
+1.2 Dilithium
+The basic template in Fig. 1 is rather ineﬃcient, as is. The most glaring (but easily ﬁxed)
+ineﬃciency is that the public key consists of a matrix ofk·𝓁polynomials, which could
+have a rather large representation. The obvious ﬁx is to haveA generated from some seed
+ρusing SHAKE-128, and this is a standard technique. The novelty ofDilithium over the
+previous schemes is that we also shrink the size of the public key by a factor of2.5 at the
+expense of increasing the signature by around150 bytes. For the recommended security
+level, the scheme has2.7KB signatures and1.5KB public keys.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 241
+The main observation for obtaining this very favorable trade-oﬀ is that when the veriﬁer
+computes w′
+1 in Line 13, the high-order bits ofAz−ct do not depend too much on the
+low orderbits of t because t is being multiplied by a very low-weight polynomialc. In
+our scheme, some low-order bits oft are not included in the public key, and so the veriﬁer
+cannot always correctly compute the high-order bits ofAz−ct. To make up for this,
+the signer includes some “hints” as part of the signature, which are essentially the carries
+caused by adding in the product ofc with the missing low-order bits oft. With this hint,
+the veriﬁer is able to correctly computew′
+1.
+Additionally, we make our scheme deterministic using the standard technique of adding
+a seed to the secret key and using this seed together with the message to produce the
+randomness y in Line 07. Our full scheme in Fig. 4 also makes use of basic optimizations
+such as pre-hashing the messageM so as to not rehash it with every signing attempt.
+Implementation Considerations. The main algebraic operation performed in the scheme
+is a multiplication of a matrixA, whose elements are polynomials inZq[X]/(X 256 + 1)
+by a vector of such polynomials. In our recommended parameter setting,A is a 5×4
+matrix, and thus the multiplicationA vinvolves 20 polynomial multiplications. As in most
+lattice-based schemes that are based on operations over polynomial rings, we have chosen
+our ring so that the multiplication operation has a very eﬃcient implementation via the
+Number Theoretic Transform (NTT), which is just a version of FFT that works over the
+ﬁnite ﬁeldZq rather than over the complex numbers. To enable the NTT, we needed to
+choose a primeq so that the groupZ∗
+q has an element of order2n = 512; or equivalently
+q≡1(mod 512). If r is such an element, thenX 256 + 1 = (X−r)(X−r 3)···(X−r 511)
+and thus one can equivalently represent any polynomiala∈Zq[X]/(X 256 + 1) in its CRT
+(Chinese Remainder Theorem) form as(a(r),a(r 3),...,a(r 2n−1)). The advantage of this
+representation is that the product of two polynomials is coordinate-wise. Therefore the
+most expensive parts of polynomial multiplication are the transformationsa→ˆa and the
+inverse ˆa→a – these are the NTT and inverse NTT operations.
+The other major time-consuming operation is the expansion of a seedρinto the
+polynomial matrix A. The matrix A is needed for both signing and veriﬁcation, therefore
+a good implementation of SHAKE-128 is important for the eﬃciency of the scheme.
+The fastest NTT-implementation used in cryptography prior to this work is, to our
+knowledge, the AVX2 optimized NTT of NewHope [ADPS16] which uses ﬂoating point
+arithmetic. In our implementation, we resort to the more natural choice of using integer
+arithmetic, as for example also in [LN16]. Although we pack only 4 coeﬃcients into
+one vector register of256 bits, which is the same density that is also used by ﬂoating
+point implementations, we can improve on the multiplication speed by about a factor of
+2 compared to the NewHope NTT adapted to the prime and degree used in Dilithium,
+see Table 1.2. We achieved this speed-up by carefully scheduling the instructions and
+interleaving the multiplications and reductions during the NTT so that parts of the
+multiplication latencies are hidden.1 The eﬀect of our fast NTT on the entire Dilithium
+scheme is a speed-up of25% for signing and15% for veriﬁcation compared to the same
+implementation with the adapted ﬂoating point NTT from NewHope. We point out that
+in this implementation only the NTT and SHAKE are vectorized. By vectorizing other
+parts of the implementation like sampling and vector addition, a faster NTT would result
+in an even greater speed-up. Similarly, if one uses a faster algorithm for seed expansion of
+ρinto A (or perhaps hasA already stored in memory if speed is truly of the essence), then
+the eﬀect on the signing and (especially) veriﬁcation algorithms will also be magniﬁed.
+1When the prime in the NTT is smaller than in Dilithium, additional improvements to the current
+algorithm produce a bigger speed-up (see Table 1.2 and [Sei18]).
+
+242 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+Table 1:Haswell cycle counts on an Intel i7-4770 CPU in terms of103 cycles of diﬀerent
+AVX2 optimized NTT implementations for Dilithium and NewHope. Dilithium uses the
+ring Zq[X]/(X 256 + 1) with q = 2 23−213 + 1 and NewHope Zq[X]/(X 1024 + 1) with
+q = 2 13 + 212 + 1. The cycle count for the forward NTT given in [ADPS16] is smaller
+than the cycle count of the inverse NTT because it is measured without the bitreversal
+operation. This operation can be left out if the input polynomial is randomly sampled
+with independent coeﬃcients. In Dilithium this is not always the case, and so we compare
+the cycle counts including the bitreversal. The ADPS implementation for Dilithium is the
+ﬂoating point AVX2 implementation from NewHope [ADPS16] adapted to the Dilithium
+prime and degree. The LN implementation is the integer AVX2 implementation from
+[LN16]. Finally, the implementation for NewHope in the last row is similar to the one from
+this work but with major additional improvements that are not applicable to Dilithium,
+see [Sei18].
+Dilithium NewHope
+ADPS 3.2 9 .5
+LN - 9.7
+This work 1.5 2 .2 [Sei18]
+1.3 Related Work
+The ﬁrst asymptotically-eﬃcient lattice-based signature scheme using the “Fiat-Shamir
+with Aborts” approach was constructed in [Lyu09] based on the Ring-SIS problem. The
+eﬃciency of the scheme was improved in [Lyu12] by basing the scheme on the combination
+of (Ring)-LWE and (Ring)-SIS problems. These schemes were further improved upon in
+[GLP12, BG14] by reducing the size of the signature. All the previous works had security
+proofs in the classical random oracle model.
+Schemes based on the hardness of (Ring)-LWE in the quantum random oracle model
+were instantiated from “lossy identiﬁcation” schemes [AFLT12] in [ABB+17] and [KLS17].
+The latter work also showed that one could base the quantum security of all the schemes
+listed in the previous paragraph (as well as the scheme in this paper) on a non-interactive
+problem that’s a convolution of a lattice problem with a cryptographic hash function. The
+main disadvantage of schemes based only on (Ring)-LWE is that they are less eﬃcient –
+they have substantially larger public key / signature sizes and also need to be instantiated
+over rings in which one cannot do NTT.
+2 Basic Operations
+2.1 Ring Operations
+We letR and Rq respectively denote the ringsZ[X]/(X n + 1) and Zq[X]/(X n + 1), forq
+an integer. Throughout this paper, the value ofn will always be256 and q will be the
+prime 8380417 = 223−213 + 1. Regular font letters denote elements inR or Rq (which
+includes elements inZ and Zq) and bold lower-case letters represent column vectors with
+coeﬃcients inR or Rq. By default, all vectors will be column vectors. Bold upper-case
+letters are matrices. For a vectorv, we denote byvT its transpose. The boolean operator
+JstatementK evaluates to1 if statement is true, and to0 otherwise.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 243
+Modular reductions. For an even (resp. odd) positive integerα, we deﬁner′= r mod±α
+to be the unique elementr′in the range−α
+2 < r′≤α
+2 (resp. −α−1
+2 ≤r′≤α−1
+2 ) such
+that r′≡r modα. We will sometimes refer to this as acentered reduction moduloq. For
+any positive integerα, we deﬁner′= r mod+αto be the unique elementr′in the range
+0≤r′<αsuch thatr′≡r modα. When the exact representation is not important, we
+simply writer modα.
+Sizes of elements. For an elementw∈Zq, we write‖w‖∞to mean|w mod±q|. We
+deﬁne the𝓁∞and 𝓁2 norms forw = w0 +w1X +...+wn−1X n−1∈R:
+‖w‖∞= max
+i
+‖wi‖∞, ‖w‖=
+√
+‖w0‖2∞+...+‖wn−1‖2∞.
+Similarly, forw = (w1,...,wk)∈Rk, we deﬁne
+‖w‖∞= max
+i
+‖wi‖∞, ‖w‖=
+√
+‖w1‖2 +...+‖wk‖2.
+We will writeSηto denote all elementsw∈R such that‖w‖∞≤η.
+2.2 NTT domain representation
+Our modulus q is chosen such that there exists a 512-th root of unity r modulo q.
+Concretely, we always work withr = 1753. This implies that the cyclotomic polynomial
+X 256 + 1splits into linear factorsX−r i modulo q with i = 1, 3, 5,..., 511. By the Chinese
+remainder theorem our cyclotomic ringRq is thus isomorphic to the product of the rings
+Zq[X]/(X−r i)∼= Zq. In this product of rings it is easy to multiply elements since the
+multiplication is pointwise there. The isomorphism
+a↦→
+(
+a(r),a(r 3),...,a(r 511)
+)
+: Rq→
+∏
+i
+Zq[X]/(X−r i)
+can be computed quickly with the help of the Fast Fourier Transform. SinceX 256 + 1 =
+X 256−r 256 = (X 128−r 128)(X 128 +r 128) one can ﬁrst compute the map
+Zq[X]/(X 256 + 1)→Zq[X]/(X 128−r 128)×Zq[X]/(X 128 +r 128)
+and then continue separately with the two reduced polynomials of degree less than
+128 noting that X 128 + r 128 = X 128−r 384. We give further detail about our NTT
+implementations in Section 5.1.
+2.3 Hashing
+Our scheme uses several diﬀerent algorithms that hash strings in{0, 1}∗onto domains of
+various forms. Below we give the high level descriptions of these functions and defer the
+details of how exactly they are used in our signature scheme to Section 5.2.
+Hashing to a Ball. Let Bh denote the set of elements ofR that have h coeﬃcients
+that are either−1 or 1 and the rest are0. We have|Bh|= 2h·
+(n
+h
+)
+. For our signature
+scheme, we will need a cryptographic hash function that hashes ontoB60 (which has
+more than 2256 elements). The algorithm we will use to create a random element inB60
+is sometimes referred to as an “inside-out” version of the Fisher-Yates shuﬄe, and its
+high-level description is in Fig. 2.2
+2Normally, the algorithm should begin ati = 0, but since there are196 0’s, the ﬁrst195 iterations
+would just be setting components ofc to 0.
+
+244 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+SampleInBall
+01 Initialize c = c0c1...c255 = 00...0
+02 for i := 196 to 255
+03 j←{0, 1,..., i}
+04 s←{0, 1}
+05 ci := cj
+06 cj := (−1)s
+07 return c
+Figure 2: Create a random256-element array with60±1’s and196 0′s
+Expanding the MatrixA. The function ExpandA maps a uniform seedρ∈{0, 1}256 to
+a matrix A∈Rk×l
+q in CRT representation.
+Sampling the vectorsy. The functionExpandMask, used for deterministically generating
+the randomness of the signature scheme, mapsK‖µ‖κto y∈S l
+γ1−1.
+Collision resistant hash. The function CRH used in our signature scheme is a collision
+resistant hash function mapping to{0, 1}384.
+2.4 High/Low Order Bits and Hints
+To reduce the size of the public key, we will need some simple algorithms that extract
+“higher-order” and “lower-order” bits of elements inZq. The goal is that when given an
+arbitrary elementr∈Zq and another small elementz∈Zq, we would like to be able to
+recover the higher order bits ofr +z without needing to storez. We therefore deﬁne
+algorithms that taker,z and produce a1-bit hinth that allows one to compute the higher
+order bits ofr +z just usingr and h. This hint is essentially the “carry” caused byz in
+the addition.
+There are two diﬀerent ways in which we will break up elements inZq into their “high-
+order” bits and “low-order” bits. The ﬁrst algorithm,Power2Roundq, is the straightforward
+bit-wise way to break up an elementr = r1·2d + r0 where r0 = r mod±2d and r1 =
+(r−r0)/2d.
+Notice that if we choose the representatives ofr1 to be non-negative integers between0
+and⌊q/2d⌋, then the distance (moduloq) between any twor1·2d and r′
+1·2d is usually
+≥2d, except for the border case. In particular, the distance moduloq between⌊q/2d⌋·2d
+and 0 could be very small. This is problematic in the case that we would like to produce a
+1-bit hint, as adding a small number tor can actually cause the high-order bits ofr to
+change by more than1.
+We avoid having the high-order bits change by more than1 with a simple tweak. We
+select anαthat is a divisor ofq−1 and writer = r1·α+r0 in the same way as before.
+For the sake of simplicity, we assume thatαis even (which is possible, asq is odd). The
+possible r1·α’s are now{0,α,2α,...,q−1}. Note that the distance betweenq−1 and
+0 is 1, and so we removeq−1 from the set of possibler1·α’s, and simply round the
+corresponding r’s to0. Because q−1 and 0 diﬀer by1, all this does is possibly increase
+the magnitude of the remainderr0 by 1. This procedure is called Decomposeq. Using
+this procedure as a sub-routine, we can deﬁne theMakeHintq and UseHintq routines that
+produce a hint and, respectively, use the hint to recover the high-order bits of the sum.
+For notational convenience, we also deﬁneHighBitsq and LowBitsq routines that simply
+extract r1 and r0, respectively, from the output ofDecomposeq.
+The below Lemmas state the crucial properties of these supporting algorithms that are
+necessary for the correctness and security of our scheme. Their proofs can be found in
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 245
+Power2Roundq(r, d)
+08 r := r mod+ q
+09 r0 := r mod±2d
+10 return
+(
+(r−r0)/2d, r0
+)
+MakeHintq(z, r,α)
+11 r1 := HighBitsq(r,α)
+12 v1 := HighBitsq(r + z,α)
+13 return Jr1⁄= v1K
+UseHintq(h, r,α)
+14 m := (q−1)/α
+15 (r1, r0) := Decomposeq(r,α)
+16 if h = 1 and r0 > 0 return (r1 + 1) mod+ m
+17 if h = 1 and r0≤0 return (r1−1) mod+ m
+18 return r1
+Decomposeq(r,α)
+19 r := r mod+ q
+20 r0 := r mod±α
+21 if r−r0 = q−1
+22 then r1 := 0; r0 := r0−1
+23 else r1 := (r−r0)/α
+24 return (r1, r0)
+HighBitsq(r,α)
+25 (r1, r0) := Decomposeq(r,α)
+26 return r1
+LowBitsq(r,α)
+27 (r1, r0) := Decomposeq(r,α)
+28 return r0
+Figure 3: Supporting algorithms forDilithium.
+Appendix A.
+Lemma 1. Suppose that q andαare positive integers satisfying q> 2α, q≡1 ( mod α)
+and αeven. Let r and z be vectors of elements in Rq where‖z‖∞≤α/2, and let h, h′
+be vectors of bits. Then theHighBitsq, MakeHintq, and UseHintq algorithms satisfy the
+following properties:
+1. UseHintq(MakeHintq(z, r,α), r,α) = HighBitsq(r + z,α).
+2. Let v1 = UseHintq(h, r,α). Then‖r−v1·α‖∞≤α+ 1. Furthermore, if the number
+of 1’s inh isω, then all except at mostωcoeﬃcients ofr−v1·αwill have magnitude
+at mostα/2 after centered reduction modulo q.
+3. For any h, h′, if UseHintq(h, r,α) = UseHintq(h′, r,α), then h = h′.
+Lemma 2. If‖s‖∞≤βand‖LowBitsq(r,α)‖∞<α/2−β, then
+HighBitsq(r,α) = HighBitsq(r + s,α).
+3 Signature
+The Key Generation, Signing, and Veriﬁcation algorithms for our signature scheme are
+presented in Fig. 4. We present the deterministic version of the scheme in which the ran-
+domness used in the signing procedure is generated (using SHAKE-256) as a deterministic
+function of the message and a small secret key. Since our signing procedure may need to
+be repeated several times until a signature is produced, we also append a counter in order
+to make the SHAKE-256 output diﬀer with each signing attempt of the same message.
+Also due to the fact that each message may require several iterations to sign, we compute
+an initial digest of the message using a collision-resistant hash function, and use this digest
+in place of the message throughout the signing procedure.
+As discussed in Section 1.2, the main design improvement ofDilithium over the scheme
+in Fig. 1 is that the public key size is reduced by a factor of around2.5 at the expense of
+an additional hundred bytes in the signature. To accomplish the size reduction, the key
+generation algorithm outputst1 := Power2Roundq(t,d) as the public key instead oft as
+
+246 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+Gen
+01 ρ←{0, 1}256
+02 K←{0, 1}256
+03 (s1, s2)←S𝓁
+η×S k
+η
+04 A∈Rk×𝓁
+q := ExpandA(ρ) A is stored in NTT Domain Representation
+05 t := As1 + s2
+06 (t1, t0) := Power2Roundq(t, d)
+07 tr∈{0, 1}384 := CRH(ρ‖t1)
+08 return (pk = (ρ,t1), sk = (ρ,K, tr, s1, s2, t0))
+Sign(sk, M )
+09 A∈Rk×𝓁
+q := ExpandA(ρ) A is stored in NTT Domain Representation
+10 µ∈{0, 1}384 := CRH(tr‖M )
+11 κ:= 0, (z, h) :=⊥
+12 while (z, h) =⊥do
+13 y∈S𝓁
+γ1−1 := ExpandMask(K‖µ‖κ)
+14 w := A y
+15 w1 := HighBitsq(w, 2γ2)
+16 c∈B60 := H(µ‖w1)
+17 z := y + cs1
+18 (r1, r0) := Decomposeq(w−cs2, 2γ2)
+19 if‖z‖∞≥γ1−βor‖r0‖∞≥γ2−βor r1⁄= w1, then (z, h) :=⊥
+20 else
+21 h := MakeHintq(−ct0, w−cs2 + ct0, 2γ2)
+22 if‖ct0‖∞≥γ2 or the # of1’s inh is greater thanω, then (z, h) :=⊥
+23 κ:=κ+ 1
+24 return σ= (z, h, c)
+Verify(pk, M,σ= (z, h, c))
+25 A∈Rk×𝓁
+q := ExpandA(ρ) A is stored in NTT Domain Representation
+26 µ∈{0, 1}384 := CRH(CRH(ρ‖t1)‖M )
+27 w′
+1 := UseHintq(h, Az−ct1·2d, 2γ2)
+28 return J‖z‖∞<γ1−βK and Jc = H (µ‖w′
+1)K and J# of 1’s inh is ≤ωK
+Figure 4: Our signature schemeDilithium.
+in Fig. 1. This means that instead of⌈logq⌉bits per coeﬃcient, the public key requires
+⌈logq⌉−d bits. In our instantiation,q≈223 and d = 14, which means that instead of23
+bits in each public key coeﬃcient, there are instead9.
+The main problem with not having the entiret in the public key is that the veriﬁcation
+algorithm is no longer able to exactly computew′
+1 in Line 13 in Fig. 1. In order to do this,
+the veriﬁcation algorithm will need the high order bits ofAz−ct, but it can only compute
+Az−ct1·2d = Az−ct +ct0. But since the productct0 consists of only small numbers,
+and we only care about the high order bits, we really only need to know the carries that
+each coeﬃcientct0 causes. These are the carries that the signer sends as a hint to the
+veriﬁer. Heuristically, based on our parameter choices, there should not be more thanω
+positions in which a carry is caused. The signer therefore simply sends the positions in
+which these carries occur (this is the extra bytes in the signature), which allows the veriﬁer
+to compute the high order bits ofAz−ct.
+3.1 Correctness
+In this section, we prove the correctness of the signature scheme.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 247
+Table 2:Parameters for Dilithium.
+weak medium recommended very high
+q 8380417 8380417 8380417 8380417
+d 14 14 14 14
+weight ofc 60 60 60 60
+γ1 = (q−1)/16 523776 523776 523776 523776
+γ2 =γ1/2 261888 261888 261888 261888
+(k,𝓁) (3 , 2) (4 , 3) (5 , 4) (6 , 5)
+η 7 6 5 3
+β 375 325 275 175
+ω 64 80 96 120
+pk size (bytes) 896 1184 1472 1760
+sig size (bytes) 1387 2044 2701 3366
+Exp. reps (from Eq. (5)) 4.3 5 .9 6 .6 4 .3
+BKZ block-sizeb to break SIS 235 355 475 605
+Best Known Classical bit-cost 68 103 138 176
+Best Known Quantum bit-cost 62 94 125 160
+Best Plausible bit-cost 48 73 98 125
+BKZ block-sizeb to break LWE 200 340 485 595
+Best Known Classical bit-cost 58 100 141 174
+Best Known Quantum bit-cost 53 91 128 158
+Best Plausible bit-cost 41 71 100 124
+Gen median cycles (Haswell) 157, 596 260 , 468 386 , 268 507 , 616
+Sign median cycles (Haswell) 736, 564 1 , 252, 496 1 , 804, 738 1 , 677, 924
+Sign average cycles (Haswell) 917, 585 1 , 597, 555 2 , 326, 829 2 , 152, 901
+Verify median cycles (Haswell) 188, 628 293 , 068 409 , 904 551 , 452
+Gen median cycles (AVX2, Haswell) 91, 940 144 , 662 218 , 724 280 , 448
+Sign median cycles (AVX2, Haswell) 359, 462 567 , 614 789 , 926 749 , 148
+Sign average cycles (AVX2, Haswell) 450, 438 722 , 372 1 , 035, 284 947 , 865
+Verify median cycles (AVX2, Haswell) 102, 820 148 , 096 209 , 292 284 , 284
+If‖ct0‖∞<γ2, then by Lemma 1 we know that
+UseHintq(h, w−cs2 +ct0, 2γ2) = HighBitsq(w−cs2, 2γ2).
+Since w = A yand t = As1 + s2, we have that
+w−cs2 = A y−cs2 = A(z−cs1)−cs2 = Az−ct, (2)
+and w−cs2 +ct0 = Az−ct1·2d. Therefore the veriﬁer computes
+UseHintq(h, Az−ct1·2d, 2γ2) = HighBitsq(w−cs2, 2γ2).
+Furthermore, because the signer also checks in Line 19 thatr1 = w1, this is equivalent
+to
+HighBitsq(w−cs2, 2γ2) = HighBitsq(w, 2γ2). (3)
+Therefore, the w1 computed by the veriﬁer is the same as that of the signer, and the
+veriﬁcation procedure will always accept.
+
+248 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+3.2 Number of Iterations
+We now want to compute the probability that Step 19 will set(z, h) to⊥. The probability
+that‖z‖∞< γ1−βcan be computed by considering each coeﬃcient separately. For
+each coeﬃcientσof cs1, the corresponding coeﬃcient ofz will be between−γ1 +β+ 1
+and γ1−β−1 (inclusively) whenever the corresponding coeﬃcient ofyi is between
+−γ1 +β+ 1−σand γ1−β−1−σ. The size of this range is2(γ1−β)−1, and the
+coeﬃcients ofy have 2γ1−1 possibilities. Thus the probability that every coeﬃcient ofy
+is in the good range is
+(2(γ1−β)−1
+2γ1−1
+)256·𝓁
+=
+(
+1− β
+γ1−1/2
+)𝓁n
+≈e−256·β𝓁/γ1, (4)
+where we used the fact that our values ofγ1 are large compared to1/2.
+We now move to computing the probability that we have
+‖r0‖∞=‖LowBitsq(w−cs2, 2γ2)‖∞<γ2−β.
+If we (heuristically) assume that the low order bits are uniformly distributed modulo2γ2,
+then there is a (2(γ2−β)−1
+2γ2
+)256·k
+≈e−256·βk/γ2
+probability that all the coeﬃcients are in the good range (using the fact that our values
+of βare large compared to1/2).
+As we already mentioned, if‖cs2‖∞≤β, then‖r0‖∞<γ2−βimplies that r1 = w1.
+Thus the last check should succeed with overwhelming probability when the previous check
+passed. Therefore, the probability that Step 19 passes is
+≈e−256·β(𝓁/γ1+k/γ2). (5)
+It is more diﬃcult to formally compute the probability that Step 22 results in a restart.
+The parameters were set such that heuristically(z, h) =⊥with probability less than1%.
+Therefore the vast majority of the loop repetitions will be caused by Step 19.
+4 Security
+The standard security notion for digital signatures isUF-CMA security, which is security
+under chosen message attacks. In this security model, the adversary gets the public key and
+has access to a signing oracle to sign messages of his choice. The adversary’s goal is to come
+up with a valid signature of a new message. A slightly stronger security requirement that
+is sometimes useful isSUF-CMA (Strong Unforgeability under Chosen Message Attacks),
+which also allows the adversary to win by producing a diﬀerent signature of a message
+that he has already seen.
+It can be shown that in the (classical) random oracle model,Dilithium is SUF-CMA
+secure based on the hardness of the standardML WEand MSIS lattice problems. The
+reduction, however, is not tight. Furthermore, since we also care about quantum attackers,
+we need to consider the security of the scheme when the adversary can query the hash
+function on a superposition of inputs (i.e. security in the quantum random oracle model –
+QROM). Since the classical security proof uses the “forking lemma” (which is essentially
+rewinding), the reduction does not transfer over to the quantum setting.
+There are no counter-examples of schemes whose security is actually aﬀected by the
+non-tightness of the reduction. For example, schemes like Schnorr signatures [Sch89], GQ
+signatures [GQ88], etc. all set their parameters ignoring the non-tightness of the reduction.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 249
+Furthermore, the only known uses of the additional power of quantum algorithms against
+schemes whose security is based on quantum-resistant problems under a classical reduction
+involve “Grover-type” algorithms that improve exhaustive search (although it has been
+shown that there cannot be a “black-box” proof that the Fiat-Shamir transform is secure
+in the QROM [ARU14]).
+The reason that there haven’t been any attacks taking advantage of the non-tightness
+of the reduction is because there is an intermediate problem which istightly equivalent,
+even under quantum reductions, to theUF-CMA security of the signature scheme. This
+problem is essentially a “convolution” of the underlying mathematical problem (such as
+MSIS or discrete log) with a cryptographic hash functionH. It would appear that as long
+as there is no relationship between the structure of the math problem andH, solving this
+intermediate problem is not easier than solving the mathematical problem.3
+Below, we will introduce the hardness assumptions upon whose hardness theSUF-CMA
+security of our scheme is based. The ﬁrst two assumptions,ML WEand MSIS, are standard
+lattice problems which are a generalization ofL WE, Ring-L WE, SIS, andRing-SIS. The third
+problem, SelfTargetMSIS is the aforementioned problem that’s based on the combined
+hardness of MSIS and the hash functionH. In the classical ROM, there is a (non-tight)
+reduction from MSIS to SelfTargetMSIS.
+4.1 Assumptions
+The ML WEProblem. For integersm,k, and a probability distributionD : Rq→[0, 1],
+we say that the advantage of algorithmA in solving the decisionalML WEm,k,D problem
+over the ringRq is
+AdvML WE
+m,k,D :=
+⏐⏐Pr[b = 1|A←Rm×k
+q ; t←Rm
+q ;b←A(A, t)]
+−Pr[b = 1|A←Rm×k
+q ; s1←Dk; s2←Dm;b←A(A, As1 + s2)]
+⏐⏐.
+The MSIS Problem. To an algorithmA we associate the advantage functionAdvMSIS
+m,k,γ
+to solve the (Hermite Normal Form)MSISm,k,γproblem over the ringRq as
+AdvMSIS
+m,k,γ(A) := Pr
+[
+0<‖y‖∞≤γ∧[ I|A ]·y = 0|A←Rm×k
+q ; y←A(A)
+]
+.
+The SelfTargetMSISProblem. Suppose that H :{0, 1}∗→B60 is a cryptographic hash
+function. To an algorithmA we associate the advantage function
+AdvSelfTargetMSIS
+H,m,k,γ (A) :=
+Pr
+[
+0≤‖y‖∞≤γ
+∧H([ I|A ]·y‖M) = c
+⏐⏐⏐⏐A←Rm×k
+q ;
+(
+y :=
+[r
+c
+]
+,M
+)
+←A|H(·)⟩(A)
+]
+.
+4.2 Signature Scheme Security
+The concrete security ofDilithium was analyzed in [KLS17], where it was shown that ifH is
+a quantum random oracle (i.e., a quantum-accessible perfect hash function), the advantage
+of an adversaryA breaking the SUF-CMA security of the signature scheme is
+AdvSUF-CMA
+Dilithium (A)≤AdvML WE
+k,𝓁,D (B) + AdvSelfTargetMSIS
+H,k,𝓁+1,ζ (C) + AdvMSIS
+k,𝓁,ζ′(D) + 2−254 , 4 (6)
+3In the ROM, there is indeed a (non-tight) reduction using the forking lemma that states that solving
+this problem is as hard as solving the underlying mathematical problem.
+4To simplify the concrete security bound, we assume thatExpandA produces a uniform matrixA∈Rk×𝓁
+q ,
+ExpandMask(K,·) is a perfect pseudo-random function, and CRH is a perfect collision-resistant hash
+function.
+
+250 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+for D a uniform distribution overSη, and
+ζ= max{γ1−β,2γ2 + 1 + 2d−1·60}≤4γ2, (7)
+ζ′= max{2(γ1−β), 4γ2 + 2}≤4γ2 + 2. (8)
+Furthermore, if the running times and success probabilities (i.e. advantages) ofA, B, C, D
+are tA,tB,tC,tD,ϵA,ϵB,ϵC,ϵD, then the lower bound ontA/ϵA is within a small multiplicative
+factor of minti/ϵi for i∈{B, C, D}.
+Intuitively, the ML WEassumption is needed to protect against key-recovery, the
+SelfTargetMSISis the assumption upon which new message forgery is based, and theMSIS
+assumption is needed for strong unforgeability. We will now sketch some parts of the
+security proof that are relevant to the concrete parameter setting.
+4.2.1 UF-CMA Security Sketch
+It was shown in [KLS17] that for zero-knowledge deterministic signature schemes, if an
+adversary having quantum access toH and classical access to a signing oracle can produce a
+forgery of a new message, then there is also an adversary who can produce a forgery without
+access to the signing oracle (so he only gets the public key).5 The latter security model is
+called UF-NMA – unforgeability under no-message attack. By theML WEassumption, the
+public key (A, t = As1 + s2) is indistinguishable from(A, t) where t is chosen uniformly
+at random. The proof that our signature scheme is zero-knowledge is fairly standard and
+follows the framework from [Lyu09, Lyu12, BG14]. It is formally proved in [KLS17]6 and
+we sketch the proof in Appendix B.
+If we thus assume that theML WEk,𝓁,D problem is hard, whereD is the distribution that
+samples a uniform integer in the range[−η,η], then to proveUF-NMA security, we only
+need to analyze the hardness of the experiment where the adversary receives a random
+(A, t) and then needs to output a valid message/signature pairM, (z, h,c) such that
+• ‖z‖∞<γ1−β
+•H(UseHintq(h, Az−ct1·2d, 2γ2)‖M) = c
+•# of 1’s inh is≤ω
+Lemma 1 implies that one can rewrite
+UseHintq(h, Az−ct1·2d, 2γ2) = Az−ct1·2d + u, (9)
+where‖u‖∞≤2γ2 + 1. Furthermore, onlyωcoeﬃcients ofu will have magnitude greater
+than γ2. If we writet = t1·2d + t0 where‖t0‖∞≤2d−1, then we can rewrite Eq. (9) as
+Az−ct1·2d + u = Az−c(t−t0) + u = Az−ct + (ct0 + u) = Az−ct + u′. (10)
+Note that the worst-case upper-bound foru′is
+‖u′‖∞≤‖ct0‖∞+‖u‖∞≤‖c‖1·‖t0‖∞+‖u‖∞≤60·2d−1 + 2γ2 + 1< 4γ2.
+5It was also shown in [KLS17] that the “deterministic” part of the requirement can be relaxed. The
+security proof simply loses a factor of the number of diﬀerent signatures produced per message in its
+tightness. Thus, for example, if one were to implement the signature scheme (with the same secret key) on
+several devices with diﬀerent random-number generators, the security of the scheme would not be aﬀected
+much.
+6In that paper, it is actually proved that the underlying zero-knowledge proof is zero-knowledge and
+then the security of the signature scheme follows via black box transformations.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 251
+Thus a (quantum) adversary who is successful at creating a forgery of a new message is
+able to ﬁndz,c, u′,M such that‖z‖∞<γ1−β,‖c‖∞= 1,‖u′‖∞< 4γ2, andM∈{0, 1}∗
+such that
+H
+
+[ A|t|Ik ]·
+
+)
+z
+c
+u′
+(
+[ ‖M
+
+= c. (11)
+Since (A, t) is completely random, this is exactly the deﬁnition of theSelfTargetMSIS
+problem from above. A standard forking lemma argument can be used to show that
+an adversary solving the above problem in the (standard) random oracle model can be
+used to solve theMSIS problem. While giving a reduction using the forking lemma is a
+good “sanity check”, it is not particularly useful for setting parameters due to its lack of
+tightness. So how does one set parameters? The Fiat-Shamir transform has been used
+for over3 decades (and we have been aware of the non-tightness of the forking lemma for
+two of them), yet the parameter settings for schemes employing it have ignored this loss
+in tightness. Implicitly, therefore, these schemes rely on the exact hardness of analogues
+(based on various assumptions such as discrete log [Sch89], one-wayness of RSA [GQ88],
+etc.) of the problem in Eq. (11).
+The intuition for the security of the problem in Eq. (11) (and its discrete log, RSA,
+etc. analogues) is as follows: sinceH is a cryptographic hash function whose structure
+is completely independent of the algebraic structure of its inputs, choosing someM
+“strategically” should not help – so the problem would be equally hard if theM were ﬁxed.
+Then, again relying on the independence ofH and the algebraic structure of its inputs,
+the only approach for obtaining a solution appears to be picking somew, computing
+H( w‖M ) = c, and then ﬁndingz, u′such that Az + u′= w +ct.7 The hardness of
+ﬁnding suchz, u′with 𝓁∞-norms less than4γ2 such that
+Az + u′= t′ (12)
+for some t′is the problem whose concrete security we will be analyzing. Note that this is
+conservative because in Eq. (11)‖z‖∞<γ1−β≈2γ2. Furthermore, onlyωcoeﬃcients of
+u′can be larger than2γ2.
+4.2.2 The Addition of the Strong Unforgeabilty Property
+To handle the strong-unforgeability requirement, one needs to handle an additional case.
+Intuitively, the reduction fromUF-CMA to UF-NMA used the fact that a forgery of a
+new message will necessarily require the use of a challengec for which the adversary has
+never seen a valid signature (i.e.,(z, h,c) was never an output by the signing oracle). To
+prove strong-unforgeability, we also have to consider the case where the adversary sees a
+signature (z, h,c) for M and then only changes(z, h). In other words, the adversary ends
+up with two valid signatures such that
+UseHintq(h, Az−ct1·2d, 2γ2) = UseHintq(h′, Az′−ct1·2d, 2γ2).
+By Lemma 1, the above equality can be shown to imply that there exist‖z‖∞≤2(γ1−β)
+and‖u‖∞≤4γ2 + 2 such that Az + u = 0.
+4.3 Concrete Security Analysis
+In Appendix C, we describe the best known lattice attacks against the problems in Eq. (6)
+upon which the security of our signature scheme is based. The best attacks involve
+ﬁnding short vectors in some lattice. The main diﬀerence between theML WEand MSIS
+7This is indeed the (non-tight) proof sketch in the classical random oracle model.
+
+252 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+problems is that theML WEproblem involves ﬁnding a short vector in a lattice in which
+an “unusually short” vector exists. TheMSIS problem, on the other hand, involves just
+ﬁnding a short vector in a random lattice. In knapsack terminology, theML WEproblem is
+a low-density knapsack, whileMSIS is a high-density knapsack instance. The analysis for
+the two instances is slightly diﬀerent and we analyze theML WEproblem in Appendix C.2
+and the MSIS problem (as well asSelfTargetMSIS) in Appendix C.3.
+We follow the general methodology from [ADPS16, BCD+16] to analyze the security
+of our signature scheme, with minor adaptations. This methodology is signiﬁcantly
+more conservative than prior ones used in lattice-based cryptography. In particular, we
+assume the adversary can run the asymptotically best algorithms known, with no overhead
+compared to the asymptotic run-times. In particular, we assume the adversary can cheaply
+handle huge amounts of (possibly quantum) memory. This conservatism is in line with
+the goal of long-term post-quantum security. We note that despite this security analysis
+methodology, our schemes remain competitive in practice.
+While the ML WEand MSIS problems are deﬁned over polynomial rings, we do not
+currently have any way of exploiting this ring structure, and therefore the best attacks are
+mounted by simply viewing these problems asL WEand SIS problems. The L WEand SIS
+problems are exactly as in the deﬁnitions ofML WEand MSIS in Section 4.1 with the ring
+Rq being replaced byZq.
+5 Implementation Details
+5.1 NTT domain representation
+Natural fast NTT implementations do not output vectors with coeﬃcients in the order
+a(r),a(r 3),...,a(r 511). Therefore we deﬁne the NTT domain representationˆa∈Z256
+q of
+a polynomial a∈Rq to have coeﬃcients in the order as output by our reference NTT.
+Concretely,
+ˆa = (a(r0),a(−r0),...,a(r127),a(−r127))
+where ri = r brv(128+i) with brv(k) the bitreversal of the8 bit numberk.
+This is important for sampling the matrix A. The matrix A is only needed for
+multiplication. Hence, for the sake of faster implementations, the expansion function
+ExpandA does not outputA∈Rk×l
+q . Instead it outputs a matrix with coeﬃcients inZ256
+q ,
+which is interpreted as the NTT domain representation ofA. As A needs to be sampled
+uniformly and the NTT is an isomorphism, ExpandA also needs to sample uniformly
+in this representation. To be compatible to Dilithium, an implementation whose NTT
+produces diﬀerently ordered vectors than our reference NTT needs to sample coeﬃcients
+in a non-consecutive order.
+5.2 Hashing
+Hashing to a Ball. We now precisely describe the operation of the functionH :µ‖w1↦→
+c∈B60 described in Fig. 2 as it is used in our signature scheme. The vectorw1 consists
+of k polynomials w1,0,...,w1,k−1 in Rq with coeﬃcients in{0,..., 15}. This allowsw1 to
+be packed in a string ofk·256·4/8 = k·128 bytes. Concretely, the bytes numbers128i
+to 128i + 127, i = 0,...,k−1, encode the coeﬃcients ofw1,i in increasing order, where
+each byte encodes two consecutive coeﬃcients ofw1,i in its low4 bits and high4 bits,
+respectively. For example, the ﬁrst two coeﬃcientsc0 and c1 of w1,i are encoded in the
+128i th byte of the bit-packed string ofw1 as c1·16 +c0.
+H then absorbs the384-bit stringµimmediately followed by thek·128 bytes for w1
+into SHAKE-256. Throughout its operations the function squeezes SHAKE-256 in order
+to obtain a stream of random bytes of variable length. The ﬁrst60 bits in the ﬁrst8 bytes
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 253
+of this random stream are interpreted as60 random sign bitssi∈{0, 1}. The remaining 4
+bits are discarded. ThenH uses Algorithm 2 to computec where in each iteration of the for
+loop it uses rejection sampling on elements from{0,..., 255}until it gets aj∈{0,...,i}.
+An element in{0,..., 255}is obtained by interpreting the next byte of the random stream
+from SHAKE-256 as a number in this set. For the signs the correspondingsi−196 is used.
+Expanding the MatrixA. The function ExpandA maps a uniform seedρ∈{0, 1}256 to a
+matrix A∈Rk×l
+q in NTT domain representation. It computes each coeﬃcientˆai,j∈Z256
+q
+of A separately. For the coeﬃcientˆai,j it absorbs the32 bytes ofρimmediately followed
+by one byte representing0≤16·j +i < 255 into SHAKE-128. Next it uses consecutive
+blocks of 3 bytes of the variable-length output string in order to obtain a sequence of
+integers between 0 and 223−1. This is done by setting the highest bit of the third
+byte in each block to zero and interpreting the blocks in little endian byte order. So
+for example the three bytesb0, b1 and b2 from SHAKE-128 are used to get the integer
+0≤b′
+2·216 +b1·28 +b0≤223−1 where b′
+2 is the logical AND ofb2 and 2128−1. Finally,
+ExpandA performs rejection sampling on these23-bit integers to sample the256 coeﬃcients
+ai,j(r0),ai,j(−r0),...,ai,j(r127)ai,j(−r127) of ˆai,j uniformly from the set{0,...,q−1}in
+the order of our NTT domain representation.
+Sampling the vectors y. The function ExpandMask maps K ‖µ‖κto y ∈S l
+γ1−1,
+where κ≥0, and works as follows. It computes each of thel coeﬃcients ofy, which are
+polynomials inSγ1−1, independently. For thei-th polynomial, 0≤i < l, it absorbs32
+bytes ofK concatenated with the48 bytes ofµand two bytes representinglκ+i in little
+endian byte order into SHAKE-256. Then each block of5 consecutive output bytes is
+used to get two20 bit integers between0 and 220−1. For this the ﬁrst two bytes of
+each output block together with a third byte having as lower4 bits the lower4 bits of
+the third output byte and4 high zero bits is interpreted in little endian order. Then the
+high 4 bits of the third output byte followed by the16 bits of the fourth and and ﬁfth
+byte are interpreted as the second20 bit integer. As an example assume we have received
+the ﬁve bytesb0,...,b4 from SHAKE-128. Then ExpandMask computes the two integers
+0≤b′
+2·216 +b1·28 +b0≤220−1 and 0≤b4·212 +b3·24 +b′′
+2≤220−1 where b′
+2 is the
+AND ofb2 and 15 and b′
+2 = [b2/16]. On the resulting sequence of20 bit integers rejection
+sampling is performed to get256 values vj∈{0,..., 2γ1−2}. From these the polynomial
+coeﬃcients are computed in increasing order asq +γ1−1−vj.
+Collision resistant hash. The function CRH in Figure 4 is a collision resistant hash
+function. For this purpose384 bits of the output of SHAKE-256 are used.CRH is called
+with two diﬀerent sets of inputs. First it is called withρ‖t1. The function then absorbs
+the 32 bytes ofρfollowed by thek·256·9/8 bytes for the bit-packed representation oft1
+into SHAKE-256 and takes the ﬁrst48 bytes of the ﬁrst output block of SHAKE-256 as
+the output hash. The bit-packing fort1 is done in the same way as described above forw1.
+As always integers are read in little endian byte order. The second input isµ‖M. Here
+the concatenation of the hashµand the message string are absorbed into SHAKE-256
+and the ﬁrst48 output bytes are used as the resulting hash.
+5.3 Data layout of keys and signature
+Public key. The public key, containingρand t1, is stored as the concatenation of the
+bit-packed representations ofρand t1 in this order. Therefore, it has a size of32 + 288k
+bytes.
+
+254 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+Secret key. The secret key containsρ, K, tr, s1, s2 and t0 and is also stored as a bit-
+packed representation of these quantities in the given order. We explain the bit-packing of
+s1, s2 and t0. The polynomials insides1 and s2 have coeﬃcients with inﬁnity norm at most
+η. So every coeﬃcientc∈Zq of these polynomials can be represented byc = q +η−v with
+some v∈{0,..., 2η}. In the bit packing the valuesv are stored so that each polynomial
+needs 256·4/8 bytes for the weak, medium and recommended security levels, and256·3/8
+bytes for the very high security level. The coeﬃcients of the polynomials oft0 can be
+written in the formq + 2d−1−v with v∈{0,..., 2d−1}and the representation by
+these v is used in the bit packing. Hence, this results in256·d/8 bytes per polynomial.
+Consequently, a secret key requires64 + 48 + 32((k +l)·⌈log (2η+ 1)⌉+ 14k) bytes. For
+the weak, medium and high security level this is equal to112 + 576k + 128l bytes. With
+the very high security parameters one needs112 + 544k + 96l = 3856 bytes.
+Signature. The signature bit string is the concatenation of a bit packed representation
+of z and encodings ofh and c in this order. The coeﬃcients of the polynomials ofz are
+written in the formq +γ1−1−v with v∈{0,..., 2γ1−2}and these valuesv are bit packed
+resulting in 256·20/8 bytes per polynomial. Next we describe the encoding ofh, which
+needs ω+K bytes. Together all the polynomials in the vectorh have at mostωnon-zero
+coeﬃcients. It is suﬃcient to store the locations of these non-zero coeﬃcients. Each of the
+ﬁrstωbytes of the bit string representingh is the indexi of the next non-zero coeﬃcient
+in its polynomial, i.e.0≤i≤255, or zero if there are no more non-zero coeﬃcients. The
+bytes numbersωup toω+k−1 record thek positions j of the polynomial boundaries in
+the string ofωcoeﬃcient indices, where0≤j≤ω. In the encoding of the challengec,
+the ﬁrst256 bits are 0 or 1 when the corresponding coeﬃcient ofc is zero or non-zero,
+respectively. The next60 bits are 0 or 1 if the corresponding non-zero coeﬃcient is1 or
+−1, respectively. Note that there are precisely60 non-zero coeﬃcients. The4 bits up to
+the next byte boundary are zero. Therefore, a signature requires640l +ω+k + 40 bytes.
+5.4 Constant time implementation
+Our reference implementation does not branch depending on secret data and does not access
+memory locations that depend on secret data. For the modular reductions that are needed
+for the arithmetic inRq we never use the ’%’ operator of the C programming language.
+Instead we use Montgomery reductions without the correction steps and special reduction
+routines that are speciﬁc to our modulusq. For computing the rounding functions described
+in Section 2.4, we have implemented branching-free algorithms. On the other hand, when
+it is safe to reveal information, we have not tried to make the code constant-time. This
+includes the computation of the challenges and the rejection conditions in the signing
+algorithm. When performing rejection sampling, our code reveals which of the conditions
+was the reason for the rejection, and in case of the norm checks, which coeﬃcient violated
+the bound. This is safe since the rejection probabilities for each coeﬃcient are independent
+of secret data. The challenges reveal information aboutCRH(µ‖w1) also in the case of
+rejected y, but this does not reveal any information about the secret key whenCRH is
+modeled as a random oracle andw1 has high min-entropy.
+5.5 Reference implementation
+Our reference NTT is a natural iterative implementation for32 bit unsigned integers that
+uses Cooley-Tukey butterﬂies in the forward transform and Gentleman-Sande butterﬂies in
+the inverse transform. For modular reductions after multiplying with a precomputed root
+of unity we use the Montgomery algorithm as was already done before in e.g. [ADPS16].
+In order that the reduced values are correct representatives, the precomputed roots contain
+the Montgomery factor232 mod q. We also use Montgomery reductions after the pointwise
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 255
+product of the polynomials in the NTT domain representations. Since we cannot get the
+Montgomery factor in at this point, these products are in fact Hensel remaindersr′≡r232
+(mod q). We then make use of the fact that the NTT transform is linear and multiply by
+an additional Montgomery factor after the inverse NTT when we divide out the factor256.
+The implementations of the functionsExpandA and ExpandMask initially squeeze a
+number of output blocks of SHAKE-256 and SHAKE-128 that gives enough randomness
+with high probability. In the case ofExpandA, which samples uniform polynomials and
+hence needs at least3·256 = 768 random bytes per polynomial,5 blocks from SHAKE-128
+of 168 bytes each are needed at least for one polynomial. They suﬃce with probability
+greater than1−2−132. ExpandMask initially retrieves5 blocks from SHAKE-256 that have
+136 bytes. This is the minimum number of blocks and suﬃces with probability greater
+than 1−2−81.
+As mentioned in the introduction our reference implementation is protected against
+timing attacks. For this reason the centralized remainders in the rounding functions given in
+Figure 3 are not computed with branchings. Instead we use the following well-known trick
+to compute the centralized remainderr′= r mod±αwhere 0≤r≤3α/2. Subtracting
+α/2 + 1 from r yields a negative result if and only ifr≤α/2. Therefore, shifting this
+result arithmetically to the right by31 bits gives−1, i.e. the integer with all bits equal to
+1, ifr≤α/2 and 0 otherwise. Then the logical AND of the shifted value andαis added
+to r and α/2−1 subtracted. This results inr−αif r >α/2 and r if r≤α/2, i.e. the
+centralized remainder.
+We make heavy use of lazy reduction in our implementation. In the NTT we do not
+reduce the results of additions and subtractions at all. For rounding and norm checking
+it is important to map to standard representatives. This freezing of the coeﬃcients is
+achieved in constant-time by conditionally subtractingq with another instance of the
+arithmetic right shift trick.
+5.6 AVX2 optimized implementation
+We have written an optimized implementation of Dilithium for CPUs that supports the
+AVX2 instruction set. Since the two most time-consuming operations are polynomial
+multiplication and the expansion of the matrix and vectors, the optimized implementation
+speeds up these two operations.
+For polynomial multiplication, we have implemented a vectorized version of the NTT.
+This NTT achieves a full multiplication of two polynomials including three NTTs and the
+pointwise multiplication in less than5000 Haswell cycles and is about a factor of4.5 faster
+than the reference C code compiled using gcc with full machine-speciﬁc optimizations
+turned on. We do not use ﬂoating point instructions, where modular reductions are easily
+done by multiplying with a ﬂoating point inverse ofq and rounding to get the quotient
+from which the remainder can be computed with another multiplication and a subtraction.
+Instead, we use integer instructions only and the same Montgomery reduction methodology
+as in the reference C code.
+At any time our AVX2 optimized NTT has32 unsigned integer coeﬃcients, of32 bits
+each, loaded into8 AVX2 vector registers. Each of these vector registers then contains
+4 extended 64 bit coeﬃcients. So after three levels of NTT the reduced polynomials ﬁt
+completely into these8 registers and we can transform them to linear factors without
+further loads and stores. In the second last and last level the polynomials have degree
+less than 4. This means that every polynomial ﬁts into one register but only half of
+the coeﬃcients need to be multiplied by roots. For this reason we shuﬄe the vectors in
+order to group together coeﬃcients that need to be multiplied. The instruction that we
+use for this task areperm2i128 in the second last level and a combination ofvpshufd
+and vpblendd in the last level. The multiplications with the constant roots of unity are
+performed using thevpmuludq instruction. This instruction computes a full64 bit product
+
+256 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+of two32 bit integers. It has a latency of5 cycles on both Haswell and Skylake. In each
+level of the NTT half of the coeﬃcients need to be multiplied. Therefore we can do four
+vector multiplications and Montgomery reductions in parallel. This hides some of the
+latency of the multiplication instructions.
+For faster matrix and vector expansion, we use a vectorized SHAKE implementation
+that operates on4 parallel sponges and hence can absorb and squeeze blocks in and out of
+these 4 sponges at the same time. For sampling this means that up to four coeﬃcients can
+be sampled simultaneously.
+5.7 Computational Eﬃciency
+We have performed timing experiments with our reference implementation on a Haswell
+CPU. The results are presented in Table 2. They include the number of CPU cycles needed
+by the three operations key generation, signing and signature veriﬁcation. These numbers
+are the medians of 10000 executions each. For the signing operation we also give the
+average number of cycles because the use of rejection sampling during signing has the
+eﬀect that sometimes more time is needed than is indicated by the median cycle counts.
+Signing was performed with a message size of32 bytes. The computer we have used is
+equipped with an Intel Core i7-4770K CPU running at the constant clock frequency of
+3500 Mhz. Hyperthreading and Turbo Boost are switched oﬀ. The system runs Debian
+stable with Linux Kernel version 3.16.0 and the code was compiled with gcc 6.3.0.
+6 Comparisons
+There are three major approaches for post-quantum signatures: hash-based signatures,
+multivariate signatures, and lattice-based signatures. Applications that can securely
+maintain a state (i.e., a constantly changing secret key) will certainly want to adopt
+stateful hash-based signatures like XMSS [BDH11], which is currently being standardized
+by the crypto forum research group (CFRG) of IETF. However, many applications are
+unlikely to migrate to a signature scheme that becomes insecure if, for example, the secret
+key is part of a backup and is restored to an older state. In their call for proposals, NIST
+therefore explicitly asks for stateless signature proposals. We present a comparison of our
+digital signature to other lattice-based and non-lattice-based schemes in Table 3.
+Non-Lattice-Based Signatures. Arguably the most conservative approach to digital
+signature construction is using stateless hash-based signatures that come with tight
+reductions in the standard model to standard properties of a cryptographic hash function,
+like collision resistance or second-preimage resistance. Unfortunately, stateless hash-based
+signatures are rather ineﬃcient in terms of signature size and signing speed. For example,
+the SPHINCS signature scheme has signatures of about 40KB and takes about 50 million
+cycles to sign even on large Intel processors with the AVX2 vector instruction set.
+Applications that need small signatures may want to turn their attention to multivariate
+signature schemes like Rainbox or HFEv-. These small signatures, however, come at the
+expense of rather large public keys. Many applications, for instance TLS, need to transmit
+public keys almost as much as signatures, so what becomes important is the sum of
+the public-key size and signature size. Also, eﬃcient multivariate signature schemes do
+not enjoy a reduction from theMQ problem. Instead these schemes require a hidden
+structure in the instance of theMQ problem, which was a weakness exploited by many
+attacks on prior protocols (c.f. [KS98, DFSS07, FGP+15, TW12]). At Asiacrypt 2016,
+Chen, Hülsing, Rijneveld, Samardjiska, and Schwabe presented MQDSS [CHR+16], a
+multivariate signature scheme thatdoes have a reduction fromMQ, but this reduction
+comes at the price of signatures that are not shorter than SPHINCS signatures.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 257
+Lattice-Based Signatures. The most eﬃcient (in terms of key and signature sizes) lattice-
+based schemes are those based on the hardness of the NTRU problem. The one with the
+smallest key/signature combination [DLP14] uses the key-generation of [HHGP+03] to
+create lattices which are optimal for using the secure signing algorithm in [GPV08]. The
+“Fiat-Shamir with Aborts” based scheme BLISS [DDLL13] is also based on the hardness
+of ﬁnding short vectors in NTRU lattices and has slightly larger parameters.
+While the above schemes have the smallest outputs of all lattice-based schemes, they
+contain several downsides. The most important one is that the schemes crucially require
+sampling from the discrete Gaussian distribution, and to the best of our knowledge no
+constant-time implementations of these schemes exist due to this “feature”.8 A second
+downside is that the security of these schemes is based on NTRU rather than Ring/Module-
+LWE. The geometric structure of NTRU lattices has been recently exploited [KF17] to
+produce signiﬁcantly better attacks against large-modulus/small-secret version of the
+problem (these attacks, though, currently do not extend to the parameters used in digital
+signatures). The ﬁnal downside is that increasing/decreasing the security levels would
+require a complete re-implementation of the schemes. In particular, it is not possible to
+eﬃciently instantiate them in a way that constructs the public key out of small blocks, as
+in this paper.
+At the other extreme of lattice constructions are digital signatures based on the hardness
+of standard lattice problems without any algebraic structure. The main downside of these
+schemes (c.f. [Lyu12, ABB+17]) is that they have extremely large public keys, and are
+not suitable for many practical applications.
+Carefully optimized signatures based on the hardness of ideal or module lattice problems
+sit in the sweet spot that oﬀers reasonably small signatures and public keys, good signing
+and veriﬁcation speeds, and simple constant-time implementations. In particular, the
+combined size of the public key and signature of the scheme in the current paper is smaller
+than in all the non-lattice-based schemes that we are aware of. Starting from [Lyu09],
+there have been many improvements and implementations of this type of scheme (e.g.
+[Lyu12, GLP12, GOPS13, BG14]). The most practical one of these that existed prior
+to the current work is [BG14], which is essentially the scheme in Fig. 1. SinceDilithium
+reduces the public key of that scheme by a factor≈2.5 (saving over2KB) at the expense
+of an additional100 bytes in the signature, it is the most eﬃcient of all those contained in
+this line of work. We should mention that it is also possible to produce slightly-shorter
+parameters (around10 - 15% saving in the signature size) if one samples from the Gaussian
+distribution, but we believe that this saving does not justify the added complexity of
+securely implementing the scheme.
+8A recent work [MW17] addresses some issues, but their implementation still uses lookup tables which
+are not protected against side-channel attacks.
+
+258 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+Table 3:Comparison of post-quantum signature schemes. Benchmarks were performed on
+an Intel Core i7-4770K (Haswell) if not indicated otherwise. The “sec” column states the
+security as reported by the authors of the respective papers. Cycles are stated for signing
+(S) and veriﬁcation (V). Bytes are given for public keys (pk), and signatures (s). The
+column “ct?” indicates whether the software is protected against timing attacks.
+Scheme sec ct? Cycles Bytes
+NTRU-based lattice signature schemes
+NTRU-GPV [DLP14] ≫128 no S: ?? pk: 1 792
+(adapted to a 1024-dim instance)a V: ?? s: ≈1 200
+BLISS [DDLL13] ≫128 no S: ?? pk: 1 792
+(adapted to a 1024-dim instance)a V: ?? s: ≈1 700
+Ring/Module-lattice-Based signature schemes
+Dilithium, recomm. param. 125 yes S: 789K pk: 1 472
+(this paper) V : 209K s: 2 701
+Standard-lattice-based signature schemes
+TESLA-I [ABB+17] 98 yes S: 143 402K pk: 12MB
+V: 19 284K s: 2 444
+Stateless hash-based signature schemes
+SPHINCS [BHH+15] 128 yes S: 51 636K b pk: 1 056
+V: 1 451K b s: 41 000
+Multivariate signature schemes
+HmFEv(256,15,3,16) [CLP+17] 128 yes S: 1 497K c pk: 83 100
+V: 15K c s: 61
+Rainbow(16,32,32,32) [CLP+17] 128 yes S: 68K c pk: 145 500
+V: 22K c s: 48
+MQDSS [CHR+16] 128 yes S: 8 510K pk: 72
+V: 5 752K s: 40 952
+a The scheme in the paper used a diﬀerent security analysis and therefore considered instances of
+dimensions (i.e. 512) that are not secure enough using the security analysis in the current paper.
+Doubling the dimension to 1024 makes these schemes well over128-bit quantum-secure. We adjusted
+the approximate parameters to match this increase in the instance size. We should point out that it
+might also be possible to increase the dimension to less than1024 by not using a ring of the form
+Z[X]/(X N + 1). This may reduce the parameters of the schemes.
+bBenchmarked on an Intel Xeon E3-1275 (Haswell)
+cBenchmarked on an Intel Xeon E3-1245 v3 (Haswell)
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 259
+Acknowledgements
+We are very thankful to the referees for their useful suggestions. This work is supported
+by the European Commission through the ICT program under contracts ICT-645622
+(PQCRYPTO), ICT-644729 (SAFEcrypto), and through the ERC Starting Grant ERC-
+2013-StG-335086 (LATTAC). It is also supported by the Swiss National Science Foundation
+through the 2014 transfer ERC Starting Grant CRETP2-166734 (FELICITY) and by the
+Netherlands Organization for Scientiﬁc Research (NWO) through Veni grant 639.021.645
+(Cryptanalysis of Lattice-based Cryptography).
+References
+[ABB+17] Erdem Alkim, Nina Bindel, Johannes A. Buchmann, Özgür Dagdelen, Edward
+Eaton, Gus Gutoski, Juliane Krämer, and Filip Pawlega. Revisiting TESLA
+in the quantum random oracle model. InPQCrypto, pages 143–162, 2017.
+242, 257, 258
+[ADPS16] Erdem Alkim, Léo Ducas, Thomas Pöppelmann, and Peter Schwabe. Post-
+quantum key exchange – a new hope. InProceedings of the 25th USENIX
+Security Symposium, pages 327–343. USENIX Association, 2016. http:
+//cryptojedi.org/papers/#newhope. 241, 242, 252, 254, 266
+[AFLT12] Michel Abdalla, Pierre-Alain Fouque, Vadim Lyubashevsky, and Mehdi Ti-
+bouchi. Tightly-secure signatures from lossy identiﬁcation schemes. In
+EUROCRYPT, pages 572–590, 2012. 242
+[AG11] Sanjeev Arora and Rong Ge. New algorithms for learning in presence of
+errors. In Luca Aceto, Monika Henzinger, and Jiri Sgall, editors,ICALP
+2011, Part I, volume 6755 ofLNCS, pages 403–415. Springer, Heidelberg,
+July 2011. 267
+[ARU14] Andris Ambainis, Ansis Rosmanis, and Dominique Unruh. Quantum attacks
+on classical proof systems: The hardness of quantum rewinding. InFOCS,
+pages 474–483, 2014. 249
+[BCD+16] Joppe W. Bos, Craig Costello, Léo Ducas, Ilya Mironov, Michael Naehrig,
+Valeria Nikolaenko, Ananth Raghunathan, and Douglas Stebila. Frodo: Take
+oﬀ the ring! Practical, quantum-secure key exchange from LWE. In Edgar R.
+Weippl, Stefan Katzenbeisser, Christopher Kruegel, Andrew C. Myers, and
+Shai Halevi, editors,ACM CCS 16, pages 1006–1018. ACM Press, October
+2016. 252
+[BDGL16] Anja Becker, Léo Ducas, Nicolas Gama, and Thijs Laarhoven. New directions
+in nearest neighbor searching with applications to lattice sieving. In Robert
+Krauthgamer, editor,27th SODA, pages 10–24. ACM-SIAM, January 2016.
+264
+[BDH11] Johannes A. Buchmann, Erik Dahmen, and Andreas Hülsing. XMSS - A prac-
+tical forward secure signature scheme based on minimal security assumptions.
+In PQCrypto, pages 117–129, 2011. 256
+[BG14] Shi Bai and Steven D. Galbraith. An improved compression technique for
+signatures based on learning with errors. InCT-RSA, pages 28–47, 2014. 238,
+239, 242, 250, 257, 264
+
+260 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+[BHH+15] Daniel J. Bernstein, Daira Hopwood, Andreas Hülsing, Tanja Lange, Ruben
+Niederhagen, Louiza Papachristodoulou, Michael Schneider, Peter Schwabe,
+and Zooko Wilcox-O’Hearn. SPHINCS: practical stateless hash-based signa-
+tures. In Marc Fischlin and Elisabeth Oswald, editors,Advances in Cryptology
+– EUROCRYPT 2015, volume 9056 ofLNCS, pages 368–397. Springer, 2015.
+http://cryptojedi.org/papers/#sphincs. 258
+[BHLY16] Leon Groot Bruinderink, Andreas Hülsing, Tanja Lange, and Yuval Yarom.
+Flush, gauss, and reload - A cache attack on the BLISS lattice-based signature
+scheme. InCHES, pages 323–345, 2016. 238
+[BKW03] Avrim Blum, Adam Kalai, and Hal Wasserman. Noise-tolerant learning, the
+parity problem, and the statistical query model.J. ACM, 50(4):506–519,
+2003. 267
+[BS16] Jean-François Biasse and Fang Song. Eﬃcient quantum algorithms for com-
+puting class groups and solving the principal ideal problem in arbitrary degree
+number ﬁelds. In Robert Krauthgamer, editor,27th SODA, pages 893–902.
+ACM-SIAM, January 2016. 267
+[CDPR16] Ronald Cramer, Léo Ducas, Chris Peikert, and Oded Regev. Recovering
+short generators of principal ideals in cyclotomic rings. In Marc Fischlin and
+Jean-Sébastien Coron, editors,EUROCRYPT 2016, Part II, volume 9666 of
+LNCS, pages 559–585. Springer, Heidelberg, May 2016. 267
+[CDW17] Ronald Cramer, Léo Ducas, and Benjamin Wesolowski. Short Stickelberger
+class relations and application to ideal-SVP. InEUROCRYPT (1), volume
+10210 ofLecture Notes in Computer Science, pages 324–348, 2017. 267
+[CGS14] Peter Campbell, Michael Groves, and Dan Shepherd. Soliloquy: A cautionary
+tale. In ETSI 2nd Quantum-Safe Crypto Workshop, pages 1–9, 2014. 267
+[CHR+16] Ming-Shing Cheng, Andreas Hülsing, Joost Rijneveld, Simona Samardjiska,
+and Peter Schwabe. From 5-pass MQ-based identiﬁcation to MQ-based
+signatures. In Jung Hee Cheon and Tsuyoshi Takagi, editors, Advances
+in Cryptology – ASIACRYPT 2016, volume 10032 ofLNCS, page 135–165.
+Springer, 2016. http://cryptojedi.org/papers/#mqdss. 256, 258
+[CLP+17] Ming-Shing Chen, Wen-Ding Li, Bo-Yuan Peng, Bo-Yin Yang, and Chen-Mou
+Cheng. Implementing 128-bit secure mpkc signatures. Cryptology ePrint
+Archive, Report 2017/636, 2017.http://eprint.iacr.org/2017/636/. 258
+[CN11] Yuanmi Chen and Phong Q. Nguyen. BKZ 2.0: Better lattice security
+estimates. In Dong Hoon Lee and Xiaoyun Wang, editors,ASIACRYPT 2011,
+volume 7073 ofLNCS, pages 1–20. Springer, Heidelberg, December 2011. 264
+[DDLL13] Léo Ducas, Alain Durmus, Tancrède Lepoint, and Vadim Lyubashevsky.
+Lattice signatures and bimodal gaussians. InCRYPTO (1), pages 40–56,
+2013. 238, 257, 258
+[DFSS07] Vivien Dubois, Pierre-Alain Fouque, Adi Shamir, and Jacques Stern. Practical
+cryptanalysis of SFLASH. In Alfred Menezes, editor,Advances in Cryptology
+– CRYPTO 2007, volume 4622 ofLNCS, pages 1–12. Springer, 2007.https:
+//eprint.iacr.org/2007/14. 256
+[DLP14] Léo Ducas, Vadim Lyubashevsky, and Thomas Prest. Eﬃcient identity-based
+encryption over NTRU lattices. InASIACRYPT, pages 22–41, 2014. 238,
+257, 258
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 261
+[EFGT17] Thomas Espitau, Pierre-Alain Fouque, Benoit Gerard, and Mehdi Ti-
+bouchi. Side-channel attacks on bliss lattice-based signatures – exploit-
+ing branch tracing against strongswan and electromagnetic emanations
+in microcontrollers. Cryptology ePrint Archive, Report 2017/505, 2017.
+http://eprint.iacr.org/2017/505 To appear in CCS 2017. 238
+[FGP+15] Jean-Charles Faugère, Danilo Gligoroski, Ludovic Perret, , Simona Samard-
+jiska, and Enrico Thomae. A polynomial-time key-recovery attack on
+MQQ cryptosystems. In Jonathan Katz, editor, Public-Key Cryptogra-
+phy – PKC 2015, volume 9020 of LNCS, pages 150–174. Springer, 2015.
+https://eprint.iacr.org/2014/811. 256
+[GLP12] Tim Güneysu, Vadim Lyubashevsky, and Thomas Pöppelmann. Practical
+lattice-based cryptography: A signature scheme for embedded systems. In
+CHES, pages 530–547, 2012. 238, 239, 242, 257
+[GOPS13] Tim Güneysu, Tobias Oder, Thomas Pöppelmann, and Peter Schwabe. Soft-
+ware speed records for lattice-based signatures. InPQCrypto, volume 7932 of
+Lecture Notes in Computer Science, pages 67–82. Springer, 2013. 257
+[GPV08] Craig Gentry, Chris Peikert, and Vinod Vaikuntanathan. Trapdoors for hard
+lattices and new cryptographic constructions. InSTOC, pages 197–206, 2008.
+257
+[GQ88] Louis C. Guillou and Jean-Jacques Quisquater. A "paradoxical" indentity-
+based signature scheme resulting from zero-knowledge. InCRYPTO, pages
+216–231, 1988. 248, 251
+[HHGP+03] Jeﬀrey Hoﬀstein, Nick Howgrave-Graham, Jill Pipher, Joseph H. Silverman,
+and William Whyte. Ntrusign: Digital signatures using the ntru lattice. In
+CT-RSA, pages 122–140, 2003. 257
+[HPS11] Guillaume Hanrot, Xavier Pujol, and Damien Stehlé. Analyzing blockwise
+lattice algorithms using dynamical systems. In Phillip Rogaway, editor,
+CRYPTO 2011, volume 6841 ofLNCS, pages 447–464. Springer, Heidelberg,
+August 2011. 264
+[KF17] Paul Kirchner and Pierre-Alain Fouque. Revisiting lattice attacks on over-
+stretched NTRU parameters. InEUROCRYPT (1), volume 10210 ofLecture
+Notes in Computer Science, pages 3–26, 2017. 257, 267
+[KLS17] Eike Kiltz, Vadim Lyubashevsky, and Christian Schaﬀner. A concrete treat-
+ment of ﬁat-shamir signatures in the quantum random-oracle model. Cryp-
+tology ePrint Archive, Report 2017/916, 2017.http://eprint.iacr.org/
+2017/916. To appear in Eurocrypt 2018. 242, 249, 250, 264
+[KS98] Aviad Kipnis and Adi Shamir. Cryptanalysis of the Oil & Vinegar signature
+scheme. In Hugo Krawczyk, editor,Advances in Cryptology – CRYPTO ’98,
+volume 1462 ofLNCS, pages 257–266. Springer, 1998. 256
+[Laa15] Thijs Laarhoven.Search problems in cryptography. PhD thesis, Eindhoven
+University of Technology, 2015. 264
+[LN16] Patrick Longa and Michael Naehrig. Speeding up the number theoretic
+transform for faster ideal lattice-based cryptography. In Cryptology and
+Network Security - 15th International Conference, CANS 2016, Milan, Italy,
+November 14-16, 2016, Proceedings, pages 124–139, 2016. 241, 242
+
+262 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+[Lyu09] Vadim Lyubashevsky. Fiat-Shamir with aborts: Applications to lattice and
+factoring-based signatures. InASIACRYPT, pages 598–616, 2009. 238, 239,
+242, 250, 257
+[Lyu12] Vadim Lyubashevsky. Lattice signatures without trapdoors. InEUROCRYPT,
+pages 738–755, 2012. 242, 250, 257, 264
+[MW17] Daniele Micciancio and Michael Walter. Gaussian sampling over the integers:
+Eﬃcient, generic, constant-time. InCRYPTO, pages 455–485, 2017. 257
+[PBY17] Peter Pessl, Leon Groot Bruinderink, and Yuval Yarom. To bliss-b or not
+to be - attacking strongswan’s implementation of post-quantum signatures.
+Cryptology ePrint Archive, Report 2017/490, 2017.http://eprint.iacr.
+org/2017/490. To appear in CCS 2017. 238
+[Sch89] Claus-Peter Schnorr. Eﬃcient identiﬁcation and signatures for smart cards.
+In CRYPTO, pages 239–252, 1989. 248, 251
+[SE94] Claus-Peter Schnorr and M. Euchner. Lattice basis reduction: Improved
+practical algorithms and solving subset sum problems. Math. Program.,
+66:181–199, 1994. 264
+[Sei18] Gregor Seiler. Faster avx2 optimized ntt multiplication for ring-lwe lattice
+cryptography. Cryptology ePrint Archive, Report 2018/039, 2018.https:
+//eprint.iacr.org/2018/039. 241, 242
+[TW12] Enrico Thomae and Christopher Wolf. Cryptanalysis of enhanced TTS,
+STS and all its variants, or: Why cross-terms are important. In Aika-
+terini Mitrokotsa and Serge Vaudenay, editors,Progress in Cryptology –
+AFRICACRYPT 2012, volume 7374 ofLNCS, pages 188–202. Springer, 2012.
+256
+A Proofs for Rounding Algorithm Properties
+The three lemmas below prove each of the three parts of Lemma 1.
+Lemma 3. Let r,z∈Zq with‖z‖∞≤α/2. Then
+UseHintq (MakeHintq(z,r,α),r,α) = HighBitsq(r +z,α).
+Proof. The output of Decomposeq is an integerr1 such that 0≤r1 < (q−1)/αand
+another integer r0 such that‖r0‖∞≤α/2. Because ‖z‖∞≤α/2, the integer v1 :=
+HighBitsq(r +z,α) either stays the same asr1 or becomesr1±1 modulo m = (q−1)/α.
+More precisely, ifr0 > 0, then−α/2 < r0 +z≤α. This implies thatv1 is eitherr1 or
+r1 + 1 mod m. If r0≤0, then we have−α≤r0 +z≤α/2. In this case, we havev1 = r1
+or r1−1 mod m.
+The MakeHintq routine checks whetherr1 = v1 and outputs 0 if this is so, and1 if
+r1⁄= v1. The UseHintq routine uses the “hint”h to either outputr1 (if y = 0) or, depending
+on whetherr0 > 0 or not, output eitherr1 + 1 mod+m or r1−1 mod+m.
+The lemma below shows thatr is not too far away from the output of theUseHintq
+algorithm. This will be necessary for the security of the scheme.
+Lemma 4. Let (h,r) ∈ {0, 1}×Zq and let v1 = UseHintq(h,r,α). If h = 0, then
+‖r−v1·α‖∞≤α/2; else‖r−v1·α‖∞≤α+ 1.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 263
+Proof. Let (r1,r0) := Decomposeq(r,α). We go through all three cases of theUseHintq
+procedure.
+Case 1 (h = 0): We havev1 = r1 and
+r−v1·α= r1·α+r0−r1·α= r0,
+which by deﬁnition has absolute value at mostα/2.
+Case 2 (h = 1 and r0 > 0): We havev1 = r1 + 1−κ·(q−1)/αfor κ= 0 or 1. Thus
+r−v1·α= r1·α+r0−(r1 + 1−κ·(q−1)/α)·α
+=−α+r0 +κ·(q−1).
+After centered reduction moduloq, the latter has magnitude≤α.
+Case 3 (h = 1 and r0≤0): We havev1 = r1−1 +κ·(q−1)/αfor κ= 0 or 1. Thus
+r−v1·α= r1·α+r0−(r1−1 +κ·(q−1)/α)·α
+=α+r0−κ·(q−1).
+After centered reduction moduloq, the latter quantity has magnitude≤α+ 1.
+The next lemma will play a role in proving the strong existential unforgeability of
+our signature scheme. It states that two diﬀerenth,h′cannot lead toUseHintq(h,r,α) =
+UseHintq(h′,r,α).
+Lemma 5. Let r∈Zq and h,h′∈{0, 1}. If UseHintq(h,r,α) = UseHintq(h′,r,α), then
+h = h′.
+Proof. Note thatUseHintq(0,r,α) = r1 and UseHintq(1,r,α) is equal to(r1±1) mod+(q−
+1)/α. Since (q−1)/α≥2, we have thatr1⁄= (r1±1) mod+(q−1)/α.
+We now prove Lemma 2.
+Proof. (Of Lemma 2) We prove the lemma for integers, rather than vectors of polynomials,
+since theHighBits function works independently on each coeﬃcient. If‖LowBitsq(r,α)‖∞<
+α/2−β, thenr = r1·α+r0 where−α/2 +β <r0≤α/2 +β. Thenr +s = r1·α+ (r0 +s)
+and−α/2< r0 +s≤α/2. Therefore r +s mod±α= r0 +s, and thus
+(r +s)−((r +s) mod±α) = r1·α= r−(r mod±α),
+and the claim in the Lemma follows.
+B Zero-Knowledge Proof
+The security of our scheme does not rely on the part of the public keyt0 being secret and
+so we will be assuming that the public key ist rather than t1.
+We want to ﬁrst compute the probability that some particular(z,c) is generated in
+Step 17 taken over the randomness ofy and the random oracleH which is modeled as a
+random function. We have
+Pr[z,c] = Pr[c]·Pr[y = z−cs1|c].
+Whenever z has all its coeﬃcients less thanγ1−βthen the above probability is exactly
+the same for every such tuple(z,c). This is because‖csi‖∞≤β(with overwhelming
+probability), and thus‖z−cs1‖∞≤γ1−1, which is a valid value ofy. Therefore, if we
+
+264 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+only output z when all its coeﬃcients have magnitudes less thanγ1−β, then the resulting
+distribution will be uniformly random overS𝓁
+γ1−β−1×B60.
+The simulation of the signature follows [Lyu12, BG14]. The simulator picks a uniformly
+random (z,c) in S𝓁
+γ1−β−1×B60, after which it also makes sure that
+‖r0‖∞=‖LowBitsq(w−cs2, 2γ2)‖∞<γ2−β.
+By Equation (2), we know that w−cs2 = Az−ct, and therefore the simulator can
+perfectly simulate this as well.
+If zdoes indeed satisfy‖LowBitsq(w−cs2, 2γ2)‖∞<γ2−β, then as long as‖cs2‖∞≤β,
+we will have
+r1 = HighBitsq(w−cs2, 2γ2) = HighBitsq(w, 2γ2) = w1.
+Since ourβwas chosen such that the probability (over the choice ofc, s2) that‖cs2‖∞<β
+is > 1−2−128, the simulator does not need to perform the check thatr1 = w1 and can
+always assume that it passes.
+We can then program
+H(µ‖w1)←c.
+Unless we have already set the value ofH(µ‖w1) to something else, the resulting pair
+(z,c) has the same distribution as in a genuine signature ofµ. It was shown in [KLS17]
+that the probability, over the random choice ofA and y, that we already set the value of
+H(µ‖w1) is less than2−255.
+All the other steps (after Step 19) of the signing algorithm are performed using public
+information and are therefore simulatable.
+C Concrete Security
+C.1 Lattice Reduction and Core-SVP Hardness
+The best known algorithm for ﬁnding very short non-zero vectors in Euclidean lattices is
+the Block–Korkine–Zolotarev algorithm (BKZ) [SE94], proposed by Schnorr and Euchner
+in 1991. More recently, it was proven to quickly converge to its ﬁx-point [HPS11] and
+improved in practice [CN11]. Yet, what it achieves asymptotically remains unchallenged.
+BKZ with block-sizeb makes calls to an algorithm that solves the Shortest lattice
+Vector Problem (SVP) in dimensionb. The security of our scheme relies on the necessity
+to run BKZ with a large block-size b and the fact that the cost of solving SVP is
+exponential inb. The best known classical SVP solver [BDGL16] runs in time≈2cC·b
+with cC = log2
+√
+3/2≈0.292. The best known quantum SVP solver [Laa15, Sec. 14.2.10]
+runs in time≈2cQ·b with cQ = log2
+√
+13/9≈0.265. One may hope to improve these run-
+times, but going below≈2cP·b with cP = log2
+√
+4/3≈0.2075 would require a theoretical
+breakthrough. Indeed, the best known SVP solvers rely on covering theb-dimensional
+sphere with cones of center-to-edge angleπ/3: this requires2cP·b cones. The subscripts C,
+Q, P respectively stand for Classical, Quantum and Paranoid.
+ThestrengthofBKZincreaseswith b. Moreconcretely, givenasinputabasis (c1,..., cn)
+of ann-dimensional lattice, BKZ repeatedly uses theb-dimensional SVP-solver on lattices
+of the form(ci+1(i),..., cj(i)) where i≤n, j = min(n,i +b) and where ck(i) denotes
+the projection of ck orthogonally to the vectors (c1,..., ci). The eﬀect of these calls
+is to ﬂatten the curve of the𝓁i = log2‖ci(i−1)‖’s (fori = 1,...,n). At the start of
+the execution, the𝓁i’s typically decrease fast, at least locally. As BKZ preserves the
+determinant of theci’s, the sum of the𝓁i’s remains constant throughout the execution,
+and after a (small) polynomial number of SVP calls, BKZ has made the𝓁i’s decrease less.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 265
+0 i0
+𝓁i
+log2 q
+Zone 1
+Zone 3
+0 i0
+𝓁i
+log2 q
+Zone 1
+Zone 2
+Zone 3
+Before reduction After b-BKZ with smallb
+0 i0
+𝓁i
+log2 q
+Zone 2
+Zone 3
+0 i0
+𝓁i
+log2 q
+Zone 2
+After b-BKZ with med. b After b-BKZ with largeb
+Figure 5: Evolution of Gram-Schmidt length in log-scale under BKZ reduction for various
+blocksizes. The area under the curves remains constant, and the slope in Zone 2 decrease
+with the blocksize. Note that Zone 3 may disappear before Zone 1, depending on the shape
+of the input basis.
+It can be heuristically estimated that for suﬃciently largeb, the local slope of the𝓁i’s
+converges to
+slope(b) = 1
+b−1 log2
+( b
+2πe(π·b)1/b
+)
+,
+unless the local input𝓁i’s are already too small or too large. The quantityslope(b) decreases
+with b, implying that the largerb the ﬂatter the output𝓁i’s.
+In our case, the input𝓁i’s are of the following form (cf. Fig. 5). The ﬁrst ones are all
+equal tolog2q and the last ones are all equal to0. BKZ will ﬂatten the jump, decreasing𝓁i’s
+with smalli’s and increasing𝓁i’s with largei’s. However, the local slopeslope(b) may
+not be suﬃciently small to make the very ﬁrst𝓁i’s decrease and the very last𝓁i’s increase.
+Indeed, BKZ will not increase (resp. increase) some𝓁i’s if these are already smaller (resp.
+larger) than ensured by the local slope guarantee. In our case, the𝓁i’s are always of the
+following form at the end of the execution:
+•The ﬁrst𝓁i’s are constant equal tolog2q (this is the possibly empty Zone 1).
+•Then they decrease linearly, with slopeslope(b) (this is the never-empty Zone 2).
+•The last𝓁i’s are constant equal to0 (this is the possibly empty Zone 3).
+The graph is continuous, i.e., if Zone 1 (resp. Zone 3) is not empty, then Zone 2 starts
+with 𝓁i = log2q (resp. ends with𝓁i = 0).
+C.2 Solving ML WE
+Any ML WE𝓁,k,D instance for some distributionD can be viewed as an LWE instance of
+dimensions 256·𝓁and 256·k. Indeed, the above can be rewritten as ﬁndingvec(s1), vec(s2)∈
+Z256·𝓁×Z256·k from (rot(A), vec(t)), where vec(·) maps a vector of ring elements to
+the vector obtained by concatenating the coeﬃcients of its coordinates, androt(A)∈
+Z256·k×256·𝓁
+q is obtained by replacing all entriesaij∈Rq of A by the 256×256 matrix
+whose z-th column isvec
+(
+x z−1·aij
+)
+.
+
+266 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+Given an LWE instance, there are two lattice-based attacks. The primal attack and
+the dual attack. Here, the primal attack consists in ﬁnding a short non-zero vector in the
+lattice Λ ={x∈Zd : Mx = 0 mod q}where M = (rot(A)[1:m]|Im|vec(t)[1:m]) is anm×d
+matrix whered = 256·𝓁+m + 1 and m≤256·k. Indeed, it is sometime not optimal to
+use all the given equations in lattice attacks.
+We tried all possible numberm of rows, and, for each trial, we increased the blocksize ofb
+until the value𝓁d−b obtained as explained above was deemed suﬃciently large. As explained
+in [ADPS16, Sec. 6.3], if2𝓁d−b is greater than the expected norm of(vec(s1), vec(s2)) after
+projection orthogonally to the ﬁrstd−b vectors, it is likely that the Module-LWE solution
+can be easily extracted from the BKZ output.
+The dual attack consists in ﬁnding a short non-zero vector in the latticeΛ′={(x, y)∈
+Zm×Zd : MT x + y = 0 mod q)}, M = (rot(A)[1:m]) is anm×d matrix whered = 256·𝓁
+and m ≤256·k. Again, for each value of m, we increased the value ofb until the
+value𝓁1 obtained as explained above was deemed suﬃciently small according the analysis
+of [ADPS16, Sec. 6.3].
+C.3 Solving MSIS and SelfTargetMSIS
+As per the discussion in Section 4.2.1, the best known attack against theSelfTargetMSIS
+problem involves either breaking the security ofH or solving the problem in Eq. (12). The
+latter amounts to solving theMSISk,𝓁+1,ζproblem for the matrix[ A|t′]. 9
+Note that theMSIS instance can be mapped to aSIS256·k,256·(𝓁+1),ζinstance by consid-
+ering the matrixrot(A|t′)∈Z256·k×256·(𝓁+1)
+q . The attack against theMSISk,𝓁,ζ′instance
+in Eq. (6) can similarly be mapped to aSIS256·k,256·𝓁,ζ′instance by considering the matrix
+rot(A)∈Z256·k×256·𝓁
+q . The attacker may consider a subset ofw columns, and let the
+solution coeﬃcients corresponding to the dismissed columns be zero.
+Remark 1. An unusual aspect here is that we are considering the inﬁnity norm, rather
+than the Euclidean norm. Further, for our speciﬁc parameters, the Euclidean norms of the
+solutions are aboveq. In particular, the vector(q, 0,..., 0)T belongs to the lattice, has
+Euclidean norm below that of the solution, but its inﬁnity norm above the requirement.
+This raises diﬃculties in analyzing the strength of BKZ towards solving our inﬁnity norm
+SIS instances: indeed, even with small values ofb, the ﬁrst𝓁i’s are short (they correspond
+to q-vectors), even though they are not solutions.
+For each numberw of selected columns and for each value ofb, we compute the
+estimated BKZ output𝓁i’s, as explained above. We then consider the smallesti such that
+𝓁i is below log2q and the largestj such that𝓁j above 0. These correspond to the vectors
+that were modiﬁed by BKZ, with smallest and largest indices, respectively. In fact, for
+the same cost as a call to the SVP-solver, we can obtain
+√
+4/3
+b
+vectors with Euclidean
+norm≈2𝓁i after projection orthogonally to the ﬁrsti−1 basis vectors. Now, let us look
+closely at the shape of such a vector. As the ﬁrsti−1 basis vectors are the ﬁrsti−1
+canonical unit vectors multiplied byq, projecting orthogonally to these consists in zeroing
+the ﬁrsti−1 coordinates. The remaining w−i + 1 coordinates have total Euclidean
+norm≈2𝓁i≈q, and the lastw−j coordinates are 0. We heuristically assume that these
+coordinates have similar magnitudesσ≈2𝓁i/√j−i + 1; we model each such coordinate
+as a Gaussian of standard deviationσ. We assume that each one of our
+√
+4/3
+b
+vectors
+has its ﬁrsti−1 coordinates independently uniformly distributed moduloq, and ﬁnally
+compute the probability that all coordinates in both ranges[0,i−1] and [i,j] are less than
+B in absolute value. Our cost estimate is the inverse of that probability multiplied by the
+run-time of ourb-dimensional SVP-solver.
+9Note that a solution to Eq. (12) would require the coeﬃcient in from oft′to be±1, while we’re
+allowing any small polynomial. Furthermore, as discussed after Eq. (12), some parts of the real solution
+are smaller than the boundζ, but we’re ignoring this for the sake of being conservative with our analysis.
+
+L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler, D. Stehlé 267
+0 i0
+𝓁i
+log2q
+Zone 1
+Zone 2
+Zone 3
+0 i0
+𝓁i
+Zone 2
+Zone 3
+Keeping q-vectors Forgetting q-vectors
+Figure 6: Eﬀect of forgettingq-vectors by randomization, under the same BKZ-blocksize
+b.
+Forgetting q-vectors. For all the parameter sets proposed in this paper, the best
+parametrization of the attack above kept the basis in a shape with a non-trivial Zone 1.
+We note that the coordinates in this range have a quite lower probability of passing the
+𝓁∞constraint than coordinates in Zone 2. We therefore considered a strategy consisting
+of “forgetting” theq-vectors, by re-randomizing the input basis before running the BKZ
+algorithm. For the same blocksizeb, this makes Zone 1 of the output basis disappear
+(BKZ does not ﬁnd theq-vectors), at the cost of producing a basis with ﬁrst vectors of
+larger Euclidean norms. This is depicted in Fig. 6.
+It turns out that this strategy always improves over the previous strategy for the
+parameter ranges considered in this paper. We therefore used this strategy for our security
+estimates.
+C.4 On Other Attacks
+For our parameters, the BKW [BKW03] and Arora–Ge [AG11] families of algorithms are
+far from competitive.
+Algebraic attacks. One speciﬁcity of our LWE and SIS instances is that they are inherited
+from Module-LWE and Module-SIS instances. One may wonder whether the extra algebraic
+structure of the resulting lattices can be exploited by an attacker. The line of work
+of [CGS14, BS16, CDPR16, CDW17] did indeed ﬁnd new cryptanalytic results on certain
+algebraic lattices, but [CDW17] mentions serious obstacles towards breaking cryptographic
+instances of Ring-LWE. By switching from Ring-LWE to Module-LWE, we get even further
+away from those weak algebraic lattice problems.
+Dense sublattice attacks. Kirchner and Fouque [KF17] showed that the existence of
+many linearly independent and unexpectedly short lattice vectors (much shorter than
+Minkowski’s bound) helps BKZ run better than expected in some cases. This could
+happen for our primal L WEattack, by extending M = ( rot(A)[1:m]|Im|vec(t)[1:m]) to
+(rot(A)[1:m]|Im|rot(t)[1:m]): the associated lattice now has256 linearly independent short
+vectors rather than a single one. The Kirchner-Fouque analysis of BKZ works best if both
+q and the ratio between the number of unexpectedly short vectors and the lattice dimension
+are high. In the NTRU case, for example, the ratio is1/2, and, for some schemes derived
+from NTRU, the modulusq is also large. We considered this reﬁned analysis of BKZ in
+our setup, but, to become relevant for our parameters, it requires a parameterb which
+is higher than needed with the usual analysis of BKZ. Note that [KF17] also arrived to
+the conclusion that this attack is irrelevant in the small modulus regime, and is mostly a
+threat to fully homomorphic encryption schemes and cryptographic multilinear maps.
+Note that, once again, the switch from Ring-LWE toML WEtakes us further away
+from lattices admitting unconventional attacks. Indeed, the dimension ratio of the dense
+
+268 CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme
+sub-lattice is 1/2 in NTRU, at most1/3 in lattices derived from Ring-LWE, and at most
+1/(𝓁+ 2) in lattices derived fromML WE.
+Specialized attack against𝓁∞-SIS. At last, we would like to mention that it is not clear
+whether the attack sketched in Appendix C.3 above forSIS in inﬁnity norm is optimal.
+Indeed, as we have seen, this approach produces many vectors, with some rather large
+uniform coordinates (at indices1,...,i), and smaller Gaussian ones (at indicesi,...,j). In
+our current analysis, we simply hope that one of the vector satisﬁes the𝓁∞bound. Instead,
+one could combine them in ways that decrease the size of the ﬁrst (large) coeﬃcients, while
+letting the other (small) coeﬃcients grow a little bit.
+This situation created by the use of𝓁∞-SIS (see Remark 1) has — to the best of our
+knowledge — not been studied in detail. After a preliminary analysis, we do not consider
+such an improved attack a serious threat to our concrete security claims, especially in the
+light of the approximations already made in the favor of the adversary. Nevertheless, we
+believe this question deserves a detailed study, which we leave to future work.

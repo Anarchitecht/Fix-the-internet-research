@@ -1,0 +1,3113 @@
+SyRA: Sybil-Resilient Anonymous Signatures
+with Applications to Decentralized Identity
+Elizabeth Crites 1, Aggelos Kiayias 2, Markulf Kohlweiss 2, and
+Amirreza Sarencheh2⋆
+1 Web3 Foundation, Zug, Switzerland
+elizabeth@web3.foundation
+2 The University of Edinburgh and IOG, Edinburgh, UK
+firstname.lastname@ed.ac.uk
+Abstract. We study Sybil-Resilient Anonymous (SyRA) signatures, a
+cryptographic primitive that enables credentialed users to generate, on
+demand, unlinkable pseudonyms tied to any given context, and issue
+signatures on behalf of these pseudonyms. Concretely, SyRA allows a
+distributed issuer to turn any legacy identity or personhood identifier,
+possibly of low entropy, into a unique associated cryptographic key of
+high pseudoentropy, for use in generating signatures for any given con-
+text. Sybil-resilient anonymous signatures achieve three main objectives:
+1) Sybil resilience: every user is entitled toat most one digital identity, 2)
+anonymity: no information about the user’s real identity is leaked, and
+3) non-interactive context switching : users can create on their own at
+most one credential for any given context in a manner that is unlinkable
+across contexts.
+We conceptualize the SyRA primitive as an ideal functionality in the
+Universal Composition (UC) setting and put forth SASSI, an efficient,
+pairing-based construction that realizes it by utilizing two levels of ver-
+ifiable random functions (VRFs), a design which may be of indepen-
+dent interest. The first level consists of threshold VRF issuance of a
+user’s unique secret key tied to their real-world identifier. The second
+level allows a user to create signatures for each context, under a unique
+pseudonym per context. Compared to prior cryptographic tools capable
+of realizing SyRA, SASSI has the unique feature that issuers are state-
+less and hence do not need to retain any information about past user
+interactions, a relevant property for a decentralized implementation.
+We overview various applications of SASSI in multiparty systems, such
+as cryptocurrency account management and airdrops, e-voting (e.g., for
+decentralized governance), and privacy-preserving regulatory compliance
+(e.g., AML/CFT checks). In the context of creating addresses for digi-
+tal assets, SyRA signatures enable users to embed their legacy identity
+into their address in a manner that protects their privacy for each ap-
+plication with which they interact. We demonstrate the practicality of
+SASSI by providing an implementation and performance evaluation of
+our construction.
+Keywords: Anonymous Signatures · Sybil Resilience · Decentralized Identity ·
+Decentralized Governance · Universal Composition
+⋆ Corresponding author: Amirreza Sarencheh
+
+2 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+1 Introduction
+A recent development in identity systems is the concept of decentralized identity
+(DID), which comes with the promise of empowering users by enabling them to
+be “self sovereign” in terms of identity management. 3 This means that users
+have the ability to self-manage the secret key(s) behind their identities and
+access services that require identification without a trusted third party acting as
+an intermediary, e.g., in the case of single sign-on systems, cf. [Wang et al.(2012),
+Fett et al.(2016)]. From a cryptographic perspective, two seemingly contradictory
+requirements are relevant for identity systems.
+– Sybil resilience. With the help of the issuing authority, each user can translate
+their real-world identity4 into at most one credential.
+– Anonymity. Credentials reveal nothing about the user’s identity, even allowing
+them to be unlinkable across applications.
+Given that users may be operating across a multitude of applications, or
+contexts, it is important for them to be able to easily generate “context-specific”
+credentials that, for privacy considerations, must be unlinkable.5 This highlights
+the following property.
+– Non-interactive context switching. Users can create (at most one) credential,
+on demand and non-interactively, for a given context, in a manner that is
+unlinkable across contexts. 6
+Achieving the above properties is feasible by employing some substantial
+cryptographic machinery (see below in related work) but an important consid-
+eration still remains: in all existing approaches capable of meeting the above
+considerations, the connection to the real-world identity of the signer is tenu-
+ous – it fundamentally relies on the ability of the credential issuer to maintain
+a mapping between credentials and real-world identities. This raises scalabil-
+ity, security, and privacy considerations, namely: how is it possible to manage
+such an ever-growing mapping of real-world identities to credentials, distribute
+such a mapping across many servers with Byzantine fault tolerance, and, at
+the same time, keep it private in order to prevent adversaries from performing
+deanonymization attacks via correlation? We refer to these considerations as the
+(credential) issuer state problem .
+3 The W3C Decentralized Identifier working group [Consortium(2022)] and Decen-
+tralized Identity Foundation [Foundation(2023)] have been developing standards for
+DIDs.
+4 Examples of real-world identities include government-issued identifiers such as a
+Social Security Number (SSN) in the United States, or national ID numbers.
+5 See Sec. 4.2 of the Peer-DID standard that covers-context specific DIDs for users
+https://identity.foundation/peer-did-method-spec/index.html .
+6 An interactive context-specific credential generation introduces a dependency on
+issuers, which can have negative effects both for latency and privacy, since the user
+will have to interact with the issuers each time they engage with a new app.
+
+SyRA Signatures 3
+Solving the issuer state problem poses a conundrum that begs cryptographic
+treatment: Sybil resilience seems to mandate that the issuer maintain a mapping
+of real-world identities to credentials; indeed, failure to do so would permit a
+trivial attack against Sybil resilience: the user would exploit the confusion of
+the issuer to dispense more than one credential for itself and thus become a
+Sybil. On the other hand, scaling and distributing the issuer would benefit from
+obfuscating, or even eliminating (if possible!) such state altogether.
+Motivated by the connection of all of the above to the DID problem, we focus
+in this work on the following question: What is a natural cryptographic primi-
+tive that reconciles Sybil resilience with anonymity and non-interactive context
+switching, and how can we realize it in a way that solves the issuer state prob-
+lem?
+Our results. We tackle the above question by putting forth a new primi-
+tive, Sybil-Resilient Anonymous (SyRA) signatures, and realizing it via an ef-
+ficient construction that solves the issuer state problem, SASSI (Sybil-resilient
+Anonymous Signatures with Stateless Issuing), and facilitates a stateless dis-
+tributed issuer entity.
+In a SyRA signature scheme, a set of issuers is tasked with translating a real-
+world identity s into a signing key for the prospective user. 7 By “real-world
+identity” (cf. Section 3) we refer to a unique identifier associated with a user
+through a verifiable personhood relation. This includes government-issued cre-
+dentials (e.g., an X.509 attribute certificate tied to a national ID), a biometric
+identifier as in systems like Worldcoin [Worldcoin(2023)] (cf. Section 6), or other
+identity assertions from legacy systems, such as those provided via DECO [Zhang
+et al.(2020)] or OAuth/OpenID [Sakimura et al.(2014)]. Crucially, we abstract
+the notion of identity through a public personhood relation Rs that is verifiable
+by the issuers, so that we enable compatibility with a broad range of identity
+instantiations without prescribing any specific realization. Given this, the issuers
+introduce a user into the system whose identity string satisfies the personhood
+relationRs and must ensure that there is a one-to-one correspondence between
+issued keys and distinct, real-world identities. Once the issuing protocol succeeds,
+a SyRA signature scheme enables a user to sign messages for any given context
+ctx; signatures can be verified against the public key of the issuing authori-
+ties and the context string. The signing procedure generates a context-specific
+pseudonym, or tagT , that is attached to each signature. This enables the user to
+create separate and unlinkable pseudonyms to issue signatures across different
+contexts. Nevertheless, within a specific context, the signatures issued by the
+user can be linked to one another, see Figure 1.
+To capture formally the properties of this new primitive, we provide an ideal
+functionality for SyRA signatures in Section 3. Some key characteristics of this
+7 Note that for SyRA signatures with centralized malicious issuer, we cannot expect
+to have privacy, since in that case, the issuer could always impersonate a real-world
+user with identitys and use the tracing operation to find all of the user’s signatures.
+Note also that s is assumed to be low entropy, such as a government identification
+number.
+
+4 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+user
+doctor
+ bank
+ government
+ government
+(σ1,T 1) (σ2,T 2) (σ3,T 3) (σ4,T 3)
+Fig. 1: Illustration of SyRA signatures’ pseudonymsT enabling anonymous, unlinkable
+engagements with various contexts. Each signature carries a pseudonymTi derived from
+the user’s identity s and the application context. When the same user engages with
+the same app more than once, the pseudonym remains the same enabling the app to
+service the user by maintaining user specific state. Nevertheless, even against collusion
+of parties, the pseudonyms reveals nothing about s or whether the same user is behind
+two separate interactions between two different apps.
+functionality are as follows. First, it verifies that the prospective user possesses
+a valid witness for their identity s with respect to the personhood relation Rs.
+Second, upon each signature generation step, it creates a unique user-context
+identifier that is leaked to the adversary. This ensures that as long as unique
+user-context combinations are being exercised, there is no loss of anonymity.
+On the other hand, once the same user signs with the same context twice, the
+adversary will be notified by receiving the same user-context identifier. Note that
+this does not allow correlation with user actions in other contexts. Finally, the
+verification interface enables the verifier to publicly extract the pseudonym of
+each signature.
+We then set out to present our construction, SASSI, which realizes SyRA via
+a distributed and stateless set of issuers, cf. Section 4. From a design perspective,
+the challenge is to embed the identity of the user into their signing key so that
+signatures are unlinkable as long as distinct contexts are signed by different
+users, and at the same time enable linking for user signatures on the same
+context. Crucially, we cannot rely on any auxiliary cryptographic structure in
+the membership credential – this is because even if the user repeats the whole
+issuing protocol again, as long as their real-world identitys remains the same, the
+user should not be able to sign the same context more than once without being
+linked to the previous instantiation. In this way, our issuers can be stateless.
+Our construction overcomes this difficulty via the composition of two verifi-
+able random functions (VRF). The first VRF is keyed by the issuing authorities.
+During issuance, the user obtains the VRF value on their real-world identity
+strings while proving to the issuing authorities that the personhood relationRs
+is satisfied. In this manner, the user obtains a value that is deterministically tied
+to their real-world identity s. The second challenge is to ensure that this value
+can be safely used as the cryptographic key to a second VRF. The reason we
+
+SyRA Signatures 5
+aim for a second VRF here is to ensure unlinkability on the one hand, while on
+the other hand still linking by a common pseudonym all signatures created by
+the same user in the same context.
+In our construction, we employ the Dodis-Yampolskiy verifiable random func-
+tion (VRF) [Dodis and Yampolskiy(2005)], which we extend to Type-III bilinear
+groups. Our asymmetric DY VRF produces the same classical DY VRF output
+in the target group with a proof of correctness in one source group; however,
+it additionally outputs the same proof in the other source group. Intuitively,
+asymmetric groups are needed to enable the use of ElGamal encryption which
+relies on Decisional-Diffie Hellman in the zero-knowledge proof that assures the
+correct composition of the two VRFs. 8
+These two values, which have the form (g1/(s+isk), ˆg1/(s+isk)), serve as the user
+secret key in SASSI, generated distributively by the issuers who share the secret
+key isk and receive a sharing of the user’s identity string s.
+The second primitive in our construction is inspired by the verifiable unpre-
+dictable function (VUF) of [Gurkan et al.(2021)], which has the unique property
+that it employs agroup element secret key. This is a key ingredient in our scheme,
+as the output of the first VRF becomes the secret key of the second. The VUF
+of [Gurkan et al.(2021)] leverages the determinism of BLS signatures [Boneh
+et al.(2004b)] and a Groth-Escala-style NIZK [Escala and Groth(2014)] proof
+of correctness with respect to the group element key. Indeed, the output of the
+VUF is the pairing T =e(h(ctx), ˆusk), where ˆusk = ˆg1/(s+isk) is part of the user
+secret key, ctx is the context, and h is a hash function modeled as a random ora-
+cle. Our scheme has the same output, but we swap the Groth-Escala NIZK with
+a Sigma protocol, as Groth-Escala proofs do not support the zero-knowledge
+property for statements that involve the target group. Furthermore, we show
+in the random oracle model that T = e(h(ctx), ˆusk) is not only unpredictable,
+but actually pseudorandom. It follows that the second primitive is also a VRF
+(essential for our privacy property).
+In order to protect the user’s identity strings, the user chooses a set of issuers
+and performs a verifiable secret-sharing of s. Subsequently, the issuers engage in
+a distributed VRF computation. As claimed in the original Dodis-Yampolskiy
+paper, it is easy to construct a distributed computation of the function Fisk(s) =
+g1/(s+isk) when the issuers have shares of the secret isk, see Figure 2. Indeed,
+we realize it using standard techniques for multiparty computation via oblivious
+transfer (OT) [Even et al.(1985)] multiplication [Haitner et al.(2022)].
+We provide a performance evaluation for our construction in Section 5.1; our
+results, cf. Figure 11 and Table 1, are highly competitive for real-world settings,
+with signature generation (inclusive of context switching if needed) requiring
+10.42 ms, signature verification 11.24 ms, signature size 5.703 KB, and issuance
+with 150 out of 300 issuers at 73 sec. (Issuance needs to be executed for each
+8 We leave as open the question whether a provably secure alternative construction
+relying solely on symmetric pairings exists. This might be feasible using DLIN based
+encryption [Boneh et al.(2004a)]. In any case, both symmetric pairing groups and
+DLIN based encryption affect performance negatively in practice.
+
+6 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+user with unique
+real-world identifier: s
+user reconstructs
+their secret key:
+– usk =g
+1
+s+isk
+– ˆusk = ˆg
+1
+s+isk
+4
+Iss1
+Iss2
+Iss3
+Iss4
+1
+3
+each stateless issuer Issi:
+– verify user’s NIZK proof of per-
+sonhood for secret shares of s.
+– run efficient distributed VRF
+with one multiplication gate.
+– output user secret key shares.
+2
+Fig. 2: Threshold issuance protocol. A user P with a unique real-world identifier s
+interacts with t (e.g., t = 4) issuers Issi, each holding a secret key iski, to generate a
+secret key pair ( usk, ˆusk). The protocol begins with P verifiably secret-sharing s and
+proving its correctness via a zero-knowledge proof 1○. The issuers after a bespoke
+multiparty computation 2○, return the output to the user 3○ who reconstructs the
+secret-key 4○. No issuer learns s.
+user only once.) We conclude our exposition with an overview of deployment
+considerations and applications for SyRA signatures. In particular, we describe
+how the personhood relation may be realized in an actual deployment using a
+variety of methods such as DECO [Zhang et al.(2020)], biometric authentica-
+tion as in [Worldcoin(2023)], and OAuth as in [Baldimtsi et al.(2024)]. Finally,
+we overview how SyRA signatures apply to various use cases, such as e-voting,
+privacy-preserving regulatory compliance, cryptocurrency airdrops, and solving
+the “peer DID” objective.
+Related work. Below we overview prior cryptographic primitives and their
+relation to SyRA signatures and our construction.
+Group signatures. Group signatures [Chaum and van Heyst(1991)] allow a mem-
+ber of a group to anonymously sign messages on behalf of the group so that the
+group manager can determine the identity of any signer using a special trapdoor.
+Similar to group signatures, in traceable signatures, each group member has a
+tracing token that, if revealed, can link signatures from the same signer [Kiayias
+et al.(2004)]. In SyRA signatures, there is no opening (or tracing) authority;
+however, each signature incorporates an obfuscation of the user’s identity string
+s in such a way that the user is unlinkable across different contexts, but linkable
+(while still being anonymous) within the same context.
+Ring signatures. Ring signatures [Rivest et al.(2001)] allow a member of a group,
+called a ring, to anonymously sign messages on behalf of the group. Ring signa-
+tures are similar to group signatures; however, there is no group manager who
+creates keys and manages the group. Instead, the formation is ad hoc. Ring
+
+SyRA Signatures 7
+signatures provide a strong notion of privacy: there is no mechanism for de-
+anonymizing users from the signatures they produce. A related concept of ring
+verifiable random functions has been explored in [Burdges et al.(2023)].
+Identity-based signatures. Identity-based signatures (IBS) [Shamir(1984)] allow
+a user’s signatures to be associated with a real-world identity string, such as an
+email address or phone number. User secret keys are generated by a master entity
+who ties them to identities using secret information. A deterministic identity-
+based signature scheme was proposed in [Herranz(2006)], i.e., signing the same
+message twice results in the same signature. This is achieved by employing a
+Schnorr signature for the key issuance phase, followed by a BLS signature for
+the signing phase, where the field element component of the Schnorr signature is
+used as the secret key for BLS. Closer to our aims, an IBS scheme where the key
+issuance phase is deterministic was proposed in [Hess(2003)]. Thus, a user can-
+not obtain multiple secret keys associated with their identity string. Here, a BLS
+signature is used for key issuance, followed by a custom signature algorithm for
+the signing phase that takes as input a group-element secret key. A key technical
+challenge in our work is combining deterministic signing at both levels, which we
+achieve via the Dodis-Yampolskiy VRF followed by a custom-built VRF with a
+group-element secret key. In a hidden identity-based signature scheme [Kiayias
+and Zhou(2007)], the user’s identity string is not public information. SyRA sig-
+natures also facilitate hiding identities as in [Kiayias and Zhou(2007)], but offer,
+by design, linkability for multiple signatures in the same context.
+Anonymous credentials. The concept of context-specific pseudonyms appears
+first in the anonymous credentials literature, beginning with the work of Chaum
+[Chaum(1985), Chaum and Evertse(1986)] (who also is the first to define, to
+the best of our knowledge, the objective of Sybil resilience ), and followed by
+subsequent works, cf. [Camenisch and Lysyanskaya(2001)]. In this setting, users
+have distinct and unlinkable pseudonyms across organizations and have to en-
+gage with with each organization individually in order to have their pseudonym
+authorized—in principle multiple pseudonyms per user could be authorized even
+if this might be costly for the user. In SyRA signatures, on the other hand, users
+can generate their organizational (context-specific) credentials on their own,
+pseudorandomly extracting them from their real world identity. The Coconut
+framework [Sonnino et al.(2019)] introduces an anonymous credential construc-
+tion that supports distributed threshold issuance. Within this framework, it is
+possible to achieve unlinkable selective attribute disclosures and manage both
+public and private attributes, even in scenarios where some issuing authorities
+may behave maliciously or be offline. However, Coconut does not provide guar-
+antees for Sybil resilience.
+Unclonable group identification. This line of work, beginning with [Damg˚ ard
+et al.(2006), Camenisch et al.(2006b)], covers a setting in which users are unlink-
+able across discrete time periods – a more limited setting compared to arbitrary
+context strings. In these constructions, the issuer verifies the real-world iden-
+tity of the user and maps it to a credential that has the desired Sybil-resilient,
+context-specific property across periods. [Camenisch et al.(2006b)] builds upon
+
+8 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+prior work on e-cash [Camenisch et al.(2005), Camenisch et al.(2006a)], with the
+addition of this type of context.
+Domain-specific pseudonymous signatures (DSPS) and direct anonymous attes-
+tation (DAA), cf. [Bender et al.(2012), Bringer et al.(2014), Kuty lowski et al.(2016),
+Kluczniak et al.(2016), B la´ skiewicz et al.(2019), Brickell and Li(2010), Yang
+et al.(2021)]. These primitives allow users to generate pseudonyms for differ-
+ent contexts and create signatures on behalf of these pseudonyms. While it is
+possible to adapt and thresholdize these techniques as well as those of unclon-
+able group identification to facilitate a SyRA construction, the resulting schemes
+would suffer from the credential issuer state problem: there is no immediately
+effective way to tie a secret key to a real-world identity (other than generic
+MPC that, e.g., evaluates a PRF “in the exponent”). A similar consideration
+applies to UTT [Tomescu et al.(2022)], a decentralized payment system based
+on anonymous credentials. In contrast, our construction SASSI only requires a
+special-purpose MPC with a single multiplication gate.
+Linkable and traceable ring signatures. Linkable ring signatures [Liu et al.(2004)]
+allow for two signatures issued by the same signer with respect to the same
+ring of keys to be linked. Traceable ring signatures [Fujisaki and Suzuki(2007),
+Au et al.(2013)] generalize this notion to arbitrary contexts and allow for the
+recovery of the public key of the signer in case of signing twice in the same
+context. One-time traceable ring signatures [Scafuro and Zhang(2021)] facilitate
+the recovery of the public key of the signer in the linkable ring signature scenario.
+A similar type of functionality is achieved in the context of e-petitions in [Diaz
+et al.(2008)], where users can only sign a petition once. As mentioned earlier,
+in all these primitives, the connection between the user’s secret key and their
+real-world identity is via an explicit mapping maintained by the issuer. While,
+in principle, such techniques could be used to produce a SyRA construction, they
+fundamentally rely on an issuer-maintained mapping of real-world identities to
+secret keys.
+Threshold DY VRF. As mentioned, Dodis and Yampolskiy [Dodis and Yampol-
+skiy(2005)] suggests a strategy for threshold implementation, which is explored
+further in [Dodis et al.(2006)] with security in the semi-honest setting. [Miao
+et al.(2020)] focuses on the n-out-of-n setting, while the general malicious set-
+ting is studied later in [Doerner et al.(2023)]. Our issuance protocol for SASSI
+suitably adapts these techniques to realize SyRA.
+Legacy-compatible9 identification. In this setting, put forth in [Zhang et al.(2020)]
+and utilized in the context of DIDs in CanDID [Maram et al.(2021)], users can
+prove a piece of information, which can be their real-world identity, from a
+“legacy” web service to a third-party provider. In the context of CanDID, such
+a provider (which is in fact a distributed entity) can issue a credential that
+the user can, on demand (albeit interactively with the issuer), transpose to any
+9 Legacy refers to a scheme that is not purpose-built for the task at hand but is
+preexisting. See, for example, [Maram et al.(2021)], where the same terminology is
+used for this purpose.
+
+SyRA Signatures 9
+context he wishes, while remaining unlinkable; furthermore, Sybil resilience is
+ensured with respect to the user’s real-world identity. The CanDID construction
+makes the only attempt (to the best of our knowledge) towards solving the issuer
+state problem: the real-world identity of the user is obfuscated in the form of
+its pseudorandom function (PRF) evaluation via a key that is shared between
+the issuing authorities. Each issuing authority keeps a copy of this obfuscated
+database and, hence, any attempt of the user to subvert Sybil resilience can be
+blocked by checking the PRF evaluation of their real-world identity against the
+obfuscated database. It is worth noting that this approach still has the downsides
+that each issuer needs to maintain a state linear in the number of credentials,
+and that users who lose their keys need additional infrastructure to help them
+recover them, as the issuers, in their effort to protect against Sybils, will deny
+re-issuance to any user who is unfortunate enough to lose their key. Our con-
+struction SASSI, on the other hand, circumvents both of these downsides by
+requiring no (updatable) state for the issuers and by requiring no interaction
+to introduce users to new contexts. Furthermore, it solves two open questions
+from [Zhang et al.(2020)], enforcing non-transferability (due to linkability of sig-
+natures in the same context), and providing unlinkability even if the adversary
+controls a minority of “committee members” (issuers in our setting).
+zkLogin [Baldimtsi et al.(2024)] aims to enable users to authenticate on the
+blockchain using legacy credentials without managing blockchain-specific secret
+keys. To achieve this, zkLogin introduces a salt service, which adds high-entropy
+salt to low-entropy user attributes, deriving a zkLogin address while preserv-
+ing the privacy of user attributes. zkLogin offers an alternative mode in which
+users manage the salt themselves. In this mode, deviating from zkLogin’s main
+objective of removing the need to manage blockchain-specific secret keys, users
+must securely record the secret salt in order to access their on-chain funds. Im-
+portantly, for our purposes, in both modes (salt service and user-managed salt),
+zkLogin does not provide Sybil resilience. SyRA, unlike zkLogin which relies
+solely on OAuth, can interoperate with a variety of identity providers (including
+OAuth) as elaborated in Section 6. Proving the well-formedness of user addresses
+in zkLogin is not ZK-friendly, whereas SyRA defines user addresses algebraically,
+enabling more efficient proofs.
+A similar approach is employed by ZK Address Abstraction [Park et al.(2023)],
+which uses zero-knowledge proofs over signed statements issued by providers
+based on user information to authenticate blockchain transactions. While this
+scheme protects users’ private data, it also does not address Sybil resilience.
+2 Preliminaries
+Let λ∈ N denote the security parameter and 1λ its unary representation. Let p
+be a λ-bit prime. For all positive polynomials f(λ), a function negl : N→ R+ is
+called negligible if∃ λ0∈ N such that∀ λ>λ 0 it holds that negl(λ)< 1/f(λ).
+We denote by G∗ the set G\ 1G, where 1 G is the identity element of the group
+G. We denote the group of integers mod p by Zp = Z/pZ and its multiplicative
+
+10 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+group of units by Z∗
+p. We denote the set of integers {1,...,n } by [1,n ]. Let
+Y
+$
+← −F (X) denote running probabilistic algorithm F on input X and assigning
+its output to Y . Let x
+$
+← −Zp denote sampling an element of Zp uniformly at
+random. All algorithms are randomized unless expressly stated otherwise. PPT
+refers to probabilistic polynomial time.
+Definition 1 (Bilinear group). A bilinear group generator GrGen(1λ) returns
+a tuple bp← (G, ˆG, GT,p,e,g, ˆg) such that G, ˆG and GT are finite groups of the
+same prime order p, g∈ G and ˆg∈ ˆG are generators, and e : G× ˆG→ GT is a
+bilinear pairing, which is efficiently computable and satisfies (1) non-degeneracy:
+e(g, ˆg)̸= 1GT and (2) bilinearity: ∀ x,y∈ Zp, e(gx, ˆgy) =e(g, ˆg)xy =e(gy, ˆgx).
+We rely on Type-III, or asymmetric, bilinear groups G and ˆG, for which there
+is no efficiently computable isomorphism between them, and two hardness as-
+sumptions defined over them: the Decisional Diffie-Hellman (DDH) assumption
+and the q-Decisional Bilinear Diffie-Hellman Inversion ( q-DBDHI) assumption.
+Our construction also relies on Shamir secret sharing (SSH), the ElGamal pub-
+lic key encryption (PKE) scheme, and the Pedersen commitment scheme. See
+Appendix A for their definitions.
+2.1 Verifiable random functions
+A verifiable random function (VRF) is a function whose output is pseudoran-
+dom and for which a proof of correct evaluation is provided (i.e., a PRF with
+verifiability).
+In our construction of a Sybil-resilient anonymous (SyRA) signature scheme,
+SASSI, we employ a VRF to compute user secret keys. Recall the Dodis-Yampolskiy
+VRF in Figure 3 [Dodis and Yampolskiy(2005)]. It is defined over a symmetric
+pairing e : G× G→ GT , where the output is a value Fsk(τ) = e(g,g )1/(τ +sk) in
+the target group, with corresponding proof πvrf =g1/(τ +sk) in the source group.
+It is proven secure (i.e., pseudorandom) under the q-Decisional Bilinear Diffie-
+Hellman Inversion assumption ( q-DBDHI) in [Dodis and Yampolskiy(2005)]:
+Given (g,gx,...,g xq
+), it is hard to distinguish e(g,g )1/x from random. The q
+powers are used to simulate VRF output queries in the security reduction. In
+our construction, we make use of the Dodis-Yampolskiy VRF in the asymmet-
+ric setting. In particular, user secret keys consist of a pair of group elements,
+one in each of the source groups, corresponding to a VRF proof of correctness
+in each group. We capture this in our VRF definitions (Definitions 4 and 5)
+by allowing a second proof ˆπvrf to be output. 10 Pseudorandomness plays a key
+role in the security proof of our construction (specifically, in preserving user
+anonymity) while verifiability ensures that users can prove they have interacted
+with the VRF secret-key holder. Our asymmetric DY VRF is secure under the
+10 Our definitions are the standard VRF definitions where the proof consists of both
+elements (πvrf, ˆπvrf). We simply chose to present them in a way that is syntactically
+closer to our scheme, for greater clarity and self-containment.
+
+SyRA Signatures 11
+q-Decisional Diffie-Hellman inversion assumption ( q-DBDHI) over asymmetric
+pairings (see Appendix A).
+Definition 2 (Verifiable random function (VRF)). [Dodis and Yampol-
+skiy(2005)] Letℓ : N→ N∪{∗} and ℓ′ : N→ N be any functions for which ℓ(λ)
+and ℓ′(λ) are computable in poly( λ) time (except when ℓ takes the value ∗ for
+an input of any length). A function family F(·)(·) :{0, 1}ℓ(k)→{ 0, 1}ℓ′(k) is a
+family of VRFs if there exist polynomial-time algorithms (VRF.Setup, VRF.Gen,
+VRF.Prove, VRF.Ver) as follows:
+– PP
+$
+← −VRF.Setup(1λ) : a PPT algorithm that takes as input the security
+parameter and outputs public parameters PP, which are implicitly given as
+input to all other algorithms.
+– (vk, sk)
+$
+← −VRF.Gen(): a PPT algorithm that returns a public verification key
+vk and secret key sk.
+– (Fsk(τ),π vrf)← VRF.Prove(sk,τ ): an algorithm that takes as input a secret key
+and VRF input τ and returns a VRF output Fsk(τ) and proof of correctness
+πvrf.
+– 0/1← VRF.Ver(vk,τ,T,π vrf): a deterministic algorithm that takes as input a
+verification key, VRF input τ, VRF output T , and proof πvrf and verifies that
+T = Fsk(τ) using the proof πvrf, outputting 1 to indicate acceptance or 0 to
+indicate rejection.
+The main security properties of a VRF are correctness, uniqueness, and pseu-
+dorandomness.
+Definition 3 (VRF correctness). For allλ∈ N and input values τ∈{ 0, 1}λ,
+Pr
+
+PP← VRF.Setup(1λ); (vk, sk)
+$
+← −VRF.Gen();
+(T,π vrf)
+$
+← −VRF.Prove(sk,τ ) : VRF.Ver(vk,τ,T,π vrf) = 1
+
+= 1
+Definition 4 (VRF uniqueness). For all PPT adversaries A playing game
+Gameunique
+A , there exists a negligible function negl such that: Advunique
+A (λ) =
+Pr[Gameunique
+A (λ) = 1]≤ negl(λ).
+The game Gameunique
+A (λ) (with optional second proof ˆπvrf) is defined as fol-
+lows:
+– PP← VRF.Setup(1λ)
+– (vk∗,τ∗,T∗
+1,T∗
+2,π∗
+vrf,1,π∗
+vrf,2, ˆπ∗
+vrf,1 , ˆπ∗
+vrf,2 )
+$
+← −A()
+– return (T∗
+1̸=T∗
+2 )∧ VRF.Ver(vk∗,τ∗,T∗
+1,π∗
+vrf,1, ˆπ∗
+vrf,1 )∧
+VRF.Ver(vk∗,τ∗,T∗
+2,π∗
+vrf,2, ˆπ∗
+vrf,2 )
+Definition 5 (VRF pseudorandomness). For all PPT adversaries A play-
+ing game Gamepseudo
+A , there exists a negligible function negl such that: Advpseudo
+A (λ) =
+Pr[Gamepseudo
+A (λ) = 1]≤ negl(λ).
+The game Gamepseudo
+A (λ) (with optional second proof ˆπvrf) is defined as fol-
+lows:
+
+12 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+– S←∅ / /query set
+– PP← VRF.Setup(1λ)
+– (vk, sk)← VRF.Gen()
+– b′ $
+← −AOSign,OChal
+(vk)
+– return (b′ =b)
+where the oracleOSign(τ) and the oracle OChal(τ∗) ( called once) are defined
+as follows:
+OSign(τ):
+– if τ =τ∗return⊥
+– else
+– (T,π vrf, ˆπvrf )
+← VRF.Prove(sk,τ )
+– S← S∪{τ}
+– return (T,π vrf, ˆπvrf )
+OChal(τ∗):
+– if τ∗∈ S return⊥
+– b
+$
+← −{0, 1}
+– if b = 0, T0←Fsk(τ∗)
+– if b = 1, T1
+$
+← −{0, 1}ℓ′(λ)
+– return Tb
+Our asymmetric Dodis-Yampolskiy VRF construction. Our asymmet-
+ric Dodis–Yampolskiy VRF ( DY-VRF†) construction is specified in Figure 4.
+DY-VRF† is distinguished from DY-VRF in a number of ways, e.g., proofs re-
+side in both asymmetric source groups, its public key exists only in the second
+source group, and VRF verification checks three equalities in the target group.
+Theorem 1. DY-VRF† (Figure 4) satisfies uniqueness (Definition 4) and pseu-
+dorandomness (Definition 5) under the q-Decisional Bilinear Diffie-Hellman In-
+version assumption (see Appendix A).
+Proof. This follows from the uniqueness and pseudorandomness of the DY VRF
+under the symmetric q-Decisional Bilinear Diffie-Hellman Inversion assumption
+(q-DBDHI) [Dodis and Yampolskiy(2005)]. 11
+In the original Dodis-Yampolskiy reduction, the powers ( g,gx,...,g xq
+) are
+used to simulate the output and VRF proof. The additional powers (ˆg, ˆgx,..., ˆgxq
+)
+in our construction are only needed to simulate the VRF proof ˆπvrf in the other
+source group.
+11 [Dodis and Yampolskiy(2005)] restricts inputs to be of at most super-logarithmic size
+(in the security parameter) in order to prove security against adaptive adversaries.
+We also note that real-world identifiers, in the context of our work, are small e.g.,
+SSN in the US.
+
+SyRA Signatures 13
+Fig. 3: The Dodis-Yampolskiy VRF [Dodis and Yampolskiy(2005)].
+Fig. 4: Our asymmetric Dodis-Yampolskiy VRF ( DY-VRF†).
+3 Formal modelling of SyRA signatures
+We define Sybil-resilient anonymous ( SyRA) signatures using an ideal function-
+alityFSyRA, which captures the desired security properties: threshold issuance,
+unforgeability, Sybil resilience, privacy-preservation, and unlinkability. The func-
+tionalityFSyRA is parameterized by a threshold t≤n and n issuers denoted as
+I = (Iss1,..., Issn). The party identifiers of the issuers are incorporated into the
+session identifier sid = (I, sid′). Initially, the state variable Init is set to 0. At
+the conclusion of the key generation phase, Init is updated to 1. For all other
+interfaces of the functionality ( threshold issuance, signature generation, verifi-
+cation, and leak signatures ) a check is performed at the beginning to ensure
+that Init = 1. If this condition is not satisfied, FSyRA disregards the received
+message.
+Key generation. The functionalityFSyRA first verifies that sid = (I, sid′), en-
+suring that each set of n issuers can initialize their own instance of the func-
+tionality. Upon receiving the (Init, sid) message from all issuers specified in sid,
+FSyRA queries the adversaryA for a verification key ivk, which is then recorded
+byFSyRA.
+Threshold issuance. Before a party P is granted the capability to sign mes-
+sages, it must demonstrate ownership of the personhood identity string s. This
+verification is formalized through an abstract personhood relationRs(xs, (s,ws)).
+
+14 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+The relationRs operates on a public value xs, which encapsulates publicly ac-
+cessible information shared between the enrolling party P and each issuer Issi∈ I
+participating in the multiparty issuance process. The multiparty setup requires
+I⊂I , and|I| =t, where t is the threshold number of issuers necessary to regis-
+ter a user. The enrolling party also has the private witness (s,ws) corresponding
+to the identity string s to satisfy the relation Rs.
+The personhood relation Rs allows us to configure the functionality to sup-
+port different identification processes. For instance, if users 12 are in possession
+of X.509 attribute certificates for their s value, the relation can be of the form
+RGov
+s (xs, (s,ws)) so that xs = ( pkGov, certP),ws = skP, certP = ( pkP,s ), and
+Cert.Verify(pkGov, certP) = 1∧ pkP =gskP. That is, the party P proves that they
+possess a certificate on s signed by the government for which they know their
+secret key. Note that it is crucial that the issuers confirm pkGov as part of their
+input; otherwise, the user could use certificates signed by arbitrary public keys.
+It is straightforward to extend the above to a setting where various identity
+providers are recognized by the issuers. Another alternative is that the issuers
+and user run DECO [Zhang et al.(2020)], a mechanism for porting existing iden-
+tities from websites (e.g., bank or government websites). Note also that xs mod-
+els the leakage of the certification process. If one were to, for example, model
+anonymous credentials instead of classical certificates, certP would become part
+of ws, and xs would not reveal any information about s. We intentionally leave
+any further details aboutRs and the way it is implemented in the environment
+unspecified, so that our mechanism is compatible with a variety of different
+personhood instantiations.
+The mapping I associates parties P with their corresponding identity strings
+s. Each honest party P is uniquely associated with a single s value, whereas
+malicious parties may be associated with multiple s values, provided that for
+eachs, the relationRs(xs, (s,ws)) holds. If a malicious party submits ans value
+(for whichRs holds) that has already been recorded for an honest party, or if
+an honest party submits an s value that is already associated with a malicious
+party, the functionality FSyRA records s using the mapping ˆP(s). Here, ˆP(s)
+maps the identity string s to its associated party identifiers. In such cases, the
+party P is deemed a compromised party. When a party P invokes the threshold
+issuance interface, if P∈ ˆP(s) holds for the provided s, the functionalityFSyRA
+does not offer anonymity guarantees for P.
+Signature generation. Both honest and malicious parties can request signa-
+tures σ for a given context ctx and message m. Upon receiving a signature re-
+quest, a new signature is generated by interacting with the adversaryA. During
+this process, only the identities of compromised parties are revealed, along with
+a value ucid, which serves as a unique label for each user-context pair. Recall
+that a party is classified as compromised, for instance, if its identity string s
+has been submitted to the issuance protocol of a malicious party. This scenario
+models the use of multiple devices belonging to the same user.
+12 The terms “user” and “party” are used interchangeably.
+
+SyRA Signatures 15
+Upon receiving a response from the adversary, the functionality updates the
+set Sig to facilitate signature verification. The adversary submits the signature
+σ, the pseudonymT (against which Sybil is checked), and the identity stringss∗
+for malicious parties to FSyRA. As the adversary may possess multiple identity
+strings,FSyRA records s∗ for malicious parties. For honest parties, s∗ is ignored
+becauseFSyRA already maintains a unique identity strings for each honest party.
+The functionalityFSyRA verifies the submitted pseudonym T e.g., whether it is
+consistent with an already recorded pseudonym T′ for the same verification key
+ivk, identity string s, and context ctx. To ensure consistency, FSyRA adds new
+records to the set Sig as necessary.
+It might be possible to strengthen the functionality by having the adversary
+commit to the algorithm that issues signatures and pseudonyms for honest users
+in advance (and monitor this algorithm to ensure the desired properties). We
+leave the specification and realization of such a functionality as a direction for
+future work.
+Verification. The verification interface enables external parties to validate sig-
+natures and retrieve the associated pseudonyms T . Notably, we do not assume
+the existence of a public-key infrastructure for issuer verification keys or the use
+of authenticated channels between verifiers and issuers. As a result, verifiers may
+inadvertently rely on incorrect issuer verification keys. For signatures generated
+using the verification keys of the session’s designated issuers, the verification pro-
+cess leverages the records in Sig that were created during signature generation.
+For other verification keys, the adversary determines the verification outcome.
+Regarding pseudonym T extraction, the interface allows external parties to
+submit signatures and retrieve the associated pseudonym, enabling parties, upon
+obtaining the pseudonym T , to query their local key-value store table to deter-
+mine whether a tuple (pseudonym T, ctx) exists. By doing so, parties can effi-
+ciently detect all signatures generated by the same identity strings holder within
+the same context ctx. If the submitted signature is invalid with respect toivk, the
+functionalityFSyRA returns⊥ as the pseudonym. To ensure consistency, FSyRA
+maintains a record of previous verification and pseudonym extraction results in
+the set Ver.
+Leak signatures. This is an adversarial interface for retrieving the signatures of
+users who are corrupted during the protocol (i.e., adaptively corrupted). It is an
+interesting question whether some of this leakage can be avoided by employing
+key-evolving VRFs [David et al.(2024)] to achieve forward secrecy. This question
+and the question of adaptive corruption in general is left for future work.
+Functionality Sybil-resilient anonymous signaturesFSyRA
+The functionalityFSyRA is parameterized by a thresholdt≤n andn issuers
+I = (Iss1,..., Issn). All sets and mappings are initialized as empty: W =
+I(P) = ˆP(s) =T = M = D = Sig = Ver =∅.
+
+16 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+Key generation. Upon receiving the input ( Init, sid) from a party
+Issi: Parse sid = ( I, sid′). If Issi /∈ I, ignore. Else, update W ←
+W ∪{ Issi}. Output ( Init, sid, Issi) to A. Once |W| = n, and upon
+receiving ( VerKey, sid, ( ˆivki, ˆivk)) from A for each Issi ∈ I: Output
+(VerKey, sid, ( ˆivki, ˆivk)) to each Issi∈I via public-delayed output. Record
+ˆivk, and set Init← 1.
+Threshold issuance. (i) Upon receiving (Issue, sid,s,x s,ws, I) from some
+party P, and (Issue.Ok, sid,xs) from issuer Issi, where sid = (I, sid′),|I| =
+t, I⊂I , and Issi∈ I act as follows.
+Upon receiving (Issue.Ok, sid,xs) fromt issuers, ignore ifRs(xs, (s,ws))̸=
+1 or if P is honest and there exists s′ such that I(P) =s′ and s′̸=s. Else,
+act as follows:
+1. If P is malicious, retrieve {Pi}i values of honest parties for which
+{I(Pi) =s}i holds. Set ˆP(s)←{ Pi}i.
+2. Else ( P is honest), if there exists a malicious party P′ for whichs∈ I(P′)
+holds, set ˆP(s)← ˆP(s)∪ P.
+Generate a fresh id. Set T (id) ← (P,s ). If P ∈ ˆP(s), set T ←
+(P,s, ˆP(s),xs, I). Else, set T ←(xs, I). Hand ( Issue, sid, id,T ) to A. //
+FSyRA guarantees privacy: the adversary learns neither s nor P.
+(ii) Upon receiving ( Issue,b, sid, id) from A: Ignore if T (id) = ⊥. Else,
+retrieve T (id) = ( P,s ). If b = 1: set I(P) ← I(P)∪{ s}; and output
+(Issued, sid) to P. Else (b = 0), output ( Issue.Failed, sid) to P.
+Signature generation. (i) Upon receiving a value (Sign, sid, ctx,m ) from
+some party P: Ignore if I(P) =∅. Else, if there exists aucid where M(ucid) =
+(P, ctx), retrieve ucid. Else, generate a fresh ucid and set M(ucid)← (P, ctx).
+If there exists an s value such that P∈ ˆP(s), set ψ← (ctx,m, P). Else,
+set ψ ← (ctx,m ). Select a fresh tid and set D(tid)← (P, ctx,m ). Hand
+(Sign, sid, ucid,ψ, tid) toA. // FSyRA guarantees privacy: the adversary learns
+neither s nor P.
+(ii) Upon receiving ( Signature, sid,σ,T,s ∗, tid) fromA: Ignore if D(tid) =
+⊥, or there exists an entry ( ·,·,·,·,σ,·,·) in the set Sig. Else, retrieve
+D(tid) = (P, ctx,m ).
+1. If s∗∈ I(P) and P is malicious, set s←s∗.
+2. Else, if P is honest, retrieve I(P) ={s′} and set s←s′.
+3. Else, ignore.
+Ignore if:
+1. there exists ( ivk,s, ctx,·,·,T′,·)∈ Sig where T′̸= T or, // FSyRA guar-
+antees Sybil-resilience: it enforces one T pers and ctx
+2. there exists ( ivk,s, ctx′,·,·,T,·)∈ Sig where ctx′̸= ctx or, // FSyRA guar-
+antees unlinkability: it enforces two pseudonyms per fixed s but different con-
+texts
+
+SyRA Signatures 17
+3. there exists ( ivk,s′, ctx,·,·,T,·)∈ Sig wheres′̸=s. // FSyRA enforces two
+distinct pseudonyms per fixed ctx but different identities
+Else, add ( ivk,s, ctx,m,σ,T, 1) to the set Sig. Output
+(Signature, sid, ctx,m,σ ) to P.
+Verification. (i) Upon receiving a value (Ver, sid, ivk′, ctx,m,σ ) from some
+party V: Hand ( Ver, sid, ivk′, ctx,m,σ ) toA.
+(ii) Upon receiving ( Ver.Ok, sid, ivk′, ctx,m,σ,T,θ ) fromA:
+1. If ( ivk′,·, ctx,m,σ,T ′,Θ′)∈ Ver, setT ←T′ and Θ←Θ′.
+2. Else, if ( ivk,s, ctx,m,σ,T ′, 1) ∈ Sig such that ivk′ = ivk, record
+(ivk,s, ctx,m,σ,T ′, 1) in the set Ver and setT ←T′ and Θ← 1.
+3. Else, if ( ivk,·, ctx,m,σ,·, 1) /∈ Sig such that ivk′ = ivk, record
+(ivk,·, ctx,m,σ,⊥, 0) in the set Ver and setT ←⊥andΘ← 0. // FSyRA
+guarantees unforgeability: if ivk′ = ivk and the signer has never signed (ctx,m ),
+then the verification fails.
+4. Else, record ( ivk′,·, ctx,m,σ,T,θ ) in the set Ver and set T ←T and
+Θ← θ. // If none of the conditions above are met, the functionality allows
+the adversary to determine the values of T and Θ.
+Output (Ver.End, sid, ivk′, ctx,m,σ,T,Θ ) to V. // FSyRA guarantees privacy:
+the adversary learns neither s nor P.
+Leak signatures. Upon receiving (Leak.Sig, sid, ivk,s ) fromA: If ˆP(s) =
+∅, set η ← ⊥. Else, retrieve {(ivk,s,·,·,σi,Ti, 1)}i from set Sig and set
+η←{σi}i. Hand ( Leaked.Sig, sid, ivk,η ) toA.
+4 Our construction: SASSI
+We describe our Sybil-resilient anonymous signature construction ΠSASSI and
+prove thatΠSASSI securely realizesFSyRA. Our construction consists of two main
+parts: (i) issuance of each user’s secret key as a deterministic function of their
+unique identity strings and the joint secret key of the issuers, and (ii) generation
+of Sybil-resilient anonymous signatures by users under the obtained secret keys.
+Our threshold issuance enables multiple issuers, each holding a share of the
+signing key isk, to issue a key pair ( usk, ˆusk) to each user P. Specifically, we
+consider a set of n issuersI = (Iss1,..., Issn), where each issuer Issi possesses a
+secret key iski received from the distributed key generation (DKG) functionality
+Fn,t
+DKG. Each issuer’s verification key ˆivki is an element of the bilinear pairing’s
+second source group ˆG.
+A user’s secret key ( usk, ˆusk) is computed as (g1/(s+isk), ˆg1/(s+isk)). This rep-
+resentation consists of two Dodis-Yampolskiy VRF proofs [Dodis and Yampol-
+skiy(2005)], one in each source group (Figure 4). As noted in the original paper,
+constructing a distributed computation of the function fisk(s) = g1/(s+isk) is
+
+18 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+straightforward when the issuers possess shares of the secret isk. Our threshold
+issuance protocol, is a distributed evaluation of Dodis-Yampolskiy VRF proofs
+where no issuer sees the user’s identity strings in plaintext, and collusion among
+t issuers would be required to compromise privacy. In this protocol, t out of n
+issuers, each holding iski andsi, collaborate with the user to generate the user’s
+secret key (usk, ˆusk).
+Our construction uses three cryptographic primitives: Shamir secret sharing
+(Definition 6), ElGamal encryption (Definition 12), and our asymmetric Dodis-
+Yampolskiy verifiable random function DY-VRF† (Figure 4). Additionally, it re-
+lies on the following ideal sub-functionalities: non-interactive zero knowledge
+functionalityFNIZK (Appendix B.1), sender-anonymous and secure communica-
+tion channel functionality F sas
+Ch (Appendix B.2) 13, broadcast functionality FB
+(Appendix B.3), distributed key generation functionalityFn,t
+DKG (Appendix B.4),
+multiplication functionalityFmul (Appendix B.5), and random oracle functional-
+ityFRO (Appendix B.6). The constructionΠSASSI is presented in four phases: key
+generation, threshold issuance, signature generation, and verification as follows.
+Key generation. In this phase, each issuer Issi is activated byZ, and whenever
+alln issuers are activated, the protocol generates secret signing key sharesiski for
+each issuer, a set of n issuer public keys{ ˆivkk}n
+k=1, and a public verification key
+ˆivk∈ ˆG as outputs of the DKG functionalityFn,t
+DKG. (Note that Issi does not have
+a verification key in the first source group G.) The protocol is parameterized by:
+1. the description of a bilinear pairing group
+bp =
+ 
+p, G, ˆG, GT,e,g, ˆg
+
+,
+2. the set of generators ( h,W, ˆW ), where:
+– g,W,h ∈ G are generators of G such that the discrete logarithm between
+any pair is unknown;
+– ˆg, ˆW∈ ˆG are generators of ˆG such that the discrete logarithm between
+them is unknown,
+3. public parameters ivk = (bp, ˆivk,h,W, ˆW ).
+The algorithm run by each issuer is provided in Figure 5.
+1. Input: Upon receiving ( Init, sid) fromZ, act as follows.
+2. Call Fn,t
+DKG
+a with (DKeyGen, sid).
+3. Upon receiving ( Point, sid, ˆivk,ri,{ ˆivkk}n
+k=1) fromFn,t
+DKG, set: iski← ri,
+and ˆivki← ˆgiski.
+4. Record ( iski, ˆivk), and{ ˆivki}n
+i=1.
+13 Note that a degree of sender anonymity is essential for maintaining privacy. Without
+this anonymity, “network leakage” could potentially expose the parties involved in
+a transaction, regardless of the robustness of cryptographic safeguards at the trans-
+actional level. Furthermore, in real-world deployment, some level of network leakage
+might be deemed acceptable. In such a scenario, our analysis would still be appli-
+cable, acknowledging that the adversary could compromise privacy through traffic
+analysis to some extent.
+
+SyRA Signatures 19
+5. Output: Output (VerKey, sid, ( ˆivki, ˆivk)) toZ.
+a Note that the functionality F n,t
+DKG is parameterized by the second source group
+ˆG of the bilinear pairing.
+Fig. 5: Key generation – Issi
+Threshold issuance.
+Threshold issuance is an interactive protocol between the party P, which has a
+unique real-world identifiers, andt issuers Issi∈ I,|I| =t, each holding a secret
+key iski. The protocol enables party P to generate its secret key pair ( usk, ˆusk),
+corresponding to two VRF proofs, πvrf and ˆπvrf, for DY-VRF†. The protocol
+produces no output for the issuers. Party P is activated by the environmentZ,
+which provides an instruction specifying a set of t issuers I with whom P is to
+engage during the issuance protocol. If the environment has previously provided
+a different s to P in an earlier session, P disregards the current instruction.
+To initiate the protocol, P verifiably secret-shares the value s received fromZ.
+This is accomplished by committing to the shares and broadcasting a vector
+of all t commitments to the issuers. Additionally, P generates a zero-knowledge
+proof showing that the committed shares are consistent with the original secret
+s, for which the personhood relationRs(xs, (s,ws)) = 1 holds. Once this proof is
+constructed, P transmits it along with the associated statement and the opening
+of the commitment to each issuer Issi∈ I via the channelF sas
+Ch .
+The algorithm executed by P is detailed in Figure 6.
+1. Input: Upon receiving ( Issue, sid,s,x s,ws, I) fromZ, act as follows.
+2. Parse sid = (I, sid′), and ignore if: (i) I̸⊂I , or (ii)|I|̸ =t, or (iii) there
+exists a recorded s′ such that s′̸= s, or (iv) Rs(xs, (s,ws))̸= 1. Else,
+record s as s′.
+3. Call {si}n
+i=1
+$
+← −SSH.Sharen,t(s).
+4. Choose a fresh identifier id.
+5. ∀i∈ index(I): set comi←gsi·hzi for zi
+$
+← −Z∗
+p.
+6. Set comI←{ comi}∀i∈index(I).
+7. Call FBC with (Broadcast, sid|| id|| I, comI).
+8. Set NIZK statement x← (comI,xs).
+9. Set NIZK witness w← (s,ws,{sj}n
+j=1,{zi}∀i∈index(I)).
+10. Call FNIZK with (Prove, sid,x,w ) for the relation R(x,w ):
+(a) comI =
+n
+comi =gsi·hzi
+o
+∀i∈index(I)
+(b) SSH.Aggn,t{si}∀i∈index(I) =s
+(c) Rs(xs, (s,ws)) = 1
+11. Receive ( Proof, sid,π ) fromFNIZK.
+12. Output: CallF sas
+Ch with ( Send, sid|| id|| I, Issi, (si,zi,x,π )) for each
+Issi∈ I.
+
+20 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+Fig. 6: Threshold issuance – P (1st phase)
+Each issuer Issi awaits activation through three distinct messages: from the net-
+work and from the environmentZ. The network signals activation by delivering
+the user’s messages sent via FBC andF sas
+Ch . The environment Z confirms the
+validity of the statement associated with the user’s personhood proof xs. Upon
+receiving these messages, the issuer Issi checks the correctness of the commit-
+ment and verifies the zero-knowledge proof πi to ensure the well-formedness of
+si. Subsequently, each issuer Issi independently samples a random value ri and
+provides it, together with the tuple ( iski,si), and auxiliary information auxi to
+Fmul.
+The value auxi contains the randomness of commitment zi, and two vectors of
+size t: ({ ˆivkk}t
+k=1, comI).Fmul first checks the well-formedness of the input of
+each issuer. Specifically, it checks if ˆgiski results in ˆivki and if gsi·hzi results
+in comi (see Section 5, Implementing Multiplication for details). If not, ignores
+the input. Else, ignores if not all ( { ˆivkk}t
+k=1, comI) values provided by t issuers
+are the same. Else, computes and outputs K and ˆK. These are group elements
+whose exponents are the inverse of multiplication of r and ( isk +s). Finally,
+the issuer Issi computes the values ωi = Kri and ˆωi = ˆKri, which are then
+transmitted back to the user via the same communication channel from which
+the user’s original message was received.
+The algorithm run by each issuer Issi is provided in Figure 7.
+1. Input: (i) Receive ( Broadcasted, sid || id || I, comI) from FBC,
+and (ii) ( Received, sid || id || I, mid, (si,zi,x,π )) from F sas
+Ch , and
+(iii) (Issue.Ok, sid,xs, I) fromZ where x = (comI,xs).
+2. Ignore if: (i) comi̸= gsi·hzi for comi∈ comI or (ii) ( iski, ˆivk) has not
+been recorded.
+3. Else, call FNIZK with (Verify, sid,x,π ) and receive ( Verification, sid,
+b). Ignore if b = 0.
+4. Else, randomly sample ri
+$
+← −Zp.
+5. Set auxi← (zi,{ ˆivkk}t
+k=1, comI).
+6. Call Fmul with ( Compute, sid || id || I,ri, (iski,si), auxi), and receive
+(Computed, sid|| id|| I,K, ˆK) from Fmul where K = g(r·(isk+s))−1
+and
+ˆK = ˆg(r·(isk+s))−1
+.
+7. Set: ωi←Kri and ˆωi← ˆKri.
+8. Output: CallF sas
+Ch with (SendBack, sid, mid, (ωi, ˆωi)).
+Fig. 7: Threshold issuance – Issi
+Upon receiving t messages from t issuers, the user computes their secret keys
+by reconstructing shares. Next, the user runs two secret key well-formedness
+equality checks. If both equalities hold, the user records their secret keys and
+
+SyRA Signatures 21
+outputs the issued message to the environment. Otherwise, it outputs failure.
+The algorithm run by P is provided in Figure 8.
+1. Upon receiving ( ReceivedBack, sid, Issi, (ωi, ˆωi)) from F sas
+Ch and from t
+issuers, call:
+– ω← −SSH.Aggn,t{ωi}∀i∈index(I)
+– ˆω← −SSH.Aggn,t{ˆωi}∀i∈index(I).
+2. Set: usk =g1/(s+isk)←ω and ˆusk = ˆg1/(s+isk)← ˆω
+3. Ignore and send ( Issue.Failed, sid) toZ if:
+e(usk, ˆg)̸=e(g, ˆusk) or e(usk, ˆivk· ˆgs)̸=e(g, ˆg).
+4. Else, record ( usk, ˆusk).
+5. Output ( Issued, sid) toZ.
+Fig. 8: Threshold issuance – P (2nd phase)
+Signature generation. To sign messages, partyP is activated byZ with a mes-
+sage ( Sign, sid, ctx,m ). P, who has an identity string s, a secret key ( usk, ˆusk)
+(derived froms), a context-message pair (ctx,m ), and issuer verification key ivk,
+generates a signature σ on (ctx,m ). The signer must prove the well-formedness
+of the pseudonym T = e(Z, ˆusk) without revealing their secret key ˆusk. This is
+accomplished by encrypting ˆusk under a public group element ˆW . Hence, instead
+of proving T = e(Z, ˆusk), they prove e(Z, ˆW )α =e(Z, ˆC2)/T . Additionally, the
+signer needs to prove that the encrypted ˆusk is well-formed with respect to the
+issuer verification key ivk. To do so, the signer first proves that ˆusk is well-formed
+with respect to usk (bye(C2, ˆg)e(g−1, ˆC2)=e(W, ˆg)βe(g−1, ˆW )α, where usk is en-
+crypted under a public group elementW ) and then proves the well-formedness of
+usk with respect to ivk (by e(C2, ˆivk)e(g−1, ˆg) =e(W, ˆivk)βe(W, ˆg)β·se(C2, ˆg)−s).
+Finally, the well-formedness of C1 and ˆC1 is proven. The algorithm run by P is
+provided in Figure 9.
+1. Input: Upon receiving ( Sign, sid, ctx,m ) fromZ, act as follows.
+2. Ignore if ( ivk, usk, ˆusk) has not been recorded. Else, proceed as follows.
+3. Call FRO with ( Query, sid, ctx) and receive ( Query.Re, sid,Z ). Compute
+T←e(Z, ˆusk).
+4. Pick (β,α )
+$
+← −Z∗
+p. Parse ivk = (bp, ˆivk,h,W, ˆW ). Compute:
+(a) C = (C1,C 2)← (gβ,W β· usk)
+(b) ˆC = ( ˆC1, ˆC2)← (ˆgα, ˆWα· ˆusk)
+5. Set NIZK statement x← (Z,C, ˆC,T, ivk, ctx,m ).
+6. Set NIZK witness w← (s,α,β ).
+7. Call FNIZK with (Prove, sid,x,w ) for the following relation R(x,w ):
+(a) e(Z, ˆW )α =e(Z, ˆC2)/T
+(b) e(C2, ˆg)e(g−1, ˆC2)=e(W, ˆg)βe(g−1, ˆW )α
+
+22 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+(c) e(C2, ˆivk)e(g−1, ˆg)=e(W, ˆivk)βe(W, ˆg)β·se(C2, ˆg)−s
+(d) C1 =gβ
+(e) ˆC1 = ˆgα
+8. Upon receiving ( Proof, sid,π ) fromFNIZK, set signature σ← (π,x ).
+9. Output: Output (Signature, sid, ctx,m,σ ) toZ.
+Fig. 9: Signature generation – P
+Verification.The verifier V is activated upon receiving a message (Ver, sid, ivk′,
+ctx,m,σ ) from Z that includes the issuer verification key ivk′, the context-
+message pair ( ctx,m ), and the signature σ. The signature is verified and the
+associated pseudonymT is extracted. The algorithm run by V is provided in Fig-
+ure 10.
+1. Input: Upon receiving ( Ver, sid, ivk′, ctx,m,σ ) fromZ, act as follows.
+2. Parse σ = (π,x ) and x = (Z,C, ˆC,T, ivk, ctx,m ).
+3. Set b← 0 and η←⊥ if:
+– ivk̸= ivk′; or
+– upon callingFRO with (Query, sid, ctx), (Query.Re, sid,Z′) is returned
+where Z′̸=Z; or
+– upon callingFNIZK with (Verify, sid,x,π ), (Verification, sid, 0) is
+returned.
+4. Else, set b← 1 and η←T .
+5. Output: Output (Ver.End, sid, ivk′, ctx,m,σ,η,b ) toZ.
+Fig. 10: Verification – V
+5 Implementation details and SyRA performance
+Implementing non-interactive zero-knowledge (NIZK) proofs. In our
+signature framework, the relationR(x,w ) that is proven by the signer in signa-
+ture generation algorithm (Figure 9) is expressed as a set of algebraic discrete
+logarithm equations. Sigma protocols excel in prover efficiency when applied to
+such algebraic statements compared to zk-SNARKs [Groth(2010)]. Sigma pro-
+tocols result in concise proof sizes, involve a limited number of operations, and
+do not necessitate the creation of a trusted common reference string [Guillou
+and Quisquater(1988), Schnorr(1991)]. This observation is particularly relevant
+in our system, where proof generation for algebraic statements could mainly
+depend on individuals with limited computational resources.
+
+SyRA Signatures 23
+In the following, the prover and the verifier are denoted by Prv and Vrf, respec-
+tively. Prv proves the relationR(x,w ) described in Figure 9. Let us define:
+A :=e(Z, ˆW ), B := e(Z, ˆC2)
+T , Γ :=e(C2, ˆg)e(g−1, ˆC2),
+∆ :=e(W, ˆg), E :=e(g−1, ˆW ), Λ :=e(C2, ˆivk)e(g−1, ˆg),
+M :=e(W, ˆivk), Θ :=e(C2, ˆg−1).
+Hence, the relation R(x,w ) is simplified to the following one: (a) Aα = B,
+(b) Γ = ∆βEα, (c) Λ = Mβ∆β·sΘs, (d) C1 = gβ, (e) ˆC1 = ˆgα where bases
+(A,B,Γ,∆,E,Λ,M,Θ ) are target group elements that can be efficiently com-
+puted by the verifier Vrf using the statement x = (Z,C, ˆC,T, ivk). Moreover, all
+source group elements (C1, ˆC1,g, ˆg) are known to Vrf.
+Therefore, the relationR(x,w ) can be implemented through a proof of knowledge
+of discrete logarithms for items (a), (b), (d), and (e) above, and via a proof of
+a multiplicative relation for exponents for item (c) above. Below, we describe
+these relations and the methods for their implementation. These are interactive
+proofs that can be transformed into non-interactive proofs using the Fiat-Shamir
+transformation [Fiat and Shamir(1987)]. 14 15
+Proof of knowledge of discrete logarithm (R(x,w ) ⇔ y = gx, x =
+(y,g ), w=x)
+1. Prv: select θ
+$
+← −Z∗
+q, compute a←gθ, and send a to Vrf.
+2. Vrf: select c
+$
+← −Zq and send c to Prv.
+3. Prv: compute z =θ +cx modq and send z to Vrf.
+4. Vrf: check if a
+?
+=gzy−c. Accept if true.
+Proof of multiplicative relation for exponents
+– x = (g,h,A 1,A 2,A 3), and w = (a1,a 2,a 3,r 1,r 2,r 3).
+– R(x,w ):A1 =ga1hr1∧A2 =ga2hr2∧A3 =ga3hr3 =ga1a2hr3∧A3 =Aa2
+1 hr
+such that r +r1a2 =r3 modq.
+1. Prv: for i = 1, 2, 3, select θi,Ri
+$
+← −Zq and compute vi = gθihRi, v = Aθ2
+1 hR
+for R
+$
+← −Zq. Send ({vi},v ) for i = 1, 2, 3 to Vrf.
+2. Vrf: choose c
+$
+← −Z2k (where 2k <q ) and send c to Prv.
+3. Prv: compute si =θi−cai, ti =Ri−cri, t =R−cr for i = 1, 2, 3. Send the
+tuple (si,ti) for i = 1, 2, 3 and t to Vrf.
+14 The context-message pair (ctx,m ), which is part of the NIZK statement, is included
+in the Fiat-Shamir hash function computation by both the signer and the verifier.
+This has been abstracted away by FNIZK.
+15 Note that to realize FNIZK, Fischlin’s transform [Kondi and abhi shelat(2022)] can be
+employed, as in [Lysyanskaya and Rosenbloom(2022)]. Alternatively, one can con-
+struct a simulation-extractable zero-knowledge proof from a simulation-sound zero-
+knowledge proof and a CPA-secure encryption scheme, as in [Damg˚ ard et al.(2021)].
+
+24 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+4. Vrf: check if vi
+?
+= Ac
+igsihti for i = 1, 2, 3 and v
+?
+= Ac
+3As2
+1 ht. Accept if all
+equations hold.
+Implementing multiplication. There are well-known techniques for realiz-
+ing multiplication via multiparty computation (MPC). In our implementation,
+we adopt the multiplication in the exponent protocol proposed by Doerner et
+al. [Doerner et al.(2023)] for Threshold BBS+ signatures. See Appendix B.5
+for more details on [Doerner et al.(2023)]. Their multi-party protocol at its
+core utilizes a two-party multiplication method, which is a two-round proto-
+col based on Oblivious Transfer (OT) [Even et al.(1985)]. Since the protocol is
+built upon OT, it can be instantiated from various cryptographic assumptions,
+such as the hardness of the computational Diffie-Hellman problem. Note that
+one could alternatively employ the OT-based multiplier of Haitner et al. [Hait-
+ner et al.(2022)], which performs numerous scalar operations over elliptic curves
+per invocation. However, this approach may introduce a computational bottle-
+neck [Doerner et al.(2023)]. The two-party multiplication between Iss1 and Iss2
+proceeds as follows. LetF denote a functionality. Then: (i) Iss1 submits its input
+a∈ Zp toF; (ii)F samplesc
+$
+← −Zp uniformly at random, stores (a,c ), and sends
+(Iss1,c ) to Iss2; (iii) Iss2 submits its input b∈ Zp toF; and (iv) F computes
+d←a·b−c mod q and returns d to Iss1. This is commonly known as Oblivious
+Linear Evaluation (OLE).
+Our multi-party multiplication protocol is executed among t servers, each hold-
+ing shares of variable ai, a vector of two variables ⃗bi = (b(1)
+i ,b (2)
+i ), and some
+auxiliary information auxi required to check the well-formedness of bi. The out-
+put to all servers is the inverse of the multiplication of first two values in the
+exponent: g(a·b)−1
+, where b = (b(1) +b(2)). We define Fmul (Appendix B.5) as
+an augmentation to the protocol of [Doerner et al.(2023)], introducing a well-
+formedness check for⃗bi = (iski,si) using auxi = (zi,{ ˆivkk}t
+k=1, comI). The func-
+tionality checks if: (i) iski∈⃗bi is the associated secret key of ˆivki∈{ ˆivkk}t
+k=1,
+(ii) si∈⃗bi is the committed value in comi∈ comI, and (iii) if all issuers are
+providing the same vectors of public keys and commitments. This enhancement
+to [Doerner et al.(2023)] is straightforward to realize, as the well-formedness
+proof is algebraic, and the witness resides in the exponent space, where the base
+elements are public and known to all .
+Implementing distributed key generation (DKG). In our formal modeling,
+we employ the t-out-of-n distributed key generation (DKG) ideal functionality
+Fn,t
+DKG in [Doerner et al.(2023), Katz(2024)]. In [Katz(2024)], Katz presents a
+series of two-round DKGs that securely realize Fn,t
+DKG and result in a uniform,
+unbiasable joint public key and guaranteed output delivery. These constructions
+rely on a broadcast channel, a synchronous network, and an honest majority
+tc < n/2, where tc is the number of corrupt parties. A number of other widely
+deployed [Dfns(2024), Fedimint(2024), Cothority(2024), Labs(2024)], efficient,
+UC-secure DKGs [Gennaro et al.(2007), Canetti et al.(2020)] are suitable for
+integration with SyRA signatures to generate issuer keys, with the Gennaro et
+
+SyRA Signatures 25
+al. DKG [Gennaro et al.(2007)] also achieving full simulatability and G.O.D. in
+the formalism of [Katz(2024)].
+5.1 Performance evaluation
+The performance evaluation of SyRA was conducted on a MacBook Pro M3
+Max featuring a 16-core CPU and 48 GB of RAM, running macOS 15.1, and
+written in the Rust (v. 1.83). In our evaluations, we used the BLS12-381 elliptic
+curve [Company(2024)]. The system’s performance metrics encompass phases of
+the threshold issuance protocol, signature generation, and verification.
+Threshold issuance performance. The performance of the issuance protocol
+was evaluated under various configurations of threshold parameters, capturing
+issuer sets of varying sizes. The threshold for secret key reconstruction by the
+user was set to n/2. In this evaluation, issuers engaged in pairwise multiplica-
+tive operations. Figure 11 illustrates the performance of the threshold issuance
+protocol. The performance metrics presented in the diagram reflect the median
+times recorded after conducting 10 iterations for each configuration. The figure
+depicts the execution times for the threshold issuance protocol among issuers
+and share aggregation via the user across various configurations of issuer sets
+n and the required shares for aggregation t = n/2. These results are presented
+within an honest majority setting, where the adversary is assumed to corrupt at
+most tc =n/2− 1 participants. The x-axis represents issuer set configurations,
+while the y-axes denote time: milliseconds (blue, left) for the share aggregation,
+and seconds (red, right) for the threshold issuance.
+Performance metrics for signature. The performance metrics for the signa-
+ture scheme, including generation time, verification time, and signature size, are
+summarized in Table 1. Note that some of the target group elements in the sig-
+nature generation phase can be precomputed once and reused, further improving
+efficiency.
+Metric V alue
+Signature generation time 10.42 ms
+Signature verification time 11.24 ms
+Signature size 5.703 KB
+T able 1: Performance metrics for SASSI.
+6 Deployment considerations and applications
+In this section, we discuss deployment considerations and applications for SyRA
+signatures. In particular, we describe how recovery of keys can be handled, how
+
+26 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+5–10 15–30 30–60 50–100 70–140 150–300
+1.1
+1.15
+1.2
+1.25
+1.3
+1.08 ms
+1.11 ms 1.11 ms
+1.16 ms
+1.18 ms
+1.29 ms
+Number of shares required for aggregation – Total number of issuers
+(Time) [ms]
+Aggregation (P)
+0
+10
+20
+30
+40
+50
+60
+70
+0.0651 s 0.680 s
+2.825 s
+8.03 s
+15.73 s
+72.6 s
+Time [s]
+Threshold issuance ( Iss)
+Fig. 11: Threshold issuance performance
+the personhood relation may be realized in an actual deployment, how we can
+combine revocation and attribute-based credentials with SyRA, and how SyRA
+signatures can be used to solve various use cases, such as e-voting, privacy-
+preserving compliance, cryptocurrency airdrops, and peer DIDs.
+Key recovery. Sybil resilience may complicate key recovery since a Sybil at-
+tacker can pretend that they have lost their key in order to be reissued a cre-
+dential and break Sybil resilience. Various approaches have been suggested to
+mitigate this attack strategy in prior work, e.g., the key can be revoked using
+a credential revocation mechanism, e.g., [Baldimtsi et al.(2017)], and only then
+the user is reissued its new credential. Alternatively, the system can store the
+key information separately in a distributed fashion to facilitate key recovery di-
+rectly, cf. [Maram et al.(2021)]. Our construction approach offers a strikingly
+simpler key recovery mechanism: A user simply reruns the issuing protocol with
+the issuers to recover their key, which is always the same for a given identity s.
+Hence, the system prevents a malicious user who attempts to reissue a DID as
+part of an attack that evades the system’s abuse mitigation mechanisms.
+Realizing personhood. One way to provide proof of personhood in our system
+is to use an oracle system like DECO [Zhang et al.(2020)] (or Town Crier [Zhang
+et al.(2016)]) that ensures data privacy and remains compatible with legacy sys-
+tems without requiring alterations to data sources. DECO functions as a three-
+
+SyRA Signatures 27
+party protocol involving a prover, a verifier, and a TLS server. Its purpose is
+to enable the prover to convince the verifier that a piece of data, which may
+potentially be private to the prover, retrieved from the server satisfies a specific
+predicate using zero-knowledge proofs without server-side modifications. In our
+specific context, the DECO verifier can either be the issuers themselves or par-
+ties designated as trustworthy by the issuers. Using this approach for personhood
+would require identifying a piece of information that is unique to individuals and
+possible to verify against a web service, for instance, a social security number
+(SSN) and a government web-site that includes the SSN as part of a TLS en-
+crypted interaction. Another approach to establishing personhood is using bio-
+metric data — a recent embodiment of this idea that gained some traction is
+Worldcoin [Worldcoin(2023)]. It utilizes a biometric device that reads the iris of
+an individual and records information that can be used to subsequently prove
+the user’s identity.
+Another approach to realizing personhood, highlighted in [Baldimtsi
+et al.(2024)], is based on the OAuth 2.0 protocol through identity providers
+such as Google or Apple. Specifically, OpenID Connect [Sakimura et al.(2014)],
+an identity layer built on top of the OAuth 2.0 protocol, provides an ID To-
+ken in the form of a signed JSON Web Token (JWT), which contains key user
+information, such as a unique user identifier ( sub) and the issuer ( iss). sub
+provided by the OAuth provider could serve as the unique identifiers in our set-
+ting, where the user runs the protocol with the OAuth provider and the SyRA
+issuer. The JWT is used to authenticate the user personhood with each SyRA
+issuer participating in the issuance protocol. This can be achieved by verifying
+the JWT’s signature using the OAuth provider’s public key. Since JWTs may
+contain sensitive personal information, zero-knowledge proofs can be employed
+to conceal such details while still demonstrating the validity of the JWT.
+Revocation.Incorporating revocation comprehensively with SyRA signatures is
+out of scope of this paper and an interesting direction for future work. Never-
+theless, we outline here an initial set of ideas to illustrate how it is possible to
+add credential revocation in different scenarios. A simple method to incorporate
+revocation is by exploiting the secret key component ˆusk and utilize it in the
+context of a revocation list. Specifically, a revocation authority can maintain a
+list of ˆusk values associated with the identity strings and disclose publicly those
+that need to form the revocation list; alternatively, the issuers can reconstruct
+ˆusk on the spot given the identity string s of the user that should be revoked.
+Using this list, a verifier can locally compute Trev = e(h(ctx), ˆusk) for each an-
+nounced ˆusk. Given this, the verifier can ignore all signatures withT′ values such
+thatT′ =Trev. Note that despite disclosing ˆusk, no one can sign on behalf of the
+associated user, as the signature σ = (x,π ) is a NIZK proof whose generation
+necessarily requires a witness for the relation R(x,w ) = 1 from Section 4. This
+means signature generation also requires usk, which cannot be derived from ˆusk
+because SyRA relies on Type-III (asymmetric) bilinear groups. In this way, by
+efficiently revealing only one group element, ˆusk, it is possible for verifiers to
+identify all signatures of the revoked user upon receiving their signatures.
+
+28 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+The above mechanism requires revealing ˆusk. In case the user’s SyRA key is
+compromised, the user can provide s to the issuers along with the relevant proof
+of ownership of s, so that the issuers compute ˆusk. In this setting, the affected
+user would have to update their identity string s with a new one from the
+identity provider that is acknowledged by the personhood relation Rs (e.g., be
+issued a new social security number). Note that the identity provider needs to
+check that the old identity string has indeed been revoked. Furthermore, this
+will not provide forward security, at least in a non-interactive manner, since
+revealing the ˆusk value of a user will link all its past pseudonyms. (Note that
+alternatively, verifiers could, in principle, run a multiparty protocol with issuers
+to check if an identity has been revoked instead of using ˆusk, but this is not a
+practical solution). Adding forward security to this revocation mechanism is an
+interesting direction for future work.
+Identity attributes. SyRA signatures can be combined with anonymous
+attribute-based credentials to demonstrate user attributes in a privacy-
+preserving way while maintaining resilience against Sybil attacks. The approach
+is simple: users will obtain keys for both SyRA and anonymous attribute-based
+credentials. This allows subsequently to engage in attribute-based identification
+with each transcript signed using SyRA for the context requested by the veri-
+fier. While simple and effective, the above approach may be further improved in
+terms of efficiency by investigating a concrete design for attribute-based SyRA
+signatures; we leave this question for future work.
+6.1 Applications
+e-Voting and e-Petitions. There are many online services that require strict
+single access per ID, such as e-voting. SyRA enables verifiers to cluster all signa-
+tures with respect to their pseudonymsT for each context. Sybil resilience means
+that a user can create at most one pseudonym T per context. For instance, in e-
+voting or e-petitions [Diaz et al.(2008)], the election procedure identifier would
+be used to determine the context, and the choice of the voter would be the
+message. The user can sign multiple times for the same identifier (as is needed
+in many election schemes for coercion protection, for instance [Volkamer and
+Grimm(2006)]), and then the system can choose the latest “message.” (Recall
+that all signatures of the user share the same T value.)
+Privacy-preserving regulatory compliance. In the context of regulatory
+compliance, SyRA signatures provide a mechanism for verifying identities with-
+out exposing sensitive information. This capability is particularly relevant for
+financial institutions and other regulated entities that need to adhere to KYC
+(Know Your Customer), AML (Anti Money Laundering), and CFT (Combating
+Financing Terrorism) regulations. For example, a recipient may be asked to sign
+a transaction using SyRA to verify that they are not identified as a terrorist ac-
+cording to a list of terrorist identity strings. Such a list could be prepared by the
+issuers for a specific context of interest by calculating all the relevant T -values;
+note that this also maintains the privacy of the list itself. Adding this requirement
+
+SyRA Signatures 29
+to the user’s workflow would ensure compliance with CFT regulations while en-
+abling the recipient to receive funds without disclosing their identity. Similarly,
+the sender of a transaction can be required to provide a SyRA signature on the
+transaction to prove that they are not associated with any revoked entities listed
+in AML regulations, enabling them to send funds. SyRA signatures can also be
+used to facilitate AML/CFT checks in anonymous payment systems like [Sasson
+et al.(2014), Kiayias et al.(2022), Fauzi et al.(2019), B¨ unz et al.(2020), Sarencheh
+et al.(2025b), Sarencheh et al.(2025a)] following the mechanism described above,
+offering a privacy-preserving, yet compliant, solution for these platforms.
+Cryptocurrency airdrops. In a cryptocurrency airdrop, a user is set to receive
+a certain amount of cryptocurrency. The user generates an address A; utilizing
+SyRA signatures, they can use the name of the airdrop event as the context and
+the address A as the message to be signed. The primitive enables the user to
+sign multiple addresses if needed or perform various actions in the context of
+one specific airdrop. Note that if a user signs the same context twice, those two
+signatures are linkable (they have the same T ), however still, the privacy of the
+user’s real-world identifier s is preserved and the user cannot be linked if they
+participate in multiple airdrops. Our mechanism enables the airdrop provider
+to write policies such as “each user receives exactly X coins,” with the Sybil
+resilient property of SyRA being the enforcer of this property. 16
+Peer DID Decentralized identifiers are often anchored to a public source of
+truth, such as a blockchain. While this ensures the security and immutability
+of transactions, it allows arbitrary parties to resolve users’ DIDs (i.e., obtain
+their DID documents). Users in a DID system should control every aspect of the
+use of their digital identity, including the ability to interact with other people,
+institutions, and organizations in a private manner. One solution, put forth by
+the Decentralized Identity Foundation [Foundation(2023)], is Peer DID17, which
+moves the resolution of DIDs to local, peer-to-peer interactions off chain. In this
+system, a user Alice can create a pairwise DID for each interaction with a differ-
+ent user or organization. For example, Alice may interact with her doctor, bank,
+etc. using these context-specific “credentials.” Our SyRA signatures are directly
+applicable here, as Alice can create pairwise DIDs from her master credential,
+which is tied to her real-world identity, via context-specific pseudonyms. The
+security properties of SyRA signatures ensure that Alice’s identity is protected,
+and her interactions are unlinkable across all contexts in which she engages,
+while Sybil resilience protects the verifiers from interacting with multiple users
+controlled by Alice.
+16 As an example of the relevance of our approach to practice, consider that in the
+Arbitrum airdrop, around 253 million Arbitrum tokens, 21 .8% of all tokens, were
+acquired by Sybil accounts [X-explore(2023)].
+17 https://identity.foundation/peer-did-method-spec/index.html
+
+30 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+7 Security proof
+In this section, we state our main theorem regarding the security of our protocol
+ΠSASSI (Section 4). Our functionality FSyRA, defined in Section 3, is general
+and allows for adaptive corruptions; however, we prove our scheme secure in
+the static corruption model. Concretely, this corresponds to ∪s ˆP(s) =∅ in our
+functionality, and thus the Leak interface is always inactive.
+Theorem 2. Letqt be an upper bound on the number of signatures of all honest
+parties and let qh be an upper bound on the number of queries the adversary can
+make to the random oracle. Under the IND-CPA security of ElGamal encryption,
+the pseudorandomness of our asymmetric Dodis-Yampolsky VRF ( DY-VRF†),
+binding property of Pedersen commitments, and the DDH assumption, in the
+{FNIZK,FRO,F sas
+Ch,FB,Fn,t
+DKG,Fmul}-hybrid model, no PPT environment Z with
+static corruptions of up to t− 1 issuers can distinguish the real-world execu-
+tion EXECΠSASSI,A,Z from the ideal-world execution EXECFSyRA,S,Z in the pres-
+ence of an arbitrary number of corrupted signers and verifiers that are all col-
+luding with advantage greater than Advbind
+A,COM(λ)+2qt· AdvIND-CPA
+A (λ) + (qt + 1)·
+Advpseudo
+A,DY-VRF†(λ) +qt·qh· AdvDDH
+A (λ).
+We now prove Theorem 2.
+7.1 Simulation
+We refer to the real-world protocol as ΠSASSI and the adversary asA. The sim-
+ulatorS is described in detail below. It ensures that the view of the real-world
+execution EXECΠSASSI,A,Z and the ideal-world execution EXECFSyRA,S,Z are indis-
+tinguishable for any PPT environment Z. The session identifier sid is selected
+by the environmentZ. Our general proof strategy is for the simulator S to in-
+ternally run an instance of ΠSASSI and the real-world adversary A, except that
+S simulates the behaviour of honest users. The purpose of the simulator S is
+to ensure that the view of the internally-run adversary A (in the ideal world)
+cannot be distinguished from the view of the real-world adversaryA.S instructs
+the functionality to provide indistinguishable outputs at the interfaces of honest
+users.
+The adversaryA has the authority to instruct corrupted parties in an arbitrary
+manner, and the simulator S engages in interactions with FSyRA on behalf of
+these corrupted parties. In the ideal-world execution EXECFSyRA,S,Z, the honest
+(dummy) parties transmit their inputs from the environmentZ directly toFSyRA.
+We define a simulator S that reproduces the real-world view of the adversary
+A and simulates the actions of honest parties during the execution. The sim-
+ulatorS engages in interactions with both the dummy adversary A and the
+functionalityFSyRA. Similar to the functionality FSyRA and our protocol ΠSASSI
+for realizing it, the simulator’s details are described in four parts: Key genera-
+tion, Threshold issuance, Signature generation, and Verification. As∪s ˆP(s) =∅,
+we do not consider the Leak signatures interface (( Leaked.Sig, sid, ivk,⊥) is
+
+SyRA Signatures 31
+always sent to the simulator). The simulator S emulates the functionalities
+FNIZK,FRO,F sas
+Ch,FB,Fn,t
+DKG andFmul. To achieve this, it must maintain specific
+lists associated with each functionality. However, for the sake of simplicity and
+without loss of generality, we assume that S keeps track of the states of these
+functionalities, but we do not explicitly discuss or address all these lists in detail.
+Without loss of generality, we assume in the following that the adversary corrupts
+t− 1 issuers.
+The simulatorS maintains the following lists and sets, which are initialized to
+∅:
+– LCR: list of corrupted-registered parties (who have been issued signing keys)
+– Scorrupted: set of s values of corrupted parties
+– LSS: list of simulated signatures (by the simulator S)
+– C : index set denoting the issuers corrupted by the adversary A where|C| =
+t− 1. We denote a malicious issuer by Iss∗.
+Corruptions. At the beginning of the execution, the environment Z instructs
+the adversary A to corrupt specific parties by sending messages of the form
+(Corrupt, sid, P), where P denotes a party identifier. All signers and verifiers, as
+well as up tot−1 issuers from the issuer setI can be corrupted. The simulatorS
+observes these corruption messages and forwards them to FSyRA using the same
+format, (Corrupt, sid, P), to indicate which parties have been corrupted.
+Simulation of key generation
+adversary corrupting t− 1 issuers:
+– For honest issuers ( Issi): upon receiving ( Init, sid, Issi) fromFSyRA, simulate
+the honest issuer by executing the algorithm provided in Figure 5. Emulating
+Fn,t
+DKG update the state of Fn,t
+DKG, and leak ( DKeyGenReq, sid, Issi) toA.
+– For malicious issuers ( Iss∗
+i ): upon invoking Fn,t
+DKG with ( DKeyGen, sid) via the
+adversary, emulateFn,t
+DKG and update its state accordingly.
+– EmulatingFn,t
+DKG, upon receiving (CPoints, sid,{isk∗
+i}i∈C) from the adversary,
+proceed as follows if ( DKeyGen, sid) has been recorded for all issuers Issi∈I
+(including the honest emulated ones).
+– CallFSyRA with (Init, sid) on behalf of all malicious issuers Iss∗
+i , wherei∈ C.
+– Output ( PublicKeys, sid, ˆivk,{ ˆivki}n
+i=1) to the adversary as the output of
+Fn,t
+DKG.
+– Output (Point, sid, ˆivk, isk∗
+i,{ ˆivki}n
+i=1) to the adversary for each malicious is-
+suer Iss∗
+i , where i∈ C.
+– Output (VerKey, sid, ( ˆivki, ˆivk)) toFSyRA for each issuer Issi∈I .
+Simulation of threshold issuance
+Recall, as discussed earlier, that without loss of generality, we assume the
+adversary corrupts t− 1 issuers. We index the malicious issuers from 1 to t− 1,
+and denote the associated set as C. The honest issuer in the set of t issuers (I)
+is denoted by Isst.
+(i) honest party P and t− 1 malicious issuers:
+
+32 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+– Upon receiving ( Issue, sid, id,T ) fromFSyRA, whereT = (xs, I), start emu-
+lating an honest party and the honest issuer Isst∈ I.
+– Choose a random s and compute{si}n
+i=1
+$
+← −SSH.Sharen,t(s).
+– Choose a fresh identifier id.
+– ∀i∈ index(I): set comi←gsi·hzi for zi
+$
+← −Z∗
+p.
+– Set comI←{ comi}∀i∈index(I).
+– EmulatingFBC, broadcast ( Broadcast, sid|| id|| I, comI).
+– Set x← (comI,xs) using xs∈T received fromFSyRA.
+– EmulatingFNIZK, compute π← SimProve(x) and store (x,π ).
+– EmulatingF sas
+Ch , for each Issi∈ I, leak ( Send, sid|| id|| I, Issi, mid,|m|) to the
+dummyA, where m = (si,zi,x,π ).
+– Emulating F sas
+Ch , upon receiving ( Ok, sid || id || I, mid) from A, output
+(Received, sid|| id|| I, mid, (si,zi,x,π )) to the adversary for each malicious
+issuer Issj∈ I,j ∈ C.
+– Upon receiving a call from the adversary of the form ( Verify, sid,x,π ), em-
+ulateFNIZK and output ( Verification, sid, 1).
+– Emulating the honest issuer Isst ∈ I, sample rt
+$
+← −Zp, and set auxt ←
+(zt,{ ˆivkk}t
+k=1, comI).
+– EmulatingFmul update its state.
+– EmulatingFmul, after receiving messages from all malicious issuers Issj ∈
+I,j ∈ C of the form ( Compute, sid || id || I,rj, (iskj,sj), auxj), leak
+(Compute, sid,α, I) to the adversary for a randomly chosen α.
+– EmulatingFmul, upon receiving ( Compute.Ok, sid,α ) from the adversary A,
+output ( Computed, sid,K, ˆK) to each malicious issuer Issj∈ I,j ∈ C (where
+K and ˆK have been computed following the functionality of Fmul).
+– Emulating the honest issuer Isst∈ I, leak (SendBack, sid|| id|| I, Isst, mid,|m|)
+to the dummy A, where |m| is size of two group elements from two source
+groups.
+– For each malicious issuer Issj ∈ I,j ∈ C, leak ( SendBack, sid|| id|| I, Issj,
+mid,|m|) to the dummy A whenever the adversary (on behalf of malicious
+issuer) callsF sas
+Ch with (SendBack, sid, mid, (ωj, ˆωj)).
+– Execute the honest party P algorithm provided in Figure 8. If either
+e(usk, ˆg)̸= e(g, ˆusk) or e(usk, ˆivk· ˆgs)̸= e(g, ˆg), set b← 0. Otherwise, set
+b← 1.
+– Submit (Issue,b, sid, id) toFSyRA.
+(ii) malicious party P and t− 1 malicious issuers: We intentionally avoid
+describing the communication channel F sas
+Ch leakage regarding malicious issuers
+as it is similar to the case above.
+– Emulating F sas
+Ch , receive ( Send, sid || id || I, Isst, (si,zi,x,π )) whenever
+the adversary (on behalf of a malicious user P) calls F sas
+Ch and leak
+(Send, sid || id || I, Isst, mid,|m|) to the dummy A where m = ( si,zi,x,
+π). Upon receiving ( Ok, sid|| id|| I, mid) from A, emulating the honest is-
+suer Isst (who verifies the proof in the real-world) and emulating FNIZK,
+extract the adversary’s witness by running w← Extract(x,π ), where w =
+
+SyRA Signatures 33
+(s,ws,{sj}n
+j=1,{zi}∀i∈index(I)). Check if (x,w )∈R holds. If it does not hold,
+emulating honest issuer Isst abort.
+EmulatingFBC, upon receiving ( Broadcasted, sid|| id|| I, comI), set c← 1
+that is initially c = 0 if condition (2) in Figure 7 are satisfied.
+– Emulating the honest issuer Isst ∈ I, sample rt
+$
+← −Zp and set auxt ←
+(zt,{ ˆivkk}t
+k=1, comI).
+– Following the real-world algorithm for honest issuer update the state ofFmul.
+– EmulatingFmul, after receiving messages from all malicious issuers Issj ∈
+I,j ∈ C of the form ( Compute, sid|| id|| I,rj, (iskj,sj), auxj), and if c = 1,
+leak (Compute, sid,α, I) to the adversary for a randomly chosen α.
+– EmulatingFmul, upon receiving ( Compute.Ok, sid,α ) from the adversary A,
+output ( Computed, sid,K, ˆK) to each malicious issuer Issj∈ I,j ∈ C (where
+K and ˆK have been computed following the functionality of Fmul).
+– Submit (Issue, sid,s,x s,ws, I∗) on behalf of the malicious party P toFSyRA,
+where xs is retrieved from xi = (si,xs) and I∗ ={Issj}j∈C∪{ Isst}.
+– Compute{ωj}j∈C←K{rj}j∈C and{ˆωj}j∈C← ˆK{rj}j∈C.
+– Execute the algorithm provided in Figure 8. If either e(usk, ˆg)̸=e(g, ˆusk) or
+e(usk, ˆivk· ˆgs)̸=e(g, ˆg), set b← 0. Otherwise, set b← 1.
+– Submit ( Issue,b, sid, id) to FSyRA. upon receiving ( Issue, sid, id,T ) from
+FSyRA.
+Simulation of signature generation
+(i) honest Party P:
+– Receive (Sign, sid, ucid, ctx,m, tid) fromFSyRA.
+– EmulateFRO and retrieve Z.
+– If an entry (ucid′,T′) exists where ucid′ = ucid, set T←T′. Otherwise, select
+T
+$
+← −GT , and record ( ucid,T ).
+– Select (β,α )
+$
+← −Z∗
+p, choose A
+$
+← −G, and ˆB
+$
+← −ˆG.
+– Compute C← (gβ,W β·A), and ˆC← (ˆgα, ˆWα· ˆB).
+– Emulate FNIZK and execute π ← SimProve(x) where x =
+(Z,C, ˆC,T, ivk, ctx,m ), and record the pair (π,x ).
+– Set σ← (π,x ) and updateLSS←L SS∪{σ}.
+– Submit (Signature, sid,σ,T,s ∗, tid) toFSyRA, where s∗ = 0.
+(ii) corrupted party P: Output to the environmentZ whatever is produced in-
+ternally byA. Note that submitting a signature generation instruction toFSyRA,
+on behalf of a corrupted P viaS, occurs later, whenS, who emulates an honest
+verifier V, receives a (valid) signature generated by a corrupted party.
+It is important to note that a corrupted party may locally compute signatures.
+However, as long as no honest verifier has encountered any of these signatures,
+there is no need for any security guarantees to be invoked. In other words, as will
+be demonstrated, onceZ submits a valid signature for verification, the simulator
+first checks whether the signature has already been simulated. If the signature
+
+34 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+has not been simulated and is valid, the simulator should register it with the
+ideal functionalityFSyRA (thus recording it in the set Sig byFSyRA). However, if
+Z has not submitted the signature, no further action is necessary.
+Simulation of verification
+(i) honest verifier V:
+– Receive ( Ver, sid, ivk′, ctx,m,σ ) from FSyRA. If there exists an entry
+(Ver.Ok, sid, ivk′, ctx,m,σ,T,θ ), submit it to FSyRA.
+– Else, submit ( Ver.Ok, sid, ivk′, ctx,m,σ,⊥, 0) toFSyRA and record it if ivk′̸=
+ivk. Else, act as follows:
+– If there exists σ′∈L SS where σ′ = σ, parse σ = (π,x ) and x = (Z,C, ˆC,T,
+ivk, ctx,m ). Submit ( Ver.Ok, sid, ivk′, ctx,m,σ,T, 1) toFSyRA and record it.
+– Else (σ /∈L SS), act as follows:
+• Parse σ = (π,x ) and x = (Z,C, ˆC,T, ivk, ctx,m ). If in emulating FRO
+the recorded entry for context ctx is ( sid, ctx,h ) where h̸= Z, submit
+(Ver.Ok, sid, ivk′, ctx,m,σ,⊥, 0) toFSyRA and record it.
+• Else, let w← Extract(x,π ) and check (x,w )∈R and if the relation does
+not hold, submit ( Ver.Ok, sid, ivk′, ctx,m,σ,⊥, 0) toFSyRA and record it.
+• Else, parse w = (s,α,β ).
+∗ If s ∈ Scorrupted, submit ( Sign, sid, ctx,m ) to FSyRA on behalf of P
+where P∈L CR holds. (If there exist multiple such P values, pick one
+at random.)
+Upon receiving ( Sign, sid, ucid, ctx,m, tid) from FSyRA, parse σ =
+(π,x ) and x = (Z,C, ˆC,T, ivk, ctx,m ), and submit ( Signature, sid,
+σ,T,s, tid).
+Finally, output ( Ver.Ok, sid, ivk′, ctx,m,σ,T, 1) to FSyRA and record
+it.
+∗ Else, the simulation fails. We later show that the probability of A
+forging a valid signature on behalf of an honest party, or generating a
+valid signature for a new party that never existed before, is negligible.
+Also, consider the following two bad events: for every two signatures
+σ1 and σ2 with associated T1 and T2, (1) If T1 =T2 and s1̸=s2, or
+(2) If T1̸=T2, and s1 =s2. We will show that the probability of the
+these bad events is zero.
+(ii) corrupted verifier V: Output toZ whateverA outputs.
+7.2 Sequence of games and reductions
+In a series of games, we demonstrate that the two random variables
+EXECΠSASSI,A,Z and EXECFSyRA,S,Z are statistically close. We use the notation
+Pr[Game(i)(λ) = 1] to represent the likelihood that the environmentZ produces
+an outcome of 1 in Game(i). Each specific game Game(i) is associated with its
+own ideal functionalityF (i)
+SyRA and simulatorS (i). We begin with the least secure
+
+SyRA Signatures 35
+(most leaky) functionalityF (0)
+SyRA and corresponding simulatorS (0), and progres-
+sively move towards our primary functionalityFSyRA and primary simulatorS.
+Letqt denote the upper bound on the number of signatures of all honest parties
+and let qh denote the upper bound on the number of queries the adversary can
+make to the random oracle, which are both polynomial in the security parameter
+λ.
+Summary of games. First, we provide an overview of six distinct games
+Game(0),..., Game(6), where Game(0) corresponds to the real-world execu-
+tion EXECΠSASSI,A,Z and Game(6) corresponds to the ideal-world execution
+EXECFSyRA,S,Z.
+Game(1): Same as Game(0), except that Game(1) additionally checks whether a
+flag is raised. The flag is raised when the adversaryA outputs two commitments
+com∈ x and com′∈ x′ where com = com′ but for different committed values
+s̸=s′. Any difference between Game(0) and Game(1) arises from a violation of the
+binding property of the underlying Pedersen commitment scheme. Accordingly,
+the distinguishing advantage ofZ between Game(0) and Game(1) can be bounded
+by:| Pr
+h
+Game(1)(λ) = 1
+i
+− Pr
+h
+Game(0)(λ) = 1
+i
+|≤ Advbind
+A,COM(λ).
+Game(2): All secret key pairs ( usk, ˆusk) of honest parties with corresponding
+ElGamal ciphertexts (C, ˆC) are changed to ( A, ˆB), where A
+$
+← −G, ˆB
+$
+← −ˆG. All
+values T = e(Z, ˆusk) remain the same, and all qt signatures are with respect
+to (A, ˆB). Thus, under the IND-CPA security of ElGamal encryption, we show:
+| Pr[Game(2)(λ) = 1]− Pr[Game(0)(λ) = 1]|≤ 2qt· AdvIND-CPA
+A (λ).
+Game(3): All pseudonyms T = e(Z, ˆusk) of honest parties are changed T =
+e(Z, ˆD), where ˆD
+$
+← −ˆG, and all qt signatures are computed with these values.
+Note that in this game, the simulator consistently employs an identical random
+group element ˆD for a given identity string s holder. In the reduction to the
+pseudorandomness of DY-VRF†, the reduction uses the pseudo-random values
+received from theOSign oracle of the challenger as the secret keys for malicious
+users, and uses the real or random output ofOChal to generate the pseudonym of
+an honest user, while faking the NIZK proof by emulating FNIZK. The reduction
+does not need to know the honest user’s secret key as it fakes the NIZK proof.
+Under the pseudorandomness of DY-VRF†, we show: | Pr[Game(3)(λ) = 1] −
+Pr[Game(2)(λ) = 1]|≤ qt· Advpseudo
+A,DY-VRF†(λ).
+Game(4): If a particular identity string s holder is directed to sign distinct con-
+texts, e.g. T = (h(ctx), ˆD) and T′ = (h(ctx′), ˆD), the simulator substitutes dis-
+tinct random group elements for these values, e.g., T,T′ $
+← −GT . Under the
+DDH assumption, we show: | Pr[Game(4)(λ) = 1] − Pr[Game(3)(λ) = 1] | ≤
+qt·qh· AdvDDH
+A (λ).
+Game(5):F (5)
+SyRA prohibitsS (5) from submitting any message to F (5)
+SyRA on be-
+half of the adversary A (corrupted party) who generates a valid signature for
+a new party (not belonging to the group of honest and corrupted parties) or
+generates a valid signature on behalf of an honest party. Under the pseudoran-
+
+36 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+domness of DY-VRF†, we show: | Pr[Game(5)(λ) = 1] − Pr[Game(4)(λ) = 1]|≤
+Advpseudo
+A,DY-VRF†(λ).
+Game(6):F (6)
+SyRA does not allow S (6) to submit any message to F (6)
+SyRA on behalf
+of the adversary A (corrupted party) who generates two valid signatures with
+one unique identifier s on a given context where T1̸=T2, or generates two valid
+signatures using two identifiers s1̸= s2 where T1 = T2. It is argued that the
+probability of such events is zero. Hence: Pr[Game(6)(λ) = 1] = Pr[Game(5)(λ) =
+1].
+Details of games and associated reductions In this section, we provide
+a detailed description of each game along with the corresponding reductions
+employed in our security proof.
+To enhance simplicity and avoid redundancy, we omit details such as channel
+leakages in the following games. These aspects have already been discussed in the
+simulator description in Section 7.1.
+Game(0): In the initial game, F (0)
+SyRA simply forwards all communications with
+Z. The simulator S (0) corresponds to the execution of the real-world protocol
+EXECΠSASSI,A,Z.
+Game(1): Same as Game(0), except that Game(1) additionally checks whether a
+flag is raised. The flag is raised when the adversaryA outputs two commitments
+com∈ x and com′∈ x′ where com = com′ but for different committed values
+s̸=s′. The associated statements and proofs are (x,π ) and (x′,π′), respectively.
+The simulator emulatingFNIZK extracts the witnesses viaw← Extract(x,π ) and
+w′← Extract(x′,π′), and checks whether s∈ w̸= s′∈ w′. The flag is raised if
+s̸=s′. Any difference between Game(0) and Game(1) arises from a violation of the
+binding property of the underlying Pedersen commitment scheme. Accordingly,
+the distinguishing advantage ofZ between Game(0) and Game(1) can be bounded
+by:| Pr
+h
+Game(1)(λ) = 1
+i
+− Pr
+h
+Game(0)(λ) = 1
+i
+|≤ Advbind
+A,COM(λ). (we omit a
+formal proof of this fact)
+Game(2): This game is identical to Game(1), except for the following modifica-
+tion: All honest parties’ plaintexts ( usk, ˆusk) within the encryptions ( C, ˆC) are
+replaced with random group elements chosen uniformly from G and ˆG, respec-
+tively. However, note thatT values are still computed using real-world values.
+We show that Game(2) and Game(1) are indistinguishable under the IND-CPA
+security of ElGamal encryption, which allows us to bound the probability that
+Z distinguishes Game(2) from Game(1).
+We introduce a sequences of sub-games:
+(Game(1)
+0 := Game(1),..., Game(1)
+i−1,
+Game(1)
+i ,..., Game(1)
+2qt := Game(2))
+where qt denotes the upper bound on the number of all signatures of all honest
+parties. Defining Game(1)
+0 := Game(1), Game(1)
+1 is the same as Game(1)
+0 , except
+
+SyRA Signatures 37
+we change the plaintext of the first ciphertext of the first honest party from
+the real-world value to the ideal-world random group element. Finally, we do
+the same for the last (second) ciphertext of the last honest party such that in
+Game(1)
+2qt := Game(2), all ciphertexts are generated from random group elements
+byS (1)
+2qt =S (2). The reduction between Game(1)
+i−1 and Game(1)
+i is described below,
+where any difference between them is upper bounded by AdvIND-CPA
+A (λ).
+In leaky functionalities F (1)
+SyRA,i, 1 ≤ i ≤ 2qt, where F (1)
+SyRA,1 := F (1)
+SyRA and
+F (1)
+SyRA,2qt
+:= F (2)
+SyRA, the leaked message to the simulator in the Issue and
+Sign commands are ( Issue, sid, id, P,s,x s, I) and ( Sign, sid, P, ctx,m, tid), re-
+spectively, for honest parties. Hence, the simulator knows ( P,s ) values for all
+honest parties. Later, in subsequent games, the associated functionalities be-
+come less leaky and closer to our main functionality FSyRA.
+Associated reduction between Game(1)
+i−1 and Game(1)
+i (IND-CPA security of
+ElGamal encryption; for 1≤i≤ 2qt). IfZ distinguishes Game(1)
+i−1 and Game(1)
+i ,
+we can construct A′ that breaks the IND-CPA security of ElGamal encryption
+used in our construction.
+– For 1≤ j≤ i− 1: all (real-world) plaintexts have already been substituted
+with (ideal-world) random values.
+– Fori + 1≤j≤ 2qt: all ciphertexts are created using real-world plaintexts.
+– The challengerC of the IND-CPA game outputs pk toA′.
+– A′ sets W ← pk. For simplicity, we omit writing the details for ˆC, as it is
+similar to C. (In our construction, pk for ElGamal ciphertext C is W ∈ G
+and for ˆC it is ˆW∈ ˆG.)
+– The real-world plaintext value g1/(s+isk) (associated to b = 0 in the IND-CPA
+game) is changed to A in Game(1)
+i , where A
+$
+← −G (which is the ideal-world
+value associated to b = 1 in the IND-CPA game).
+– The challenger provides Cb to distinguisher A′: for b = 0, C0 encrypts
+g1/(s+isk), and for b = 1, C1 encrypts A. Therefore, for Z, Game(1)
+i is the
+same as running the real-world protocol with real-world value usk for an hon-
+est party, rather than a random group element. Hence, if Z distinguishes
+Game(1)
+i−1 from Game(1)
+i ,A′ uses this to win the IND-CPA game.
+The next game hop, namely between Game(1)
+i and Game(1)
+i+1, for the value ˆusk of
+honest parties encrypted to ˆC is similar, so we omit the details.
+Simulating honest party signature. A′ simulates signatures σ of honest parties
+as follows:
+– EmulatingFNIZK, call π ← SimProve(x) where x = (Z,C, ˆC,T, ivk, ctx,m )
+and record (π,x ).
+– Set σ← (π,x ) andLSS←L SS∪{σ}. Recall thatLSS is the list of simulated
+signatures.
+– Submit (Signature, sid,σ,s∗, tid) toF (1)
+SyRA,i where s∗ = 0.
+
+38 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+Therefore, under the IND-CPA security of ElGamal encryption, the following
+inequality holds:
+| Pr[Game(2)(λ) = 1]− Pr[Game(1)(λ) = 1]|≤ 2qt· AdvIND-CPA
+A (λ)
+Game(3): Same as Game(2), except that in Game(3), we change all tags T =
+e(Z, ˆusk) of honest parties to tags of the form T = e(Z, ˆD) where ˆD
+$
+← −ˆG. We
+highlight that in this game, for a fixed identifier s, the simulator always uses the
+same random group element ˆD. Hence, Game(3) is the same as Game(2), except
+S (3) computes theT values using random group elements, rather than real-world
+ˆusk values, for all honest parties.
+We show that Game(3) and Game(2) are indistinguishable under the pseudoran-
+domness of DY-VRF†, which allows us to bound the probability that Z distin-
+guishes Game(3) from Game(2).
+We introduce a sequence of sub-games:
+(Game(2)
+0 := Game(2),..., Game(2)
+j−1,
+Game(2)
+j ,..., Game(2)
+qt := Game(3))
+(whereqt denotes the upper bound on the number of all signatures of all honest
+parties.) Define Game(2)
+0 := Game(2). Game(2)
+1 is the same as Game(2)
+0 , except in
+Game(2)
+1 , we change the tag T from the real-world value T = e(Z, ˆusk) to the
+ideal-world valueT =e(Z, ˆD), where ˆD
+$
+← −ˆG. Finally, we do the same for the last
+tag such that in Game(2)
+qt := Game(3), all tags are generated using random group
+elements (instead of real-world values ˆusk). The reduction between Game(2)
+j−1 and
+Game(2)
+j is described below, where any difference between them is upper bounded
+by Advpseudo
+A,DY-VRF†(λ).
+In leaky functionalities F (2)
+SyRA,j, 1 ≤ j ≤ qt, where F (2)
+SyRA,1 := F (2)
+SyRA and
+F (2)
+SyRA,qt
+:= F (3)
+SyRA), the leaked message to the simulator in the Issue and
+Sign commands are ( Issue, sid, id, P,s,x s, I) and ( Sign, sid, P, ctx,m, tid), re-
+spectively, for an honest party P.
+Associated reduction between Game(2)
+j−1 and Game(2)
+j (pseudorandomness
+of DY-VRF†; for 1 ≤ j≤ qt). IfZ distinguishes Game(2)
+j−1 and Game(2)
+j , we can
+constructA′ that breaks the pseudorandomness of DY-VRF†.
+High-level overview of the reduction . The reduction proceeds by constructing an
+adversaryA′ that leveragesZ who is capable of distinguishing between Game(2)
+j−1
+and Game(2)
+j , to break the pseudorandomness of DY-VRF† (see Definition 5).
+First,A′ interacts with the challenger and uses its oracle access to simulate re-
+sponses for the adversaryA. As described in Definition 5, the pseudorandomness
+game grants the adversary oracle access (OSign) to a signing function that outputs
+proofs. Specifically,A′ uses this access to emulate the issuance of malicious user
+secret keys: it submits a malicious user identitys to the challenger and receives a
+
+SyRA Signatures 39
+corresponding response, which it sets as the malicious user’s secret key. Later, in
+the challenge phase, A′ submits an identity s corresponding to an honest user.
+The challenger then returns a group element, which is either (a) a uniformly
+random element or (b) a pseudorandom element derived in a specific way (see
+Definition 5). A′ uses this challenge to generate the honest user’s pseudonym
+and sets random group elements as the plaintexts of ciphertexts ( C, ˆC) while
+faking the NIZK proof via emulating FNIZK.
+– For 1≤k≤j−1: all (real-world) ˆusk values in tagsT =e(Z, ˆusk) have already
+been substituted with (ideal-world) random values ˆD
+$
+← −ˆG, T =e(Z, ˆD).
+– Forj + 1≤k≤qt: all tags are created using real-world ˆusk values.
+– The challengerC of the pseudorandomness game outputs ˆIVK toA′.
+– A′ sets ˆivk← ˆIVK.
+– Program random oracle as: Zl = h(m1l)←grl for rl
+$
+← −Z∗
+p.
+– Upon receiving ( Sign, sid, P, ctx,m, tid) fromF (2)
+SyRA,j,A′ retrieves the associ-
+ated s value of P using the leaked message ( Issue, sid, id, P,s,x s, I).
+– If there exists an entry (s′,r′
+s) recorded where s′ =s, set ˆD← ˆgr′
+s. Else, pick
+rs
+$
+← −Z∗
+p. Record (s,rs), and set ˆD← ˆgrs.
+– The real-world tag value Treal = e(g, ˆg1/(s+isk))rl (associated to b = 0 in the
+pseudorandomness game) is changed to the ideal-world valueTideal =e(g, ˆD)rl
+in Game(2)
+j (associated to b = 1 in the pseudorandomness game).
+– A′ providess (wheres /∈ Scorrupted) to the challengerC (note thats /∈Q ;Q is a
+query list maintained byC which contains onlys values of corrupted parties).
+– Upon receiving the challenge target group element Tb from the challengerC,
+the adversary A′ proceeds as follows: for the case b = 0, Treal = Trl
+0 ; and
+for b = 1, Tideal = Trl
+1 . This is because as defined in Definition 5, T0 =
+e(g, ˆg)1/(s+isk) and T1 is sampled randomly. A′ sets Trl
+b as pseudonym T of
+honest user with identity string s (provided to the challenger as the challenge
+input) and emulatingFNIZK computesπ← SimProve(x) forTrl
+b ∈x and check
+that Verify(x,π ) = 1. If so, records the entry (x,π ).
+– IfZ distinguishes Game(2)
+j−1 (with Treal = Trl
+b for b = 0) from Game(2)
+j (with
+Tideal =Trl
+b forb = 1), thenA′ uses this advantage to win the pseudorandom-
+ness game as the pseudonym of the honest user is derived using the challenge.
+Therefore, for Z, Game(2)
+j is indistinguishable from the real-world protocol
+where the real-world ˆusk value is used in tag computation for an honest party,
+rather than a random group element from ˆG.
+Simulating honest issuer public key.A′ simulates the public keys of honest issuers
+as follows without knowing their secret keys. Without loss of generality, we
+assume the index set C ={1,...,t − 1} corresponds to the malicious issuers,
+while the indices H ={t,...,n } are assigned to the honest ones.
+– Set ˆivk ← ˆIVK, where ˆIVK is provided by the challenger of the DY-VRF†
+pseudorandomness game.
+
+40 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+– EmulatingFn,t
+DKG, upon receiving (CPoints, sid,{αj}j∈C) fromA, compute the
+public keys of the malicious issuers as: ˆivkj← ˆgαj for all j∈ C.
+– Compute the public keys of the honest issuers using Lagrange interpolation:
+ˆivkk = ( ˆivk)
+Q
+m∈C
+m−k
+m ·
+Y
+j∈C
+( ˆivkj)
+Q
+m∈C∪{0},m̸=j
+k−m
+j−m
+for all k∈ H.
+– Output (VerKey, sid, ( ˆivki, ˆivk)) for all issuers to F (2)
+SyRA,j.
+Simulating honest issuer share of malicious user secret key. 18A′ simulates the
+shares of honest issuers during the threshold issuance protocol (for the malicious
+user’s secret key generation). Similar to the previous simulation we assume the
+index set C = {1,...,t − 1} corresponds to the malicious issuers, while the
+indices H ={t,...,n } are assigned to the honest ones. We intentionally avoid
+addressing leakages and calls that have been already addressed in Section 7.1 for
+malicious user case.
+– Emulating FNIZK and an honest issuer Issk in the set of t issuers I, ex-
+tract the adversary’s witness by executing: w← Extract(x,π ), where w =
+(s,ws,{sj}n
+j=1,{zi}∀i∈index(I)) fork∈ H. Check if (x,w )∈R holds. If it does
+not hold, abort.
+– Query the challengerC using the extracted s.
+[Note that: C sets Q ← Q∪{s} and sends (χ, ˆχ) to A′, where χ =
+g1/(s+ISK) and ˆχ = ˆg1/(s+ISK). Here, ISK is the secret key associated with
+ˆIVK. Upon receiving (χ, ˆχ) fromC, A′ must simulate the honest issuer’s
+share such that the secret key generated by the malicious user becomes (χ, ˆχ).
+The adversary (malicious user P) receives (ReceivedBack, sid, Isst, (ωt, ˆωt))
+from F sas
+Ch , sent by the honest issuer Isst. Thus, A′ must simulate two
+group elements ensuring the following equalities hold upon aggregation: ω← −
+SSH.Aggn,t{ωi}∀i∈index(I) and ˆω ← −SSH.Aggn,t{ˆωi}∀i∈index(I), such that
+ω = χ and ˆω = ˆχ where I contains t− 1 malicious issuers and an honest
+issuer simulated by A′.]
+– EmulatingFn,t
+DKG,A′ knows secret keys of malicious issuers: iskj for j∈ C.
+And given the witness extracted by A′: w = (s,ws,{sj}n
+j=1,{zi}∀i∈index(I)),
+A′ checks if calls toFmul via the adversary (on behalf of malicious issuers) of
+the form: ( Compute, sid|| id|| I,rj, (iskj,sj), auxj) for some rj are consistent
+with iskj and sj.
+• If there exits at least one inconsistency either for iskj orsj forj∈ C: sam-
+pleγ
+$
+← −Zp and setK←gγ and ˆK← ˆgγ. Output (Computed, sid|| id|| I,
+K, ˆK) to all t− 1 malicious issuers who have called Fmul as output of
+18 All honest users secret keys that are DY-VRF† proofs in both source groups are
+hidden under ciphertexts from the adversary’s view. In the following, we elaborate
+on the simulation of DY-VRF† proof issuance for malicious users.
+
+SyRA Signatures 41
+Fmul. Emulating honest issuer Isst andF sas
+Ch , sample rt
+$
+← −Zp and send
+(ReceivedBack, sid, Isst, (ωt, ˆωt)) to the malicious user where ωt← Krt,
+and ˆωt← ˆKrt.
+• Else, samplert
+$
+← −Zp and computer← −SSH.Aggn,t
+n
+{rj}j∈C∪{rt}
+o
+. Set
+K← χr−1
+and ˆK← ˆχr−1
+. Output ( Computed, sid|| id|| I,K, ˆK) to all
+t− 1 malicious issuers who have calledFmul as output ofFmul. Emulating
+honest issuer Isst andF sas
+Ch , send ( ReceivedBack, sid, Isst, (ωt, ˆωt)) to the
+malicious user where ωt← Krt, and ˆωt← ˆKrt. Update: LCR←L CR∪
+{P}, Scorrupted← Scorrupted∪{s}, whereLCR denotes the list of corrupted-
+registered parties (who have been issued signing keys).
+A′ simulates the signatures σ of honest parties similar to how this simula-
+tion was done in the reduction between Game(1)
+i−1 and Game(1)
+i . A′ submits
+(Signature, sid,σ,s∗, tid) toF (2)
+SyRA,j, where s∗ = 0.
+Therefore, under the pseudorandomness of DY-VRF†, the following inequality
+holds:
+| Pr[Game(3)(λ) = 1]− Pr[Game(2)(λ) = 1]|≤ qt· Advpseudo
+A,DY-VRF†(λ)
+Game(4): Same as Game(3), except that in Game(4), we change all tags T =
+e(Z, ˆD) of honest parties to random values T
+$
+← −GT . We highlight that in this
+game, for a fixed identifiers, the simulator samples fresh random group elements
+for different contexts unless the same identity strings holder is instructed to sign
+the same context. (In this case, the simulator receives the same ucid from the
+ideal functionality and uses the same tag value T , as we will see.)
+Specifically, in Game(3), if the same s holder was instructed to sign different
+contexts, the simulator used the same ˆD value for tags (e.g., T1 =e(h(ctx1), ˆD)
+andT2 =e(h(ctx2), ˆD), where ˆD
+$
+← −ˆG, and h(·) is the output ofFRO). In Game(4),
+if the same s holder is instructed to sign different contexts, the simulator uses
+different random group elements for tag computation: ( T1,T 2)
+$
+← −G2
+T .
+In leaky functionalities F (3)
+SyRA,j, 1 ≤ j ≤ qt, where F (3)
+SyRA,1 := F (3)
+SyRA and
+F (3)
+SyRA,qt
+:=F (4)
+SyRA), the leaked message to the simulator in the Issue and Sign
+commands ( Issue, sid, id, P,xs, I) and ( Sign, sid, P, ctx,m, tid), respectively, for
+an honest party P.
+We show thatGame(4) and Game(3)are indistinguishable under the DDH assump-
+tion, which allows us to bound the probability thatZ distinguishes Game(4) from
+Game(3).
+We introduce a sequences of sub-games:
+(Game(3)
+0 := Game(3),..., Game(3)
+j−1,
+Game(3)
+j ,..., Game(3)
+qt := Game(4))
+
+42 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+(whereqt denotes the upper bound on the number of all signatures of all honest
+parties.) Define Game(3)
+0 := Game(3). Game(3)
+1 is the same as Game(3)
+0 , except in
+Game(3)
+1 , we change the first tag value of the first honest party (e.g., who holds
+s1) from T1,1 = e(Z, ˆD) to T1,1
+$
+← −GT . in Game(3)
+2 , we change the second tag
+value of the first honest party (holding s1) from T2,1 =e(Z′, ˆD) to T2,1
+$
+← −GT ,
+and so on. The reduction between Game(3)
+j−1 and Game(3)
+j is described below,
+where any difference between them is upper bounded by AdvDDH
+A (λ).
+Associated reduction between Game(3)
+j−1 and Game(3)
+j (DDH; for 1≤j≤qt).
+IfZ distinguishes Game(3)
+j−1 and Game(3)
+j , we can construct A′ that breaks the
+DDH assumption.
+– For 1≤ k≤ j− 1: all ˆD values (associated to each honest party P) in tags
+T = e(Z, ˆD) have already been substituted. For instance, T1 = e(Z, ˆD) and
+T2 =e(Z′, ˆD) associated with an honest party have changed to (T1,T 2)
+$
+← −G2
+T .
+– For j + 1≤ k≤ qt: all tags are created such that for a fixed s holder the
+simulator always uses the same group element ˆD in tag computation.
+– The challengerC of DDH forg∈ G computes:X =gx,Y =gy,C 0 =gxy, and
+C1 =gr whereC samples (x,y,r ) randomly: (x,y,r )
+$
+← −Z∗
+p.
+– The challengerC provides (g,X,Y,C b) toA′ where b = 0 or b = 1.
+Letqh be the total number of queries the adversary can make to the random
+oracle. Then:
+– i
+$
+← −[1,qh],A′ sets Z = h(ctx)← X if ctr = i; ( ctr is initially set to zero).
+Else, program the random oracle as: Zk = h(ctxk)←gxk wherexk
+$
+← −Z∗
+p and
+set ctr← ctr + 1.
+The tag value T =e(h(ctx), ˆD), which is computed as e(C0, ˆg) (associated to
+b = 0 in the DDH game), is changed to T = e(C1, ˆg) (associated to b = 1
+in the DDH game) in Game(3)
+j . Therefore, if Z distinguishes Game(3)
+j−1 from
+Game(3)
+j ,A′ uses this to win the DDH game.
+A′ simulates signatures σ of honest parties similar to how this simula-
+tion was done in the reduction between Game(1)
+i−1 and Game(1)
+i . A′ submits
+(Signature, sid,σ,s∗, tid) toF (3)
+SyRA,j where s∗ = 0.
+Therefore, under the DDH assumption, the following inequality holds:
+| Pr[Game(4)(λ) = 1]− Pr[Game(3)(λ) = 1]|≤ qt·qh· AdvDDH
+A (λ)
+Game(5): Same as Game(4), except that in Game(5),F (5)
+SyRA does not allow S (5)
+to submit any message to F (5)
+SyRA on behalf of adversary A (corrupted party)
+who generates a valid signature for a new party (who is not among honest and
+corrupted parties) or who generates a valid signature on behalf of an honest
+party. Hence, Game(5) is the same as Game(4), except that it checks whether a
+flag is raised or not. The flag is raised if A can generate a valid signature for
+a completely new party, who is neither honest nor corrupted, or forge a valid
+signature for an honest party.
+
+SyRA Signatures 43
+We show that Game(5) and Game(4) are indistinguishable under the pseudoran-
+domness of DY-VRF†, which allows us to bound the probability that Z distin-
+guishes Game(5) from Game(4).
+Note thatF (5)
+SyRA, in the Issue and Sign commands, does not leak the identity
+of the (honest) party P toS (5).F (5)
+SyRA leaks to ideal-world adversaryS whatever
+our finalFSyRA leaks toS, which is ( Sign, sid, ucid, ctx,m, tid). As a result, S (5)
+picks a random group element as the tag value, except in the instance that the
+same ucid is received from the functionality.
+Associated reduction between Game(5) and Game(4) (pseudorandomness of
+DY-VRF†). If Z distinguishes Game(5) and Game(4), we can construct A′ that
+breaks the pseudorandomness of DY-VRF†.
+The final simulatorS is described in Section 7.1. To prevent redundancy, we will
+highlight distinctions from this simulator. S (5) fails with probability at most
+Advpseudo
+A,DY-VRF†(λ) as it is shown below in cases where emulating honest verifier
+S (5) receives a valid signature (fromA) that is never simulated by S (5).
+– Given the extracted witnessw = (s,α,β ) fromA’s statement and proof (x,π )
+(see Section 7.1 for more details), A′ provides s /∈ Scorrupted to the challenger
+C of the pseudorandomness game (where s /∈Q ; recall that Q is a query list
+maintained byC, which only contains s values of corrupted parties).
+– The challengerC providesTb toA′.
+– Parsex = (Z,C, ˆC,T, ivk, ctx,m ). For caseb = 0:T0 =T ; and for b = 1:T1̸=
+T . Hence, ifA provides a valid signature (see Section 7.1 for a comprehensive
+description of the steps involved in verifying the signature) for s /∈ Scorrupted,
+A′ uses that to win the pseudorandomness game. Therefore, the probability
+of failure forS (5) is upper bounded by Advpseudo
+A,DY-VRF†(λ).
+To avoid repetition, we omit the description of other simulations, as they are
+similar to those provided in Game(3).
+Therefore, under the pseudorandomness of DY-VRF†, the following inequality
+holds:
+| Pr[Game(5)(λ) = 1]− Pr[Game(4)(λ) = 1]|≤ Advpseudo
+A,DY-VRF†(λ)
+Game(6): Same as Game(5), except that in Game(6),F (6)
+SyRA does not allowS (6) to
+submit any message toF (6)
+SyRA on behalf of adversary A (corrupted party) who:
+– generates two valid signatures on behalf of a corrupted party on a context
+where T1̸=T2; or
+– generates two valid signatures on a context using two real-world identifiers
+s1̸=s2 where T1 =T2.
+Hence, Game(6) is the same as Game(5), except that it checks whether a flag is
+raised or not. The flag is raised if one of the two events above occurs. Hence, the
+probability thatZ distinguishes Game(6) from Game(5) is zero, as tag values have
+uniqueness with respect to the context and s value of the party. More precisely:
+
+44 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+– For a given s and context ctx, all generated signatures have the same tag
+T =e(Z, ˆg)1/(isk+s).
+– For a given context ctx, s1, and s2 where s1 ̸= s2, we always have T1 =
+e(Z, ˆg)1/(isk+s1)̸=T2 =e(Z, ˆg)1/(isk+s2), as s≪| Z∗
+p|.
+Hence, the flag is never raised, and the following equality holds:
+| Pr[Game(6)(λ) = 1] = Pr[Game(5)(λ) = 1]
+AsF (6)
+SyRA =FSyRA andS (6) =S, so that Game(6) corresponds to the ideal-world
+execution EXECFSyRA,S,Z, we argue that random variables EXECΠSASSI,A,Z and
+EXECFSyRA,S,Z are statistically close. Indeed, the probability for any PPT envi-
+ronmentZ to distinguish EXECΠSASSI,A,Z from EXECFSyRA,S,Z is upper bounded
+by
+Advbind
+A,COM(λ) + 2qt· AdvIND-CPA
+A (λ)
++ (qt + 1)· Advpseudo
+A,DY-VRF†(λ) +qt·qh· AdvDDH
+A (λ)
+which concludes the security proof.
+Acknowledgements
+This work has been supported by Input Output (iohk.io) through their funding
+of the University of Edinburgh Blockchain Technology Lab. We thank Lovesh
+Harchandani for implementing the system and contributing to the performance
+evaluation.
+References
+Au et al.(2013). Man Ho Au, Joseph K. Liu, Willy Susilo, and Tsz Hon Yuen. 2013.
+Secure ID-based linkable and revocable-iff-linked ring signature with constant-size
+construction. Theor. Comput. Sci. 469 (2013), 1–14. https://doi.org/10.1016/
+j.tcs.2012.10.031
+Baldimtsi et al.(2017). Foteini Baldimtsi, Jan Camenisch, Maria Dubovitskaya, Anna
+Lysyanskaya, Leonid Reyzin, Kai Samelin, and Sophia Yakoubov. 2017. Accumu-
+lators with Applications to Anonymity-Preserving Revocation. In 2017 IEEE Eu-
+ropean Symposium on Security and Privacy, EuroS&P 2017, Paris, France, April
+26-28, 2017. IEEE, 301–315. https://doi.org/10.1109/EuroSP.2017.13
+Baldimtsi et al.(2024). Foteini Baldimtsi, Konstantinos Kryptos Chalkias, Yan Ji,
+Jonas Lindstrøm, Deepak Maram, Ben Riva, Arnab Roy, Mahdi Sedaghat, and
+Joy Wang. 2024. zklogin: Privacy-preserving blockchain authentication with exist-
+ing credentials. arXiv preprint arXiv:2401.11735 (2024).
+Ben-Sasson et al.(2014). Eli Ben-Sasson, Alessandro Chiesa, Christina Garman,
+Matthew Green, Ian Miers, Eran Tromer, and Madars Virza. 2014. Zerocash:
+Decentralized Anonymous Payments from Bitcoin. In 2014 IEEE Symposium on
+Security and Privacy. IEEE Computer Society Press, 459–474. https://doi.org/
+10.1109/SP.2014.36
+
+SyRA Signatures 45
+Bender et al.(2012). Jens Bender, ¨Ozg¨ ur Dagdelen, Marc Fischlin, and Dennis K¨ ugler.
+2012. Domain-specific pseudonymous signatures for the german identity card. In
+Information Security: 15th International Conference, ISC 2012, Passau, Germany,
+September 19-21, 2012. Proceedings 15. Springer, 104–119.
+B la´ skiewicz et al.(2019). Przemys law B la´ skiewicz, Lucjan Hanzlik, Kamil Kluczniak,
+ Lukasz Krzywiecki, Miros law Kuty lowski, Marcin S lowik, and Marta Wszo la. 2019.
+Pseudonymous signature schemes. Advances in Cyber Security: Principles, Tech-
+niques, and Applications (2019), 185–255.
+Boneh et al.(2004a). Dan Boneh, Xavier Boyen, and Hovav Shacham. 2004a. Short
+Group Signatures. In CRYPTO 2004 (LNCS, Vol. 3152), Matthew Franklin (Ed.).
+Springer, Heidelberg, 41–55. https://doi.org/10.1007/978-3-540-28628-8_3
+Boneh et al.(2004b). Dan Boneh, Ben Lynn, and Hovav Shacham. 2004b. Short Sig-
+natures from the Weil Pairing. Journal of Cryptology 17, 4 (Sept. 2004), 297–319.
+https://doi.org/10.1007/s00145-004-0314-9
+Boyle et al.(2021). Elette Boyle, Ran Cohen, and Aarushi Goel. 2021. Breaking the
+O(√n)-Bit Barrier: Byzantine Agreement with polylog bits per party. In Proceed-
+ings of the 2021 ACM Symposium on Principles of Distributed Computing . 319–
+330.
+Brickell and Li(2010). Ernie Brickell and Jiangtao Li. 2010. A pairing-based DAA
+scheme further reducing TPM resources. In International Conference on Trust
+and Trustworthy Computing . Springer, 181–195.
+Bringer et al.(2014). Julien Bringer, Herv´ e Chabanne, Roch Lescuyer, and Alain
+Patey. 2014. Efficient and strongly secure dynamic domain-specific pseudonymous
+signatures for ID documents. In Financial Cryptography and Data Security: 18th
+International Conference, FC 2014, Christ Church, Barbados, March 3-7, 2014,
+Revised Selected Papers 18. Springer, 255–272.
+B¨ unz et al.(2020). Benedikt B¨ unz, Shashank Agrawal, Mahdi Zamani, and Dan Boneh.
+2020. Zether: Towards privacy in a smart contract world. In International Confer-
+ence on Financial Cryptography and Data Security . Springer, 423–443.
+Burdges et al.(2023). Jeffrey Burdges, Oana Ciobotaru, Elizabeth Crites, Han-
+dan Kılın¸ c Alper, Alistair Stewart, and Sergey Vasilyev. 2023. Ring Verifi-
+able Random Functions. Cryptology ePrint Archive, Paper 2023/002. https:
+//eprint.iacr.org/2023/002
+Camenisch et al.(2018). Jan Camenisch, Manu Drijvers, Tommaso Gagliardoni, Anja
+Lehmann, and Gregory Neven. 2018. The wonderful world of global random ora-
+cles. In Annual International Conference on the Theory and Applications of Cryp-
+tographic Techniques. Springer, 280–312.
+Camenisch et al.(2006b). Jan Camenisch, Susan Hohenberger, Markulf Kohlweiss,
+Anna Lysyanskaya, and Mira Meyerovich. 2006b. How to win the clonewars: effi-
+cient periodic n-times anonymous authentication. In Proceedings of the 13th ACM
+Conference on Computer and Communications Security, CCS 2006, Alexandria,
+VA, USA, October 30 - November 3, 2006 . ACM, 201–210. https://doi.org/10.
+1145/1180405.1180431
+Camenisch et al.(2005). Jan Camenisch, Susan Hohenberger, and Anna Lysyanskaya.
+2005. Compact E-Cash. In EUROCRYPT 2005 (LNCS, Vol. 3494) , Ronald
+Cramer (Ed.). Springer, Heidelberg, 302–321. https://doi.org/10.1007/
+11426639_18
+Camenisch et al.(2006a). Jan Camenisch, Susan Hohenberger, and Anna Lysyanskaya.
+2006a. Balancing Accountability and Privacy Using E-Cash (Extended Abstract).
+In SCN 06 (LNCS, Vol. 4116) , Roberto De Prisco and Moti Yung (Eds.). Springer,
+Heidelberg, 141–155. https://doi.org/10.1007/11832072_10
+
+46 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+Camenisch and Lysyanskaya(2001). Jan Camenisch and Anna Lysyanskaya. 2001.
+An Efficient System for Non-transferable Anonymous Credentials with Op-
+tional Anonymity Revocation. In EUROCRYPT 2001 (LNCS, Vol. 2045) , Bir-
+git Pfitzmann (Ed.). Springer, Heidelberg, 93–118. https://doi.org/10.1007/
+3-540-44987-6_7
+Canetti et al.(2020). Ran Canetti, Rosario Gennaro, Steven Goldfeder, Nikolaos
+Makriyannis, and Udi Peled. 2020. UC Non-Interactive, Proactive, Threshold
+ECDSA with Identifiable Aborts. In ACM CCS 2020 , Jay Ligatti, Xinming Ou,
+Jonathan Katz, and Giovanni Vigna (Eds.). ACM Press, 1769–1787. https:
+//doi.org/10.1145/3372297.3423367
+Chase and Lysyanskaya(2006). Melissa Chase and Anna Lysyanskaya. 2006. On Sig-
+natures of Knowledge. Cryptology ePrint Archive, Report 2006/184. https:
+//eprint.iacr.org/2006/184.
+Chaum(1985). David Chaum. 1985. Security Without Identification: Transaction Sys-
+tems to Make Big Brother Obsolete. Commun. ACM 28, 10 (1985), 1030–1044.
+https://doi.org/10.1145/4372.4373
+Chaum and Evertse(1986). David Chaum and Jan-Hendrik Evertse. 1986. A Secure
+and Privacy-protecting Protocol for Transmitting Personal Information Between
+Organizations. In Advances in Cryptology - CRYPTO ’86, Santa Barbara, Cali-
+fornia, USA, 1986, Proceedings (Lecture Notes in Computer Science, Vol. 263) .
+Springer, 118–167. https://doi.org/10.1007/3-540-47721-7_10
+Chaum and van Heyst(1991). David Chaum and Eug` ene van Heyst. 1991. Group
+Signatures. In EUROCRYPT’91 (LNCS, Vol. 547) , Donald W. Davies (Ed.).
+Springer, Heidelberg, 257–265. https://doi.org/10.1007/3-540-46416-6_22
+Company(2024). Electric Coin Company. 2024. New SNARK Curve. https:
+//electriccoin.co/blog/new-snark-curve/.
+Consortium(2022). The World Wide Web Consortium. 2022. Decentralized Identifiers
+(DIDs). https://w3c.github.io/did-core/.
+Cothority(2024). Cothority. 2024. DKG Implementation. Available at: Link..
+Damg˚ ard et al.(2006). Ivan Damg˚ ard, Kasper Dupont, and Michael Østergaard Ped-
+ersen. 2006. Unclonable Group Identification. In Advances in Cryptology - EURO-
+CRYPT 2006, 25th Annual International Conference on the Theory and Applica-
+tions of Cryptographic Techniques, St. Petersburg, Russia, May 28 - June 1, 2006,
+Proceedings (Lecture Notes in Computer Science, Vol. 4004) . Springer, 555–572.
+https://doi.org/10.1007/11761679_33
+Damg˚ ard et al.(2021). Ivan Damg˚ ard, Chaya Ganesh, Hamidreza Khoshakhlagh,
+Claudio Orlandi, and Luisa Siniscalchi. 2021. Balancing Privacy and Accountabil-
+ity in Blockchain Identity Management. In CT-RSA 2021 (LNCS, Vol. 12704) ,
+Kenneth G. Paterson (Ed.). Springer, Heidelberg, 552–576. https://doi.org/
+10.1007/978-3-030-75539-3_23
+David et al.(2024). Bernardo David, Rafael Dowsley, Anders Konring, and Mario
+Larangeira. 2024. MUSEN: Aggregatable Key-Evolving Verifiable Random Func-
+tions and Applications. Cryptology ePrint Archive, Paper 2024/628. https:
+//eprint.iacr.org/2024/628
+Dfns(2024). Dfns. 2024. CGGMP21 In Rust, At Last. Available at: Link..
+Diaz et al.(2008). Claudia Diaz, Eleni Kosta, Hannelore Dekeyser, Markulf Kohlweiss,
+and Girma Nigusse. 2008. Privacy preserving electronic petitions. Identity in the
+Information Society 1, 1 (2008), 203–219.
+Dingledine et al.(2004). Roger Dingledine, Nick Mathewson, and Paul F. Syverson.
+2004. Tor: The Second-Generation Onion Router. In USENIX Security 2004, Matt
+Blaze (Ed.). USENIX Association, 303–320.
+
+SyRA Signatures 47
+Dodis and Yampolskiy(2005). Yevgeniy Dodis and Aleksandr Yampolskiy. 2005. A
+verifiable random function with short proofs and keys. In International Workshop
+on Public Key Cryptography . Springer, 416–431.
+Dodis et al.(2006). Yevgeniy Dodis, Aleksandr Yampolskiy, and Moti Yung. 2006.
+Threshold and Proactive Pseudo-Random Permutations. In Theory of Cryptogra-
+phy, Third Theory of Cryptography Conference, TCC 2006, New York, NY, USA,
+March 4-7, 2006, Proceedings (Lecture Notes in Computer Science, Vol. 3876) .
+Springer, 542–560. https://doi.org/10.1007/11681878_28
+Doerner et al.(2023). Jack Doerner, Yashvanth Kondi, Eysa Lee, Abhi Shelat, and
+LaKyah Tyner. 2023. Threshold bbs+ signatures for distributed anonymous cre-
+dential issuance. In 2023 IEEE Symposium on Security and Privacy (SP) . IEEE,
+773–789.
+ElGamal(1985). Taher ElGamal. 1985. A public key cryptosystem and a signature
+scheme based on discrete logarithms. IEEE transactions on information theory
+31, 4 (1985), 469–472.
+Escala and Groth(2014). Alex Escala and Jens Groth. 2014. Fine-Tuning Groth-Sahai
+Proofs. In PKC 2014 (LNCS, Vol. 8383) , Hugo Krawczyk (Ed.). Springer, Heidel-
+berg, 630–649. https://doi.org/10.1007/978-3-642-54631-0_36
+Even et al.(1985). Shimon Even, Oded Goldreich, and Abraham Lempel. 1985. A
+randomized protocol for signing contracts. Commun. ACM 28, 6 (1985), 637–647.
+Fauzi et al.(2019). Prastudy Fauzi, Sarah Meiklejohn, Rebekah Mercer, and Claudio
+Orlandi. 2019. Quisquis: A new design for anonymous cryptocurrencies. In Ad-
+vances in Cryptology–ASIACRYPT 2019: 25th International Conference on the
+Theory and Application of Cryptology and Information Security, Kobe, Japan, De-
+cember 8–12, 2019, Proceedings, Part I 25 . Springer, 649–678.
+Fedimint(2024). Fedimint. 2024. DKG Implementation. Available at: Link..
+Fett et al.(2016). Daniel Fett, Ralf K¨ usters, and Guido Schmitz. 2016. A Com-
+prehensive Formal Security Analysis of OAuth 2.0. In Proceedings of the 2016
+ACM SIGSAC Conference on Computer and Communications Security . Asso-
+ciation for Computing Machinery, New York, NY, USA, 1204–1215. https:
+//doi.org/10.1145/2976749.2978385
+Fiat and Shamir(1987). Amos Fiat and Adi Shamir. 1987. How to Prove Yourself:
+Practical Solutions to Identification and Signature Problems. In CRYPTO’86
+(LNCS, Vol. 263) , Andrew M. Odlyzko (Ed.). Springer, Heidelberg, 186–194.
+https://doi.org/10.1007/3-540-47721-7_12
+Foundation(2023). Decentralized Identity Foundation. 2023. https://identity.
+foundation/.
+Fujisaki and Suzuki(2007). Eiichiro Fujisaki and Koutarou Suzuki. 2007. Traceable
+Ring Signature. In PKC 2007 (LNCS, Vol. 4450) , Tatsuaki Okamoto and Xi-
+aoyun Wang (Eds.). Springer, Heidelberg, 181–200. https://doi.org/10.1007/
+978-3-540-71677-8_13
+Garay et al.(2011). Juan A Garay, Jonathan Katz, Ranjit Kumaresan, and Hong-
+Sheng Zhou. 2011. Adaptively secure broadcast, revisited. In Proceedings of the
+30th annual ACM SIGACT-SIGOPS symposium on Principles of distributed com-
+puting. 179–186.
+Gennaro et al.(2007). Rosario Gennaro, Stanislaw Jarecki, Hugo Krawczyk, and Tal
+Rabin. 2007. Secure Distributed Key Generation for Discrete-Log Based Cryp-
+tosystems. Journal of Cryptology 20, 1 (Jan. 2007), 51–83. https://doi.org/10.
+1007/s00145-006-0347-3
+
+48 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+Groth(2010). Jens Groth. 2010. Short Pairing-Based Non-interactive Zero-Knowledge
+Arguments. In ASIACRYPT 2010 (LNCS, Vol. 6477) , Masayuki Abe (Ed.).
+Springer, Heidelberg, 321–340. https://doi.org/10.1007/978-3-642-17373-8_
+19
+Groth et al.(2006). Jens Groth, Rafail Ostrovsky, and Amit Sahai. 2006. Perfect non-
+interactive zero knowledge for NP. InAnnual International Conference on the The-
+ory and Applications of Cryptographic Techniques . Springer, 339–358.
+Guillou and Quisquater(1988). Louis C. Guillou and Jean-Jacques Quisquater. 1988.
+A Practical Zero-Knowledge Protocol Fitted to Security Microprocessor Mini-
+mizing Both Trasmission and Memory. In EUROCRYPT’88 (LNCS, Vol. 330) ,
+C. G. G¨ unther (Ed.). Springer, Heidelberg, 123–128.https://doi.org/10.1007/
+3-540-45961-8_11
+Gurkan et al.(2021). Kobi Gurkan, Philipp Jovanovic, Mary Maller, Sarah Meiklejohn,
+Gilad Stern, and Alin Tomescu. 2021. Aggregatable Distributed Key Generation.
+In EUROCRYPT 2021, Part I (LNCS, Vol. 12696) , Anne Canteaut and Fran¸ cois-
+Xavier Standaert (Eds.). Springer, Heidelberg, 147–176. https://doi.org/10.
+1007/978-3-030-77870-5_6
+Haitner et al.(2022). Iftach Haitner, Nikolaos Makriyannis, Samuel Ranellucci, and
+Eliad Tsfadia. 2022. Highly efficient ot-based multiplication protocols. In An-
+nual International Conference on the Theory and Applications of Cryptographic
+Techniques. Springer, 180–209.
+Herranz(2006). Javier Herranz. 2006. Deterministic Identity-Based Signatures for Par-
+tial Aggregation. Comput. J. 49, 3 (2006), 322–330. https://doi.org/10.1093/
+comjnl/bxh153
+Hess(2003). Florian Hess. 2003. Efficient Identity Based Signature Schemes Based
+on Pairings. In SAC 2002 (LNCS, Vol. 2595) , Kaisa Nyberg and Howard M.
+Heys (Eds.). Springer, Heidelberg, 310–324. https://doi.org/10.1007/
+3-540-36492-7_20
+JAP(2009). JAP. 2009. JAP Anonymity & Privacy. http://anon.inf.tu-dresden.
+de/.
+Katz(2024). Jonathan Katz. 2024. Round-optimal, fully secure distributed key gener-
+ation. In Annual International Cryptology Conference . Springer, 285–316.
+Kiayias et al.(2022). Aggelos Kiayias, Markulf Kohlweiss, and Amirreza Sarencheh.
+2022. PEReDi: Privacy-enhanced, regulated and distributed central bank digital
+currencies. In Proceedings of the 2022 ACM SIGSAC Conference on Computer and
+Communications Security. 1739–1752.
+Kiayias et al.(2004). Aggelos Kiayias, Yiannis Tsiounis, and Moti Yung. 2004. Trace-
+able Signatures. In EUROCRYPT 2004 (LNCS, Vol. 3027) , Christian Cachin
+and Jan Camenisch (Eds.). Springer, Heidelberg, 571–589. https://doi.org/
+10.1007/978-3-540-24676-3_34
+Kiayias and Zhou(2007). Aggelos Kiayias and Hong-Sheng Zhou. 2007. Hidden
+Identity-Based Signatures. In FC 2007 (LNCS, Vol. 4886) , Sven Dietrich and
+Rachna Dhamija (Eds.). Springer, Heidelberg, 134–147.
+Kluczniak et al.(2016). Kamil Kluczniak, Lucjan Hanzlik, and Miros law Kuty lowski.
+2016. A formal concept of domain pseudonymous signatures. In Information Secu-
+rity Practice and Experience: 12th International Conference, ISPEC 2016, Zhangji-
+ajie, China, November 16-18, 2016, Proceedings 12 . Springer, 238–254.
+Kondi and abhi shelat(2022). Yashvanth Kondi and abhi shelat. 2022. Improved
+Straight-Line Extraction in the Random Oracle Model With Applications to Signa-
+ture Aggregation. Cryptology ePrint Archive. https://eprint.iacr.org/2022/
+393
+
+SyRA Signatures 49
+Kuty lowski et al.(2016). Miros law Kuty lowski, Lucjan Hanzlik, and Kamil Kluczniak.
+2016. Pseudonymous signature on eIDAS token–implementation based privacy
+threats. In Australasian Conference on Information Security and Privacy. Springer,
+467–477.
+Labs(2024). Bolt Labs. 2024. DKG Implementation. Available at: Link..
+Liu et al.(2004). Joseph K. Liu, Victor K. Wei, and Duncan S. Wong. 2004. Link-
+able Spontaneous Anonymous Group Signature for Ad Hoc Groups (Extended
+Abstract). In ACISP 04 (LNCS, Vol. 3108) , Huaxiong Wang, Josef Pieprzyk, and
+Vijay Varadharajan (Eds.). Springer, Heidelberg, 325–335. https://doi.org/10.
+1007/978-3-540-27800-9_28
+Lysyanskaya and Rosenbloom(2022). Anna Lysyanskaya and Leah Namisa Rosen-
+bloom. 2022. Universally Composable Sigma-protocols in the Global Random-
+Oracle Model. Cryptology ePrint Archive. https://eprint.iacr.org/2022/290
+Maram et al.(2021). Deepak Maram, Harjasleen Malvai, Fan Zhang, Nerla Jean-Louis,
+Alexander Frolov, Tyler Kell, Tyrone Lobban, Christine Moy, Ari Juels, and An-
+drew Miller. 2021. Candid: Can-do decentralized identity with legacy compatibil-
+ity, sybil-resistance, and accountability. In 2021 IEEE Symposium on Security and
+Privacy (SP). IEEE, 1348–1366.
+Metere and Dong(2017). Roberto Metere and Changyu Dong. 2017. Automated cryp-
+tographic analysis of the pedersen commitment scheme. In Computer Network Se-
+curity: 7th International Conference on Mathematical Methods, Models, and Ar-
+chitectures for Computer Network Security, MMM-ACNS 2017, Warsaw, Poland,
+August 28-30, 2017, Proceedings 7 . Springer, 275–287.
+Miao et al.(2020). Peihan Miao, Sarvar Patel, Mariana Raykova, Karn Seth, and Moti
+Yung. 2020. Two-Sided Malicious Security for Private Intersection-Sum with Car-
+dinality. In CRYPTO 2020, Part III (LNCS, Vol. 12172) , Daniele Micciancio and
+Thomas Ristenpart (Eds.). Springer, Heidelberg, 3–33. https://doi.org/10.
+1007/978-3-030-56877-1_1
+Micali et al.(2003). Silvio Micali, Michael Rabin, and Joe Kilian. 2003. Zero-knowledge
+sets. In 44th Annual IEEE Symposium on Foundations of Computer Science, 2003.
+Proceedings.IEEE, 80–91.
+Park et al.(2023). Sanghyeon Park, Jeong Hyuk Lee, Seunghwa Lee, Jung Hyun Chun,
+Hyeonmyeong Cho, MinGi Kim, Hyun Ki Cho, and Soo-Mook Moon. 2023. Beyond
+the Blockchain Address: Zero-Knowledge Address Abstraction. IACR Cryptol.
+ePrint Arch. (2023), 191. https://eprint.iacr.org/2023/191
+Pedersen(1991). Torben Pryds Pedersen. 1991. Non-interactive and information-
+theoretic secure verifiable secret sharing. In Annual international cryptology con-
+ference. Springer, 129–140.
+Rial and Piotrowska(2022). Alfredo Rial and Ania M Piotrowska. 2022. Security Anal-
+ysis of Coconut, an Attribute-Based Credential Scheme with Threshold Issuance.
+Cryptology ePrint Archive (2022).
+Rivest et al.(2001). Ronald L. Rivest, Adi Shamir, and Yael Tauman. 2001. How
+to Leak a Secret. In ASIACRYPT 2001 (LNCS, Vol. 2248) , Colin Boyd (Ed.).
+Springer, Heidelberg, 552–565. https://doi.org/10.1007/3-540-45682-1_32
+Sakimura et al.(2014). Nat Sakimura, John Bradley, Mike Jones, Breno De Medeiros,
+and Chuck Mortimore. 2014. OpenID Connect Core 1.0 incorporating errata set
+1. The OpenID Foundation, specification 335 (2014).
+Sarencheh et al.(2025a). Amirreza Sarencheh, Alireza Kavousi, Hamidreza
+Khoshakhlagh, and Aggelos Kiayias. 2025a. DART: Decentralized, Anony-
+mous, and Regulation-friendly Tokenization. Cryptology ePrint Archive (2025).
+
+50 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+Sarencheh et al.(2025b). Amirreza Sarencheh, Aggelos Kiayias, and Markulf
+Kohlweiss. 2025b. PARScoin: A Privacy-preserving, Auditable, and Regulation-
+friendly Stablecoin. In Cryptology and Network Security . Springer Nature
+Singapore, Singapore, 289–313.
+Sasson et al.(2014). Eli Ben Sasson, Alessandro Chiesa, Christina Garman, Matthew
+Green, Ian Miers, Eran Tromer, and Madars Virza. 2014. Zerocash: Decentral-
+ized anonymous payments from bitcoin. In 2014 IEEE symposium on security and
+privacy. IEEE, 459–474.
+Scafuro and Zhang(2021). Alessandra Scafuro and Bihan Zhang. 2021. One-Time
+Traceable Ring Signatures. In ESORICS 2021, Part II (LNCS, Vol. 12973) , Elisa
+Bertino, Haya Shulman, and Michael Waidner (Eds.). Springer, Heidelberg, 481–
+500. https://doi.org/10.1007/978-3-030-88428-4_24
+Schnorr(1991). Claus-Peter Schnorr. 1991. Efficient Signature Generation by Smart
+Cards. Journal of Cryptology 4, 3 (Jan. 1991), 161–174. https://doi.org/10.
+1007/BF00196725
+Shamir(1979). Adi Shamir. 1979. How to share a secret. Commun. ACM 22, 11 (1979),
+612–613.
+Shamir(1984). Adi Shamir. 1984. Identity-Based Cryptosystems and Signature
+Schemes. In CRYPTO’84 (LNCS, Vol. 196) , G. R. Blakley and David Chaum
+(Eds.). Springer, Heidelberg, 47–53.
+Sonnino et al.(2019). Alberto Sonnino, Mustafa Al-Bassam, Shehar Bano, Sarah Meik-
+lejohn, and George Danezis. 2019. Coconut: Threshold Issuance Selective Disclo-
+sure Credentials with Applications to Distributed Ledgers. In NDSS 2019 . The
+Internet Society.
+Tomescu et al.(2022). Alin Tomescu, Adithya Bhat, Benny Applebaum, Ittai Abra-
+ham, Guy Gueta, Benny Pinkas, and Avishay Yanai. 2022. UTT: Decentralized
+Ecash with Accountable Privacy. Cryptology ePrint Archive (2022).
+Volkamer and Grimm(2006). Melanie Volkamer and R¨ udiger Grimm. 2006. Multiple
+Casts in Online Voting: Analyzing Chances. In Electronic Voting 2006: 2nd In-
+ternational Workshop, Co-organized by Council of Europe, ESF TED, IFIP WG
+8.6 and E-Voting.CC, August, 2nd - 4th, 2006 in Castle Hofen, Bregenz, Austria
+(LNI, Vol. P-86). GI, 97–106. https://dl.gi.de/handle/20.500.12116/29174
+Wang et al.(2012). Rui Wang, Shuo Chen, and XiaoFeng Wang. 2012. Signing Me onto
+Your Accounts through Facebook and Google: A Traffic-Guided Security Study of
+Commercially Deployed Single-Sign-On Web Services. In 2012 IEEE Symposium
+on Security and Privacy . 365–379. https://doi.org/10.1109/SP.2012.30
+Worldcoin(2023). Worldcoin. 2023. https://whitepaper.worldcoin.org/.
+X-explore(2023). X-explore. 2023. Advanced Analysis For Ar-
+bitrum Airdrop. https://mirror.xyz/x-explore.eth/
+AFroG11e24I6S1oDvTitNdQSDh8lN5bz9VZAink8lZ4.
+Yang et al.(2021). Kang Yang, Liqun Chen, Zhenfeng Zhang, Christopher JP Newton,
+Bo Yang, and Li Xi. 2021. Direct anonymous attestation with optimal tpm signing
+efficiency. IEEE transactions on information forensics and security 16 (2021),
+2260–2275.
+Zhang et al.(2016). Fan Zhang, Ethan Cecchetti, Kyle Croman, Ari Juels, and Elaine
+Shi. 2016. Town Crier: An Authenticated Data Feed for Smart Contracts. In
+ACM CCS 2016 , Edgar R. Weippl, Stefan Katzenbeisser, Christopher Kruegel,
+Andrew C. Myers, and Shai Halevi (Eds.). ACM Press, 270–282. https://doi.
+org/10.1145/2976749.2978326
+
+SyRA Signatures 51
+Zhang et al.(2020). Fan Zhang, Deepak Maram, Harjasleen Malvai, Steven Goldfeder,
+and Ari Juels. 2020. DECO: Liberating Web Data Using Decentralized Oracles
+for TLS. In ACM CCS 2020 , Jay Ligatti, Xinming Ou, Jonathan Katz, and Gio-
+vanni Vigna (Eds.). ACM Press, 1919–1938. https://doi.org/10.1145/3372297.
+3417239
+A Preliminaries (continued)
+A.1 Cryptographic assumptions
+Assumption 1 (Decisional Diffie-Hellman (DDH)) The decisional Diffie-
+Hellman assumption holds in G for GrGen if for all PPT adversaries A, there
+exists a negligible function negl such that:
+| Pr[A(bp,gx,gy,gr) = 1]− Pr[A(bp,gx,gy,gxy) = 1]|≤ negl(λ)
+where in each case the probabilities are taken over the experiment in which
+GrGen(1λ) outputs bp = (p, G, ˆG, GT,e,g, ˆg), and then random x,y,r ∈ Zp are
+chosen.
+The DDH assumption may be defined similarly for ˆG and GT .
+Assumption 2 (q-Decisional Bilinear Diffie-Hellman Inversion (q-DBDHI))
+[Dodis and Yampolskiy(2005)] Let GrGen be a group generator that outputs
+bp = ( G, ˆG, GT,p,e,g, ˆg). The q-Decisional Bilinear Diffie-Hellman Inversion
+assumption holds for GrGen if for all PPT adversariesA, there exists a negligible
+function negl such that:
+ Pr[A(bp,gx, ˆgx,...,g xq
+, ˆgxq
+;e(g, ˆg)1/x)]
+− Pr[A(bp,gx, ˆgx,...,g xq
+, ˆgxq
+;Γ )]
+≤ negl(λ)
+where the probability is taken over the internal coin tosses of A and choices of
+x∈ Z∗
+p and Γ∈ GT .
+A.2 Shamir secret sharing
+In Shamir secret sharing [Shamir(1979)], a secret value s is divided into n parts
+such that anyt shares together can be used to reconstruct the secrets. However,
+fewer than t shares provide no information about the secret.
+Definition 6 (Shamir secret sharing (SSH)). A (n,t )-secret sharing
+scheme SSH = (SSH.Share, SSH.Agg) consists of the following algorithms:
+– {si}n
+i=1
+$
+← −SSH.Sharen,t(s): Given s as input, this algorithm outputs n secret
+shares, where si denotes the i-th share of s. To share a secret s into t shares,
+chooset−1 random scalars (a1,...,a t−1) and construct a polynomial P (x) =
+s +a1x +... +at−1xt−1. Each share i is represented by the pair (xi,P (xi)),
+where the xi values are distinct and non-zero.
+
+52 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+– s∗ ← −SSH.Aggn,t{si}i∈I: Given t shares (|I| = t) as input, this algorithm
+reconstructs the secret s∗. This is achieved via Lagrange interpolation as fol-
+lows: s =P
+i∈Iyi·Q
+j̸=i,j∈I
+xj
+xj−xi
+, where I is the set of indices of the shares
+used for reconstruction.
+Definition 7 (SSH correctness). Pr[s∗ =s] = 1.
+Definition 8 (SSH privacy). Requires that, given t− 1 or fewer shares of
+either s1 or s0, no PPT adversary A can distinguish which message was shared.
+A.3 Public key encryption (PKE)
+Definition 9 (Public key encryption (PKE) scheme). Let PKE =
+(PKE.KeyGen, PKE.Enc, PKE.Dec) be a public key encryption (PKE) scheme. A
+PKE scheme is defined as follows:
+– PKE.KeyGen (Key generation): This algorithm takes a security parameter
+λ as input and outputs a pair (pk, sk), where pk is the public key and sk is the
+secret (private) key. The public key pk also (implicitly) defines a corresponding
+message space, denoted as MessageSpace(pk), which specifies the set of valid
+plaintexts for encryption.
+– PKE.Enc (Encryption): This algorithm takes the public key pk and a plain-
+text message m (where m∈ MessageSpace(pk)) as input and produces a ci-
+phertext C.
+– PKE.Dec (Decryption): The decryption algorithm takes the private key sk
+and a ciphertext C as input and outputs either the original plaintext message
+m or⊥ if decryption fails.
+Definition 10 (PKE correctness). A public key encryption (PKE) scheme
+PKE = ( PKE.KeyGen, PKE.Enc, PKE.Dec) is said to be correct if, for all λ∈
+N, for all key pairs (pk, sk) ← PKE.KeyGen(1λ), and for all messages m ∈
+MessageSpace(pk),
+PKE.Dec(sk, PKE.Enc(pk,m )) =m holds with overwhelming probability.
+Definition 11 (PKE CPA security). A public key encryption (PKE) scheme
+PKE = (PKE.KeyGen, PKE.Enc, PKE.Dec) is IND-CPA-secure if, for all PPT ad-
+versariesA, the advantage AdvIND-CPA
+A (λ) in the following experiment is negligible
+in λ: AdvIND-CPA
+A (λ)≤ negl(λ).
+The experiment, denoted IND-CPAb
+PKE(A,λ ), is defined between a probabilistic
+polynomial-time (PPT) adversaryA and a challenger, with a security parameter
+λ and a bit b∈{ 0, 1}:
+1. The challenger generates a key pair (pk, sk) by running
+PKE.KeyGen(1λ) and sends the public key pk to the adversary A.
+2. The adversary A submits two plaintext messages (m0,m 1), ensuring that
+|m0| =|m1| and m0,m 1∈ MessageSpace(pk).
+3. The challenger selects a random bit b
+$
+← −{0, 1}, chooses one of the two plain-
+texts based on b, and computes the ciphertext Cb = PKE.Enc(pk,mb).
+
+SyRA Signatures 53
+4. The challenger sends the ciphertext Cb to the adversary A.
+5. The adversary A outputs a bit b′ as its guess for b. IfA does not output any
+value, the guess b′ is set to 0 by default.
+The adversary’s advantage AdvIND-CPA
+A (λ) in this experiment is defined as:
+AdvIND-CPA
+A (λ) =
+ Pr[IND-CPA1
+PKE(A,λ ) = 1]
+− Pr[IND-CPA0
+PKE(A,λ ) = 1]
+
+Definition 12 (ElGamal encryption scheme). The ElGamal encryp-
+tion scheme [ElGamal(1985)], which we denote by EG, is a public key en-
+cryption (PKE) scheme that operates over a prime-order cyclic group Gq
+with generator g. The scheme consists of three main algorithms EG =
+(EG.KeyGen, EG.Enc, EG.Dec) defined as follows:
+– EG.KeyGen (Key Generation): LetG be a prime-order group generator
+that outputs (q,g ), where q is a prime and g is a generator of the cyclic
+group Gq. The key generation algorithm proceeds as follows:
+• Take the security parameter 1λ as input.
+• Sample the secret key sk =x
+$
+← −Zq uniformly at random.
+• Compute the public key component P =gx.
+• The public key is pk = (q,g, P), and the secret key is sk =x.
+– EG.Enc (Encryption): To encrypt a message M∈ Gq:
+• Sample a random value r
+$
+← −Zq.
+• Compute: C1 =gr, B = Pr.
+• Compute the ciphertext components: ψ = (C1, C2), where C2 = B·M.
+– EG.Dec (Decryption): Given a ciphertext ψ = ( C1, C2), the decryption
+process is as follows:
+• Compute: B = Cx
+1
+• Recover the original message M by computing: M = C2· B−1.
+The security of the ElGamal encryption scheme under chosen-plaintext attack
+relies on the hardness of the Decisional Diffie-Hellman (DDH) problem in the
+group Gq.
+A.4 Commitment
+Definition 13 (Commitment scheme). A commitment scheme COM =
+(KeyGen, Commit, Verify) is defined by the following three algorithms:
+– KeyGen(1λ): A probabilistic algorithm that takes as input a security param-
+eter λ, and outputs a pair (ck, vk), where:
+• ck: A commitment key used by the party to produce commitments.
+• vk: A verification key used to check the validity of commitments.
+In schemes with public verifiability, we assume ck = vk.
+
+54 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+– Commit(ck,m ): A randomized algorithm that takes a commitment key ck and
+a message m∈ MessageSpace(ck), and outputs a commitment c along with
+an opening value d:
+(c,d )← Commit(ck,m ).
+The tuple (c,d ) allows the party to later prove the committed message was
+m.
+– Verify(vk,c,m,d ): A deterministic procedure that checks whether a commit-
+ment c, when opened with value d, corresponds to the message m using the
+verification key vk. The output is either accept or reject:
+Verify(vk,c,m,d ) =
+(
+accept if (c,d ) correctly opens to m,
+reject otherwise.
+Definition 14 (Correctness). A commitment scheme COM =
+(KeyGen, Commit, Verify) satisfies correctness if, for every security parameter λ,
+every messagem∈ MessageSpace(ck), and every key pair (ck, vk)← KeyGen(1λ),
+it holds that:
+Verify(vk,c,m,d ) = accept
+with probability 1 over the randomness of Commit, where (c,d )← Commit(ck,m ).
+This property ensures that honest executions by both parties always lead to suc-
+cessful verification.
+Definition 15 (Hiding). Consider a publicly verifiable commitment scheme
+COM = ( KeyGen, Commit, Verify). The hiding property states that no PPT ad-
+versaryA can distinguish the commitments of any two equal-length messages
+with significant advantage. The hiding experiment Hideb
+COM(A,λ ), parameterized
+by a bit b∈{ 0, 1}, proceeds as follows:
+1. The challenger runs KeyGen(1λ) to generate ck = vk and gives ck toA.
+2. A returns two messages (m0,m 1) of equal length from MessageSpace(ck).
+3. A random bit b
+$
+← −{0, 1} is sampled, and (c,d )← Commit(ck,mb) is com-
+puted. The challenger sends c toA.
+4. A outputs a guess b′.
+The adversary’s distinguishing advantage is defined by:
+AdvHide
+A (λ) =
+Pr[Hide1
+COM(A,λ ) = 1]− Pr[Hide0
+COM(A,λ ) = 1]
+.
+The hiding property is satisfied if:
+– Perfect hiding: AdvHide
+A (λ) = 0 for all A.
+– Computational hiding: AdvHide
+A (λ)≤ negl(λ) for all PPT adversaries, where
+negl(·) denotes a negligible function.
+This ensures that the commitment leaks no useful information about the com-
+mitted message.
+
+SyRA Signatures 55
+Definition 16 (Binding). In a (publicly verifiable) commitment scheme
+COM = (KeyGen, Commit, Verify), the binding property asserts that it is infeasible
+for a PPT adversary A to find two distinct openings for the same commitment.
+The binding experiment BindCOM(A,λ ) runs as follows:
+1. Generate keys (ck, vk)← KeyGen(1λ), and provide ck toA.
+2. A returns (c,m,d,m ′,d′) with m,m′∈ MessageSpace(ck).
+3. The challenger checks if:
+Verify(vk,c,m,d ) = accept and Verify(vk,c,m′,d′) = accept,
+and whether m̸=m′.
+The adversary’s success probability is:
+AdvBind
+A (λ) = Pr[BindCOM(A,λ ) = 1].
+A scheme satisfies binding if:
+– Perfect binding: AdvBind
+A (λ) = 0 for all adversaries.
+– Computational binding: AdvBind
+A (λ)≤ negl(λ) for all PPT adversaries.
+This ensures that a commitment uniquely determines the committed message.
+Definition 17 (Pedersen commitment scheme). The Pedersen commit-
+ment scheme [Pedersen(1991)], denoted PCOM = ( KeyGen, Commit, Verify), is
+constructed as follows:
+– KeyGen(1λ): On input λ, select:
+• G: A cyclic group of prime order q,
+• g∈G: A generator,
+• h
+$
+← −G: An element sampled uniformly at random, independent of g.
+The commitment and verification keys are identical:
+ck = vk = (G,q,g,h ).
+– Commit(ck,m ): For a message m∈ Zq, choose d
+$
+← −Zq, and compute:
+c =gd·hm.
+The output is the pair (c,d ).
+– Verify(vk,c,m,d ): Accept if:
+gd·hm =c.
+Otherwise, reject.
+This scheme enjoys the following security guarantees [Micali et al.(2003), Metere
+and Dong(2017)]:
+– Perfect hiding: The commitment value c leaks no information about m due
+to the randomness gd.
+– Computational binding: It is computationally hard to find two distinct open-
+ings (m,d ) and (m′,d′) such that:
+gd·hm =gd′
+·hm′
+.
+
+56 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+B Ideal functionalities
+B.1 Non-interactive zero-knowledge (NIZK) functionality FNIZK
+Groth et al. [Groth et al.(2006)] provided a formal definition of non-interactive
+zero-knowledge (NIZK) in the form of an ideal functionality FNIZK. The
+ideal functionality FNIZK is parameterized by a relation R and consists of
+two phases: proof generation and proof verification. Upon receiving a request
+(Prove, sid,x,w ) from a party P,FNIZK checks whether (x,w )∈R . If this condi-
+tion does not hold, the request is ignored. Otherwise,FNIZK sends (Prove, sid,x )
+to the adversaryA. Upon receiving a response ( Proof, sid,π ) fromA, the func-
+tionality stores the tuple (x,π ) and sends ( Proof, sid,π ) back to P.
+In our construction, we aim to ensure that the statementx is not revealed to the
+adversary. Recall that during the issuance protocol, the user generates t pairs
+(xi,πi) for i = 1,...,t , where each pair corresponds to the i-th issuer Issi. The
+user’s statement includes secret sharings of the user’s real-world identifiers (si∈
+xi, see Figure 6), which must remain confidential. Specifically, the statement xi
+is sent by the user to the i-th issuer Issi (via a secure channel), where there may
+be up to t− 1 malicious issuers among the t participating issuers in the issuance
+process. Consequently, the adversary gains access to all t statements, including
+those provided securely to the honest issuers. This implies that the adversary
+also learns the shares si corresponding to honest issuers, and thus, having all t
+shares would enable the reconstruction ofs. Note that this issue arises due to the
+nature of the UC modeling. In real-world implementations, the proof generation
+is performed locally by the (honest) user, ensuring that the adversary does not
+gain access to the statement x.
+A concept closely related to NIZK is the notion ofsignatures of knowledge (SoK).
+SoK combines digital signatures with zero-knowledge proofs and allows a signer
+to authenticate a message not only by proving possession of a secret key but
+also by demonstrating knowledge of a witness w for an NP statement x∈ L.
+Such a signature ensures that, upon verification, it is confirmed that the signer
+possesses a valid witness for the truth of the statement. The concept of SoK
+was formally defined by Chase et al. [Chase and Lysyanskaya(2006)] via an
+ideal functionality FSoK. Similar to FNIZK,FSoK is for (x,w )∈R . It consists
+of three primary phases: setup, signature generation, and signature verification.
+UnlikeFNIZK,FSoK receives (Verify, Sign, SimSign, Extract) from the adversary
+A. Upon receiving a request ( Sign, sid,m,x,w ) from a party P,FSoK checks
+whether (x,w )∈R . If the check passes, FSoK computes σ← SimSign(m,x ).
+UnlikeFNIZK,FSoK does not leak the statement x to the adversary.
+To avoid leaking the statement to the adversary in the proof generation inter-
+face, we utilize FSoK, which inherently prevents such leakage. Although FSoK
+introduces a message m as part of the signature, this component is unnecessary
+in our setting. Therefore, we simplify FSoK by fixing m to a predefined dummy
+message for all sessions. This transforms FSoK into a form that functions as
+FNIZK without the undesired statement leakage. Therefore, in the following we
+present the formal definition of FSoK from [Chase and Lysyanskaya(2006)] un-
+
+SyRA Signatures 57
+der a simplifying assumption: the message m in all interfaces and algorithms is
+a predefined (dummy) message, hence, we avoid addressing it. Without loss of
+generality, we denote the following functionality as FNIZK.
+FunctionalityFNIZK
+The functionality is parameterized by a relation R. Prove, SimProve, and
+Extract are descriptions of PPT TMs, and Verify is a description of a de-
+terministic polytime TM.
+1. Setup. Upon receiving ( Setup, sid) from some party P if this is the
+first time that ( Setup, sid) is received, send ( Setup, sid) toA; upon re-
+ceiving (Algorithms, sid, Prove, Verify, SimProve, Extract) fromA, store
+these algorithms. Output ( Algorithms, sid, Prove, Verify) to P.
+2. Proof generation. Upon receiving ( Prove, sid,x,w ) from P, if
+(x,w ) /∈R , ignore. Else, compute π← SimProve(x), and check that
+Verify(x,π ) = 1. If so, then output ( Proof, sid,π ) to P and record the
+entry (x,π ). Else, output an error message ( Completeness error ) to P
+and halt.
+3. Proof verification. Upon receiving (Verify, sid,x,π ) from P: if (x,π )
+is stored, then output ( Verification, sid, 1) to P. Else, let w ←
+Extract(x,π ); if (x,w )∈R , output ( Verification, sid, 1) to P. Else
+if Verify(x,π ) = 0, output ( Verification, sid, 0) to P. Else output an
+error message (Verification error) to P and halt.
+B.2 Communication channel functionality F sas
+Ch
+Our functionality FSyRA does not reveal the network identifiers of users to
+adversary. To realize this functionality, our protocol ΠSASSI employs sender-
+anonymous and secure communication channel F sas
+Ch to deliver messages and
+to fulfill network-level anonymity. As discussed in Section 4, regardless of the
+robustness of cryptographic safeguards at the protocol level, “network leakage”
+could potentially expose the parties involved in a communication. Hence, in our
+formal UC modelling, a degree of sender anonymity is essential for maintaining
+(UC) anonymity.
+The purpose of using F sas
+Ch in our description is to highlight that there is net-
+work leakage and that it can compromise privacy with respect to the function-
+ality. This is not specific to ΠSASSI but a common issue whenever one formalizes
+any privacy-preserving primitive in the UC setting. (For example consider for-
+malizing Zerocash [Ben-Sasson et al.(2014)] in the UC setting; without sender
+anonymous channel it will offer no privacy whatsoever. SASSI is no different
+in this respect.) The alternative approach would have been to let such leakage
+come through the functionality, but this would complicate the program of the
+
+58 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+functionality much more – we opted to avoid this. We expect that in practice,
+deployments of SASSI will be used via the usual and customary compromises
+people make in these settings to minimize network leakage (and this is exactly
+as in Zerocash and other similar schemes), e.g., running the protocol via a VPN,
+Tor [Dingledine et al.(2004)], a short-lived network identity (e.g., a computer
+terminal in a library), or JAP [JAP(2009)].
+FunctionalityF sas
+Ch
+Let S be the sender and R the receiver of a message m.
+1. Upon input ( Send, sid, R,m ) from S, record a mapping P(mid) ←
+(S, R,m ) where mid is chosen at random. Output (Send, sid, R, mid,|m|)
+toA.
+2. Upon receiving ( Ok, sid, mid) fromA, retrieve ( S, R,m )← P(mid) and
+send (Received, sid, mid,m ) to R.
+3. Upon receiving ( SendBack, sid, mid,m′) from R, record ( mid,m′). Out-
+put (SendBack, sid, R, mid,|m′|) toA.
+4. Upon receiving ( SendBackOk, sid, mid) from A, retrieve ( S, R,m ) ←
+P(mid), and ( mid,m′). Send ( ReceivedBack, sid, R,m′) to S.
+B.3 Broadcast functionality FB
+The broadcast functionality introduced in [Garay et al.(2011)] does not pro-
+vide secrecy guarantees for the broadcasted message m. Furthermore, it reveals
+the identity of the sender to the recipients. In our work, we require UC-sender
+anonymity (see Appendix B.2 for details), which necessitates hiding the sender’s
+identity from the receiving entities. We refer to this as sender-anonymous broad-
+cast. One possible approach to realize this involves using sender-anonymous
+point-to-point communication channels between the sender and the receiving
+servers. Subsequently, the servers can run a Byzantine agreement protocol (such
+as the one proposed in [Boyle et al.(2021)]) to agree on the message content as
+described in [Sarencheh et al.(2025b)].
+FunctionalityFB
+The broadcast functionality FB is parameterized by a set of parties I =
+{Iss1,··· , Isst} and proceeds as follows.
+1. Upon receiving ( Broadcast, sid, m) from a party P, record ( mid, P),
+where mid is freshly sampled. Send ( Broadcasted, sid, m,mid) to all
+parties in I and toA.
+
+SyRA Signatures 59
+2. Upon receiving ( Send.Back, sid, m′, mid) from some Issi∈ I, retrieve
+(mid, P), and record (Issi,m′, mid, P). Output (Send, sid, Issi, mid) toA.
+3. Upon receiving ( Send.Back.Ok, sid, Issi, mid) from A, retrieve
+(Issi,m′, mid, P), and send ( Received, sid, Issi,m′) to P.
+B.4 Distributed key generation (DKG) functionality F n,t
+DKG
+We model distributed key generation via the functionality Fn,t
+DKG in [Doerner
+et al.(2023), Katz(2024)]. (We adapt [Doerner et al.(2023)] to output public key
+shares explicitly so that it is equivalent to [Katz(2024)].) The functionalityFn,t
+DKG
+assumes that the adversaryA can corrupt up tot−1 parties and thatA learns the
+public key shares{Ai}n
+i=1 of all parties. The adversary determines the secret key
+shares for corrupted parties, while the remaining secret key shares are generated
+uniformly at random. For concreteness, Fn,t
+DKG assumes Shamir secret sharing of
+the secret key α, but it can be adapted to other secret-sharing schemes. For
+example, an n-out-of-n additive sharing of α can be used when t =n− 1.
+FunctionalityFn,t
+DKG
+The functionality is parameterized by the number of partiesn, the threshold
+t, and the group G with order p. The index set C denotes the parties
+corrupted by the adversaryA where max|C| =t− 1.
+1. Upon receiving ( DKeyGen, sid) from some party Issi, send
+(DKeyGenReq, sid, Issi) toA.
+2. Upon receiving ( CPoints, sid,{αi}i∈C) from A, and when
+(DKeyGen, sid) is received from all parties, proceed as follows.
+3. Sample α← Zp, and set A←gα.
+4. Sample a random polynomial f of degree t− 1 over Zp where{f(i) =
+αi}i∈C and f(0) =α.
+5. For each i∈ [n], compute Ai←gf(i).
+6. Send ( PublicKeys, sid,A,{Ai}n
+i=1) to A, and
+(Point, sid,A, f(i),{Ai}n
+i=1) to each party Issi for i ∈ [n] via
+private-delayed output.
+B.5 Multiplication functionality Fmul
+The multiplication ideal functionalityFmul involvest parties I = (Iss1,..., Isst).
+It enables parties to collaboratively compute a multiplication result in the ex-
+ponent without revealing their individual inputs. It is parameterized by a secret
+sharing aggregation algorithm SSH.Agg, to reconstruct the secret given t shares.
+
+60 E. Crites, A. Kiayias, M. Kohlweiss, A. Sarencheh
+Operations are performed over a finite field defined by a primeq. The functional-
+ity proceeds by first handling inputs from the parties. Each partyIssi∈ I submits
+a message (ai,⃗bi, auxi) where auxi is used to check the well-formedness of⃗bi. Non
+well-formed inputs or those from entities outside the set I are ignored. Once all
+t parties provide their inputs, the functionality employs SSH.Agg to reconstruct
+the valuesa andb from their respective t shares. Subsequently, the functionality
+performs the multiplicationϕ =a·b mod q. The group elementsgϕ−1
+, and ˆgϕ−1
+are then sent to all parties where g and ˆg are source group generators.
+See Section 5 for implementation details ofFmul, based on [Doerner et al.(2023)].
+Below, we summarize the high-level structure of the protocol introduced in [Do-
+erner et al.(2023)]. The protocol begins with the user providing a message m to
+be signed and a subset I⊆ [n] representing the indices of the selected signing
+servers. Assume that these t servers collectively possess a secret sharing r of a
+random scalar r, along with common knowledge of uniformly chosen values s
+and e. Furthermore, suppose the servers hold a secret sharing u of the product
+u =r· (x +e). Each server Issi can locally compute:
+Ri :=
+
+g1·hs
+1·
+Y
+k∈[ℓ]
+hmk
+k+1
+
+
+ri
+If each participant Issi then transmits the tuple (s,e,R i,ui) to the user, the user
+is able to reconstruct:
+A :=
+ Y
+i∈I
+Ri
+!(
+Q
+i∈Iui)
+−1
+=
+
+g1·hs
+1·
+Y
+k∈[ℓ]
+hmk
+k+1
+
+
+r·(r·(x+e))−1
+which constitutes a BBS+ signature on the message m. Both s and e can be
+generated using a commit-and-open coin tossing mechanism. The shares r are
+locally sampled by the servers, and a two-round secure multiplication protocol is
+employed to compute shares of the pairwise productsri·lagrange(I,j, 0)·p(j) for
+each pair (i,j )∈ I× I. Here, lagrange( I,j, 0) refers to the Lagrange coefficient
+used by serverIssj for reconstructing the secret at the origin using Shamir’s secret
+sharing scheme over the setI, andp denotes a Shamir secret sharing of the secret
+valuex. Each server Issi computes its shareui by adding its local shares of these
+pairwise products with ri·e. To protect against incorrect inputs from corrupted
+servers, the protocol rerandomizes the multiplier inputs by adding secret sharings
+of zero. This design ensures that any bias introduced into the outputs of honest
+parties, as a result of adversarial misbehavior, remains independent of their
+secret inputs. The generation of sharings of 0 is done non-interactively using
+established techniques.
+
+SyRA Signatures 61
+FunctionalityFmul
+The functionalityFmul is parameterized byt parties I = (Iss1,..., Isst). Let
+SSH.Agg be the secret sharing aggregation algorithm.
+1. Input. Upon receiving ( Compute, sid|| id|| I,ai,⃗bi, auxi) from Issi, ig-
+nore if Issi /∈ I where sid = ( sid′, I). Else, parse ⃗bi = (b(1)
+i ,b (2)
+i ), and
+auxi = (zi,{ ˆivkk}t
+k=1, comI = {comk}t
+k=1). Ignore if ˆivki ̸= ˆgb(1)
+i or
+if comi̸=gb(2)
+i ·hzi. Else, record (ai,⃗bi, auxi, Issi, I, id). Upon receiving
+messages from allt parties in I with id, ignore if not all ({ ˆivkk}t
+k=1, comI)
+are the same int inputs received. Else, callψ← −SSH.Agg{ψi}∀i∈index(I)
+forψi =ai and (b(1)
+i +b(2)
+i ) generating a, and b. Sample a fresh α, and
+setf(α)← (a,b, I). Leak (Compute, sid|| id|| I,α ) to the adversaryA.
+2. Output. Upon receiving ( Compute.Ok, sid|| id|| I,α ) from the adver-
+saryA, ignore if f(α) = ⊥. Else, retrieve f(α) = ( a,b, I). Compute
+ϕ←a·b mod q, K←gϕ−1
+, and ˆK← ˆgϕ−1
+. Output ( Computed, sid||
+id|| I,K, ˆK) to each party Issi∈ I.
+B.6 Random oracle functionality FRO
+FRO models an idealized hash function [Camenisch et al.(2018)] and is defined
+as follows. The third check is included to avoid output collisions for simplicity,
+though it is removed in realizations. We follow this approach to streamline the
+formal analysis, e.g., similar to [Rial and Piotrowska(2022)].
+FunctionalityFRO
+The functionality is parameterized by a message spaceM and output space
+H.FRO functions as follows:
+Upon receiving ( Query, sid,m ) from a party P:
+1. Ignore if m /∈M.
+2. If there exists a tuple ( sid,m′,h′) where m′ =m, set h←h′.
+3. Else, select ¯h
+$
+← −H such that there is no stored tuple (sid,m∗,h′) where
+h′ = ¯h. Set h← ¯h.
+4. Store ( sid,m,h ).
+5. Output ( Query.Re, sid,h ) to party P.

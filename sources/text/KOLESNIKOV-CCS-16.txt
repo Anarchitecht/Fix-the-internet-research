@@ -1,0 +1,906 @@
+Eﬃcient Batched Oblivious PRF with Applications to
+Private Set Intersection
+Vladimir Kolesnikov∗ Ranjit Kumaresan† Mike Rosulek‡ Ni Trieu‡
+August 20, 2016
+Abstract
+We describe a lightweight protocol for oblivious evaluation of a pseudorandom function (OPRF) in
+the presence of semi-honest adversaries. In an OPRF protocol a receiver has an input r; the sender gets
+outputs and the receiver gets outputF (s,r ), whereF is a pseudorandom function ands is a random seed.
+Our protocol uses a novel adaptation of 1-out-of-2 OT-extension protocols, and is particularly eﬃcient
+when used to generate a large batch of OPRF instances. The cost to realizem OPRF instances is roughly
+the cost to realize 3.5m instances of standard 1-out-of-2 OTs (using state-of-the-art OT extension).
+We explore in detail our protocol’s application to semi-honest secure private set intersection (PSI).
+The fastest state-of-the-art PSI protocol (Pinkas et al., Usenix 2015) is based on eﬃcient OT extension.
+We observe that our OPRF can be used to remove their PSI protocol’s dependence on the bit-length of
+the parties’ items. We implemented both PSI protocol variants and found ours to be 3.1–3.6 × faster
+than Pinkas et al. for PSI of 128-bit strings and suﬃciently large sets. Concretely, ours requires only 3.8
+seconds to securely compute the intersection of 2 20-size sets, regardless of the bit length of the items.
+For very large sets, our protocol is only 4 .3× slower than the insecure na¨ ıve hashing approach for PSI.
+1 Introduction
+This work involves OT, OPRF and PSI constructions. We start by reviewing the three primitives.
+Oblivious Transfer. Oblivious Transfer (OT) has been a central primitive in the area of secure compu-
+tation. Indeed, the original protocols of Yao [Yao86] and GMW [Gol04, GMW87] both use OT in a critical
+manner. In fact, OT is both necessary and suﬃcient for secure computation [Kil88]. Until early 2000’s,
+the area of generic secure computation was often seen mainly as a feasibility exercise, and improving OT
+performance was not a priority research direction. This changed when Yao’s Garbled Circuit (GC) was ﬁrst
+implemented [MNPS04] and a surprisingly fast OT protocol (which we will call IKNP) was devised by Ishai
+et al. [IKNP03].
+The IKNP OT extension protocol [IKNP03] is truly a gem; it allows 1-out-of-2 OT execution at the cost of
+computing and sending only a few hash values (but a security parameter of public key primitives evaluations
+were needed to bootstrap the system). IKNP was immediately noticed and since then universally used in
+implementations of the Yao and GMW protocols. It took a few years to realize that OT extension’s use
+goes far beyond these fundamental applications. Many aspects of secure computation were strengthened and
+sped up by using OT extension. For example, Nielsen et al. [NNOB12] propose an approach to malicious
+two-party secure computation, which relates outputs and inputs of OTs in a larger construction. They
+critically rely on the low cost of batched OTs. Another example is the application of information-theoretic
+Gate Evaluation Secret Sharing (GESS) [Kol05] to the computational setting [KK12]. The idea of [KK12]
+is to stem the high cost in secret sizes of the GESS scheme by evaluating the circuit by shallow slices, and
+using OT extension to eﬃciently “glue” them together. Particularly relevant for our work, eﬃcient OTs
+∗Bell Labs, kolesnikov@research.bell-labs.com
+†MIT, vranjit@gmail.com
+‡Oregon State University,{rosulekm,trieun}@eecs.oregonstate.edu
+1
+
+were recognized by Pinkas et al. [PSZ14] as an eﬀective building block for private set intersection, which we
+discuss in more detail later.
+The IKNP OT extension, despite its wide and heavy use, received very few updates. In the semi-honest
+model it is still state-of-the-art. Robustness was added by Nielsen [Nie07], and in the malicious setting it
+was improved only very recently [ALSZ15, KOS15]. Improvement for short secret sizes, motivated by the
+GMW use case, was proposed by Kolesnikov and Kumaresan [KK13]. We use ideas from their protocol, and
+refer to it as the KK protocol. Under the hood, KK [KK13] noticed that one core aspect of IKNP data
+representation can be abstractly seen as a repetition error-correcting code, and their improvement stems
+from using a better code. As a result, instead of 1-out of-2 OT, a 1-out of- n OT became possible at nearly
+the same cost, for n up to approximately 256.
+Oblivious PRFs. An oblivious pseudorandom function (OPRF) [FIPR05] is a protocol in which a sender
+learns (or chooses) a random PRF seed s while the receiver learns F (s,r ), the result of the PRF on a single
+input r chosen by the receiver. While the general deﬁnition of an OPRF allows the receiver to evaluate the
+PRF on several inputs, in this paper we consider only the case where the receiver can evaluate the PRF on
+a single input.
+The central primitive of this work, an eﬃcient OPRF protocol, can be viewed as a variant of Oblivious
+Transfer (OT) of random values. We build it by modifying the core of OT extension protocols [IKNP03,
+KK13], and its internals are much closer to OT than to prior works on OPRF. Therefore, our presentation
+is OT-centric, with the results stated in OPRF terminology.
+OT of random messages shares many properties with OPRF. In OT of random messages, the sender
+learns random m0,m 1 while the receiver learns mr for a choice bit r∈{ 0, 1}. One can think of the function
+F ((m0,m 1),r ) = mr as a pseudorandom function with input domain {0, 1}. Similarly, one can interpret
+1-out-of-n OT of random messages as an OPRF with input domain {1,...,n }.
+In this work, we propose a novel extension to the IKNP and KK protocols. At almost the same cost as
+1-out-of-2 IKNP and KK OTs, we are able to achieve an 1-out-of- n OT of random messages for arbitrarily
+largen. This can be viewed as an OPRF with unbounded input domain{0, 1}∗. That is, the receiver has an
+input r∈{ 0, 1}∗ and learns the value R(r), while the sender obtains the ability to evaluate R(r′) for any
+string r′, where R is a pseudorandom function.
+We call our main protocol batched, related-key OPRF ( BaRK-OPRF) since it achieves a large
+number of OPRF instances, with keys that are related (in a way we describe later). This is a new primitive,
+which nevertheless suﬃces for the application to private set intersection that we consider.
+Application to Private Set Intersection (PSI). Private set intersection (PSI) refers to the setting
+where two parties each hold sets of items and wish to learn nothing more than the intersection of these
+sets. Today, PSI is a truly practical primitive, with extremely fast cryptographically secure implementa-
+tions [PSSZ15]. Incredibly, these implementations are only a relatively small factor slower than than the
+na¨ ıve and insecure method of exchanging hashed values. Among the problems of secure computation, PSI is
+probably the one most strongly motivated by practice. Indeed, already today companies such as Facebook
+routinely share and mine shared information [Ops13, Yun15]. In 2012, (at least some of) this sharing was
+performed with insecure naive hashing. Today, companies are able and willing to tolerate a reasonable per-
+formance penalty, with the goal of achieving stronger security [Yun15]. We believe that the ubiquity and
+the scale of private data sharing, and PSI in particular, will continue to grow as big data becomes bigger
+and privacy becomes a more recognized issue. We refer reader to [PSSZ15, PSZ14] for additional discussion
+and motivation of PSI.
+In our work, we signiﬁcantly improve state-of-the-art PSI protocol of [PSSZ15] by replacing one of its
+components with BaRK-OPRF. This change results in a factor 2.3–3.6× performance improvement for PSI of
+moderate-length strings (64 or 128 bits) and reasonably large sets. We substantiate our algorithmic results
+with implementation and detailed evaluation. Our largest improvement is for the case of larger sets (2 24
+items each) of long strings (128 bits), which requires only one minute in our protocol but 214 seconds using
+[PSSZ15].
+2
+
+1.1 Related work
+Oblivious transfer. Our BaRK-OPRF protocol can be seen as an OPRF protocol as well as a variant of
+oblivious transfer in the paradigm of IKNP [IKNP03]. As mentioned in Section 1, given its critical importance
+in secure computation, the IKNP OT extension has a surprisingly short list of follow up improvements,
+extensions and generalizations.
+Most relevant prior work for us is the KK protocol [KK13], which views the IKNP OT from a new
+angle and presents a framework generalizing IKNP. More speciﬁcally, under the hood, players in the IKNP
+protocol encode Receiver’s selection bit b as a repetition string of k copies of b. KK generalized this and
+allowed the use of an error-correcting code (ECC) with large distance as the selection bit encoding. For a
+code consisting of n codewords, this allowed to do 1-out of- n OT with consuming a single row of the OT
+extension matrix. In this work, we take the coding-theoretic perspective to the extreme. We observe that we
+never need to decode codewords, and by using (pseudo-)random codes we are able to achieve what amounts
+to a 1-out-of-poly OT by consuming a single row of the OT matrix, which for the same security guarantee
+is only about 3.5× longer than in the original IKNP protocol.
+Our work is strictly in the semi-honest security model. Other work on OT extension extends the IKNP
+protocol to the malicious model [ALSZ15, KOS15] and the PVC (publicly veriﬁable covert) model [KM15].
+Oblivious PRF. Oblivious pseudorandom functions were introduced by Freedman, Ishai, Pinkas, & Rein-
+gold [FIPR05]. In general, the most eﬃcient prior protocols for OPRF require expensive public-key operations
+because they are based on algebraic PRFs. For example, an OPRF of [FIPR05] is based on the Naor-Reingold
+PRF [NR04] and therefore requires exponentiations. Furthermore, it requires a number of OTs proportional
+to the bit-length of the PRF input. The protocol of [CNs07] constructs an OPRF from unique blind signature
+schemes. The protocol of [JL09] obliviously evaluates a variant of the Dodis-Yampolskiy PRF [DY05] and
+hence requires exponentiations (as well as other algebraic encryption components to facilitate the OPRF
+protocol).
+Private set intersection. Oblivious PRFs have many applications, but in this paper we explore in depth
+the application to private set intersection (PSI). We consider only the semi-honest security model. Our PSI
+protocol is most closely related to that of Pinkas et al. [PSSZ15], which is itself an optimized variant of a
+previous protocol of [PSZ14]. We describe this protocol in great detail in Section 5.
+We refer the reader to [PSZ14] for an overview of the many diﬀerent protocol paradigms for PSI. As we
+have mentioned, the OT-based protocols have proven to be the fastest in practice. We do, however, point
+out that the OT-based protocols do not have the lowest communication cost. In settings where computation
+is not a factor, but communication is at a premium, the best protocols are those in the Diﬃe-Hellman
+paradigm introduced in [HFH99]. In the semi-honest version of these protocols, each party sends only 2 n
+group elements, where n is the number of items in each set. However, these protocols require a number of
+exponentiations proportional to the number of items, making their performance slow in practice. Concretely,
+[PSSZ15] found Diﬃe-Hellman-based protocols to be over 200× slower than the OT-based ones.
+While we closely follow the paradigm of [PSZ14], we abstract parts of their protocol in the language
+of oblivious PRFs (OPRF). The connection between OPRF and PSI was already pointed out in [FIPR05].
+However, the most straightforward way of using OPRF to achieve PSI requires an OPRF protocol in which
+the receiver can evaluate the PRF on many inputs, whereas our OPRF allows only a single evaluation point
+for the receiver. OPRFs have been used for PSI elsewhere, generally in the malicious adversarial model
+[JL09, HL10, Haz15].
+Other applications of OPRF. Just like a standard OPRF, our BaRK-OPRF variant immediately and
+eﬃciently implies the keyword search functionality of [FIPR05] (also called “string-select OT (SOT)” in
+[KK12]). Keyword search allows the receiver R to select the received secret via a string. In SOT the sender
+S has a mapping of keywords to secret values. R receives the secret corresponding to the keyword string it
+selected. In [KK12], SOT for k-bit selection strings is built by executingk 1-out of-2 OTs, and this technique
+is also essentially what is used in the PSI protocol of [PSZ14]. Using BaRK-OPRF, we can achieve keyword
+search by consuming only a single row of the OT extension matrix.
+3
+
+Oblivious PRFs can be used for secure pattern matching [HL10, FHV13], where one party holds a long
+text T and the other party holds a short pattern string p. The parties learn the location of all occurrences
+of p within T .
+2 Technical Overview of Our Results
+We start with the OT-extension paradigm of Ishai, Kilian, Nissim & Petrank (IKNP) [IKNP03]. The goal
+of OT extension is to use a small number k of “base-OTs,” plus only symmetric-key operations, to achieve
+m≫ k “eﬀective OTs.” Here, k is chosen depending on the computational security parameter κ; in the
+following we show to what value k should be set. Below we describe an OT extension that achieves m
+1-out-of-2 OTs of random strings, in the presence of semi-honest adversaries.
+We follow the notation of [KK13] as it explicates the coding-theoretic framework for OT extension.
+Suppose the receiver has choice bitsr∈{ 0, 1}m. He chooses two m×k matrices (m rows,k columns),T and
+U. Let tj, uj∈{ 0, 1}k denote the j-th row of T andU, respectively. The matrices are chosen at random, so
+that:
+tj⊕ uj =rj· 1k def
+=
+{
+1k if rj = 1
+0k if rj = 0
+The sender chooses a random string s∈{ 0, 1}k. The parties engage in k instances of 1-out-of-2 string-
+OT, with their roles reversed, to transfer to senderS the columns of eitherT orU, depending on the sender’s
+bit si in the string s it chose. In the i-th OT, the receiver gives inputs ti and ui, where these refer to the
+i-th column of T and U, respectively. The sender uses si as its choice bit and receives output qi∈{ ti, ui}.
+Note that these are OTs of strings of length m≫k — the length of OT messages is easily extended. This
+can be done, e.g., by encrypting and sending the two m-bit long strings, and using OT on short strings to
+send the right decryption key.
+Now let Q denote the matrix obtained by the sender, whose columns are qi. Let qj denote the jth row.
+The key observation is that
+qj = tj⊕ [rj·s] =
+{
+tj if rj = 0
+tj⊕s if rj = 1 (1)
+Let H be a random oracle (RO). We have that the sender can compute two random strings H(qj) and
+H(qj⊕s), of which the receiver can compute only one, via H(tj). Note that tj equals either qj or qj⊕s,
+depending on the receiver’s choice bit rj. Note that the receiver has no information about s, so intuitively
+he can learn only one of the two random strings H(qj),H (qj⊕s). Hence, each of the m rows of the matrix
+can be used to produce a single 1-out-of-2 OT.
+As pointed out by [IKNP03], it is suﬃcient to assume that H is a correlation-robust hash function, a
+weaker assumption than RO. A special assumption is required because the same s is used for every resulting
+OT instance. See Section 3 for deﬁnition of correlation-robustness.
+Coding interpretation. In IKNP, the receiver prepares secret shares of T and U such that each row of
+T⊕U is either all zeros or all ones. Kolesnikov & Kumaresan [KK13] interpret this aspect of IKNP as a
+repetition code and suggest to use other codes instead.
+Consider how we might use the IKNP OT extension protocol to realize 1-out-of-2 𝓁 OT. Well, instead of
+a choice bit ri for the receiver, ri will now be an 𝓁-bit string. Let C be a linear error correcting code of
+dimension 𝓁 and codeword length k. The receiver will prepare matrices T and U so that tj⊕ uj =C(rj).
+Now, generalizing Equation 1 the sender receives
+qj = tj⊕ [C(rj)·s] (2)
+where “·” now denotes bitwise-AND of two strings of length k. (Note that when C is a repetition code, this
+is exactly Equation 1.)
+For each value r′ ∈ {0, 1}𝓁, the sender associates the secret value H(qj⊕ [C(r′)·s]), which it can
+compute for all r′∈{ 0, 1}𝓁. At the same time, the receiver can compute one of these values, namely, H(tj).
+Rearranging Equation 2, we have:
+H(tj) =H(qj⊕ [C(rj)·s])
+4
+
+Hence, the value that the receiver can learn is the secret value that the sender associates with the receiver’s
+choice string r′ =rj.
+At this point, OT of random strings is completed. For OT of chosen strings, the sender will use each
+H(qi⊕ [C(r)·s]) as a key to encrypt the r’th OT message. The receiver will be able to decrypt only one of
+these encryptions, namely one corresponding to its choice string rj.
+To argue that the receiver learns only one string, suppose the receiver has choice bits rj but tries to learn
+also the secret H(qj⊕ [C(˜r)·s]) corresponding to a diﬀerent choice ˜r. We observe:
+qj⊕ [C(˜r)·s] = tj⊕ [C(rj)·s]⊕ [C(˜r)·s]
+= tj⊕ [(C(rj)⊕C(˜r))·s]
+(3)
+Importantly, everything in this expression is known to the receiver except for s. Now suppose the
+minimum distance of C is κ (the security parameter). Then C(rj)⊕C(˜r) has Hamming weight at least
+κ. Intuitively, the adversary would have to guess at least κ bits of the secret s in order to violate security.
+The protocol is secure in the RO model, and can also be proven under the weaker assumption of correlation
+robustness, following [IKNP03, KK13].
+Finally, we remark that the width k of the OT extension matrix is equal to the length of codewords in
+C. The parameter k determines the number of base OTs and the overall cost of the protocol.
+Pseudorandom codes. The main technical observation we make in this work is pointing out that the
+code C need not have many of the properties of error-correcting codes. In particular,
+• We make no use of decoding, thus our code does not need to be eﬃciently decodable.
+• We require only that for all possibilities r,r′, the value C(r)⊕C(r′) has Hamming weight at least
+equal to the computational security parameter κ. In fact, it is suﬃcient even if the Hamming distance
+guarantee is only probabilistic — i.e., it holds with overwhelming probability over choice of C (we
+discuss subtleties below).
+For ease of exposition, imagine letting C be a random oracle with suitably long output. (Later we will
+show thatC can be instantiated from a pseudorandom function in a straight-forward way.) Intuitively, when
+C is suﬃciently long, it should be hard to ﬁnd a “near-collision.” That is, it should be hard to ﬁnd values
+r andr′ such that C(r)⊕C(r′) has low (less than a computational security parameter κ) Hamming weight.
+Later in Table 2 we compute the parameters more precisely, but for now we simply point out that a random
+function with output length k = 4κ suﬃces to make near-collisions negligible in our applications.
+We refer to such a function C (or family of functions, in our standard-model instantiation) as a pseu-
+dorandom code (PRC) , since its coding-theoretic properties — namely, minimum distance — hold in a
+cryptographic sense.
+By relaxing the requirement on C from an error-correcting code to a pseudorandom code, we remove the
+a-priori bound on the size of the receiver’s choice string! In essence, the receiver can use any string as its
+choice string; the sender can associate a secret value H(qj⊕ [C(r′)·s]) for any stringr′. As discussed above,
+the receiver is only able to compute H(tj) = H(qj⊕ [C(r)·s]) — the secret corresponding to its choice
+string r. The property of the PRC is that, with overwhelming probability, all other values of qj⊕ [C(˜r)·s]
+(that a polytime player may ever ask) diﬀer from tj in a way that would require the receiver to guess at
+least κ bits of s.
+Interpretation as an oblivious PRF variant. As discussed in Section 1, we can view the functionality
+achieved by this protocol as a kind of oblivious PRF. Intuitively, r↦→H(q⊕ [C(r)·s]) is a function that the
+sender can evaluate on any input, whose outputs are pseudorandom, and which the receiver can evaluate
+only on its chosen input r.
+In Section 3 we give a formal deﬁnition of the functionality that we achieve. The main subtleties of the
+deﬁnition are:
+1. the fact that the receiver learns slightly more than the output of this “PRF” — in particular, the
+receiver learns t = q⊕ [C(r)·s] rather than H(t);
+5
+
+2. the fact that the protocol realizes many instances of this “PRF” but with related keys — s andC are
+shared among all instances.
+We prove our construction secure assuming C is a pseudorandom code and that H satisﬁes a natural gener-
+alization of the “correlation robust” assumption from [IKNP03].
+Summary & cost. With our new variant of the IKNP protocol, we can obtain m OPRF instances eﬃ-
+ciently, using only k base OTs plus symmetric-key operations. Compared to IKNP-paradigm OT extension
+for 1-out-of-2 OTs, the main diﬀerences in cost are:
+• Cost associated with the increased width of the OT extension matrices. In our case, the matrix has
+width k rather than κ — concretely 3κ < k <4κ in our applications. Note that the parameter k
+controls the number of base OTs required. 1
+• Computational costs associated with the pseudorandom code C. While in IKNP C is a repetition
+code, and in [KK13] C is a short Walsh-Hadamard code, in our protocol C is cryptographic. However,
+we are able to instantiate C using a PRF. In practice, we use AES as the PRF, and the associated
+hardware acceleration for AES in modern processors makes the cost of computing C minimal.
+Application to private set intersection. Private set intersection (PSI) refers to a computation in which
+Alice has a set A of items, Bob has a set B of items, and the two learn only A∩B and nothing more.
+We show how BaRK-OPRF can be used to signiﬁcantly reduce the cost of semi-honest-secure PSI. The
+current fastest protocol for the task is that of Pinkas et al. [PSSZ15]. The protocol relies heavily on eﬃcient
+OT extension (for standard 1-out-of-2 OTs).
+Looking closely at the PSI protocol of [PSSZ15], we see that they use a number of OTs that is proportional
+to N𝓁, where N is the number of items in the parties’ sets and 𝓁 is the length (in bits) of those items. We
+can replace their use of 1-out-of-2 OTs with a suitable use of BaRK-OPRF and remove the dependence on 𝓁.
+Our protocol uses a number of BaRK-OPRF instances that is proportional only to N.
+We implemented our BaRK-OPRF-based PSI protocol and compared its performance to that of [PSSZ15].
+For PSI on strings of length 𝓁∈{ 64, 128} and suﬃciently large sets, our protocol is 2.3–3.6 times faster.
+This is a signiﬁcant achievement in the already very polished PSI state of the art!
+3 Technical Preliminaries
+We write‖x‖H to denote the hamming weight of a binary string x. Our computational security parameter
+is κ and statistical security parameter is σ.
+3.1 Correlation Robustness
+The OT extension protocol of IKNP [IKNP03] is proven secure under a so-called correlation robustness
+assumption on the underlying hash function. Our protocol makes use of the following generalization of this
+notion:
+Deﬁnition 1. Let H be a hash function with input length n. Then H is d-Hamming correlation ro-
+bust if, for any strings z1,...,z m∈{ 0, 1}∗, a1,...,a m,b 1,...,b m∈{ 0, 1}n with‖bi‖H≥ d, the following
+distribution, induced by random sampling of s←{ 0, 1}n, is pseudorandom:
+H(z1‖a1⊕ [b1·s]),...,H (zm‖am⊕ [bm·s])
+As in the overview, “·” denotes bitwise-AND.
+The deﬁnition generalizes previous ones in the following way:
+1In our instantiation, we actually use IKNP to extend κ base OTs to k OTs, and then use those k OTs as base OTs for
+BaRK-OPRF instances. Hence, the number of public-key OT operations is unchanged. Still, the total communication cost
+remains proportional to km in our protocol rather than κm.
+6
+
+• If d = n, then the only legal choice of bi is 1n, and H(zi‖ai⊕ [bi·s]) simpliﬁes to H(zi‖ai⊕s).
+Restricting the deﬁnition in this way, and taking zi =i corresponds to the IKNP notion of correlation
+robustness.
+• If the bi values are required to be elements of a linear error correcting code C, then the resulting
+deﬁnition is one under which the construction of [KK13] is secure (for simplicity they prove security
+in the random oracle model).
+3.2 Pseudorandom Codes
+We now formalize the notion of a pseudorandom code, motivated in Section 2.
+Deﬁnition 2. LetC be a family of functions. We say that C is a (d,ϵ ) pseudorandom code (PRC) if
+for all strings x⁄=x′,
+Pr
+C←C
+[
+‖C(x)⊕C(x′)‖H <d
+]
+≤ 2−ϵ
+That is, a (d,ϵ )-PRC guarantees that the hamming distance of two codewords is less or equal to d with
+probability at most 2−ϵ.
+The reader may ﬁnd it convenient to think of C as a random oracle. However, it suﬃces for C to be a
+pseudorandom function instantiated with random seed:
+Lemma 3. Suppose F :{0, 1}κ×{ 0, 1}∗→{ 0, 1}n is a pseudorandom function. Deﬁne C ={F (s,·)|s∈
+{0, 1}κ}. Then C is a (d,ϵ )-pseudorandom-code where:
+2−ϵ = 2−n
+d−1∑
+i=0
+(n
+i
+)
++ν(κ).
+and ν is a negligible function.
+Proof. Consider the following game. An adversary has strings x and x′ hard-coded. It queries its oracle O
+on x and x′ and outputs 1 if O(x) andO(x′) are within Hamming distance d.
+WhenO is instantiated as a random function, a simple counting argument shows that the adversary
+outputs 1 with probability 2−n∑d−1
+i=0
+(n
+i
+)
+.
+WhenO is instantiated as a PRF F with random seed, the probability must be within ν(κ) of the above
+probability, where ν is negligible. The adversary’s output probability in this instantiation is exactly the
+probability speciﬁed in the PRC security deﬁnition, so the lemma follows.
+Note that in our typical usage of PRCs, the choice of C (in this case, the seed to the PRF) is a public
+value. But in both the security deﬁnition for PRC and in this analysis, the values x and x′ are ﬁxed before
+the PRF key is chosen. Whether or not F (s,x ) and F (s,x′) are within Hamming distance d is not aﬀected
+by making the PRF seed public.
+3.3 Our Oblivious PRF Variant
+As outlined in Section 2, our main construction is a variant of OT-extension which associates a pseudorandom
+output R(x) for every possible input r ∈ {0, 1}∗. The sender can compute R(r) for any r, while the
+receiver learns R(x) for only a single value r. This functionality is reminiscent of an oblivious PRF
+(OPRF) [FIPR05]. In this section we describe how our construction can be interpreted as a variant OPRF
+functionality.
+In an OPRF functionality for a PRF F , the receiver provides an input 2 r; the functionality chooses a
+random seed s, gives s to the sender and F (s,r ) to the receiver.
+In our protocol, the sender knows qj and s. We can consider these values as keys to a PRF:
+F ((qj,s ),r ) =H(j‖qj⊕ [C(r)·s])
+Intuitively, the sender can evaluate this PRF at any point, while the receiver can evaluate it on only one.
+However, we point out some subtleties:
+2More general OPRF variants allow the receiver to learn the PRF output on many inputs — here it suﬃces to limit the
+receiver to one input.
+7
+
+• In our protocol, the receiver learns tj = qj⊕[C(r∗)·s] for his chosen inputr∗, which is more information
+than the “PRF output” H(j‖tj). However, even knowing tj, the other outputs of the “PRF” still look
+random. This common feature of an OPRF protocol leaking slightly more than the PRF output is
+called relaxed OPRF in [FIPR05].
+• In our protocol, we realize many “OPRF” instances with related keys. In particular, all instances have
+the same component s (and C).
+We encapsulate these properties in the following deﬁnitions.
+3.3.1 Our PRF variant
+We refer toF as a relaxed PRF if there is another function ~F , such thatF (k,r ) can be eﬃciently computed
+given just ~F (k,r ). We then deﬁne the relevant notion of security with respect to an adversary who can query
+the relaxed function ~F rather than just F .
+Deﬁnition 4. LetF be a relaxed PRF with output length v, for which we can write the seed as a pair (k∗,k ).
+Then F has m-related-key-PRF (m-RK-PRF) security if the advantage of any PPT adversary in the
+following game is negligible:
+1. The adversary chooses strings x1,...,x n and m pairs (j1,y 1),..., (jm,ym), where yi⁄=xji.
+2. Challenger chooses random values appropriate for PRF seeds k∗,k 1,...,k n and tosses a coinb←{ 0, 1}.
+(a) If b = 0, the challenger outputs {~F ((k∗,kj),xj)}j and{F ((k∗,kji),yi)}i.
+(b) If b = 1 the challenger chooses z1,...,z m←{ 0, 1}v and outputs{~F ((k∗,kj),xj)}j and{zi}i,
+3. The adversary outputs a bit b′. The advantage of the adversary is Pr[b =b′]− 1/2. ♦
+Intuitively, the PRF is instantiated with n related keys (sharing the same k∗ value). The adversary
+learns the relaxed output of the PRF on one chosen input for each key. Then any m additional PRF outputs
+(corresponding to any seed) are indistinguishable from random by the adversary.
+Lemma 5. LetC be a (d,ϵ + log2m)-PRC, where 1/2ϵ is a negligible function, Let H be a d-Hamming
+correlation robust hash function. Deﬁne the following relaxed PRF, for C∈C :
+F
+(
+((C,s ), (q,j )),r
+)
+=H(j‖q⊕ [C(r)·s])
+~F
+(
+((C,s ), (q,j )),r
+)
+= (j,C, q⊕ [C(r)·s])
+Then F has m-RK-PRF security.
+Proof. In the m-RK-PRF game with this PRF, we can rewrite the adversary’s view as in Section 2 as:
+(C,{tj}j,{H(ji‖tji⊕ [(C(xji)⊕C(yi))·s])}i)
+There are m terms of the form C(xji)⊕C(yi) for xji⁄= yi. Each of these terms has Hamming weight at
+least d with probability at least 1 − 2−ϵ−log2m over the choice of C. By a union bound, all m terms have
+Hamming weight at least d with probability 1− 2−ϵ. Conditioning on this (overwhelmingly likely) event, we
+can apply the d-Hamming correlation robust property of H to see that the H-outputs are indistinguishable
+from random.
+3.3.2 Our BaRK-OPRF functionality
+In Figure 1 we formally describe the variant OPRF functionality we achieve. It generates m instances of the
+PRF with related keys, and allows the receiver to learn the (relaxed) output on one input per key.
+8
+
+The functionality is parameterized by a relaxed PRF F , a number m of instances, and two parties: a
+sender and receiver.
+On input (r1,...,r m) from the receiver,
+• Choose random components for seeds to the PRF: k∗,k 1,...,k m and give these to the sender.
+• Give ~F ((k∗,k 1),r 1),..., ~F ((k∗,km),rm) to the receiver.
+Figure 1: Batched, related-key OPRF ( BaRK-OPRF) ideal functionality.
+4 Main construction
+We present our main construction, which is a semi-honest secure protocol for the functionality in Figure 1,
+instantiated with the relaxed PRF deﬁned in Lemma 5.
+4.1 Notation
+We use the notation OTk
+m to denote k instances of 1-out-of-2 string-OT where the strings are m bits long.
+LetS denote the sender, and letR denote the receiver. In OTk
+m, the sender’s input is{(xj,0,xj,1)}j∈[k], i.e.,
+m pairs of strings, each of length m, and the receiver holds input {rj}j∈[k], where each rj is a choice bit.
+Note that ifS provides input{(xj,0,xj,1)}j∈[k] to OTk
+m, and ifR provides input{rj}j∈[k] to OTk
+m, thenR
+receives back{xj,rj}j∈[k], whileS receives nothing.
+Following the convention in IKNP, we denote vectors in bold, and matrices in capitals. For a matrix A,
+we let aj denote thej-th row ofA, and ai denote thei-th column of A. If a =a1‖···‖ ap and b =b1‖···‖ bp
+are two vectors, then we deﬁne ⊕ and· operations as follows. We use the notation a⊕ b to denote the
+vector (a1⊕b1)‖···‖ (ap⊕bp). Similarly, the notation a·b denotes the vector (a1·b1)‖···‖ (ap·bp). Finally,
+suppose c∈{ 0, 1}, then c· a denotes the vector (c·a1)‖···‖ (c·ap).
+We note that to simplify notation via indexing, in the following we will refer to the OT matrices as T0
+and T1, rather than as T and U, as we did when presenting high-level overview of our work.
+4.2 The BaRK-OPRF construction
+Our BaRK-OPRF protocol is presented in Figure 2. It closely follows the high-level overview. Recall that
+we are considering a PRF whose seed is of the form (( C, s), (j, qj)) and whose relaxed output is of the form
+t0,j = qj⊕ (C(rj)· s).
+Theorem 6. The BaRK-OPRF protocol in Figure 2 securely realizes the functionality of Figure 1, instanti-
+ated with the relaxed PRF deﬁned in Lemma 5, in the presence of semi-honest adversaries, where κ is the
+computational security parameter.
+Proof. When using the abstraction of our OPRF functionality, the proof is elementary.
+SimulatingS. The simulator receives output from the OPRF ideal functionality consisting of related PRF
+seeds: a common (C, s) and a qj for each j∈ [m]. Let Q be a matrix whose rows are the qj. Let qi denote
+the ith column of Q.
+The simulator simulates an execution of the protocol in which S chooses C in step 0, chooses s in step
+1, and receives output{qi}i∈[k] as OT output in step 3.
+SimulatingR. The simulator has input (r1,...,r m) and receives output from the OPRF ideal functionality
+consisting of a relaxed PRF output ( j,C, tj) for each j∈ [m].
+The simulator simulates an execution of the protocol in whichR receivesC in step 0 and samples t0,j = tj
+in step 2.
+In both cases it is straightforward to check that the simulation is perfect.
+9
+
+Input of R: m selection strings r = (r1,...,r m), ri∈{ 0, 1}∗.
+Parameters:
+• A (κ,ϵ )-PRC familyC with output length k =k(κ).
+• A κ-Hamming correlation-robust H : [m]×{ 0, 1}k→{ 0, 1}v.
+• An ideal OTk
+m primitive.
+Protocol:
+0. S chooses a random C←C and sends it to R.
+1. S chooses s←{ 0, 1}k at random. Let si denote the i-th bit of s.
+2. R forms m×k matrices T0,T 1 in the following way:
+• Forj∈ [m], choose t0,j←{ 0, 1}k and set t1,j =C(rj)⊕ t0,j.
+Let ti
+0, ti
+1 denote the i-th column of matrices T0, T1 respectively.
+3. S andR interact with OTk
+m in the following way:
+• Sacts as receiver with input{si}i∈[k].
+• Racts as sender with input{ti
+0, ti
+1}i∈[k].
+• Sreceives output{qi}i∈[k].
+S formsm×k matrixQ such that the i-th column of Q is the vector qi. (Note qi = ti
+si.) Let qj
+denote the j-th row of Q. Note, qj = ((t0,j⊕ t1,j)· s)⊕ t0,j. Simplifying, qj = t0,j⊕ (C(rj)· s).
+4. For j∈ [m],S outputs the PRF seed ((C, s), (j, qj)).
+5. For j∈ [m],R outputs relaxed PRF output (C,j, t0,j).
+Figure 2: The BaRK-OPRF protocol
+5 Improving Private Set Intersection
+The main application of BaRK-OPRF is to improve the performance of semi-honest-secure private set
+intersection (PSI). Pinkas et al. [PSZ14] give a thorough summary of many diﬀerent paradigms for PSI
+in this model.
+For our purposes, we summarize only the most eﬃcient PSI protocol, which is the OT-based paradigm
+of [PSZ14] including the optimizations suggested in follow up work [PSSZ15]. Hereafter we refer to their
+protocol as the “PSSZ” protocol.
+5.1 The OPRF Implicit in PSSZ
+The main building block of PSSZ, private equality test, can be viewed as a relaxed OPRF based on random
+OTs (i.e., oblivious transfers of random messages), which can be obtained eﬃciently from OT extension.
+The protocol is as follows, where Bob has input r, with 𝓁 =|r|.
+• The parties perform 𝓁 1-out-of-2 OTs of random messages, with Alice as receiver. Bob acts as receiver
+and uses the bits of r as his choice bits. In the ith OT, Alice learns random strings mi,0 and mi,1,
+while Bob learns mi,r[i].
+• Deﬁne the mapping F (x) = H
+(⨁
+imi,x[i]
+)
+, where H is a random oracle. One can then view F as a
+PRF whose keys are the mi,b values (known to Alice). Bob learns the output of F on r only. More
+precisely, he learns relaxed output{mi,r[i]}i, for which all other outputs of F are pseudorandom.
+10
+
+In this description, we have treated r as a string of bits, and therefore use 1-out-of-2 (random) OTs.
+However, when using the OT extension protocol of [KK13], the cost of a 1-out-of-2 random OT is essentially
+the same as a 1-out-of-256 random OT. Hence, PSSZ interpret r as strings of characters over {0, 1}8. The
+protocol uses one instance of 1-out-of-256 ROT for each byte (not bit) of r.
+Regardless of whether one uses 1-out-of-2 or 1-out-of-256 OT, this OPRF protocol has cost that scales
+with length of the input r, whereas ours has cost independent of the input length. Our main improvement
+to PSSZ consists of replacing their OPRF with ours. The rest of the protocol is largely unchanged.
+5.2 PSI from OPRF
+We now describe how the PSSZ paradigm achieves PSI using an OPRF. This part of the overall PSI pro-
+tocol is nearly identical between our implementation and that of [PSSZ15] (we include an additional small
+optimization). For concreteness, we describe the parameters used in PSSZ when the parties have roughly
+the same number n of items.
+The protocol relies on Cuckoo hashing [PR04] with 3 hash functions, which we brieﬂy review now. To
+assign n items into b bins using Cuckoo hashing, ﬁrst choose random functions h1,h 2,h 3 :{0, 1}∗→ [b] and
+initialize empty bins B[1,...,b ]. To hash an item x, ﬁrst check to see whether any of the bins B[h1(x)],
+B[h2(x)],B[h3(x)] are empty. If so, then place x in one of the empty bins and terminate. Otherwise, choose
+a random i∈{ 1, 2, 3}, evict the item currently in B[hi(x)], replacing it with x, and then recursively try to
+insert the evicted item. If this process does not terminate after a certain number of iterations, then the ﬁnal
+evicted element is placed in a special bin called the stash.
+PSSZ use Cuckoo hashing for PSI in the following way. First, the parties choose 3 random hash functions
+h1,h 2,h 3 suitable for 3-way Cuckoo hashing. Suppose Alice has a set X of inputs and Bob has a set Y ,
+where|X| =|Y| =n. Bob maps his items into 1.2n bins using Cuckoo hashing and a stash of size s. At this
+point Bob has at most one item per bin and at most s items in his stash — he pads his input with dummy
+items so that each bin contains exactly 1 item and the stash contains exactly s items.
+The parties then run 1.2n +s instances of an OPRF, where Bob plays the role of receiver and uses each
+of his 1.2n +s items as OPRF input. Let F (ki,·) denote the PRF evaluated in the ith OPRF instance.
+If Bob has mapped item y to bin i via cuckoo hashing, then Bob learns F (ki,y ); if Bob has mapped y to
+position j in the stash, then Bob learns F (k1.2n+j,y ).
+On the other hand, Alice can computeF (ki,·) for anyi. So she computes sets of candidate PRF outputs:
+H ={F (khi(x),x )|x∈X and i∈{ 1, 2, 3}}
+S ={F (k1.2n+j,x )|x∈X and j∈{ 1,...,s }}
+She randomly permutes elements of H and elements of S and sends them to Bob. Bob can identify the
+intersection of X and Y as follows. If Bob has an item y mapped to the stash, he checks whether the
+associated OPRF output is present in S. If Bob has an item y not mapped to the stash, he checks whether
+its associated OPRF output is in H.
+Intuitively, the protocol is secure against a semi-honest Bob by the PRF property. For an itemx∈X\Y ,
+the corresponding PRF outputs F (ki,y ) are pseudorandom. It is easy to see that security holds even if
+Bob learns relaxed PRF outputs and the PRF achieves RK-PRF security, Deﬁnition 4 (i.e., Alice’s PRF
+outputs are pseudorandom to an adversary who learns relaxed PRF outputs). Similarly, if the PRF outputs
+are pseudorandom even under related keys, then it is safe for the OPRF protocol to instantiate the PRF
+instances with related keys.
+The protocol is correct as long as the PRF does not introduce any further collisions (i.e., F (ki,x ) =
+F (ki′,x′) for x⁄=x′). Below we discuss the parameters required to prevent such collisions.
+An Optimization. In the protocol summary above, Bob must search for each of his OPRF outputs, either
+in the setH or the setS. Furthermore,|H| = 3n and|S| =sn. Even when using a reasonable data structure
+for these comparisons, they have a non-trivial eﬀect on the protocol’s running time. We now describe an
+optimization that reduces this cost (by approximately 10% in our implementation). The full protocol is
+described in Figure 3.
+Our modiﬁcation works as follows. First, Bob keeps track of a hash index z∈{ 1, 2, 3} for each item
+y∈Y that is not mapped to the stash. For example, if Bob’s Cuckoo hashing maps y to bin #h2(y), then
+11
+
+Bob associates z = 2 with y. If for example y is mapped to bin by two hash functions # h1(y) = #h2(y)
+then Bob may choose either z = 1 or z = 2 arbitrarily.
+Then in the ﬁrst 1.2n OPRF instances, Bob uses input y‖z. For the OPRF instances associated with the
+stash, he does not need to append the index z. Summarizing, if Bob has mapped item to position j in the
+stash, then Bob learns F (k1.2n+j,y ). If he has not mapped y to the stash, then he learns F (khz(x),y‖z) for
+exactly one z.
+Then Alice computes the following sets:
+Hi ={F (khi(x),x‖i)|x∈X}, for i∈{ 1, 2, 3}
+Sj ={F (k1.2n+j,x )|x∈X}, for j∈{ 1,...,s }
+She randomly permutes the contents of eachHi and eachSj and sends them to Bob. For each item y of Bob,
+if y is not mapped to the stash then Bob can whether F (khz(y),y‖z)∈Hz, for the associated hash-index z.
+If his Cuckoo hashing maps item y to position j in the stash, he can check whether F (k1.2n+j,y )∈Sj.
+The reason for appending the hash-index z to the PRF input is as follows. Suppose h1(x) = h2(x) = i,
+which is indeed can happen with noticeable probability, since the output range of h1,h 2 is small ([1.2n]).
+Without appending z, both H1 and H2 would contain the identical value F (ki,x ). This would leak the fact
+that a collision h1(x) =h2(x) occurred. Such an event is input-dependent so cannot be simulated. 3
+With our optimization: (1) All of the calls to the PRF made by Alice (to compute the Hi’s and Sj’s)
+invoke the PRF on distinct key-input pairs. This ensures that the contents of these sets can be easily
+simulated; (2) Bob searches for each of his PRF outputs within only one set (either an Hi or an Sj) of n
+items. Contrast this with the approach described previously, where Bob must ﬁnd each OPRF output in
+either a set of size 3n or sn (depending on whether the item is in the stash or not).
+Recall that the protocol is correct as long as there are no spurious collisions among PRF outputs. Since
+there are at most n2 opportunities for a spurious collision (Bob searches each time for a PRF output in a
+set of n items), we can limit the overall probability of a spurious collision to 2 −σ by using PRF outputs of
+length σ + log2(n2).
+5.3 Comparing OPRF Subprotocols
+When comparing our protocol to that of PSSZ, the major diﬀerence is the choice of OPRF subprotocols.
+Later in Section 6 we give an empirical comparison of the protocols. For now, we derive an analytical
+comparison of the costs of the two OPRF subprotocols, to give a better sense of our improvement.
+We focus on the communication cost associated with the OT primitives. Communication cost is an
+objective metric, and it often reﬂects the bottleneck in practice (especially in these protocols where essentially
+all of the cryptographic computations are precomputed). Although the computation costs of our protocols
+are diﬀerent (e.g., ours requires computing the pseudorandom code, which is a cryptographic operation),
+communication cost is nonetheless a good proxy for computation costs in OT extension protocols. The data
+that is communicated in these protocols is a large matrix that must be transposed, and this transposition is
+the primary contributor to the computational cost.
+The main beneﬁt of our protocol is that its cost does not scale with the size of the items being compared.
+Each instance of OPRF consumes just one row of the OT extension matrix. The width of this OT extension
+matrix is exactly the length of the pseudorandom code (PRC). In Section 6.1 we describe how to compute an
+appropriate length of PRC. For the range of parameters we consider, this parameter is 424–448 bits. Hence
+the OT-cost of one instance of our OPRF protocol is 424–448 bits. The speciﬁc numbers are in Table 1.
+The PSSZ OPRF protocol uses several instances of 1-out-of-256 ROT. With security parameter 128, the
+cost of such a random OT is 256 bits using the OT extension of [KK13].
+The main optimization of [PSSZ15] allows for the OPRF subprotocols to be performed on items of length
+𝓁∗ = 𝓁− logn (n is the number of items in the overall PSI protocol) rather than length 𝓁. Let 𝓁∗ denote
+this eﬀective item length. Then𝓁∗/8 instances of 1-out-of-256 ROT are needed for one OPRF instance. The
+total OT-cost of their OPRF protocol is therefore 256 𝓁∗/8 = 32𝓁∗ bits.
+3The protocol and implementation of PSSZ do not account for such collisions among the Cuckoo hash functions. Duplicate
+values will appear in H in such an event.
+12
+
+Parameters: Alice has input X; Bob has input Y , with |X| =|Y| = n. s is an upper bound on the
+stash size for Cuckoo hashing.
+1. Bob speciﬁes random hash functions h1,h 2,h 3 :{0, 1}∗→ [1.2n] and tells them to Alice.
+2. Bob assigns his items Y into 1.2n bins using Cuckoo hashing. Let Bob keep track of z(y) for each
+y so that: if z(y) =⊥ then y is in the stash; otherwise y is in bin hz(y)(y). Arrange the items in
+the stash in an arbitrary order.
+Bob selects OPRF inputs as follows: for i∈ [1.2n], if bin #i is empty, then set ri to a dummy
+value; otherwise if y is in bin #i then set ri =y‖z(y). For i∈ [s], if position i in the stash is y,
+then set ri =y; otherwise set ri to a dummy value.
+3. The parties invoke 1.2n +s OPRF instances, with Bob the receiver with inputs (r1,...,r 1.2n+s).
+Alice receives (k1,...,k 1.2n+s) and Bob receives F (ki,ri) for all i.
+4. Alice computes:
+Hi ={F (khi(x),x‖i)|x∈X}, for i∈{ 1, 2, 3}
+Sj ={F (k1.2n+j,x )|x∈X}, for j∈{ 1,...,s }
+and sends a permutation of each set to Bob.
+5. Bob initializes an empty setO and does the following fory∈Y : If z(y) =⊥ andy is at positionj
+in the stash and F (k1.2n+j,y )∈Sj, then Bob adds y toO. If z(y)⁄=⊥ andF (khz(y)(y),y‖z(y))∈
+Hz(y) then Bob adds y toO.
+6. Bob sends O to Alice and both parties output O.
+Figure 3: Our optimization to the PSSZ PSI protocol, written in terms of an OPRF functionality.
+Hence, we see that our protocol has lower communication cost whenever 𝓁∗ > 448/32 = 14. Among the
+diﬀerent parameter settings reported in [PSSZ15], the only conﬁguration with 𝓁∗ < 14 is for PSI of n≥ 220
+items of length 32 bits. For all other conﬁgurations, our PSI protocol has lower communication cost, with
+the savings increasing as the items become longer. See Table 1.
+Remark on pre-hashing long PSI inputs. Our improvements to PSI are most signiﬁcant for PSI of
+long items. Yet, if the parties have items which are very long strings (say, thousands of bits), they can agree
+on a random hash function, hash their items locally, and perform PSI on the shorter hashes instead. The
+reader may rightfully wonder whether this idea make our improvements irrelevant!
+For this approach (hash-then-PSI) to work, we must ensure that the hashing introduces no collisions
+among the parties’ items. If the parties have n items each, and we wish to limit the probability of a collision
+to 2−σ, then we must choose a hash function whose length is σ + 2 logn. When using the optimizations of
+[PSSZ15], the eﬀective item length can be reduced from σ + 2 logn to σ + logn bits.
+We see that pre-hashing the items cannot reduce their eﬀective length below σ bits, where σ is a sta-
+tistical security parameter. Standard practice suggests σ≥ 40, and yet our protocol outperforms [PSSZ15]
+whenever the eﬀective item length is at least 14 bits. Hence hash-then-PSI does not allow one to bypass our
+improvement to [PSSZ15].
+On a similar note, in our experimental results we report performance of the protocols only for PSI inputs
+up to 128 bits long. For statistical security parameter σ = 40, as long as the parties have at most 2 34 (17
+billion) items, they can use hash-then-PSI with a 128-bit hash.
+13
+
+OT cost
+n 𝓁 𝓁∗ PSSZ our BaRK-OPRF ratio
+28 32 24 768 424 0.54
+28 64 56 1792 424 0.24
+28 128 120 3840 424 0.11
+212 32 20 640 432 0.68
+212 64 52 1664 432 0.26
+212 128 116 3712 432 0.12
+216 32 16 576 440 0.76
+216 64 48 1536 440 0.29
+216 128 112 3584 440 0.12
+220 32 12 384 448 1.17
+220 64 44 1408 448 0.32
+220 128 108 3456 448 0.13
+224 32 8 256 448 1.75
+224 64 40 1280 448 0.35
+224 128 104 3328 448 0.13
+Table 1: Comparing the OT-cost of PSSZ-paradigm OPRF subprotocol and ours, for various parameters.
+The entries in the table refer to the contribution (in bits) to the size of the OT-extension matrices. 𝓁 is the
+item length (in bits), n is the total number of items in the parties’ sets, and 𝓁∗ is the eﬀective item length
+when using the optimizations of [PSSZ15].
+6 Implementation & Performance
+We implemented our PSI protocol and report on its performance in comparison with the state-of-the-art
+PSI protocol of [PSSZ15]. Our complete implementation is available on GitHub: https://github.com/
+osu-crypto/BaRK-OPRF.
+In our implementation we used parameter settings consistent with PSSZ or stricter, and ran their and
+our code on our system so as to obtain meaningful comparisons. As do PSSZ, we use matrix transposition
+code from [ALSZ13] and several other optimizations.
+6.1 Choosing Suitable Parameters
+In this section we discuss concrete parameters used in our implementation. We use a computational security
+parameter of κ = 128 and a statistical security parameter of σ = 40.
+The other parameters are:
+s: the maximum size of the stash for Cuckoo hashing, when hashing n items into 1 .2n using 3 hash
+functions.
+k: length of the pseudorandom code (and hence the width of the OT extension matrix) in the BaRK-OPRF
+protocol.
+v: output length of the PRF realized by the BaRK-OPRF protocol.
+A summary of our concrete parameter choices is given in Table 2. Below we describe how these parameters
+were derived.
+Hashing parameters. Bob uses Cuckoo hashing with 3 hash functions to assign his n items into 1.2n
+bins (and a stash). For the appropriate choice of the stash size s, we use the numbers given in [PSSZ15],
+which limit the probability of hashing failure to 2 −40.
+14
+
+n s k v
+28 12 424 56
+212 6 432 64
+216 4 440 72
+220 3 448 80
+224 2 448 88
+Table 2: Parameters used in our implementation. n is the size of the parties’ input sets; s is the maximum
+stash size for Cuckoo hashing; k is the width of the pseudorandom code (in bits); v is the length of OPRF
+output (in bits).
+set size n
+Setting Protocol Bit length 𝓁 28 212 216 220 224
+LAN
+(insecure) na¨ ıve hashing {32, 64, 128} 1 6 75 759 13,529
+PSSZ
+32 306 380 770 4,438 42,221
+64 306 442 1,236 10,501 137,383
+128 307 443 1,352 13,814 213,597
+BaRK-OPRF-PSI {32, 64, 128} 192 211 387 3,780 58,567
+WAN
+(insecure) na¨ ıve hashing {32, 64, 128} 97 101 180 1,422 22,990
+PSSZ
+32 609 701 1,425 8,222 81,234
+64 624 742 2,142 18,398 248,919
+128 624 746 2,198 23,546 381,913
+BaRK-OPRF-PSI {32, 64, 128} 556 585 1,259 7,455 106,828
+Table 3: Running time in ms for PSI protocols with n elements per party
+set size n
+Setting Phase 28 212 216 220 224
+LAN Oﬄine 171 171 216 601 7,615
+Online 21 40 171 3,179 50,952
+WAN Oﬄine 291 313 316 758 7,482
+Online 265 272 943 6,697 99,346
+Table 4: Running time of our BaRK-OPRF protocol in ms in oﬄine and online phases
+set size n
+Protocol Bit length 𝓁 28 212 216 220 224 Asymptotic [bit]
+na¨ ıve hashing {32, 64, 128} 0.01 0.03 0.56 10.00 176.00 nv
+PSSZ
+32 0.06 0.77 9.18 142.80 1,574.40
+64 0.09 1.37 18.78 296.40 4,032.00 2κ(1.2n +s)⌈ min(v′,𝓁)−log(n)
+8 ⌉ + (3 +s)nv′
+128 0.10 1.52 23.58 411.60 6,489.60
+BaRK-OPRF-PSI {32, 64, 128} 0.04 0.53 8.06 127.20 1,955.20 k(1.2n +s) + (3 +s)nv
+Table 5: Communication in MB for PSI protocols with n elements per party. Parameters k,s, andv refer to
+those in Table 2 / Section 6.1. PSSZ requires slightly long OPRF outputs:v′ =σ+log(3n2). Communication
+costs for PSSZ and for our protocol ignore the ﬁxed cost of base OTs for OT extension.
+Size of pseudorandom code. Our BaRK-OPRF protocol requires a pseudorandom code achieving min-
+imum distance κ = 128. In our protocol, Alice evaluates the PRF on (3 + s)n values. In order to argue
+that these values can be collectively pseudorandom, so we require the underlying PRF to have m-RK-PRF
+security (Deﬁnition 4) for m = (3 +s)n.
+From Lemma 5, this means we must choose a pseudorandom code with parameters (d =κ,ϵ =σ+logm).
+Using Lemma 3, we calculate the minimum length of such a pseudorandom code; the results are column k
+in Table 2. We round up to the nearest multiple of 8 so that protocol messages will always be whole bytes.
+15
+
+Length of OPRF outputs. The length of OPRF output controls the probability of a spurious collision
+in the PSI protocol. In Section 5.2 we argued that output length of σ + log2(n2) is suﬃcient to bound the
+probability of any spurious collision to 2−σ.
+Using σ = 40, we compute the appropriate length in column v of Table 2. We round up to the nearest
+multiple of 8 so that protocol messages will always be whole bytes.
+6.2 Environment settings
+All of our experiments were implemented on a server with Intel(R) Xeon(R) CPU E5-2699 v3 2.30GHz CPU
+and 256 GB RAM. We run both clients on the same machine, but simulate a LAN and WAN connection using
+the Linux tc command. In the WAN setting, the average network bandwidth and the average (round-trip)
+latency are set to be 50 MB/s and 96 ms, respectively. In the LAN setting, the network has 0.2ms latency.
+All of our experiments use a single thread for each party.
+6.3 Implementation Details
+In our BaRK-OPRF protocol, the oﬄine phase is conducted to obtain an OT extension matrix of size (1.2n +
+s)×k by using the IKNP OT extension. Speciﬁcally, ﬁrst we use the Naor-Pinkas construction [NP01] to
+get 128 base-OTs, which are then extended to a k× 128 matrix by utilizing the pseudorandom generator.
+The transpose of this matrix yields the k base OTs for the BaRK-OPRF extension protocol. We extend to
+1.2n +s OPRF instances.
+We hash all inputs of both client and server at the beginning of the online phase. Following Lemma 3,
+we use a PRF with suitably long output as our pseudorandom code. More concretely, the parties agree on
+an AES-128 key sk, which is independent of their inputs, and then extend the output of AES via:
+C(x) =AESsk(1‖x)‖AESsk(2‖x)‖AESsk(3‖x)‖AESsk(4‖x)
+to obtain the desired k random output bits. Furthermore, to reduce the waiting time at the server side,
+the client will constantly send a new packet encompassing multiple code words to the server. Based on
+trail-and-error approach, the packet size of 2 12×k bits is selected to minimize the waiting time. In Table
+4, we report the running time of our protocol for both oﬄine and online phases in diﬀerent settings. For
+instance, in LAN environment, the online phase of our BaRK-OPRF protocol takes about 3.2s for n = 220.
+To illustrate the eﬃcacy of theBaRK-OPRF-PSI approach, we compared it with ana¨ ıve hashingprotocol
+and the PSSZ protocol. The na¨ ıve hashing protocol is a widely-used insecure protocol [PSSZ15] where both
+parties use the same cryptographic hash function to hash their elements, then one of the parties permutes
+their hash value and sends the result to the other party, who will compute the intersection by computing
+the match of the hash values. In the following, we conducted several performance tests with the input sets
+of equal size n and for inputs of length 32, 64, and 128 bits.
+Note that the running time of our PSI protocol does not depend on the bit length of the input. It can be
+explained as follows. First, the upper bound of the length of the input is 128 bits. Second, the hash function
+will call a block of 128 bits to encrypt the input data, thus our protocol has the same computation cost for
+all bit length of the input. In addition, the communication cost of our BaRK-OPRF protocol depends only
+on the length of the pseudorandom code k and the length v of the OPRF outputs, which are independent
+of the bit length 𝓁. Similarly, the na¨ ıve hashing protocol does not depend on 𝓁. This was conﬁrmed by our
+simulation results for diﬀerent bit lengths (e.g. 32 bits, 64 bits, and 128 bits). Table 3 presents the running
+time of the na¨ ıve hashing protocol, PSSZ, and our PSI protocol in both LAN and WAN environment.
+As we can see in the tables, our protocol outperforms PSSZ in almost all the case studies, especially for
+the long bit length of input 𝓁 and large values of the input sizen. For example, we consider the results in the
+LAN setting. For the input size of 2 20, our approach can improve 2.8 times and 3.6 times the performance
+of PSSZ for the bit lengths of 64 bits and 128 bits, respectively. For the input size of 2 24, the corresponding
+improvements are 2.3 times and 3.6 times. It is worth mentioning that it takes about 1 minute to compute
+the intersection for the sets of size n = 224. Similar observations can be inferred from Table 3 for the WAN
+setting.
+At the same time, for smaller bit lengths, the PSSZ protocol can be faster than our PSI protocol. This
+is the case, for example, when the bit length is 32 bits and n = 224 in LAN setting. Since the two protocols
+16
+
+are very similar, diﬀering only in the choice of OPRF subprotocol, it would be relatively straightforward to
+implement a hybrid that always chooses the best OPRF subprotocol based on n and𝓁 according to Table 1.
+However, in order to clarify the strengths/weaknesses of the two protocols, we report the performance for
+our approach even when it is worse.
+Similar to the running time result, our communication cost is 2.9–3.3 × faster than Pinkas et al. for PSI
+of 128-bit strings and suﬃciently large sets. Concretely, for the input size of 2 20, our protocol can improve
+3.2 times the performance of PSSZ for the bit lengths 128 bits. Table 5 presents the communication (in MB)
+of the na¨ ıve hashing protocol, PSSZ, and ourBaRK-OPRF-PSI protocol.
+Acknowledgments
+We thank Peter Rindal for contributing libraries and helpful suggestions to our protocol implementation.
+We also thank Michael Zohner for answering our many questions about the implementation of [PSSZ15].
+Finally, we thank the anonymous CCS reviewers for their helpful feedback.
+The ﬁrst author is supported by the Oﬃce of Naval Research (ONR) contract number N00014-14-C-
+0113. The second author is supported by NSF Grants CNS-1350619 and CNS-1414119, in part by the
+Defense Advanced Research Projects Agency (DARPA) and the U.S. Army Research Oﬃce under contracts
+W911NF-15-C-0226, and an MIT Translational Fellowship. The third and fourth authors are supported by
+NSF award 1149647 and a Google research award. This work was initiated while the ﬁrst three authors were
+visiting the Simons Institute for the Theory of Computing, supported by the Simons Foundation and by the
+DIMACS/Simons Collaboration in Cryptography through NSF grant #CNS-1523467.
+References
+[ALSZ13] Gilad Asharov, Yehuda Lindell, Thomas Schneider, and Michael Zohner. More eﬃcient oblivious
+transfer and extensions for faster secure computation. In Ahmad-Reza Sadeghi, Virgil D. Gligor,
+and Moti Yung, editors, ACM CCS 13 , pages 535–548, Berlin, Germany, November 4–8, 2013.
+ACM Press.
+[ALSZ15] Gilad Asharov, Yehuda Lindell, Thomas Schneider, and Michael Zohner. More eﬃcient oblivious
+transfer extensions with security for malicious adversaries. In Elisabeth Oswald and Marc Fis-
+chlin, editors, EUROCRYPT 2015, Part I, volume 9056 of LNCS, pages 673–701, Soﬁa, Bulgaria,
+April 26–30, 2015. Springer, Heidelberg, Germany.
+[CNs07] Jan Camenisch, Gregory Neven, and abhi shelat. Simulatable adaptive oblivious transfer. In
+Moni Naor, editor, EUROCRYPT 2007, volume 4515 of LNCS, pages 573–590, Barcelona, Spain,
+May 20–24, 2007. Springer, Heidelberg, Germany.
+[DY05] Yevgeniy Dodis and Aleksandr Yampolskiy. A veriﬁable random function with short proofs and
+keys. In Serge Vaudenay, editor,PKC 2005, volume 3386 of LNCS, pages 416–431, Les Diablerets,
+Switzerland, January 23–26, 2005. Springer, Heidelberg, Germany.
+[FHV13] Sebastian Faust, Carmit Hazay, and Daniele Venturi. Outsourced pattern matching. In Fedor V.
+Fomin, Rusins Freivalds, Marta Z. Kwiatkowska, and David Peleg, editors, ICALP 2013, Part
+II, volume 7966 of LNCS, pages 545–556, Riga, Latvia, July 8–12, 2013. Springer, Heidelberg,
+Germany.
+[FIPR05] Michael J. Freedman, Yuval Ishai, Benny Pinkas, and Omer Reingold. Keyword search and
+oblivious pseudorandom functions. In Joe Kilian, editor, TCC 2005 , volume 3378 of LNCS,
+pages 303–324, Cambridge, MA, USA, February 10–12, 2005. Springer, Heidelberg, Germany.
+[GMW87] Oded Goldreich, Silvio Micali, and Avi Wigderson. How to play any mental game or A com-
+pleteness theorem for protocols with honest majority. In Alfred Aho, editor, 19th ACM STOC ,
+pages 218–229, New York City,, New York, USA, May 25–27, 1987. ACM Press.
+17
+
+[Gol04] Oded Goldreich. Foundations of Cryptography, Volume 2: Basic Applications . Cambridge Uni-
+versity Press, The address, 2004.
+[Haz15] Carmit Hazay. Oblivious polynomial evaluation and secure set-intersection from algebraic PRFs.
+In Yevgeniy Dodis and Jesper Buus Nielsen, editors, TCC 2015, Part II , volume 9015 of LNCS,
+pages 90–120, Warsaw, Poland, March 23–25, 2015. Springer, Heidelberg, Germany.
+[HFH99] Bernardo A. Huberman, Matthew K. Franklin, and Tad Hogg. Enhancing privacy and trust in
+electronic communities. In EC, pages 78–86, 1999.
+[HL10] Carmit Hazay and Yehuda Lindell. Eﬃcient protocols for set intersection and pattern matching
+with security against malicious and covert adversaries. Journal of Cryptology , 23(3):422–456,
+July 2010.
+[IKNP03] Yuval Ishai, Joe Kilian, Kobbi Nissim, and Erez Petrank. Extending oblivious transfers eﬃciently.
+In Dan Boneh, editor, CRYPTO 2003, volume 2729 of LNCS, pages 145–161, Santa Barbara,
+CA, USA, August 17–21, 2003. Springer, Heidelberg, Germany.
+[JL09] Stanislaw Jarecki and Xiaomin Liu. Eﬃcient oblivious pseudorandom function with applications
+to adaptive OT and secure computation of set intersection. In Omer Reingold, editor, TCC 2009,
+volume 5444 of LNCS, pages 577–594. Springer, Heidelberg, Germany, March 15–17, 2009.
+[Kil88] Joe Kilian. Founding cryptography on oblivious transfer. In 20th ACM STOC , pages 20–31,
+Chicago, Illinois, USA, May 2–4, 1988. ACM Press.
+[KK12] Vladimir Kolesnikov and Ranjit Kumaresan. Improved secure two-party computation via
+information-theoretic garbled circuits. In Ivan Visconti and Roberto De Prisco, editors, SCN
+12, volume 7485 of LNCS, pages 205–221, Amalﬁ, Italy, September 5–7, 2012. Springer, Heidel-
+berg, Germany.
+[KK13] Vladimir Kolesnikov and Ranjit Kumaresan. Improved OT extension for transferring short se-
+crets. In Ran Canetti and Juan A. Garay, editors,CRYPTO 2013, Part II, volume 8043 of LNCS,
+pages 54–70, Santa Barbara, CA, USA, August 18–22, 2013. Springer, Heidelberg, Germany.
+[KM15] Vladimir Kolesnikov and Alex J. Malozemoﬀ. Public veriﬁability in the covert model (almost)
+for free. In Tetsu Iwata and Jung Hee Cheon, editors, ASIACRYPT 2015, Part II , volume 9453
+of LNCS, pages 210–235, Auckland, New Zealand, November 30 – December 3, 2015. Springer,
+Heidelberg, Germany.
+[Kol05] Vladimir Kolesnikov. Gate evaluation secret sharing and secure one-round two-party compu-
+tation. In Bimal K. Roy, editor, ASIACRYPT 2005, volume 3788 of LNCS, pages 136–155,
+Chennai, India, December 4–8, 2005. Springer, Heidelberg, Germany.
+[KOS15] Marcel Keller, Emmanuela Orsini, and Peter Scholl. Actively secure OT extension with optimal
+overhead. In Rosario Gennaro and Matthew J. B. Robshaw, editors, CRYPTO 2015, Part I ,
+volume 9215 of LNCS, pages 724–741, Santa Barbara, CA, USA, August 16–20, 2015. Springer,
+Heidelberg, Germany.
+[MNPS04] Dahlia Malkhi, Noam Nisan, Benny Pinkas, and Yaron Sella. Fairplay—a secure two-party
+computation system. In Proceedings of the 13th Conference on USENIX Security Symposium -
+Volume 13, SSYM’04, pages 20–20, Berkeley, CA, USA, 2004. USENIX Association.
+[Nie07] Jesper Buus Nielsen. Extending oblivious transfers eﬃciently - how to get robustness almost for
+free. Cryptology ePrint Archive, Report 2007/215, 2007. ia.cr/2007/215.
+[NNOB12] Jesper Buus Nielsen, Peter Sebastian Nordholt, Claudio Orlandi, and Sai Sheshank Burra. A
+new approach to practical active-secure two-party computation. In Reihaneh Safavi-Naini and
+Ran Canetti, editors, CRYPTO 2012, volume 7417 of LNCS, pages 681–700, Santa Barbara, CA,
+USA, August 19–23, 2012. Springer, Heidelberg, Germany.
+18
+
+[NP01] Moni Naor and Benny Pinkas. Eﬃcient oblivious transfer protocols. In Proceedings of the Twelfth
+Annual ACM-SIAM Symposium on Discrete Algorithms, SODA ’01, pages 448–457, Philadelphia,
+PA, USA, 2001. Society for Industrial and Applied Mathematics.
+[NR04] Moni Naor and Omer Reingold. Number-theoretic constructions of eﬃcient pseudo-random func-
+tions. Journal of the ACM , 51(2):231–262, 2004.
+[Ops13] Kurt Opsahl. The disconcerting details: How Facebook teams up with data brokers to show
+you targeted ads. https://www.eﬀ.org/deeplinks/2013/04/disconcerting-details-how-facebook-
+teams-data-brokers-show-you-targeted-ads, 2013. [Online; accessed 23-May-2016].
+[PR04] Rasmus Pagh and Flemming Friche Rodler. Cuckoo hashing. J. Algorithms, 51(2):122–144, 2004.
+[PSSZ15] Benny Pinkas, Thomas Schneider, Gil Segev, and Michael Zohner. Phasing: Private set inter-
+section using permutation-based hashing. In Jaeyeon Jung and Thorsten Holz, editors, 24th
+USENIX Security Symposium, USENIX Security 15 , pages 515–530. USENIX Association, 2015.
+[PSZ14] Benny Pinkas, Thomas Schneider, and Michael Zohner. Faster private set intersection based
+on OT extension. In Kevin Fu and Jaeyeon Jung, editors, 23rd USENIX Security Symposium,
+USENIX Security 14 , pages 797–812. USENIX Association, 2014.
+[Yao86] Andrew Chi-Chih Yao. How to generate and exchange secrets (extended abstract). In 27th FOCS,
+pages 162–167, Toronto, Ontario, Canada, October 27–29, 1986. IEEE Computer Society Press.
+[Yun15] Moti Yung. From mental poker to core business: Why and how to deploy secure computation
+protocols? https://www.sigsac.org/ccs/CCS2015/pro_keynote.html, 2015. ACM CCS 2015
+Keynote Talk.
+19

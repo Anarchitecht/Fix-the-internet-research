@@ -1,0 +1,1249 @@
+Estimating Global Statistics for Unstructured P2P Search
+in the Presence of Adversarial Peers
+Sami Richardson
+Dept. of Computer Science
+University College London
+Gower St., London WC1E 6BT , UK
+sami.richardson.10@ucl.ac.uk
+Ingemar J. Cox
+Dept. of Computer Science
+University College London
+Gower St., London WC1E 6BT , UK
+i.cox@ucl.ac.uk
+ABSTRACT
+A common problem in unstructured peer-to-peer (P2P) in-
+formation retrieval is the need to compute global statistics
+of the full collection, when only a small subset of the col-
+lection is visible to a peer. Without accurate estimates of
+these statistics, the eﬀectiveness of modern retrieval models
+can be reduced. We show that for the case of a probably ap-
+proximately correct P2P architecture, and using either the
+BM25 retrieval model or a language model with Dirichlet
+smoothing, very close approximations of the required global
+statistics can be estimated with very little overhead and a
+small extension to the protocol. However, through theoreti-
+cal modeling and simulations we demonstrate this technique
+also greatly increases the ability for adversarial peers to ma-
+nipulate search results. We show an adversary controlling
+fewer than 10% of peers can censor or increase the rank of
+documents, or disrupt overall search results. As a defense,
+we propose a simple modiﬁcation to the extension, and show
+global statistics estimation is viable even when up to 40%
+of peers are adversarial.
+Categories and Subject Descriptors
+H.3.3 [Information Storage and Retrieval]: Information
+Search and Retrieval—Search process; H.3.4 [ Information
+Storage and Retrieval]: Systems and Software—Distributed
+systems
+Keywords
+P2P IR; adversarial IR
+1. INTRODUCTION
+Full-text search across peer-to-peer (P2P) networks has
+received considerable interest in recent years. P2P architec-
+tures can be classiﬁed as structured, where content is placed
+according to deﬁned rules to allow for eﬃcient retrieval, and
+unstructured, where there are no such rules. To guarantee
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full cita-
+tion on the ﬁrst page. Copyrights for components of this work owned by others than
+ACM must be honored. Abstracting with credit is permitted. To copy otherwise, or re-
+publish, to post on servers or to redistribute to lists, requires prior speciﬁc permission
+and/or a fee. Request permissions from permissions@acm.org.
+SIGIR’14,July 6–11, 2014, Gold Coast, Queensland, Australia.
+Copyright 2014 ACM 978-1-4503-2257-7/14/07 ...$15.00.
+http://dx.doi.org/10.1145/2600428.2609567.
+ﬁnding content in an unstructured P2P network it is nec-
+essary to search all nodes. Communication costs typically
+make this infeasible, so search is probabilistic. The Proba-
+bly Approximately Correct framework [10] was proposed to
+model the problem of probabilistic search in an unstructured
+distributed network. The PAC framework assumes that (i)
+nodes operate independently, (ii) each node indexes a sub-
+set of documents from the collection, (iii) the documents
+indexed are not disjoint across nodes, i.e. each document
+may be indexed on more than one node, and (iv) a query is
+performed by sampling a random subset of nodes and com-
+bining the results. The accuracy of a query is deﬁned as the
+size of the intersection of the set of documents retrieved by
+a constrained, probabilistic search and the set that would
+have been retrieved by an exhaustive search, normalized by
+the size of the latter.
+A PAC architecture gracefully handles the churn associ-
+ated with nodes joining and leaving the network. This is
+because the addition of any node compensates for the loss
+of any other. P2P networks comprised of volunteer nodes
+typically experience high levels of churn [18], and therefore
+may be a good match for a PAC architecture. One example
+is a PAC P2P web search engine, as proposed by Asthana
+et al [1]. They demonstrated, from a communications band-
+width perspective, the feasibility of using a PAC architecture
+to store an index of the world wide web on one million vol-
+unteer nodes, and to handle a query load equivalent to that
+seen by the Google web search engine.
+However, in a PAC architecture each node is only aware
+of the documents it indexes, and typically does not have ac-
+cess to the global statistics of the entire document collection
+that are often used by modern information retrieval models.
+Without these statistics, a node may not be able to correctly
+score and rank its documents when responding to a query.
+As a consequence, the accuracy of queries may not reach
+the level predicted by the PAC framework. In this paper we
+evaluate a solution that requires only a small modiﬁcation
+to the PAC query procedure. When each node involved in
+a query returns a list of matching documents, we propose
+that it also returns information on statistics derived from
+its local index. After responses from all nodes have been
+received, this information is used to calculate an improved
+estimate of global statistics, and the retrieved documents
+are then scored and ranked again to form a new, potentially
+more accurate top-k result list. We test this technique with
+two examples of modern retrieval models, BM25 [17], and
+a language model with Dirichlet smoothing [22]. We show
+that accuracy approaches the theoretical value predicted by
+
+the PAC model, thereby overcoming a previous limitation of
+the architecture.
+It should be expected that a PAC P2P network comprised
+of volunteer nodes will be subject to malicious behavior.
+When a secure method is used to select the random set of
+nodes for each query, such as a gossip-based secure peer sam-
+pling service like Brahms [4], the random nature of a PAC
+architecture makes it relatively resilient to attack. Unfor-
+tunately, the global statistics estimation technique greatly
+increases vulnerability. We demonstrate this by ﬁrst iden-
+tifying how an adversary can introduce malicious nodes to
+perform three attacks: (i) censorship of a document, (ii)
+promotion (increasing the rank) of a document, and (iii)
+disruption of overall search results. We then develop theo-
+retical models of these attacks, assuming the global statistics
+estimation technique is not used. This establishes a baseline
+of vulnerability. Next, we outline how an adversary can cor-
+rupt the global statistics estimation technique, and through
+simulations demonstrate the potential for manipulation of
+search results is much greater than for the PAC architecture
+baseline.
+As a defense, we propose that the querying node measures
+the skewness of global statistics information returned from
+nodes, and ﬁlters out values that appear to be manipulated.
+We show the technique to be highly eﬀective, withstand-
+ing up to 40% of malicious nodes before query results are
+signiﬁcantly aﬀected.
+1.1 Paper Overview
+In Sect. 2 we discuss related work. In Sect. 3 we review
+the PAC framework and provide details of BM25 and the
+language model. In Sect. 4 we modify the PAC query proce-
+dure to incorporate the estimation of global statistics, and
+evaluate its eﬀectiveness. In Sect. 5 we investigate how this
+increases vulnerability to attack, and in Sect. 6 we propose
+a defense. Finally, in Sect. 7 overall conclusions are drawn.
+2. RELA TED WORK
+The problem of estimating global statistics for P2P infor-
+mation retrieval (P2P IR) is similar to that of estimating
+corpus statistics for distributed information retrieval (DIR).
+The multi-database model of DIR assumes that (i) a query
+is sent to a subset of the most promising databases, (ii) each
+database returns matching documents, and (iii) results from
+each database are merged into a ﬁnal ranked result list [5].
+A PAC P2P architecture can be thought of as a special case
+of this model, where queries are sent to a random subset of
+databases (nodes), and where each database uses the same
+retrieval algorithm and contains documents randomly se-
+lected from the same central document collection.
+In DIR, document scores assigned by diﬀerent databases
+may be based on diﬀerent corpus statistics and retrieval al-
+gorithms, and therefore may not be directly comparable.
+To correctly merge results from diﬀerent databases, scores
+from each database can be normalized. When databases
+are uncooperative, and do not aid in this task, normalized
+scores can be estimated from a sample of documents ob-
+tained by submitting queries [6], but normalization is easier
+when databases are cooperative and share local database in-
+formation, such as corpus statistics. Viles et al. proposed
+that databases periodically share corpus statistics, so that
+all databases use the same corpus statistics [19]. However,
+this may be impractical when there are a very large num-
+ber of databases (or equivalently, nodes in a P2P network).
+Callan et al. suggested that corpus statistics be requested
+from databases before each query, and then passed along
+with the query [7]. All databases responding to the query
+can then use the same corpus statistics. However, the in-
+crease in query latency may be unacceptable. Kirsch et al.
+proposed that each queried database returns local corpus
+statistics, in addition to the result list [15]. The corpus
+statistics from all databases are then combined, and new,
+normalized scores are calculated for each returned docu-
+ment. This is similar to the technique we use in this paper.
+Our work diﬀers, because instead of using a deterministic ar-
+chitecture, we speciﬁcally consider a PAC P2P architecture,
+where documents are randomly replicated across peers, and
+queries are directed to a random subset of peers.
+P2P IR diﬀers from DIR in that P2P networks are typi-
+cally intended to scale to a much larger number of nodes, po-
+tentially thousands or tens of thousands, and are character-
+ized by much higher levels of churn. A number of solutions
+have been proposed to overcome the lack of global statis-
+tics at each node in P2P networks. PlanetP [11] is a P2P
+information retrieval system that eﬃciently routes queries
+to nodes containing relevant documents by using a compact
+summary of the entire document index maintained at each
+node. The document frequency global statistic, which is
+the proportion of documents that index a given term, is not
+available at each node, so it is diﬃcult to rank documents
+with the commonly used measure of term frequency-inverse
+document frequency (TF-IDF). However, the summary in-
+dex at each node makes it possible to determine peer fre-
+quency, the proportion of peers that index at least one doc-
+ument with a given term, and this is used to calculate the
+measure of term frequency-inverse peer frequency (TF-IPF).
+The performance of TF-IPF is shown to be similar to that of
+TF-IDF. Unfortunately, for many other P2P architectures,
+including PAC, it is not substantially easier to calculate peer
+frequency than it is to calculate document frequency.
+Lu et al. considered search of text based libraries in hier-
+archical P2P networks [16]. They assume some nodes act as
+top-level ‘hubs’ and provide a directory service for low-level
+‘leaf’ nodes that contain text libraries. A query is routed to
+one or more hub nodes, which in turn route it to appropriate
+leaf nodes or pass it on to be handled by other hub nodes.
+The responses from leaf nodes are returned down the query
+path. Hub nodes maintain global statistics for all connected
+leaf nodes, and also share these global statistics with other
+hub nodes. This allows hub nodes to normalize document
+scores in query responses and merge them into a ranked list
+before passing the query response back down the query path.
+As a result, the user is provided with a correctly merged
+ranked result list. This can be a very eﬀective solution, but
+it is only applicable to hierarchical P2P architectures.
+Chen et al. proposed a hybrid structured/unstructured
+P2P system for full text-search [9]. The structured com-
+ponent eﬃciently handles multi-term queries, while the un-
+structured component gathers global statistics at each node
+using a gossip protocol. This allows each node to maintain
+up-to-date global statistics, but comes at the cost of extra
+inter-node communication traﬃc.
+Witschel et al. [21] showed that reasonable estimates of
+global statistics can be derived by requesting statistics from
+random nodes. Our approach also amounts to receiving
+statistics from random nodes, but takes advantage of the
+
+mechanism already in place to perform queries, whereas in
+theirs the random sampling is implemented alongside the
+mechanism to perform queries. Witschel et al. also showed
+the eﬀectiveness of random sampling can be improved by
+combining it with a small reference corpus of global statis-
+tics on each node. However, this may be less eﬀective with a
+dynamically changing document collection, and is unneces-
+sary with our approach because global statistics are derived
+from a large proportion of the document collection.
+A major part of our contribution is an analysis of the ad-
+versarial manipulation of global statistics. While the impact
+of malicious nodes in P2P networks has been widely stud-
+ied [20], we are unaware of investigations into attacks against
+global statistics. Bender et al. [3] reduce bias of estimates of
+document frequency using hash sketches. Each node creates
+a hash sketch to provide a compact synopsis of documents
+that contain a query term, and hash sketches are combined
+to calculate document frequency. However, this is intended
+to reduce bias arising from the overlap of document collec-
+tions across nodes, and not bias caused by adversarial nodes.
+3. PRELIMINARIES
+We ﬁrst review the fundamental concepts of the PAC
+framework [10]. This earlier work assumes there is no ad-
+versarial behavior. In Sect. 5 we drop this assumption. Let
+there be n homogenous nodes in the network, m unique
+documents in the collection, and each node indexes ρ doc-
+uments. Let the total index capacity of the network be R.
+There are ri copies of each document di replicated across
+the indexes of nodes, such that ∑
+iri =R. Documents are
+uniformly randomly replicated, so ri = R
+m. Queries are sent
+to z randomly selected nodes, and relevant documents are
+combined and ranked to form a top-k result list. The prob-
+ability of ﬁnding c copies of a document di is binomially
+distributed. It was shown [10] that the probability P (di) of
+ﬁnding at least one copy of document di is given by
+P (di) = 1−
+(
+1− ρ
+m
+)z
+. (1)
+For (1) to hold, the number of documents returned from
+each queried node, k′, needs to be greater than or equal to
+k. In [10] this was implicitly assumed. In this paper, since
+we varyk′, we explicitly state this requirement.
+Using the property of exponential functions, (1) can be
+approximated with
+P (di)≈ 1−e−zρ
+m . (2)
+As a consequence, for a ﬁxed collection size m, the proba-
+bility of ﬁnding di is determined by the product zρ.
+In information retrieval, typically there are multiple doc-
+uments that are relevant to a query. LetDk(j) be the global
+top-k, the set of top-k documents retrieved for queryj from
+the full document collection, and D′
+k(j) be the local top-k,
+the set retrieved from a constrained search of z nodes. The
+accuracy aj for query j is then deﬁned [10] as
+aj =|Dk(j)∩D′
+k(j)|
+|Dk(j)| . (3)
+It was shown [10] that each query is expected to retrieve
+k·P (di) documents out of the global top- k, and therefore
+expected average accuracy is given by
+E(aj) = k·P (di)
+k =P (di) . (4)
+3.1 BM25 Ranking Function
+The ﬁrst ranking function we evaluate the global statis-
+tics estimation technique for is BM25. Let C be the set of
+documents in the collection and T be the set of terms in a
+query. The score, sBM 25(d,T ), assigned to document d for
+query T is then given [17] by
+sBM 25(d,T ) =
+∑
+t∈T
+w(t)·s(t,d ) , (5)
+where
+s(t,d ) = TF (t,d )· (k1 + 1)
+TF (t,d ) +k1
+(
+1−b +b· DL(d)
+AVGDL
+) , (6)
+w(t) = log 1
+Pdoc(t), k1 and b are free parameters, TF (t,d ) is
+the term frequency of term t in document d, DL(d) is the
+number of terms in documentd, i.e. its length, andAVGDL
+is the average document length across all documents in C.
+Pdoc(t) is the probability of a document in collection C con-
+taining term t, and is calculated with
+Pdoc(t) = DF (t,C)
+|C| , (7)
+where DF (t,C) is document frequency, the number of doc-
+uments from collectionC that contain the term t.
+Each node has access to or can calculate all the parameters
+of (5), with the exception of Pdoc(t) and AVGDL . These
+are the global statistics for the collection, which we need to
+estimate.
+3.2 Language Model with Dirichlet Smooth-
+ing
+The second ranking function we consider is a language
+model with Dirichlet smoothing. For a language model, the
+score, slang(d,T ), assigned to each document d for query T
+is given by
+slang(d,T ) =
+∏
+t∈T
+p(t|d) , (8)
+wherep(t|d) is the probability of the language model of doc-
+umentd generating term t, and is given by
+p(t|d) = TF (t,d )
+DL(d) . (9)
+This does not require global statistics of the collection. How-
+ever, to prevent a score of zero if a query term is not present
+in a document, it is common to use smoothing. Various tech-
+niques have been proposed [22] that assign a non-zero value
+to p(t|d) if the term is missing. In this paper we consider
+Dirichlet smoothing, for which p(t|d) is given by
+p(t|d) = TF (t,d ) +µ·Pcoll(t)
+DL(d) +µ , (10)
+whereµ is a free parameter to control the amount of smooth-
+ing, andPcoll(t) is the probability of term t being generated
+from the collection. Pcoll(t) is given by
+Pcoll(t) =
+∑
+d∈CTF (t,d )∑
+d∈CDL(d) , (11)
+and is the global statistic we need to estimate.
+
+4. GLOBAL STA TISTICS ESTIMA TION
+We now outline a modiﬁcation to the PAC query proce-
+dure that allows the estimation of global statistics. Each
+node, u, uses its local collection of documents, Lu, to calcu-
+late an initial estimate of the retrieval model global statis-
+tics. Using these estimated statistics the node calculates the
+retrieval model score for each term from all documents inLu.
+These scores are then added to an index for use when scoring
+documents for queries. The query procedure is as follows.
+1. A querying node issues a query comprised of a set of
+terms, T , to z random nodes (including itself).
+2. Each queried node, u, then:
+(a) Compiles a top-k′ result list of the highest ranked
+documents from Lu for query T , using the previ-
+ously calculated scores.
+(b) The node returns to the querying node two sets
+of information: Ru and Gu. The former contains
+summary information for the top- k′ documents
+that the querying node needs to produce a ﬁnal
+top-k result list (e.g. document id, parameters
+of the document required to calculate its score).
+The latter contains information to estimate the
+document collection global statistics, used by the
+retrieval model scoring algorithm.
+3. On receiving responses from all z queried nodes, the
+querying node:
+(a) Calculates new, improved estimates of global statis-
+tics based on Gu returned from each node.
+(b) Calculates a score for each received document us-
+ing summary information from Ru and the new
+global statistics.
+(c) Ranks documents by their new score, and presents
+a ﬁnal top-k result list to the user.
+For BM25, the estimate of the global statistic Pdoc(t) is
+calculated in Step 3(a) with
+ˆPdoc(t) =
+∑
+u∈ZDF (t,Lu)∑
+u∈Z|Lu| , (12)
+and the estimate of the global statisticAVGDL is calculated
+with
+ˆAVGDL =
+∑
+u∈Z
+∑
+d∈LuDL(d)∑
+u∈Z|Lu| . (13)
+Therefore, for BM25, Gu consists of DF (t,Lu) for t∈ T ,
+|Lu|, and∑
+d∈LuDL(d).
+For the language model, the estimate of the global statistic
+Pcoll(t) is calculated in Step 3(a) with
+ˆPcoll(t) =
+∑
+u∈Z
+∑
+d∈LuTF (t,d )∑
+u∈Z
+∑
+d∈LuDL(d) , (14)
+requiring Gu to consist of ∑
+d∈LuTF (t,d ) for t∈ T , and∑
+d∈LuDL(d).
+For both BM25 and the language model, the summary
+information Ru consists of TF (t,d ) for t∈ T and DL(d),
+for each document d in the top-k′ result list.
+The collections Lu on each node used by (12) to (14) are
+not disjoint across nodes, but because a PAC architecture
+distributes documents uniformly randomly, global statistics
+are, on average, unaﬀected.
+4.1 Evaluation
+We begin our evaluation of the above technique by ﬁrst
+assuming there are no malicious nodes present. This demon-
+strates the maximum gain in query accuracy. In Sect. 5 we
+then consider the risk that malicious nodes may be able to
+manipulate search results by returning corrupt global statis-
+tics information.
+4.1.1 Experimental Setup
+A simulated network of n = 10, 000 nodes was used. The
+document collection, C, was comprised of m = 1, 692, 096
+documents from the WT10g [2] web corpus. Documents
+were uniformly randomly distributed across nodes so that
+each node indexed ρ documents. Fifty queries were drawn
+randomly from the TREC 2009 Million Query track [8] and
+used as the query test set. Each query was performed us-
+ing the technique described above, where each queried node
+returned the topk′ = 10 matching documents, and the accu-
+racy of the ﬁnal top-10 list calculated with (3). Each query
+was repeated for a total of ten repetitions, and the aver-
+age accuracy across queries for a given value of z recorded.
+In our simulations we chose parameter z, the number of
+nodes a query is issued to, and ρ, the number of documents
+indexed per node, such that the theoretical expected av-
+erage accuracy given by (4) would be 0.9. For values of
+z = 1, 2000, 4000, 6000, 8000, 10000 this meant correspond-
+ing values of ρ = 1692096 , 1946, 973, 649, 486, 389. Such
+large values ofz, and correspondingly small values ofρ, were
+chosen so that the global statistics technique was evaluated
+under the most challenging circumstances. These experi-
+ments were then repeated, ﬁrst with the querying node using
+only its local documents to estimate collection global statis-
+tics in step (3a), and then again assuming each node had
+access to the global statistics of the document collection.
+We performed the above experiments for both BM25 and
+the language model. For the former, the free parameters
+were k1 = 2.0,b = 0.75, and for the latter µ = AVGDL .
+These are typical choices [17].
+4.1.2 Results
+Figure 1(a) shows average accuracy of queries for diﬀerent
+values ofz, for BM25. There are curves for diﬀerent combi-
+nations of the global statisticsPdoc(t) andAVGDL , derived
+either from assumed knowledge of the whole collection (coll),
+or from only the collection on the querying node ( node). As
+would be expected, when bothPdoc(t) andAVGDL were de-
+rived from the entire collection, average accuracy was about
+0.9 for all values of z. However, when Pdoc(t) or AVGDL
+were estimated only from the index of the querying node,
+accuracy in general decreased as z increased, i.e. as the
+number of documents per node, ρ, decreased and thus the
+number of documents from which global statistics could be
+estimated decreased. Deriving Pdoc(t) from only the index of
+the querying node caused a drop in accuracy of up to nearly
+35%, whereas doing the same for AVGDL caused a less se-
+vere drop of up to about 10%. Figure 1(b) shows the results
+for the language model. Here the estimated global statistic
+isPcoll(t), and using documents only from the querying node
+to derive the estimate resulted in a drop of up to about 20%.
+Fig. 1(c),(d) show the results when the global statistics
+estimation technique is used. There are curves for diﬀerent
+values of k′, i.e. the maximum number of results returned
+from each of the z queried nodes. For BM25, the global
+
+2000 4000 6000 800010000
+0
+0.5
+1
+z
+average accuracy
+(a)
+2000 4000 6000 800010000
+0
+0.5
+1
+z
+average accuracy (b)
+2000 4000 6000 800010000
+0
+0.5
+1
+z
+average accuracy (c)
+2000 4000 6000 800010000
+0
+0.5
+1
+z
+average accuracy (d)
+Figure 1: Average accuracy of queries, where each pair ofz,ρ values is chosen to achieve a theoretical expected
+average accuracy of 0.9. Global statistics are estimated from either the whole collection (coll) or from just the
+querying node (node). (a) is for BM25, where the curves from top to bottom are for (collPdoc(t), collAVGDL ),
+(coll Pdoc(t), node AVGDL ), (node Pdoc(t), coll AVGDL ), and (node Pdoc(t), node AVGDL ). Note the last two
+curves overlap. (b) is for the language model, where the curves from top to bottom are for (coll Pcoll(t)),
+and (node Pcoll(t)). (c) and (d) are for BM25 and the language model respectively, using the global statistics
+estimation technique with k′ =ρ (top) or k′ = 10 (bottom). Note the two curves in (c) overlap.
+0 0.5 1
+0
+50
+100
+x
+% queries > accuracy x
+(a)
+0 0.5 1
+0
+50
+100
+x
+% queries > accuracy x (b)
+Figure 2: The percentage of queries that achieve accuracy x when global statistics are estimated from either
+the whole collection ( coll) or from just the querying node ( node). (a) is for BM25, where the curves from
+right to left are for (collPdoc(t), collAVGDL ), ( ˆPdoc(t), ˆAVGDL ), and (node Pdoc(t), node AVGDL ). Note the ﬁrst
+two curves overlap. (b) is for the language model, where the curves from right to left are for (coll Pcoll(t)),
+( ˆPcoll(t)), and (node Pcoll(t)). For z = 10, 000, ρ = 389, and k′ = 10.
+statistics estimation technique achieves accuracy that is very
+close to the theoretical value of 0.9, for all values of z. The
+same is true for the language model for k′ = ρ, but for
+k′ = 10 average accuracy drops to 0.8 for larger values of z,
+which is about 10% lower than the theoretical value.
+We are also interested in how accuracy varies across diﬀer-
+ent queries. For parameters z = 10, 000, ρ = 389, and k′ =
+10, Fig. 2(a),(b) show the proportion of queries that achieve
+a given accuracy, for BM25 and the language model respec-
+tively. With only 389 documents per node these results rep-
+resent performance under challenging circumstances. Nev-
+ertheless, for BM25, the proportion of queries achieving a
+given accuracy when using the global statistics estimation
+technique ( ˆPdoc(t), ˆAVGDL ) is almost identical to the case
+where collection global statistics are available at each node
+(collPdoc(t), coll A VGDL), e.g. about 95% of queries achieve
+an accuracy of at least 0.7. When global statistics are de-
+rived only from documents at the querying node(nodePdoc(t),
+node A VGDL), this ﬁgure falls to 15%. For the language
+model, the global statistics estimation technique does not
+perform quite as well, with about 65% of queries achieving
+an accuracy of at least 0.7, compared to about 90% for when
+global statistics are available at each node, and 60% when
+global statistics are estimated from only documents at the
+querying node. However, for the global statistics technique
+over 95% of queries achieve an accuracy of at least 0.3, com-
+pared to less than 80% when global statistics are estimated
+from only documents at the querying node.
+4.1.3 Discussion
+The experiments showed that the global statistics estima-
+tion technique can achieve an average query accuracy that
+is very close to what would be attained if global statistics
+had been available at each node, at least for larger values of
+k′, even for extreme cases where each node indexes only a
+small proportion of the document collection. To understand
+why this is the case, we observe that for each query global
+statistics are estimated from zρ documents, a potentially
+very large sample. Of course these documents are unlikely
+to be distinct. The number of distinct documents, ndistinct,
+is between ρ and min(m,zρ ). It is straightforward to show
+that the expected value of ndistinct is given by
+E(ndistinct) =P (di)m , (15)
+where P (di) is given by (1). It follows that the expected
+coverage for an estimate, i.e. the proportion of documents
+in the collection that the estimate is based on, is given by
+E(Coverage) = ndistinct
+m =P (di) . (16)
+The expected average accuracy for a top-k query, as given by
+(4), is also equal to P (di). Therefore, by choosing network
+parametersρ andz to increase theoretical expected average
+accuracy, coverage is also increased for the global statistics
+estimates, and accuracy moves towards the upper bound
+predicted by the PAC framework. For example, a network
+could be designed to achieve high theoretical accuracy, such
+
+as 0.9, which means that estimates of global statistics will
+be based on 90% of the document collection, and would be
+expected to be very close to the correct global statistics.
+As was apparent for the language model with k′ = 10,
+the eﬀectiveness of the global statistics estimation technique
+may be reduced when k′ < ρ. Since the top- k′ result lists
+are calculated using global statistics estimated from just the
+local index of one node, ranking may be incorrect, and there-
+fore relevant documents may not be returned to the query-
+ing node. Consequently, no matter how accurate the ﬁnal
+global statistic estimate is, these documents will never ap-
+pear in the top-k result list presented to the user. However,
+in practice it is likely that a large value of k′ can be used,
+since the communication cost associated with each result in
+the result list is small. For example, both BM25 and the
+language model require only a document id, and values for
+term frequency and document length to be returned for each
+result.
+5. ADVERSARIAL A TTACKS
+We now show that if an adversary can introduce mali-
+cious nodes, the global statistics estimation technique can
+be subverted to manipulate search results. In the analysis
+that follows, it is assumed an adversary controls the pro-
+portion f∈ [0, 1] of the n nodes in the network. To ensure
+no node has a greater inﬂuence on search results than any
+other, each node is restricted to indexing the same number
+of documents, ρ. In practical systems the capacity of each
+node may diﬀer, and can be dealt with by allowing nodes
+with higher capacities to operate multiple ‘virtual’ nodes,
+each of which has capacity ρ. This resembles the Sybil at-
+tack [12], where an adversary impersonates a large number
+of nodes to control the network. Therefore, the defensive
+techniques discussed in [12] to restrict the number of nodes
+operated by an individual need to be applied to both vir-
+tual and physical nodes. For example, a check can be made
+to verify that only a limited number of virtual or physical
+nodes are associated with an email address.
+We consider the following attacks.
+• Censorship. Reduce the likelihood of a target docu-
+ment appearing in the ﬁnal top-k result list.
+• Promotion. Increase the rank of a target document
+so that it is more likely to appear in the ﬁnal top- k
+result list, and if it does appear, to rank higher.
+• Disruption. Reduce the ‘correctness’ of the ﬁnal top-
+k result list, i.e reduce accuracy, as given by (3).
+A node responding to a query returns Ru for the top- k′
+matching documents, and Gu. The former contains result
+summary information, such as document id, document length
+etc, and the latter contains information on global statistics.
+An adversary can perform the above attacks by using ma-
+licious nodes to return corrupt information for Ru and/or
+Gu. (We assume that malicious nodes cannot construct and
+return corrupt documents that will score highly for a query;
+this can be enforced by requiring documents to be digitally
+signed by a trusted third party.)
+In our analysis we initially assume the global statistics es-
+timation technique is not used, and attacks only corruptRu.
+This establishes the baseline vulnerability inherent to the
+PAC architecture. We then consider the increase in attack
+eﬀectiveness that arises when the global statistics estimation
+technique is used and an adversary can also corrupt Gu.
+5.1 Baseline Vulnerability
+Malicious nodes can perform the Censorship attack by
+returning corrupt summary information for k documents in
+Ru, such that each document would score higher than the
+target document and prevent it from appearing in the ﬁnal
+top-k result list. For the Promotion attack, malicious nodes
+would always include the target document inRu, along with
+corrupt summary information so that it will outrank any
+other. For the Disruption attack, malicious nodes would
+return k irrelevant documents, all with corrupt summary
+information that ensures they will outrank other documents.
+To have an eﬀect on a query, these attacks require only a
+single malicious node to be one of the z nodes randomly
+sampled. If the proportion f of nodes are malicious, the
+probabilityP (mi) of a query visiting at least one malicious
+node is
+P (mi) = 1− (1−f)z . (17)
+For z = 1, 000, it would require an adversary to control
+onlyf = 0.3% of nodes for there to be a 0.95 probability of
+a malicious node being visited by the query, and therefore
+allow the adversary to manipulate on average 95% of queries.
+However, incorrect summary information inRu can be de-
+tected by retrieving the documents. For example, a querying
+node, on receiving responses from all queried nodes, could
+retrieve the documents in the ﬁnal top- k result list, calcu-
+late the summary information for each, and only display to
+the user results with correct scores. The extra latency and
+communication costs involved with this may be unaccept-
+able, so an alternative is to display the top- k result list to
+the user, unchecked. Only when a user chooses to view a
+document is it retrieved and the score veriﬁed. If the score
+proves to be incorrect, then the document is not made avail-
+able to the user. Since incorrect summary information can
+be easily detected, we assume an adversary does not per-
+form attacks using this approach. A more subtle, and less
+easily detectable alternative, is for malicious nodes to re-
+turn correct summary information for documents inRu, but
+to exclude speciﬁc documents. Each node indexes random
+documents, so it is more diﬃcult to determine if a node is
+not returning a given document because it is behaving mali-
+ciously, or because the document is simply not in its index.
+Attacks carried out by excluding documents form the base-
+line of vulnerability for a PAC architecture.
+5.1.1 Censorship
+The Censorship attack can be performed by malicious
+nodes excluding the target document. Let P′(di) be the
+probability of retrieving documentdi when the proportionf
+of nodes are malicious and exclude it. From (1) it is straight-
+forward to show that P′(di) is given by
+P′(di) = 1−
+(
+1− ρ
+m
+)z(1−f )
+. (18)
+Using the property of exponential functions, this can be ap-
+proximated with
+P′(di)≈ 1−e−(1−f )zρ
+m . (19)
+Equations (2) and (4) can be used to estimate the expected
+average accuracy for a query when there are no malicious
+
+nodes present, E(aj). P′(di), for a given proportion f of
+malicious nodes, andE(aj) are both determined by zρ
+m . Fig-
+ure 3 shows the eﬀect onP′(di) asf is varied. Each curve de-
+picts diﬀerent choices of zρ
+m to achieve E(aj) = 0.3, 0.6, 0.9.
+As E(aj) increases, resilience to censorship also increases.
+Typically, zρ
+m would be chosen to achieve high average ex-
+pected accuracy, so resilience to censorship would be high.
+For example, whenE(aj) = 0.9, it would require about 70%
+of nodes to be malicious to reduce the probability of ﬁnding
+di by 50% from 0.9 to 0.45.
+0 0.5 1
+0
+0.5
+1
+f
+P’(di)
+Figure 3: Probability P′(di) of retrieving document
+di when the proportion f of nodes are performing
+the Censorship attack by excluding di. For E(aj) =
+0.9 (top), 0.6 (middle), 0.3 (bottom).
+5.1.2 Promotion
+The Promotion attack can be carried out by censoring
+documents that rank higher than the target document, thus
+improving the rank of the target document. If there are u
+documents in the global top-k for a query that rank higher
+than the target document, and if malicious nodes never re-
+turn them when queried, the probability P (u′) of retrieving
+u′ documents out of the total u is given by
+P (u′) =
+(
+u
+u′
+)
+P′(di)u′(
+1−P′(di)
+)u−u′
+, (20)
+where P′(di) is the probability of retrieving one of the ex-
+cluded documents, as given by (18). Since this is a standard
+binomial distribution, the expected number of documents
+retrieved is
+E(u′) =u·P′(di) . (21)
+If document di is retrieved for a query, then its rank is one
+plus the number of other documents retrieved that rank
+higher. Therefore, (21) can be expressed in terms of the
+expectations of the rank of the target document before the
+attack,rbefore, and the rank after, rafter:
+E(rafter) = (E(rbefore)− 1)P′(di) + 1. (22)
+As for the Censorship attack in Sect. 5.1.1, we consider the
+eﬀectiveness of this attack for an example system designed to
+achieve expected average accuracy of 0.9 when no malicious
+nodes are present. This requires zρ
+m = 2.3. An adversary
+would need to control overf = 50% of nodes to increase the
+expected rank of a target document from 10 to 2.
+5.1.3 Disruption
+The Disruption attack can be performed in a similar man-
+ner to the Promotion attack, except rather than excluding
+the u documents that rank higher than a target document,
+allk documents in the global top-k for a query are excluded.
+The probability P (u′) of retrieving u′ documents from the
+global top-k for the query is given by (20) (where u = k),
+and the expected number of documents retrieved, E(u′), is
+given by (21). If a′
+j denotes accuracy for a query j when
+malicious nodes are censoring all global top- k documents,
+then E(a′
+j) is given by
+E(a′
+j) = E(u′)
+k =P′(di) . (23)
+As an example, for zρ
+m = 2.3, expected accuracy for queries is
+0.9 when no malicious nodes are present. If we assume users
+ﬁnd search results acceptable as long as expected accuracy
+remains above 0.5, then an adversary would need to control
+over f = 70% of nodes to reduce expected accuracy below
+this threshold.
+5.2 Increased Vulnerability - Global Statistics
+Estimation
+Section 5.1 established a theoretical baseline for the vul-
+nerability of a PAC architecture, which assumes attacks are
+performed by excluding documents. In this section we inves-
+tigate the increased vulnerability that the global statistics
+estimation technique introduces. For the following analy-
+sis, the global statistic to be estimated for BM25 is Pdoc(t),
+calculated at the querying node with (12), and for the lan-
+guage model Pcoll(t), calculated at the querying node with
+(14). BM25 also requires the global statistic AVGDL, but
+since AVGDL is a single value, it is feasible for every node
+to store it. For a ﬁxed document collection size, this is triv-
+ial to implement; for a collection size that varies, a gossip
+protocol can be used to compute it [14].
+When estimating Pdoc(t) and Pcoll(t) with (12) and (14),
+the numerator and denominator of both equations are values
+returned from queried nodes. If no limits are placed on these,
+even a single malicious node can dominate the result. This is
+prevented forPdoc(t), however, since we restrict the capacity
+of each node to ρ. Pdoc(t) is then estimated with
+ˆPdoc(t) =
+∑
+u∈Z min (ρ,DF (t,Lu))
+ρ·z . (24)
+To prevent a single node dominating the estimate ofPcoll(t),
+it is assumed that the sum of document lengths on a node
+is AVGDL·ρ. Approximate estimates of Pcoll(t) can then
+be calculated with
+ˆPcoll(t)≈
+∑
+u∈Z min
+(
+ψ,
+(∑
+d∈LuTF (t,d )
+))
+ψ·z , (25)
+where
+ψ =AVGDL·ρ . (26)
+We shall see that this approximation can still yield very good
+results.
+Equations (24) and (25) are more succinctly expressed as
+ˆgt = 1
+c
+∑
+u∈Z
+x(u)
+t , (27)
+where ˆgt is an estimate of the global statistic gt. For BM25,
+we havegt =Pdoc(t), andx(u)
+t equal to the numerator of (24)
+and c equal to the denominator. For the language model,
+we have gt = Pcoll(t), and x(u)
+t equal to the numerator of
+
+(25) and c equal to the denominator. The Gu information
+returned from each node then consists of x(u)
+t :t∈T .
+We now investigate how an adversary may attempt the
+attacks from Sect. 5. Experiments were performed for both
+BM25 and the language model, but since ﬁndings for both
+are similar, for brevity we only present results for BM25.
+5.2.1 Censorship/Promotion
+An adversary can decrease/increase the score of a target
+document for query T by using malicious nodes to manip-
+ulate ˆgt : t ∈ T . However, this will not necessarily de-
+crease/increase the rank, since the scores of other documents
+may also be decreased/increased. A more eﬀective approach
+is to iterate through diﬀerent values of gt :t∈T , calculate
+the rank of the target document for each, and select the val-
+ues that minimize/maximize rank. We denote these optimal
+values as ˙gt :t∈T . An adversary then uses malicious nodes
+to return a corrupt value, x′
+t, for x(u)
+t , and manipulates ˆgt
+to be ˙gt. To ﬁnd the required value of x′
+t, we observe that
+during the attack ˆgt can be estimated with
+ˆgt = z
+c
+(
+(1−f)x(u)
+t +fx′
+t
+)
+. (28)
+The value of x′
+t is then selected so that ˆ gt = ˙gt. If the
+proportion of nodes an adversary controls, f, is too small to
+select a value of x′
+t that will satisfy (28), then ˙gt :t∈T are
+discarded and the iteration repeated until values of ˙gt :t∈T
+are found that allow (28) to be satisﬁed.
+Figure 4 illustrates the potential eﬀect of these attacks
+for the queries T1 =‘small dog’ and T2 =‘brown dog’ on the
+rank of two documents selected from the WT10g corpus,D1
+and D2. Each curve is calculated with (5) by assuming full
+access to the document collection, and using global statistic
+g1 when scoring the ﬁrst term and g2 for the second. The
+range of ranks achieved by varying g1 andg2, and therefore
+the potential for manipulation, is considerable, but depends
+heavily on the query-document combination.
+We simulated these attacks using the experimental setup
+from Sect. 4.1.1, but with a proportion f of nodes behav-
+ing maliciously. Malicious nodes performed the attacks by
+returning corrupt global statistics, as described above, and
+by excluding speciﬁc documents, as described in Sects. 5.1.1
+and 5.1.2. In order to observe the full range of ranks a doc-
+ument may achieve when under attack, the ﬁnal result list
+for each query was not restricted to just the top- k, i.e. all
+retrieved documents were treated as important, and each
+queried node returned results for all documents it indexes,
+i.e. k′ =ρ.
+Figure 5 shows results for the queryT =‘small dog’, when
+performing the Censorship attack onD2, and when perform-
+ing the Promotion attack onD1. There are z = 2, 000 nodes
+involved in the query, and each node indexesρ = 1, 946 doc-
+uments. Considering ﬁrst the Censorship attack (top left),
+when varying the proportion of malicious nodes from 0 to
+10% to 20% to 30%, rank decreases from 5 to 9 to 582 to
+2166. Therefore, for top- k queries, when k = 10 it would
+require an adversary to control less than 20% of nodes for
+the target document to not appear in the ﬁnal top-10. Com-
+pared to the PAC architecture baseline, where correct global
+statistics are available at each node, and the attack is per-
+formed only by excluding D2, then from (18), with 20% of
+malicious nodes there is still an expected 84% probability of
+D2 being retrieved and appearing in the ﬁnal top-10.
+0 0.5 1
+00.51
+10
+0
+10
+5
+g1g2
+rank (log scale)
+Figure 4: Eﬀect of global statistics on rank of doc-
+uments D1 and D2 for queries T1 = ‘small dog’ and
+T2 = ‘brown dog’, where g1 is the global statistic for
+the ﬁrst term, and g2 is for the second. For query-
+document combinations T1,D 1(top left), T1,D 2(top
+middle), T2,D 1(bottom), T2,D 2(bottom left).
+0 0.5 1
+10
+0
+10
+5
+10
+10
+f
+rank (log scale)
+Figure 5: Censorship attack on D2 by manipulat-
+ing global statistics (top left). Promotion attack on
+D1 by manipulating global statistics and excluding
+documents (top), or just by excluding documents
+(bottom). For query T = ‘small dog’, and z = 2, 000,
+ρ = 1, 946.
+From the Promotion attack curve (top), it can be seen that
+varying the proportion of malicious nodes from 0 to 10% to
+20% to 30% increases the rank of D1 from 20778 to 84 to 11
+to 9, demonstrating that fewer than 30% of malicious nodes
+are required to bring D1 into the top-10. The Promotion
+attack baseline curve (bottom) shows the PAC architecture
+baseline, which is the theoretical expected rank calculated
+with (22), when correct global statistics are available at each
+node, and nodes perform the Promotion attack by only ex-
+cluding documents. In this case, over 95% of malicious nodes
+are required to promoteD1 into the top-10. Clearly, for both
+the Promotion and Censorship attacks, the global statistics
+estimation technique can greatly increase vulnerability to
+manipulation.
+We repeated the simulations with k = k′ = 10, i.e. only
+the ﬁnal top-10 documents were considered important, and
+each queried node returned the top-10 matching documents.
+Results were very similar to the previous simulations for
+documents at ranks 1 to 10.
+5.2.2 Disruption
+An adversary can achieve maximum disruption of a query
+by using malicious nodes to return responses that make es-
+timates of global statistics at the querying node, ˆgt :t∈T ,
+as ‘wrong’ as possible. For example a global statistic would
+be assigned a high value, even though it should be low, and
+vice-versa. The Disruption attack can be represented as an
+optimization problem, where ˆgt : t∈ T are manipulated to
+maximize the squared diﬀerence, δ, between the true global
+
+0 0.5 1
+0
+0.5
+1
+f
+average accuracy
+Figure 6: Disruption attack by manipulating global
+statistics and excluding documents (bottom), or just
+by excluding documents (top). For z = 2, 000, ρ =
+1, 946.
+statisticgt and the estimated value ˆgt for each termt in the
+query, as given by
+δ =
+∑
+t∈T
+(gt− ˆgt)2 , (29)
+with ˆgt : t∈ T constrained according to the global statis-
+tics they represent, e.g. for gt = Pdoc(t) or gt = Pcoll(t),
+we require 0 ≤ ˆgt≤ 1. Standard non-linear optimization
+techniques can be used to ﬁnd values of ˆ gt : t ∈ T that
+maximize (29). As for the Censorship/Promotion attacks in
+Sect. 5.2.1, we denote these optimal values as ˙ gt : t∈ T .
+Again, an adversary can use malicious nodes to return x′
+t,
+so that each value of ˆgt, as calculated with (28), becomes ˙gt.
+Simulations were performed using the setup from Sect. 4.1.1,
+with ﬁfty randomly selected queries and k = k′ = 10. Ma-
+licious nodes returned corrupt global statistics information,
+Gu, to maximize (29). In addition, they also excluded the
+global top-k documents for the query, as described in Sect. 5.1.3.
+Figure 6 shows the results for z = 2, 000 and ρ = 1, 946.
+The bottom curve depicts average accuracy across the ﬁfty
+queries for diﬀerent proportions of malicious nodes. Also,
+as a baseline, the top curve depicts theoretical expected av-
+erage accuracy, calculated with (23), that assumes correct
+global statistics are available at each node and that ma-
+licious nodes perform the Disruption attack by excluding
+documents. Clearly, the potential for attack is much greater
+when the adversary is able to corrupt global statistics. With
+only 10% of malicious nodes, average accuracy drops from a
+theoretical baseline of about 0.9 to about 0.6, a nearly 35%
+fall.
+6. ROBUST GLOBAL STA TISTICS ESTIMA-
+TION
+Section 5.2 showed that when the global statistics estima-
+tion technique is used, even a small proportion of malicious
+nodes can signiﬁcantly aﬀect query results. We now pro-
+pose a defense. The querying node calculates estimates of
+the global statistics, ˆgt : t∈ T , using (27) with values of
+x(u)
+t : t∈ T returned from each queried node u. Values of
+x(u)
+t from non-malicious nodes are expected to be normally
+distributed, since each node determines the value from its
+local collection of random documents. If an adversary at-
+tempts to bias ˆgt by using malicious nodes to return skewed
+values of x(u)
+t , then this normal distribution will be skewed
+in one direction. We propose that the querying node mea-
+sures this skewness,Kt, using a standard measure [13] given
+0 0.5 1
+10
+0
+10
+5
+10
+10
+f
+rank (log scale)
+Figure 7: Censorship and Promotion attacks. As
+Fig. 5, but with skewness defense in operation.
+0 0.5 1
+0
+0.5
+1
+f
+average accuracy
+Figure 8: Disruption attack. As Fig. 6 but with
+skewness defense in operation.
+by
+Kt =
+√
+z(z− 1)
+z− 2
+
+
+1
+z
+∑
+u∈Z (x(u)
+t − ¯x(u)
+t )3
+(
+1
+z
+∑
+u∈Z (x(u)
+t − ¯x(u)
+t )2
+) 3
+2
+
+ , (30)
+where ¯x(u)
+t = 1
+z
+∑
+u∈Zx(u)
+t . If Kt is greater than a thresh-
+oldτ, the querying node sorts values ofx(u)
+t , and repeatedly
+discards the largest value until skew is within the limit. Sim-
+ilarly, ifKt <−τ, the smallest value is repeatedly discarded.
+We reran the attack simulations from Sect. 5.2, but with
+the querying node reducing skewness to within the threshold
+τ =±0.1. Figures 7 and 8 show the results for the Censor-
+ship/Promotion, and Disruption attacks respectively. For a
+proportion of malicious nodes f < 40%, the attacks have
+very little eﬀect. This is because malicious values of x(u)
+t
+are being removed, and the only impact of the attacks is to
+reduce the number of non-malicious values available for com-
+putation of global statistics. When f rises above 40%, the
+defense rapidly breaks down due to the proportion of mali-
+cious nodes nearing that of the proportion of non-malicious
+nodes, and therefore it is no longer possible to distinguish
+between malicious and non-malicious nodes.
+The defense is eﬀective because in order to manipulate
+global statistics, an adversary needs to introduce skew, but
+the defense directly measures skew and limits it. With this
+defense the global statistics estimation technique can be
+safely used to improve query accuracy when fewer than 40%
+of nodes are malicious. For many situations this may be suf-
+ﬁcient. For example, to select a random subset of nodes for
+each query, a gossip-based secure peer sampling service like
+Brahms [4] can be used. Brahms can withstand up to 20% of
+nodes behaving maliciously before sampling becomes signif-
+icantly biassed. Consequently, it would be Brahms that im-
+poses the limit on the maximum number of malicious nodes
+tolerated, and not the technique to estimate global statistics.
+
+7. CONCLUSIONS AND FUTURE WORK
+In unstructured P2P information retrieval, performance
+can be severely degraded by poor estimates of the global
+statistics of the collection. For the case of unstructured P2P
+PAC search, we proposed that a querying node estimates
+the global statistics of the collection using information de-
+rived from the local statistics of the responding nodes. We
+showed, both theoretically, and experimentally with BM25
+and a language model, that such an approach can provide
+accurate estimates of global statistics and signiﬁcantly im-
+prove retrieval performance. The solution is well suited to a
+PAC architecture because it requires only a minimal amount
+of extra information to be returned from queried nodes. Un-
+fortunately, it greatly increases the ability for an adversary
+to manipulate search results. We identiﬁed attacks where
+an adversary may attempt to (i) censor a document, (ii)
+promote a document, or (iii) disrupt overall search results.
+Through theoretical modeling and simulations we showed
+that while a PAC architecture is resilient to even a large
+proportion of malicious nodes, when the global statistics
+estimation technique is used, an adversary would need to
+control only 10% of nodes to have a signiﬁcant impact. To
+protect against this, we proposed that the querying node ﬁl-
+ters out the most skewed responses, and showed that more
+than 40% of nodes would need to be malicious before these
+attacks become eﬀective.
+Our work assumed that a peer’s local collection consists of
+a uniform random sample from the global collection. Future
+work is needed to analyze the case where document sampling
+is non-uniform, such as when based on document popular-
+ity. In this case, we believe that hash sketches, described in
+Section 2, may form the basis of a solution.
+8. ACKNOWLEDGEMENTS
+Sami Richardson was supported by EPSRC grant no. EP-
+G037264-1 (Security Science Doctoral Training Centre).
+9. REFERENCES
+[1] H. Asthana, R. Fu, and I. J. Cox. On the feasibility of
+unstructured peer-to-peer information retrieval. In
+Advances in Information Retrieval Theory , pages
+125–138. Springer, 2011.
+[2] P. Bailey, N. Craswell, and D. Hawking. Engineering a
+multi-purpose test collection for web retrieval
+experiments. Information Processing & Management ,
+39(6):853–871, 2003.
+[3] M. Bender, S. Michel, P. Triantaﬁllou, and
+G. Weikum. Global document frequency estimation in
+peer-to-peer web search. In Proc. of the 9th Int.
+Workshop on the web and databases , 2006.
+[4] E. Bortnikov, M. Gurevich, I. Keidar, G. Kliot, and
+A. Shraer. Brahms: Byzantine resilient random
+membership sampling. Computer Networks ,
+53(13):2340–2359, 2009.
+[5] J. Callan. Distributed information retrieval. In
+Advances in Information Retrieval , pages 127–150,
+2000.
+[6] J. Callan and M. Connell. Query-based sampling of
+text databases. ACM Transactions on Information
+Systems (TOIS) , 19(2):97–130, 2001.
+[7] J. P. Callan, Z. Lu, and W. B. Croft. Searching
+distributed collections with inference networks. In
+Proceedings of the 18th annual international ACM
+SIGIR conference on Research and development in
+information retrieval, pages 21–28. ACM, 1995.
+[8] B. Carterette, V. Pavlu, H. Fang, and E. Kanoulas.
+Million query track 2009 overview. In Proceedings of
+TREC, volume 9, 2009.
+[9] H. Chen, J. Yan, H. Jin, Y. Liu, and L. M. Ni. TSS:
+Eﬃcient term set search in large peer-to-peer textual
+collections. Computers, IEEE Transactions on ,
+59(7):969–980, 2010.
+[10] I. J. Cox, R. Fu, and L. K. Hansen. Probably
+approximately correct search. In Advances in
+Information Retrieval Theory , pages 2–16. Springer,
+2009.
+[11] F. M. Cuenca-Acuna, C. Peery, R. P. Martin, and
+T. D. Nguyen. Planetp: Using gossiping to build
+content addressable peer-to-peer information sharing
+communities. In HPDC’03: Proceedings of the 12th
+International Symposium on High Performance
+Distributed Computing, Seattle, WA, USA , 2003.
+[12] J. Douceur. The Sybil attack. Peer-to-peer Systems,
+pages 251–260, 2002.
+[13] R. A. Groeneveld and G. Meeden. Measuring skewness
+and kurtosis. The Statistician , pages 391–399, 1984.
+[14] D. Kempe, A. Dobra, and J. Gehrke. Gossip-based
+computation of aggregate information. In Foundations
+of Computer Science, 2003. Proceedings. 44th Annual
+IEEE Symposium on , pages 482–491. IEEE, 2003.
+[15] S. T. Kirsch. Document retrieval over networks
+wherein ranking and relevance scores are computed at
+the client for multiple database documents, Aug. 19
+1997. US Patent 5,659,732.
+[16] J. Lu and J. Callan. Federated search of text-based
+digital libraries in hierarchical peer-to-peer networks.
+In ECIR’05: Proceedings of the 27th European
+conference on IR Research, Santiago de Compostela,
+Spain, 2005.
+[17] C. D. Manning, P. Raghavan, and H. Sch ¨utze.
+Introduction to information retrieval , volume 1.
+Cambridge University Press Cambridge, 2008.
+[18] D. Stutzbach and R. Rejaie. Understanding churn in
+peer-to-peer networks. In Proceedings of the 6th ACM
+SIGCOMM conference on Internet measurement ,
+pages 189–202. ACM, 2006.
+[19] C. L. Viles and J. C. French. Dissemination of
+collection wide information in a distributed
+information retrieval system. In Proceedings of the
+18th annual international ACM SIGIR conference on
+Research and development in information retrieval ,
+pages 12–20. ACM, 1995.
+[20] D. Wallach. A survey of peer-to-peer security issues.
+Software Security—Theories and Systems , pages
+253–258, 2003.
+[21] H. F. Witschel. Global term weights in distributed
+environments. Information Processing & Management ,
+44(3):1049–1061, 2008.
+[22] C. Zhai and J. Laﬀerty. A study of smoothing
+methods for language models applied to information
+retrieval. ACM Transactions on Information Systems
+(TOIS), 22(2):179–214, 2004.

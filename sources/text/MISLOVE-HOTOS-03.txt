@@ -1,0 +1,673 @@
+USENIX Association
+Proceedings of
+HotOS IX: The 9th Workshop on
+Hot Topics in Operating Systems
+Lihue, Hawaii, USA
+May 18–21, 2003
+THE ADVANCED COMPUTING SYSTEMS ASSOCIATION
+© 2003 by The USENIX Association All Rights Reserved For more information about the USENIX Association:
+Phone: 1 510 528 8649 FAX: 1 510 548 5738 Email: office@usenix.org WWW: http://www.usenix.org
+Rights to individual papers remain with the author or the author's employer.
+ Permission is granted for noncommercial reproduction of the work for educational or research purposes.
+This copyright notice must be included in the reproduced paper. USENIX acknowledges all trademarks herein.
+
+HotOS IX: The 9th Workshop on Hot Topics in Operating SystemsUSENIX Association 61
+POST: A secure, resilient, cooperative messaging system∗
+AlanMislove1 AnsleyPost1 CharlesReis1 PaulWillmann1 PeterDruschel1
+DanS.Wallach 1 XavierBonnaire2 PierreSens2 Jean-MichelBusca2
+LucianaArantes-Bezerra2
+1Rice University, Houston, TX, USA
+2LIP6, Universit´e Paris VI, Paris, France
+Abstract
+POST is a decentralized messaging infrastructure that
+supports a wide range of collaborative applications, in-
+cluding electronic mail, instant messaging, chat, news,
+shared calendars and whiteboards. POST is highly re-
+silient, secure, scalable and does not rely on dedicated
+servers. Instead, POST is built upon a peer-to-peer
+(p2p) overlay network, consisting of participants ’desk-
+top computers. POST offers three simple and general
+services: (i) secure, single-copy message storage, (ii)
+metadata based on single-writer logs, and (iii) event no-
+tiﬁcation. We sketch POST’s basic messaging infrastruc-
+ture and show how POST can be used to construct a co-
+operative, secure email service called ePOST.
+1 Introduction
+Messaging systems like traditional email and news, as
+wellasinstantmessaging,sharedcalendarsandbulletin
+boards,areamongthemostsuccessfulandwidelyused
+distributedapplications.Today,theseservicesareimple-
+mentedintheclient-servermodel. Messagesarestored
+on and routed through dedicated servers, each hosting
+asetofuseraccounts. Thispartialcentralizationlimits
+availability, because a failure or attack on a server de-
+nies service to the users it supports. Also, substantial
+infrastructure,maintenanceandadministrationcostsare
+requiredtoscaletolargenumbersofusers. Thisistrue
+in particular for semantically rich, complex messaging
+systemslikeMicrosoftExchangeandLotusNotes.
+POSTisacooperativeinfrastructurethatutilizesthe
+untapped resources of users’ desktops to provide mes-
+sagingservices. Unlikeserver-basedsystems,POSTis
+self-scaling:theadditionofnewuserdesktopsandperi-
+odicupgradesofexistingdesktopsimplicitlyaddmore
+resources,thusbalancingincreaseddemandsontheser-
+vice due to additional users and new features. POST
+doesnotpresentasinglepointoffailureorattack,and
+∗This research was supported in part by Texas
+ATP (003604-0079-2001) and by NSF (ANI-0225660),
+http://project-iris.net.
+isthuspotentiallymoreresilientthanserver-basedsys-
+tems. Finally, the self-organizing properties of POST
+promisereducedsystemadministrationcosts.
+POST provides three basic services to applications:
+(1)persistentsingle-copymessagestorage,(2)metadata
+basedonsingle-writerlogs,and(3)eventnotiﬁcation.A
+widerangeofmessagingapplicationscanbeconstructed
+ontopofPOSTusingtheseservices.
+POSTisbuiltuponastructuredp2poverlaynetwork,
+providingitscalability,resilienceandself-organization.
+Users contribute resources to the POST system (CPU,
+diskspace,networkbandwidth),andinreturn,theyare
+abletoutilizeitsservices.POSTassumesthatparticipat-
+ingnodescansufferbyzantinefailures. Strongerfailure
+assumptionsmaybeunrealistic,eveninscenarioswhere
+participating hosts belong to a single organization, be-
+causeasinglecompromisednodecoulddisruptcritical
+messagingservicesordiscloseconﬁdentialmessages.
+Inthispaper,wesketchthedesignofPOST,andthen
+describehowacooperative,secureemailsystemcanbe
+built using POST. Unlike conventional email services,
+our ePOSTsystemprovidessecureemailservicesbyde-
+fault and requires no dedicated servers. Furthermore,
+duetoitsstrongsenderauthentication,ePOSTmakesef-
+ﬁcientspamdefenseeasier.Wechoseemailastheinitial
+applicationforPOSTbecauseitiswellunderstood,and
+becauseitshighavailability,reliabilityandsecurityde-
+mands make it a challenging driver for POST and p2p
+systemsingeneral.
+Theremainderofthispaperisorganizedasfollows.
+Section 2 provides background information on Pastry,
+PAST,andScribe. Section3sketchesthedesignofthe
+POSTinfrastructure. InSection4,wesketchthedesign
+ofacooperativeemailsystemasanexamplePOSTap-
+plication. Section 5discussesintegratingePOSTwith
+existingemailsystems. Section6outlinesrelatedwork,
+andSection7concludes.
+2 Background
+POSTrelieson Pastry,astructuredoverlaynetwork,as
+well as two basic services built upon Pastry:PAST,a
+
+HotOS IX: The 9th Workshop on Hot Topics in Operating Systems USENIX Association62
+storagesystemand Scribe,agroupcommunicationsys-
+tem. POSTcouldeasilybelayeredonsimilarsystems
+likeChord/CFS,orTapestry/OceanStore[14,6,9,16].
+Pastry[12] is a structured p2p overlay network de-
+signed to be self-organizing, highly scalable, and fault
+tolerant. In Pastry, every node and every object is as-
+signedauniqueidentiﬁerchosenfromalargeidspace,
+referred to as anodeId and key, respectively. Given a
+messageandakey,Pastrycanefﬁcientlyroutethemes-
+sagetothenodewhosenodeIdisnumericallyclosestto
+thekey.
+PAST[13] is a storage system built on top of Pas-
+tryandcanbeviewedasadistributedhashtable. Each
+storediteminPASTisgivena160bitkey(hereafterre-
+ferred to as thehandle), and replicas of an object are
+stored at thek nodes whose nodeIds are the numeri-
+callyclosesttotheobject’shandle.PASTmaintainsthis
+invariant regardless of node arrivals or failures. Since
+nodeIdassignmentisrandom,these knodesareunlikely
+tosuffercorrelatedfailures. PASTreliesonPastry’sse-
+curerouting[2]toensurethat kreplicasarestoredonthe
+correctnodes,despitethepresenceofmaliciousnodes.
+Throughout this paper, we assume that at mostk −1
+nodesarefaultyorunreachableinanyreplicaset.
+POST stores three types of data in PAST:content-
+hash blocks, public-key blocks, and certiﬁcate blocks.
+Content-hashblocksarestoredusingthecryptographic
+hash of the block’s contents as the handle. Public-key
+blockscontainmonotonicallyincreasingtimestamps,are
+signedwithaprivatekey,andarestoredusingthecryp-
+tographic hash of the corresponding public key as the
+handle. Certiﬁcateblocksaresignedbyatrustedthird
+partyandbindapublickeytoaname(e.g.,anemailad-
+dress). Theblockisstoredusingthecryptographichash
+ofthenameasthehandle.
+Content-hashblockscanbeauthenticatedbyobtain-
+ingasinglereplicaandverifyingthatitscontentsmatch
+the handle. Unlike content-hash blocks, public key
+blocksaremutable.Topreventrollbackattacksbymali-
+ciousstoragenodes,clientsattempttoobtainall krepli-
+casandchoosetheauthenticblockwiththemostrecent
+timestamp. Certiﬁcateblocksrequireasignatureveriﬁ-
+cationusingthepublickeyofatrustedthirdparty.
+Scribe[3]isascalablemulticastsystembuiltontop
+of Pastry. Each Scribe group has a 160 bitgroupId,
+whichservesastheaddressofthegroup.Thenodessub-
+scribedtoeachgroupformamulticasttree,consistingof
+theunionofPastryroutesfromallgroupmemberstothe
+nodewithnodeIdnumericallyclosesttothegroupId.
+3 POST Architecture
+POST provides three basic services: a shared, secure
+single-copy message store, metadata based on single-
+writer logs, and event notiﬁcation. These services can
+becombinedtoimplementavarietyofcollaborativeap-
+plications, like email, news, instant messaging, shared
+calendarsandwhiteboards.
+Atypicalpatternisthatuserscreatemessagesandin-
+sert them in encrypted form into the secure store. To
+sendamessagetoanotheruserorgroup,thenotiﬁcation
+serviceisusedtoprovidetherecipient(s)withtheneces-
+saryinformationtolocateanddecryptthemessage.The
+recipientsmaythenmodifytheirpersonalmetadatatoin-
+corporatethemessageintotheirview(e.g.,intoaprivate
+mailfolder).
+POSTassumestheexistenceofacertiﬁcateauthority.
+Thisauthoritysignscertiﬁcatesbindingauser’sunique
+name (e.g., her email address) to her public key. The
+sameauthorityissuesthenodeIdcertiﬁcatesrequiredfor
+secureroutinginPastry[2]. Furthermore,theauthority
+maysetpoliciesforeachuser(suchasensuringthateach
+userownsanodeIdboundtoaliveIPaddress),thusforc-
+ingtheusertocontributeresourcestothesystem.Users
+canaccessthesystemfromanynode,butitisassumed
+thattheusertrustsherlocalnode,hereafterreferredtoas
+thetrustednode,withherprivatekey.
+ThroughoutthedesignofPOST,weassumethatob-
+jectsstoredinPASTcannotbedeleted.Thus,theamount
+ofavailablediskspaceinthesystemmustbeincreasing
+and greater than the total storage requirements, which
+isreasonabletoexpectinap2penvironmentwhereeach
+participantisrequiredtocontributeaportionofherdesk-
+top’slocaldisk.
+3.1 User Accounts
+Each user in the POST system possesses an account,
+whichisassociatedwithanidentitycertiﬁcate. Thecer-
+tiﬁcateisstoredasacertiﬁcateblock, usingthesecure
+hashoftheuser’snameasthehandle. Alsoassociated
+with each account is a user identity block, which con-
+tainsadescriptionoftheuser,thecontactaddressofthe
+user’scurrenttrustednode,andanyreferencestopublic
+metadataassociatedwiththeaccount.Theidentityblock
+isstoredasapublic-keyblock,signedwiththeuser’spri-
+vatekey. Finally,eachaccounthasanassociatedScribe
+groupusedfornotiﬁcation,withagroupIdequaltothe
+cryptographichashoftheuser’spublickey.
+Theimmutableidentitycertiﬁcate,combinedwiththe
+mutablepublic-keyblock, providesasecuremeansfor
+atrustedauthoritytobindnamestokeys, whilegiving
+users the ability to change their personal contact data
+without requiring subsequent interactions with the cer-
+tiﬁcateauthority.TheScribegroupallowsanybodywait-
+ingfornewsfromthatuser,oranybodywishingtono-
+tifytheuserthatnewdataisavailable,tohaveacommon
+rendezvouspoint.
+3.2 Secure Message Storage
+POSTprovidesashared,securemessagestoragefacility.
+Application-providedmessagedataisencryptedusinga
+techniqueknownasconvergentencryption[7]. Conver-
+gentencryptionallowsamessagetobedisclosedtose-
+lected recipients, while ensuring that copies of a given
+cleartextmessageinsertedbydifferentusersmaptothe
+
+HotOS IX: The 9th Workshop on Hot Topics in Operating SystemsUSENIX Association 63
+sameciphertext,thusrequiringonlyasinglecopyofthe
+ciphertexttobestored.
+When an application wishes to store messageX,
+POST ﬁrst computes the cryptographicHash(X), uses
+thishashasakeytoencrypt Xwithansymmetriccipher,
+andthenstorestheresultingciphertextatthehandle
+Hash
+(
+EncryptHash(X) (X)
+)
+whichisthesecurehashoftheciphertext.Todecryptthe
+message,ausermustknowthehashoftheplaintext.
+Convergent encryption reduces the storage require-
+ments when multiple copies of the same content tend
+to be inserted into the store independently. This hap-
+penscommonlyincooperativeapplications,forinstance,
+whenagivenpopulardocumentissentasanemailat-
+tachmentorpostedonbulletinboardsbydifferentusers.
+Convergentencryptionisvulnerabletocertainknown
+plaintext attacks. An attacker who is able to guess
+the plaintext of a message can verify its existence in
+the store, but cannot necessarily ﬁnd out who inserted
+it. Moreover,sinceusersnormallyencrypttheirprivate
+metadata,itisnotpossibletodeterminewhoreferences
+themessage. Nevertheless,withsensitivecontent,con-
+vergentencryptionmustbeusedwithcare,particularly
+whenthecontentisofasmallsize,ishighlystructured,
+orisotherwisepredictable.Insuchcases,convergenten-
+cryptioncouldbesupplementedorreplacedbyconven-
+tionalcryptographicmethods.Asimplechangecouldbe
+toprependsomenumberofrandombitstotheplaintext
+priortotheconvergentencryption.
+3.2.1 Scoped storage overlays
+P2p storage systems like PAST or CFS form a single
+overlaynetworkthatincludesallparticipants. Replicas
+of stored objects are placed at random nodes with ad-
+jacent nodeIds throughout this overlay. This approach
+leadstogoodloadbalancingandfailureindependence,
+sincethesetofreplicanodesforanobjectiswidelydis-
+tributedandthusunlikelytosuffercorrelatedfailures.
+Ontheotherhand, networklocalitycanbepoorbe-
+cause all objects are replicated at global scope, even
+whenanobjectisonlyoflocalinterestandamorelocal
+distribution(e.g.,withinalargeorganization)mayyield
+adequatefailureindependence. Thelackofcentralized
+nodeadministrationmakesitdifﬁculttoassessindivid-
+ualnodes’failureprobabilities, andthusdeterminethe
+appropriatedegreeofreplication. And,thefactthatany
+node can insert objects anywhere in the system invites
+denial-of-serviceattacksaimedatexhaustingthestorage
+spaceofcertainnodes,ortheentiresystem. Lastly,itis
+difﬁculttoletnodesbehindaﬁrewallparticipateinthe
+storageoverlay.
+POST overcomes these problems using a two-level
+storeconsistingoforganizationaloverlaysandaglobal
+overlay. Thetwo-levelstoreallowsPOSTtoscopethe
+insertion of documents into the store, such that docu-
+mentsinsertedbymembersofanorganizationarerepli-
+catedamongtheorganization’snodes. Thisisachieved
+withoutsacriﬁcingloadbalancing,failureindependence,
+ortheabilitytolookupastoredmessageanywhereinthe
+globaloverlay;weomitthedetailsduetolackofspace.
+3.3 Event noti ﬁcation
+The event notiﬁcation service is used to alert users to
+certain events, such as the availability of a message, a
+changeinthestateofauser,orachangeinthestateofa
+sharedobject.
+For instance, after a new message was inserted into
+POSTaspartofanemailornewsservice,theintended
+receiver(s)mustbealertedtotheavailabilityofthemes-
+sageandprovidedwiththeappropriatedecryptionkey.
+Commonly, this type of notiﬁcation requires obtaining
+the contact address from the recipient’s identity block.
+(This may require a lookup of the recipient’s certiﬁ-
+cateblock,ifthecertiﬁcateisnotalreadycachedbythe
+sender).Then,anotiﬁcationmessageissenttotherecip-
+ient’scontactaddress,containingthesecurehashofthe
+message’s ciphertext and its decryption key, encrypted
+withtherecipient’spublickeyandsignedbythesender.
+In practice, notiﬁcation can be more complicated if
+thesenderandtherecipientarenoton-lineatthesame
+time. Tohandlethiscase, thesendermaydelegatethe
+responsibilityofdeliveringthenotiﬁcationmessagetoa
+setof krandomnodes; weomitthedetailsheredueto
+lackofspace.
+To guarantee conﬁdentiality, each notiﬁcation mes-
+sageisencryptedusingasymmetricciphersuchasAES
+withauniquesessionkey, andthesessionkeyitselfis
+then encrypted using the recipient’s public key. Thus,
+onlytherecipientcandecryptthesessionkey(i.e.,with
+hisprivatekey)inordertodecrypttheremainderofthe
+message. Eachnotiﬁcationmessageisalsosignedwith
+thesender’sprivatekey,allowingtherecipienttoverify
+itsauthenticity. Finally, eachnotiﬁcationmessagealso
+includes a timestamp to prevent the message from be-
+ingreplayedbymalicioususers. Notethat,unlikemost
+traditionalusermessaginginfrastructures,everythingin
+POSTisdigitallysignedandencrypted,bydefault.This
+will prove useful when implementing higher-level ser-
+viceslikeemail,chat,andsoforth.
+3.4 Metadata
+POSTprovidessingle-writerlogsthatallowapplications
+to maintain metadata. Typically, a log encodes a view
+ofaspeciﬁcuserorgroupofusersandreferstostored
+messages. Forinstance,alogmayrepresentupdatesto
+auser’sprivateemailfolder,orapublicnewsgroup.An
+emailornewsapplicationwouldusealogofinsertand
+deleterecordstokeeptrackofthestateofauser’smail
+folderorasharedfolderrepresentinganewsgroup.
+In general, logs can be used to track the state of a
+chatroom, a newsgroup, a shared calendar, or an arbi-
+trary data structure. POST represents logs using self-
+authenticating blocks that form a content-hash chain.
+Thisissimilarto,andwasinspiredby,thelogsusedin
+theIvyp2pﬁlesystem[11].
+
+HotOS IX: The 9th Workshop on Hot Topics in Operating Systems USENIX Association64
+Thelogheadisstoredasapublic-keyblockandcon-
+tainsthelocationofthemostrecentlogrecord.Handles
+forlogheadsmaybestoredintheuser’sidentityblock,
+inalogrecord,orinamessage.Eachlogrecordisstored
+asacontent-hashblockandcontainsapplication-speciﬁc
+metadataandthehandleofthenextrecentrecordinthe
+log. Applicationsoptionallyencryptthecontentsoflog
+recordsdependingontheintendedsetofreaders.
+In the original implementation used in Ivy, the log
+head and each log record are stored at a different set
+of nodes. To allow for more efﬁcient log traversal,
+POST stores clusters ofM consecutive log records on
+the same node, under the handle of the least recent of
+the Mrecords. Todealwithpartiallyﬁlledclusters,the
+logheadcontainsanadditionalhandle, referringtothe
+leastrecentrecordinapartiallyﬁlledcluster. Thishan-
+dleidentiﬁesthecluster.
+Other optimizations are possible to reduce the over-
+headoflogtraversals,includingcachingoflogrecords
+atclientsandtheuseofsnapshots.LikeIvy,POSTappli-
+cationsmayperiodicallyinsertsnapshotsoftheirmeta-
+dataintothestore.Thus,logtraversalsalwaysterminate
+atthemostrecentsnapshot.
+3.5 POST robustness and security
+The single-writer property and the content-hash chain-
+ing[10]ofthelogsmakeitveryhardforamalicioususer
+orstoragenodetoinsertanewlogrecordortomodify
+anexistinglogrecordwithoutthechangebeingdetected.
+To prevent version rollback attacks, public-key blocks
+containversiontimestamps. Whenreadingapublic-key
+block(e.g.,aloghead)fromthestore,clientsattemptto
+read allk replicas of the block, and use the authentic
+replicawiththemostrecenttimestamp. Whenreading
+content-hashblocksorcertiﬁcateblocks,itissufﬁcient
+touseanyauthenticreplica.
+Ofgreatconcernisthedurabilityofstoredmessages.
+It depends on the failure independence of the replica
+nodesetsandanappropriatechoiceofreplicationfactor,
+relativetothefailurerateofindividualnodes. POST’s
+scopedinsertionintolocaloverlaysgreatlyeasestheas-
+sessmentoffailureindependenceandnodefailurerates,
+becauseallnodesareundersomelevelofjointadminis-
+trativecontrol.
+Organizations that run a local overlay should ensure
+thatnodesarespreadoverdifferentbuildings,ifnotdif-
+ferentsites. Toreducetheriskofcorrelatedfailuresdue
+tosecurityattacks,thereshouldbesufﬁcientheterogene-
+ityinhardwareandsoftware.Thiscanbedifﬁculttoen-
+sure due to most organizations’ monoculture approach
+to systems administration. However, risks from com-
+monvirusattackscanbegreatlyreducedbyrunningthe
+POSTdaemonwithreducedsystemprivilegesunderits
+ownuseridentiﬁer.Thus,acompromisedPOSTdaemon
+hasinsufﬁcientprivilegestocauseharmtotherestofthe
+system. Likewise,othercompromiseduserapplications
+cannotattackPOST’slocalﬁlestore.
+Pastry’ssecureroutingmechanismprovidesaneffec-
+tivedefenseagainstdenial-of-serviceattacksagainstthe
+overlay,bothfromwithinandoutside[2].Attacksaimed
+atﬁllingthestorecanbethwartedwithrelativeeasedue
+totheuseoflocaloverlays. Sinceobjectinsertionsare
+allowedonlywithinalocaloverlay,itispossibletotrack,
+identifyandreprimandoffenderswithinanorganization.
+Single-writer logs are the only mechanism used to
+maintain mutable state in POST. Their use avoids the
+costandcomplexityofageneralbyzantinefault-tolerant
+replicatedstatemachine. WeareconﬁdentthatPOST’s
+restrictedmechanismformutablestateisﬂexibleenough
+forapplicationslikeemail,news,instantmessagingand
+calendaring. Thelogsareefﬁcientincooperativeappli-
+cations,whereinsertionsoccurataratetypicalofhuman
+useractions.
+Some cooperative applications may require a more
+ﬂexible mechanism for maintaining mutable state. To
+support such applications, the authors at LIP6 are cur-
+rently investigating additional, byzantine fault-tolerant
+mechanismsformaintainingmulti-writer,mutablestate.
+4 Example: Electronic mail
+Inthissection,wesketchthedesignofaserverlessemail
+system,ePOST,ontopofthePOSTinfrastructure. The
+goal is to show how POST can support a secure, scal-
+ableandhighlyresilientemailsystemthatleveragesthe
+resourcesofparticipatingdesktopcomputers.
+While a system like ePOST promises increased re-
+silience, greater scalability and lower cost, it remains
+anopenquestionwhethertheseadvantageswillbesuf-
+ﬁcienttocompletelydisplacetheexisting,server-based
+email infrastructure. Nevertheless, we chose to pursue
+ePOSTforseveralreasons.
+First, ePOST is designed so that it can be deployed
+incrementally,thusallowingindividualorganizationsto
+adopt it while still relying on existing standards and
+infrastructure for communication across organizations.
+Second,unlikemostexistingp2papplications,emailis
+mission-critical and demands high reliability, security,
+andavailability. Thus,itisachallengingdriverforthe
+developmentofPOSTand,moregenerally,theunderly-
+ingp2pinfrastructure.
+4.1 Overview
+EachePOSTuserisexpectedtorunadaemonprogram
+on his desktop computer that implements the Pastry,
+PAST,ScribeandPOSTprotocols,andcontributessome
+CPU,networkbandwidthanddiskstoragetothesystem.
+ThedaemonactsasaSMTPandIMAPserver,thusal-
+lowingtheusertoutilizeconventionalemailclientpro-
+grams.Thedaemonisassumedtobetrustedbytheuser
+andholdstheuser’sprivatekey. Noothernodesinthe
+systemareassumedtobetrustedbytheuser(otherthan
+theauthoritythatsignstheusers’certiﬁcates).
+
+HotOS IX: The 9th Workshop on Hot Topics in Operating SystemsUSENIX Association 65
+4.2 Email storage
+InePOST,emailmessagesreceivedfromanemailclient
+program are parsed and the MIME components of the
+message(messagebodyandanyattachments)arestored
+as separate messages in POST. Thus, frequently circu-
+latedattachmentsarestoredinthesystemonlyonce.
+ThemessagecomponentsareﬁrstinsertedintoPOST
+bythesender’sePOSTdaemon;then,anotiﬁcationmes-
+sageissenttotherecipient.Sendingamessageorattach-
+menttoalargenumberofrecipientsrequiresverylittle
+additionalstorageoverheadbeyondsendingtoasingle
+recipient. If messages are forwarded or sent by differ-
+entusers,theoriginalmessagedatadoesnotneedtobe
+storedagain;theoriginalmessagereferenceisreused.
+Due to the necessary data replication in PAST, the
+storage overhead per message is higher in POST com-
+pared to a conventional server-based email system.
+However, this effect is partly offset by POST’s single-
+copystore, whicheliminateslargeamountsofduplica-
+tion due to large, widely circulated email attachments.
+Moreover, exploiting the typically underutilized disk
+space on desktop computers should more than com-
+pensate for this overhead [1]. Lastly, the storage re-
+quirements can be further reduced by using erasure
+codes [15], but we have not yet explored their use in
+POST.
+4.3 Email delivery
+ThedeliveryofnewemailisaccomplishedusingPOST’s
+notiﬁcationservice. Asenderﬁrstconstructsanotiﬁca-
+tionmessagecontainingbasicheaderinformation,such
+asthenamesofthesenderandrecipients,thesubject,a
+timestamp,andareferencetothebodyandattachments
+ofthemessage. ThesenderthenrequeststhePOSTser-
+vicetodeliverthisnotiﬁcationtoeachoftherecipients.
+ItisnoteworthythatePOSTextendsrecipientcontrol
+beyondcurrentsystemsbyallowingtherecipienttoap-
+pendthemessagetohismailboxortosimplyignorethe
+notiﬁcation,perhapsbasedonaspamﬁlter. Sincemes-
+sagesarestoredinthesenderorganization’sring,oneof
+themajorgoalsofanti-spamresearchers, topushmost
+of the costs of spam back onto the spammers, can be
+achievedinastraightforwardmanner.
+4.4 Email folders
+EachmailfolderisrepresentedbyaPOSTlog.Eachlog
+entry represents a change to the state of the associated
+folder,suchastheadditionordeletionofamessage.Fur-
+thermore,sincethelogcanonlybewrittenbyitsowner
+anditscontentsareencrypted,ePOSTpreservestheex-
+pectedprivacyandintegritysemanticsofcurrentemail
+systemswithstorageontrustedservers.
+Anemailinsertionrecordcontainsthecontentofthe
+message’s MIME header, the message’s handle and its
+decryption key, and a signature of all this information,
+taken from the sender’s original notiﬁcation message.
+Thisdataisthenencryptedundertheuser’spublickey.
+4.5 Discussion
+By default, ePOST provides strong conﬁdentiality, au-
+thenticationandmessageintegrity.Thesystemisableto
+tolerate up tok −1 faulty or unreachable nodes in any
+randomsetof kPOSTnodeswithoutlossofdataorser-
+vice, wherek is the degree of message replication. It
+reliesonPastry’ssecureroutingfacilities[2],datarepli-
+cation,andcryptographictechniquestoachieverobust-
+nessunderawiderangeofattacks,includingdenial-of-
+serviceandparticipantsthatsufferbyzantinefaults.
+Moreanalysisandexperimentationwillbenecessary
+todetermineappropriateassumptionsaboutthefraction
+of faulty nodes in various environments, and appropri-
+atelevelsofreplication. Resultsofapriorstudyonp2p
+ﬁlesystemsincorporateenvironmentsindicatethatmod-
+estlevelsofreplicationcanyieldhighavailability[1].
+Since ePOST inserts all incoming messages into the
+localoverlay,onlythenodefailureprobabilityandfail-
+ure independence within a user’s local overlay deter-
+mine the durability of the messages that the user ref-
+erences. Therefore, a user’s organization can take ap-
+propriatestepstoensurefailureindependenceanddeter-
+mineanappropriatedegreeofreplication.
+Mailinglistscanbeeasilysupportedbymaintaining
+thelistasanadditionallogandstoringthelogheadref-
+erenceatthelistmaintainer’suseridentityblock. When
+deliveringamessage,thesendernoticesthelistandex-
+pandstherecipientlistappropriately.
+5 Incremental deployment
+To allow an organization to adopt ePOST as its email
+infrastructure,ePOSTmustbeabletointeroperatewith
+the existing email infrastructure. We sketch here how
+ePOST could be deployed in a single organization and
+interoperatewithemailservicesinthegeneralInternet.
+Forinboundemail,theorganization’sDNSserverpro-
+vides MXrecords referring to one of a set of POST
+nodes within the local organization. These nodes act
+asincomingSMTPmailgateways,acceptingmessages,
+insertingthemintoPOST,andnotifyingtherecipient’s
+nodes. Suitableheadersaregeneratedsuchthatthere-
+ceiverisawarethemessagemayhavebeentransmitted
+ontheInternetunencrypted. Ifnoidentityblockcanbe
+foundfortherecipientinthelocaloverlay,thentheemail
+“bounces”asinserver-basedsystems.
+Theincomingmailgatewaynodesneedtobetrusted
+totheextentthattheyreceiveplaintextemailmessages
+forlocalusers.Typically,thedesktopworkstationsofan
+organization’ssystemadministratorscanbeusedforthis
+purpose. Theseadministratorsownrootpasswordsthat
+allow them to access incoming email in conventional,
+server-basedsystems. Thus, ePOSTprovidesthesame
+privacyforincomingemailfromnon-ePOSTsendersas
+existingsystems.
+Sendingemailtotheoutsideworldﬁrstrequiresde-
+termining that the desired email address is not already
+available inside the ePOST world. At that point, there
+
+HotOS IX: The 9th Workshop on Hot Topics in Operating Systems USENIX Association66
+may be a gateway service that can provide the appro-
+priatecertiﬁcatematerialtogenerateastandardcrypto-
+graphicemailinS/MIMEorPGPformat. Thisencryp-
+tionisperformedinthesendinguser’slocalnode,before
+thedatagoesontothenetwork. Iftherecipientdoesnot
+supportsecureemail,thentheemailmustultimatelybe
+transmittedintheclear,sotheePOSTproxyservercan
+speakregularSMTPtotherecipient’smailserver.
+6 Related work
+Lotus Notes and Microsoft Exchange provide a gen-
+eral,securemessaginginfrastructurebasedontheclient-
+servermodel,providingtheabilitytotransferemail,per-
+sonalcontacts,calendars,andtasks. POSTaimstopro-
+videsimilarfunctionalitybasedonaserverless, decen-
+tralizedandcooperativep2parchitecture.
+Currentemailprotocols,includingSMTP,POP3,and
+IMAP, are tailored towards an infrastructure based on
+dedicatedservers. Minimalsecurityisprovidedinthese
+protocols,astheydonotprovideconﬁdentiality,veriﬁ-
+ability, or data integrity. Extensions like PGP provide
+secureemail,butarenotwidelyused.
+The use of a single-writer, self-authenticating log in
+POSTwasinspiredbytheuseofsimilarlogsintheIvy
+ﬁlesystem[11].ThelogheadistherootofaMerklehash
+tree[10],whichallowsthelogtobestoredonuntrusted
+nodes, while ensuring that the authenticity of each log
+entrycanbeveriﬁedlocally.ThisallowsPOSTtoavoid
+morecomplexbyzantinestatemachineprotocols[4].
+Aserverlessemailsystemproposedin[8]sharesmany
+ofthegoalsofePOST.UnlikePOST,itfocusesonemail
+serviceonly,andunlikeePOST,itisnotcompatiblewith
+the existing email infrastructure. Providing email ser-
+vicesontopofap2pstoragesystemhasalsobeenex-
+ploredintheOceanStoreproject[5]. Theuseofsingle-
+writerlogsallowsPOSTtoachievesimilarfunctionality
+withsigniﬁcantlylesscomplexity,whileprovidinggen-
+eralsupportforcollaborativeapplications.
+7 Status and conclusions
+POST is a decentralized, collaborative messaging sys-
+temthatleveragestheresourcesofparticipatingdesktop
+computers. POSTprovideshighlyresilientandscalable
+messagingservices,whileensuringconﬁdentiality,data
+integrity, and authentication. The basic services pro-
+videdbyPOSTcanbeusedtosupportavarietyofcol-
+laborativeapplications. Inthispaper,wehavesketched
+howPOSTcanbeusedtoconstructePOST,acoopera-
+tive,secureemailsystem.
+Prototype implementations of POST and ePOST ex-
+istandarecurrentlyunderexperimentalevaluation. Im-
+plementationsofcalendaringandinstantmessagingap-
+plicationsareunderway. WeplantostartusingePOST
+shortly, initially within our research groups, and hope
+to expand the user base within Rice and LIP6 and be-
+yond,aswegainexperienceandconﬁdenceinthesys-
+tem. Given users’ dependence on email services, we
+viewthisasaproofofconceptformission-criticalp2p
+systems,andasavehicletogainpracticalexperienceand
+workloadtracedatafromsuchasystem.
+References
+[1] W.J.Bolosky,J.R.Douceur,D.Ely,andM.Theimer.Feasibility
+ofaserverlessdistributedﬁlesystemdeployedonanexistingset
+ofdesktopPCs. In Proc. SIGMETRICS’2000,SantaClara,CA,
+2000.
+[2] M.Castro,P.Druschel,A.Ganesh,A.Rowstron,andD.S.Wal-
+lach. Securityforstructuredpeer-to-peeroverlaynetworks. In
+Proc. of the Fifth Symposium on Operating System Design and
+Implementation (OSDI 2002),Boston,MA,December2002.
+[3] M. Castro, P. Druschel, A-M. Kermarrec, and A. Rowstron.
+SCRIBE:Alarge-scaleanddecentralizedapplication-levelmul-
+ticastinfrastructure. IEEE JSAC,20(8),October2002.
+[4] M.CastroandB.Liskov. Practicalbyzantinefaulttolerance. In
+OSDI: Symposium on Operating Systems Design and Implemen-
+tation.USENIXAssociation,Co-sponsoredbyIEEETCOSand
+ACMSIGOPS,1999.
+[5] S. Czerwinski, A. Joseph, and J. Kubiatowicz. Design-
+ing a global email repository using OceanStore, June 2002.
+UCBerkeleysummerretreat, http://roc.cs.berkeley.
+edu/retreats/summer_02/slides/czerwin.pdf.
+[6] F. Dabek, M. F. Kaashoek, D. Karger, R. Morris, and I. Sto-
+ica. Wide-area cooperative storage with CFS. InProc. ACM
+SOSP’01,Banff,Canada,October2001.
+[7] J. Douceur, A. Adya, W. Bolosky, D. Simon, and M. Theimer.
+Reclaimingspacefromduplicateﬁlesinaserverlessdistributed
+ﬁle system. In Proc. of the International Conference on Dis-
+tributed Computing Systems (ICDCS 2002) , Vienna, Austria,
+July2002.
+[8] J.Kangasharju,K.Ross,D.Turner,J.Syrjala,andD.S.Digeon.
+Peer-to-peere-mail,November2002. Submittedforpublication.
+[9] J. Kubiatowicz, D. Bindel, Y. Chen, S. Czerwinski, P. Eaton,
+D.Geels,R.Gummadi,S.Rhea,H.Weatherspoon,W.Weimer,
+C.Wells,andB.Zhao. Oceanstore: Anarchitectureforglobal-
+scalepersistentstore. In Proc. ASPLOS’2000,Cambridge,MA,
+November2000.
+[10] R. Merkle. A digital signature based on a conventional en-
+cryptionfunction. In In Advances in Cryptology — CRYPTO’87
+(LNCS, vol. 293),1987.
+[11] A. Muthitacharoen, R. Morris, T. Gil, and B. Chen. Ivy: A
+read/write peer-to-peer ﬁle system. InProc. of the Fifth Sym-
+posium on Operating System Design and Implementation (OSDI
+2002),Boston,MA,December2002.
+[12] A.RowstronandP.Druschel. Pastry: Scalable,distributedob-
+jectlocationandroutingforlarge-scalepeer-to-peersystems. In
+IFIP/ACM Middleware 2001, Heidelberg, Germany, November
+2001.
+[13] A.RowstronandP.Druschel. Storagemanagementandcaching
+inPAST,alarge-scale,persistentpeer-to-peerstorageutility. In
+Proc. ACM SOSP’01,Banff,Canada,October2001.
+[14] I.Stoica,R.Morris,D.Karger,M.F.Kaashoek,andH.Balakr-
+ishnan. Chord: Ascalablepeer-to-peerlookupserviceforInter-
+netapplications. In Proc. ACM SIGCOMM’01,SanDiego,CA,
+August2001.
+[15] H.WeatherspoonandJ.Kubiatowicz.Erasurecodingvs.replica-
+tion:Aquantitativecomparison.In Proc. ITPTS’02,Cambridge,
+MA,March2002.
+[16] B.Y. Zhao, J.D. Kubiatowicz, and A.D. Joseph. Tapestry: An
+infrastructure for fault-resilient wide-area location and routing.
+Technical Report UCB//CSD-01-1141, U. C. Berkeley, April
+2001.

@@ -1,0 +1,1148 @@
+arXiv:1407.3561v1  [cs.NI]  14 Jul 2014
+IPFS - Content Addressed, Versioned, P2P File System
+(DRAFT 3)
+Juan Benet
+juan@benet.ai
+ABSTRACT
+The InterPlanetary File System (IPFS) is a peer-to-peer dis -
+tributed ﬁle system that seeks to connect all computing de-
+vices with the same system of ﬁles. In some ways, IPFS
+is similar to the Web, but IPFS could be seen as a sin-
+gle BitTorrent swarm, exchanging objects within one Git
+repository. In other words, IPFS provides a high through-
+put content-addressed block storage model, with content-
+addressed hyper links. This forms a generalized Merkle
+DAG, a data structure upon which one can build versioned
+ﬁle systems, blockchains, and even a Permanent Web. IPFS
+combines a distributed hashtable, an incentivized block ex -
+change, and a self-certifying namespace. IPFS has no single
+point of failure, and nodes do not need to trust each other.
+1. INTRODUCTION
+There have been many attempts at constructing a global
+distributed ﬁle system. Some systems have seen signiﬁ-
+cant success, and others failed completely. Among the aca-
+demic attempts, AFS [6] has succeeded widely and is still
+in use today. Others [7, ?] have not attained the same
+success. Outside of academia, the most successful systems
+have been peer-to-peer ﬁle-sharing applications primaril y
+geared toward large media (audio and video). Most no-
+tably, Napster, KaZaA, and BitTorrent [2] deployed large
+ﬁle distribution systems supporting over 100 million simul -
+taneous users. Even today, BitTorrent maintains a massive
+deployment where tens of millions of nodes churn daily [16].
+These applications saw greater numbers of users and ﬁles dis -
+tributed than their academic ﬁle system counterparts. How-
+ever, the applications were not designed as infrastructure to
+be built upon. While there have been successful repurpos-
+ings1, no general ﬁle-system has emerged that oﬀers global,
+low-latency, and decentralized distribution.
+Perhaps this is because a “good enough” system for most
+use cases already exists: HTTP. By far, HTTP is the most
+successful “distributed system of ﬁles” ever deployed. Cou -
+pled with the browser, HTTP has had enormous technical
+and social impact. It has become the de facto way to trans-
+mit ﬁles across the internet. Yet, it fails to take advantage
+of dozens of brilliant ﬁle distribution techniques invente d in
+the last ﬁfteen years. From one prespective, evolving Web
+infrastructure is near-impossible, given the number of bac k-
+wards compatibility constraints and the number of strong
+1For example, Linux distributions use BitTorrent to trans-
+mit disk images, and Blizzard, Inc. uses it to distribute
+video game content.
+parties invested in the current model. But from another per-
+spective, new protocols have emerged and gained wide use
+since the emergence of HTTP. What is lacking is upgrading
+design: enhancing the current HTTP web, and introducing
+new functionality without degrading user experience.
+Industry has gotten away with using HTTP this long be-
+cause moving small ﬁles around is relatively cheap, even for
+small organizations with lots of traﬃc. But we are enter-
+ing a new era of data distribution with new challenges: (a)
+hosting and distributing petabyte datasets, (b) computing
+on large data across organizations, (c) high-volume high-
+deﬁnition on-demand or real-time media streams, (d) ver-
+sioning and linking of massive datasets, (e) preventing ac-
+cidental disappearance of important ﬁles, and more. Many
+of these can be boiled down to “lots of data, accessible ev-
+erywhere.” Pressed by critical features and bandwidth con-
+cerns, we have already given up HTTP for diﬀerent data
+distribution protocols. The next step is making them part
+of the Web itself.
+Orthogonal to eﬃcient data distribution, version control
+systems have managed to develop important data collabo-
+ration workﬂows. Git, the distributed source code version
+control system, developed many useful ways to model and
+implement distributed data operations. The Git toolchain
+oﬀers versatile versioning functionality that large ﬁle di stri-
+bution systems severely lack. New solutions inspired by Git
+are emerging, such as Camlistore [ ?], a personal ﬁle stor-
+age system, and Dat [ ?] a data collaboration toolchain
+and dataset package manager. Git has already inﬂuenced
+distributed ﬁlesystem design [9], as its content addressed
+Merkle DAG data model enables powerful ﬁle distribution
+strategies. What remains to be explored is how this data
+structure can inﬂuence the design of high-throughput ori-
+ented ﬁle systems, and how it might upgrade the Web itself.
+This paper introduces IPFS, a novel peer-to-peer version-
+controlled ﬁlesystem seeking to reconcile these issues. IP FS
+synthesizes learnings from many past successful systems.
+Careful interface-focused integration yields a system gre ater
+than the sum of its parts. The central IPFS principle is
+modeling all data as part of the same Merkle DAG.
+2. BACKGROUND
+This section reviews important properties of successful
+peer-to-peer systems, which IPFS combines.
+2.1 Distributed Hash Tables
+Distributed Hash Tables (DHTs) are widely used to coor-
+dinate and maintain metadata about peer-to-peer systems.
+
+For example, the BitTorrent MainlineDHT tracks sets of
+peers part of a torrent swarm.
+2.1.1 Kademlia DHT
+Kademlia [10] is a popular DHT that provides:
+1. Eﬃcient lookup through massive networks: queries on
+average contact ⌈log2(n)⌉ nodes. (e.g. 20 hops for a
+network of 10 ,000,000 nodes).
+2. Low coordination overhead: it optimizes the number
+of control messages it sends to other nodes.
+3. Resistance to various attacks by preferring long-lived
+nodes.
+4. Wide usage in peer-to-peer applications, including
+Gnutella and BitTorrent, forming networks of over 20
+million nodes [16].
+2.1.2 Coral DSHT
+While some peer-to-peer ﬁlesystems store data blocks di-
+rectly in DHTs, this “wastes storage and bandwidth, as data
+must be stored at nodes where it is not needed” [5]. The
+Coral DSHT extends Kademlia in three particularly impor-
+tant ways:
+1. Kademlia stores values in nodes whose ids are “nearest”
+(using XOR-distance) to the key. This does not take
+into account application data locality, ignores “far”
+nodes that may already have the data, and forces “near-
+est” nodes to store it, whether they need it or not.
+This wastes signiﬁcant storage and bandwith. Instead,
+Coral stores addresses to peers who can provide the
+data blocks.
+2. Coral relaxes the DHT API from get_value(key) to
+get_any_values(key) (the “sloppy” in DSHT). This
+still works since Coral users only need a single (work-
+ing) peer, not the complete list. In return, Coral can
+distribute only subsets of the values to the “nearest”
+nodes, avoiding hot-spots (overloading all the nearest
+nodes when a key becomes popular).
+3. Additionally, Coral organizes a hierarchy of separate
+DSHTs called clusters depending on region and size.
+This enables nodes to query peers in their region ﬁrst,
+“ﬁnding nearby data without querying distant nodes” [5]
+and greatly reducing the latency of lookups.
+2.1.3 S/Kademlia DHT
+S/Kademlia [1] extends Kademlia to protect against ma-
+licious attacks in two particularly important ways:
+1. S/Kademlia provides schemes to secure NodeId gener-
+ation, and prevent Sybill attacks. It requires nodes to
+create a PKI key pair, derive their identity from it,
+and sign their messages to each other. One scheme
+includes a proof-of-work crypto puzzle to make gener-
+ating Sybills expensive.
+2. S/Kademlia nodes lookup values over disjoint paths,
+in order to ensure honest nodes can connect to each
+other in the presence of a large fraction of adversaries
+in the network. S/Kademlia achieves a success rate of
+0.85 even with an adversarial fraction as large as half
+of the nodes.
+2.2 Block Exchanges - BitTorrent
+BitTorrent [3] is a widely successful peer-to-peer ﬁleshar -
+ing system, which succeeds in coordinating networks of un-
+trusting peers (swarms) to cooperate in distributing piece s
+of ﬁles to each other. Key features from BitTorrent and its
+ecosystem that inform IPFS design include:
+1. BitTorrent’s data exchange protocol uses a quasi tit-
+for-tat strategy that rewards nodes who contribute to
+each other, and punishes nodes who only leech others’
+resources.
+2. BitTorrent peers track the availability of ﬁle pieces,
+prioritizing sending rarest pieces ﬁrst. This takes load
+oﬀ seeds, making non-seed peers capable of trading
+with each other.
+3. BitTorrent’s standard tit-for-tat is vulnerable to some
+exploitative bandwidth sharing strategies. PropShare [8]
+is a diﬀerent peer bandwidth allocation strategy that
+better resists exploitative strategies, and improves the
+performance of swarms.
+2.3 Version Control Systems - Git
+Version Control Systems provide facilities to model ﬁles
+changing over time and distribute diﬀerent versions eﬃcien tly.
+The popular version control system Git provides a power-
+ful Merkle DAG 2 object model that captures changes to a
+ﬁlesystem tree in a distributed-friendly way.
+1. Immutable objects represent Files ( blob), Directories
+(tree), and Changes ( commit).
+2. Objects are content-addressed, by the cryptographic
+hash of their contents.
+3. Links to other objects are embedded, forming a Merkle
+DAG. This provides many useful integrity and work-
+ﬂow properties.
+4. Most versioning metadata (branches, tags, etc.) are
+simply pointer references, and thus inexpensive to cre-
+ate and update.
+5. Version changes only update references or add objects.
+6. Distributing version changes to other users is simply
+transferring objects and updating remote references.
+2.4 Self-Certiﬁed Filesystems - SFS
+SFS [12, 11] proposed compelling implementations of both
+(a) distributed trust chains, and (b) egalitarian shared gl obal
+namespaces. SFS introduced a technique for building Self-
+Certiﬁed Filesystems : addressing remote ﬁlesystems using
+the following scheme
+/sfs/<Location>:<HostID>
+where Location is the server network address, and:
+HostID = hash(public_key || Location)
+Thus the name of an SFS ﬁle system certiﬁes its server.
+The user can verify the public key oﬀered by the server,
+negotiate a shared secret, and secure all traﬃc. All SFS
+instances share a global namespace where name allocation
+is cryptographic, not gated by any centralized body.
+2Merkle Directed Acyclic Graph – similar but more general
+construction than a Merkle Tree. Deduplicated, does not
+need to be balanced, and non-leaf nodes contain data.
+
+3. IPFS DESIGN
+IPFS is a distributed ﬁle system which synthesizes suc-
+cessful ideas from previous peer-to-peer sytems, includin g
+DHTs, BitTorrent, Git, and SFS. The contribution of IPFS
+is simplifying, evolving, and connecting proven technique s
+into a single cohesive system, greater than the sum of its
+parts. IPFS presents a new platform for writing and de-
+ploying applications, and a new system for distributing and
+versioning large data. IPFS could even evolve the web itself .
+IPFS is peer-to-peer; no nodes are privileged. IPFS nodes
+store IPFS objects in local storage. Nodes connect to each
+other and transfer objects. These objects represent ﬁles an d
+other data structures. The IPFS Protocol is divided into a
+stack of sub-protocols responsible for diﬀerent functiona lity:
+1. Identities - manage node identity generation and ver-
+iﬁcation. Described in Section 3.1.
+2. Network - manages connections to other peers, uses
+various underlying network protocols. Conﬁgurable.
+Described in Section 3.2.
+3. Routing - maintains information to locate speciﬁc
+peers and objects. Responds to both local and re-
+mote queries. Defaults to a DHT, but is swappable.
+Described in Section 3.3.
+4. Exchange - a novel block exchange protocol (BitSwap)
+that governs eﬃcient block distribution. Modelled as
+a market, weakly incentivizes data replication. Trade
+Strategies swappable. Described in Section 3.4.
+5. Objects - a Merkle DAG of content-addressed im-
+mutable objects with links. Used to represent arbi-
+trary datastructures, e.g. ﬁle hierarchies and commu-
+nication systems. Described in Section 3.5.
+6. Files - versioned ﬁle system hierarchy inspired by Git.
+Described in Section 3.6.
+7. Naming - A self-certifying mutable name system. De-
+scribed in Section 3.7.
+These subsystems are not independent; they are integrated
+and leverage blended properties. However, it is useful to de -
+scribe them separately, building the protocol stack from th e
+bottom up.
+Notation: data structures and functions below are speci-
+ﬁed in Go syntax.
+3.1 Identities
+Nodes are identiﬁed by a NodeId, the cryptographic hash 3
+of a public-key, created with S/Kademlia’s static crypto puz-
+zle [1]. Nodes store their public and private keys (encrypte d
+with a passphrase). Users are free to instatiate a “new” node
+identity on every launch, though that loses accrued network
+beneﬁts. Nodes are incentivized to remain the same.
+type NodeId Multihash
+type Multihash []byte
+// self-describing cryptographic hash digest
+type PublicKey []byte
+3Throughout this document, hash and checksum refer
+speciﬁcally to cryptographic hash checksums of data.
+type PrivateKey []byte
+// self-describing keys
+type Node struct {
+NodeId NodeID
+PubKey PublicKey
+PriKey PrivateKey
+}
+S/Kademlia based IPFS identity generation:
+difficulty = <integer parameter>
+n = Node{}
+do {
+n.PubKey, n.PrivKey = PKI.genKeyPair()
+n.NodeId = hash(hash(n.PubKey))
+p = count_preceding_zero_bits(n.NodeId)
+} while (p < difficulty)
+Upon ﬁrst connecting, peers exchange public keys, and
+check: hash(other.PublicKey) equals other.NodeId . If
+not, the connection is terminated.
+Note on Cryptographic Functions.
+Rather than locking the system to a particular set of func-
+tion choices, IPFS favors self-describing values. Hash di-
+gest values are stored in multihash format, which includes
+a short header specifying the hash function used, and the
+digest length in bytes. Example:
+<function code><digest length><digest bytes>
+This allows the system to (a) choose the best function for
+the use case (e.g. stronger security vs faster performance) ,
+and (b) evolve as function choices change. Self-describing
+values allow using diﬀerent parameter choices compatibly.
+3.2 Network
+IPFS nodes communicate regualarly with hundreds of other
+nodes in the network, potentially across the wide internet.
+The IPFS network stack features:
+• Transport: IPFS can use any transport protocol,
+and is best suited for WebRTC DataChannels [ ?] (for
+browser connectivity) or uTP(LEDBAT [14]).
+• Reliability: IPFS can provide reliability if underlying
+networks do not provide it, using uTP (LEDBAT [14])
+or SCTP [15].
+• Connectivity: IPFS also uses the ICE NAT traversal
+techniques [13].
+• Integrity: optionally checks integrity of messages us-
+ing a hash checksum.
+• Authenticity: optionally checks authenticity of mes-
+sages using HMAC with sender’s public key.
+3.2.1 Note on Peer Addressing
+IPFS can use any network; it does not rely on or assume
+access to IP. This allows IPFS to be used in overlay networks.
+IPFS stores addresses as multiaddr formatted byte strings
+for the underlying network to use. multiaddr provides a way
+to express addresses and their protocols, including suppor t
+for encapsulation. For example:
+
+# an SCTP/IPv4 connection
+/ip4/10.20.30.40/sctp/1234/
+# an SCTP/IPv4 connection proxied over TCP/IPv4
+/ip4/5.6.7.8/tcp/5678/ip4/1.2.3.4/sctp/1234/
+3.3 Routing
+IPFS nodes require a routing system that can ﬁnd (a)
+other peers’ network addresses and (b) peers who can serve
+particular objects. IPFS achieves this using a DSHT based
+on S/Kademlia and Coral, using the properties discussed in
+2.1. The size of objects and use patterns of IPFS are similar
+to Coral [5] and Mainline [16], so the IPFS DHT makes a
+distinction for values stored based on their size. Small val ues
+(equal to or less than 1KB) are stored directly on the DHT.
+For values larger, the DHT stores references, which are the
+NodeIds of peers who can serve the block.
+The interface of this DSHT is the following:
+type IPFSRouting interface {
+FindPeer(node NodeId)
+// gets a particular peer’s network address
+SetValue(key []bytes, value []bytes)
+// stores a small metadata value in DHT
+GetValue(key []bytes)
+// retrieves small metadata value from DHT
+ProvideValue(key Multihash)
+// announces this node can serve a large value
+FindValuePeers(key Multihash, min int)
+// gets a number of peers serving a large value
+}
+Note: diﬀerent use cases will call for substantially diﬀer-
+ent routing systems (e.g. DHT in wide network, static HT
+in local network). Thus the IPFS routing system can be
+swapped for one that ﬁts users’ needs. As long as the in-
+terface above is met, the rest of the system will continue to
+function.
+3.4 Block Exchange - BitSwap Protocol
+In IPFS, data distribution happens by exchanging blocks
+with peers using a BitTorrent inspired protocol: BitSwap.
+Like BitTorrent, BitSwap peers are looking to acquire a set
+of blocks ( want_list), and have another set of blocks to of-
+fer in exchange ( have_list). Unlike BitTorrent, BitSwap
+is not limited to the blocks in one torrent. BitSwap oper-
+ates as a persistent marketplace where node can acquire the
+blocks they need, regardless of what ﬁles those blocks are
+part of. The blocks could come from completely unrelated
+ﬁles in the ﬁlesystem. Nodes come together to barter in the
+marketplace.
+While the notion of a barter system implies a virtual cur-
+rency could be created, this would require a global ledger to
+track ownership and transfer of the currency. This can be
+implemented as a BitSwap Strategy, and will be explored in
+a future paper.
+In the base case, BitSwap nodes have to provide direct
+value to each other in the form of blocks. This works ﬁne
+when the distribution of blocks across nodes is complemen-
+tary, meaning they have what the other wants. Often, this
+will not be the case. In some cases, nodes must work for
+their blocks. In the case that a node has nothing that its
+peers want (or nothing at all), it seeks the pieces its peers
+want, with lower priority than what the node wants itself.
+This incentivizes nodes to cache and disseminate rare piece s,
+even if they are not interested in them directly.
+3.4.1 BitSwap Credit
+The protocol must also incentivize nodes to seed when
+they do not need anything in particular, as they might have
+the blocks others want. Thus, BitSwap nodes send blocks to
+their peers optimistically, expecting the debt to be repaid .
+But leeches (free-loading nodes that never share) must be
+protected against. A simple credit-like system solves the
+problem:
+1. Peers track their balance (in bytes veriﬁed) with other
+nodes.
+2. Peers send blocks to debtor peers probabilistically, ac-
+cording to a function that falls as debt increases.
+Note that if a node decides not to send to a peer, the node
+subsequently ignores the peer for an ignore_cooldown time-
+out. This prevents senders from trying to game the proba-
+bility by just causing more dice-rolls. (Default BitSwap is
+10 seconds).
+3.4.2 BitSwap Strategy
+The diﬀering strategies that BitSwap peers might employ
+have wildly diﬀerent eﬀects on the performance of the ex-
+change as a whole. In BitTorrent, while a standard strat-
+egy is speciﬁed (tit-for-tat), a variety of others have been
+implemented, ranging from BitTyrant [8] (sharing the least -
+possible), to BitThief [8] (exploiting a vulnerability and never
+share), to PropShare [8] (sharing proportionally). A range
+of strategies (good and malicious) could similarly be imple -
+mented by BitSwap peers. The choice of function, then,
+should aim to:
+1. maximize the trade performance for the node, and the
+whole exchange
+2. prevent freeloaders from exploiting and degrading the
+exchange
+3. be eﬀective with and resistant to other, unknown strate-
+gies
+4. be lenient to trusted peers
+The exploration of the space of such strategies is future
+work. One choice of function that works in practice is a
+sigmoid, scaled by a debt retio :
+Let the debt ratio r between a node and its peer be:
+r = bytes_sent
+bytes_recv + 1
+Given r, let the probability of sending to a debtor be:
+P
+(
+send | r
+)
+= 1 − 1
+1 + exp(6 − 3r)
+As you can see in Figure 1, this function drops oﬀ quickly
+as the nodes’ debt ratio surpasses twice the established credit.
+
+r
+P ( send | r )
+0 1 2 3 4
+1
+Figure 1: Probability of Sending as r increases
+The debt ratio is a measure of trust: lenient to debts between
+nodes that have previously exchanged lots of data success-
+fully, and merciless to unknown, untrusted nodes. This (a)
+provides resistance to attackers who would create lots of
+new nodes (sybill attacks), (b) protects previously succes sful
+trade relationships, even if one of the nodes is temporarily
+unable to provide value, and (c) eventually chokes relation -
+ships that have deteriorated until they improve.
+3.4.3 BitSwap Ledger
+BitSwap nodes keep ledgers accounting the transfers with
+other nodes. This allows nodes to keep track of history and
+avoid tampering. When activating a connection, BitSwap
+nodes exchange their ledger information. If it does not
+match exactly, the ledger is reinitialized from scratch, lo sing
+the accrued credit or debt. It is possible for malicious node s
+to purposefully “lose” the Ledger, hoping to erase debts. It
+is unlikely that nodes will have accrued enough debt to war-
+rant also losing the accrued trust; however the partner node
+is free to count it as misconduct, and refuse to trade.
+type Ledger struct {
+owner NodeId
+partner NodeId
+bytes_sent int
+bytes_recv int
+timestamp Timestamp
+}
+Nodes are free to keep the ledger history, though it is
+not necessary for correct operation. Only the current ledge r
+entries are useful. Nodes are also free to garbage collect
+ledgers as necessary, starting with the less useful ledgers :
+the old (peers may not exist anymore) and small.
+3.4.4 BitSwap Speciﬁcation
+BitSwap nodes follow a simple protocol.
+// Additional state kept
+type BitSwap struct {
+ledgers map[NodeId]Ledger
+// Ledgers known to this node, inc inactive
+active map[NodeId]Peer
+// currently open connections to other nodes
+need_list []Multihash
+// checksums of blocks this node needs
+have_list []Multihash
+// checksums of blocks this node has
+}
+type Peer struct {
+nodeid NodeId
+ledger Ledger
+// Ledger between the node and this peer
+last_seen Timestamp
+// timestamp of last received message
+want_list []Multihash
+// checksums of all blocks wanted by peer
+// includes blocks wanted by peer’s peers
+}
+// Protocol interface:
+interface Peer {
+open (nodeid :NodeId, ledger :Ledger);
+send_want_list (want_list :WantList);
+send_block (block :Block) -> (complete :Bool);
+close (final :Bool);
+}
+Sketch of the lifetime of a peer connection:
+1. Open: peers send ledgers until they agree.
+2. Sending: peers exchange want_lists and blocks.
+3. Close: peers deactivate a connection.
+4. Ignored: (special) a peer is ignored (for the duration
+of a timeout) if a node’s strategy avoids sending
+Peer.open(NodeId, Ledger).
+When connecting, a node initializes a connection with a
+Ledger, either stored from a connection in the past or a
+new one zeroed out. Then, sends an Open message with the
+Ledger to the peer.
+Upon receiving an Open message, a peer chooses whether
+to activate the connection. If – acording to the receiver’s
+Ledger – the sender is not a trusted agent (transmission
+below zero, or large outstanding debt) the receiver may opt
+to ignore the request. This should be done probabilisticall y
+with an ignore_cooldown timeout, as to allow errors to be
+corrected and attackers to be thwarted.
+If activating the connection, the receiver initializes a Pe er
+object with the local version of the Ledger and sets the
+last_seen timestamp. Then, it compares the received Ledger
+with its own. If they match exactly, the connections have
+opened. If they do not match, the peer creates a new zeroed
+out Ledger and sends it.
+Peer.send_want_list(WantList).
+While the connection is open, nodes advertise their want_list
+to all connected peers. This is done (a) upon opening the
+connection, (b) after a randomized periodic timeout, (c) af -
+ter a change in the want_list and (d) after receiving a new
+block.
+Upon receiving a want_list, a node stores it. Then, it
+checks whether it has any of the wanted blocks. If so, it
+sends them according to the BitSwap Strategy above.
+Peer.send_block(Block).
+Sending a block is straightforward. The node simply trans-
+mits the block of data. Upon receiving all the data, the re-
+ceiver computes the Multihash checksum to verify it matches
+the expected one, and returns conﬁrmation.
+
+Upon ﬁnalizing the correct transmission of a block, the
+receiver moves the block from need_list to have_list, and
+both the receiver and sender update their ledgers to reﬂect
+the additional bytes transmitted.
+If a transmission veriﬁcation fails, the sender is either ma l-
+functioning or attacking the receiver. The receiver is free to
+refuse further trades. Note that BitSwap expects to operate
+on a reliable transmission channel, so transmission errors
+– which could lead to incorrect penalization of an honest
+sender – are expected to be caught before the data is given
+to BitSwap.
+Peer.close(Bool).
+The final parameter to close signals whether the inten-
+tion to tear down the connection is the sender’s or not. If
+false, the receiver may opt to re-open the connection imme-
+diatelty. This avoids premature closes.
+A peer connection should be closed under two conditions:
+• a silence_wait timeout has expired without receiving
+any messages from the peer (default BitSwap uses 30
+seconds). The node issues Peer.close(false).
+• the node is exiting and BitSwap is being shut down.
+In this case, the node issues Peer.close(true).
+After a close message, both receiver and sender tear down
+the connection, clearing any state stored. The Ledger may
+be stored for the future, if it is useful to do so.
+Notes.
+• Non-open messages on an inactive connection should
+be ignored. In case of a send_block message, the re-
+ceiver may check the block to see if it is needed and
+correct, and if so, use it. Regardless, all such out-of-
+order messages trigger a close(false) message from
+the receiver to force re-initialization of the connection.
+3.5 Object Merkle DAG
+The DHT and BitSwap allow IPFS to form a massive peer-
+to-peer system for storing and distributing blocks quickly
+and robustly. On top of these, IPFS builds a Merkle DAG, a
+directed acyclic graph where links between objects are cryp -
+tographic hashes of the targets embedded in the sources.
+This is a generalization of the Git data structure. Merkle
+DAGs provide IPFS many useful properties, including:
+1. Content Addressing: all content is uniquely identi-
+ﬁed by its multihash checksum, including links .
+2. Tamper resistance: all content is veriﬁed with its
+checksum. If data is tampered with or corrupted, IPFS
+detects it.
+3. Deduplication: all objects that hold the exact same
+content are equal, and only stored once. This is par-
+ticularly useful with index objects, such as git trees
+and commits, or common portions of data.
+The IPFS Object format is:
+type IPFSLink struct {
+Name string
+// name or alias of this link
+Hash Multihash
+// cryptographic hash of target
+Size int
+// total size of target
+}
+type IPFSObject struct {
+links []IPFSLink
+// array of links
+data []byte
+// opaque content data
+}
+The IPFS Merkle DAG is an extremely ﬂexible way to
+store data. The only requirements are that object reference s
+be (a) content addressed, and (b) encoded in the format
+above. IPFS grants applications complete control over the
+data ﬁeld; applications can use any custom data format they
+chose, which IPFS may not understand. The separate in-
+object link table allows IPFS to:
+• List all object references in an object. For example:
+> ipfs ls /XLZ1625Jjn7SubMDgEyeaynFuR84ginqvzb
+XLYkgq61DYaQ8NhkcqyU7rLcnSa7dSHQ16x 189458 less
+XLHBNmRQ5sJJrdMPuu48pzeyTtRo39tNDR5 19441 script
+XLF4hwVHsVuZ78FZK6fozf8Jj9WEURMbCX4 5286 template
+<object multihash> <object size> <link name>
+• Resolve string path lookups, such as foo/bar/baz. Given
+an object, IPFS resolves the ﬁrst path component to
+a hash in the object’s link table, fetches that second
+object, and repeats with the next component. Thus,
+string paths can walk the Merkle DAG no matter what
+the data formats are.
+• Resolve all objects referenced recursively:
+> ipfs refs --recursive \
+/XLZ1625Jjn7SubMDgEyeaynFuR84ginqvzb
+XLLxhdgJcXzLbtsLRL1twCHA2NrURp4H38s
+XLYkgq61DYaQ8NhkcqyU7rLcnSa7dSHQ16x
+XLHBNmRQ5sJJrdMPuu48pzeyTtRo39tNDR5
+XLWVQDqxo9Km9zLyquoC9gAP8CL1gWnHZ7z
+...
+A raw data ﬁeld and a common link structure are the
+necessary components for constructing arbitrary data stru c-
+tures on top of IPFS. While it is easy to see how the Git
+object model ﬁts on top of this DAG, consider these other
+potential data structures: (a) key-value stores (b) tradi-
+tional relational databases (c) Linked Data triple stores ( d)
+linked document publishing systems (e) linked communica-
+tions platforms (f) cryptocurrency blockchains. These can
+all be modeled on top of the IPFS Merkle DAG, which allows
+any of these systems to use IPFS as a transport protocol for
+more complex applications.
+
+3.5.1 Paths
+IPFS objects can be traversed with a string path API.
+Paths work as they do in traditional UNIX ﬁlesystems and
+the Web. The Merkle DAG links make traversing it easy.
+Note that full paths in IPFS are of the form:
+# format
+/ipfs/<hash-of-object>/<name-path-to-object>
+# example
+/ipfs/XLYkgq61DYaQ8NhkcqyU7rLcnSa7dSHQ16x/foo.txt
+The /ipfs preﬁx allows mounting into existing systems
+at a standard mount point without conﬂict (mount point
+names are of course conﬁgurable). The second path com-
+ponent (ﬁrst within IPFS) is the hash of an object. This
+is always the case, as there is no global root. A root ob-
+ject would have the impossible task of handling consistency
+of millions of objects in a distributed (and possibly discon -
+nected) environment. Instead, we simulate the root with
+content addressing. All objects are always accessible via
+their hash. Note this means that given three objects in path
+<foo>/bar/baz, the last object is accessible by all:
+/ipfs/<hash-of-foo>/bar/baz
+/ipfs/<hash-of-bar>/baz
+/ipfs/<hash-of-baz>
+3.5.2 Local Objects
+IPFS clients require some local storage, an external system
+on which to store and retrieve local raw data for the objects
+IPFS manages. The type of storage depends on the node’s
+use case. In most cases, this is simply a portion of disk space
+(either managed by the native ﬁlesystem, by a key-value
+store such as leveldb [4], or directly by the IPFS client). In
+others, for example non-persistent caches, this storage is just
+a portion of RAM.
+Ultimately, all blocks available in IPFS are in some node’s
+local storage. When users request objects, they are found,
+downloaded, and stored locally, at least temporarily. This
+provides fast lookup for some conﬁgurable amount of time
+thereafter.
+3.5.3 Object Pinning
+Nodes who wish to ensure the survival of particular ob-
+jects can do so by pinning the objects. This ensures the
+objects are kept in the node’s local storage. Pinning can be
+done recursively, to pin down all linked descendent objects
+as well. All objects pointed to are then stored locally. This
+is particularly useful to persist ﬁles, including referenc es.
+This also makes IPFS a Web where links are permanent,
+and Objects can ensure the survival of others they point to.
+3.5.4 Publishing Objects
+IPFS is globally distributed. It is designed to allow the
+ﬁles of millions of users to coexist together. The DHT, with
+content-hash addressing, allows publishing objects in a fa ir,
+secure, and entirely distributed way. Anyone can publish an
+object by simply adding its key to the DHT, adding them-
+selves as a peer, and giving other users the object’s path.
+Note that Objects are essentially immutable, just like in
+Git. New versions hash diﬀerently, and thus are new ob-
+jects. Tracking versions is the job of additional versionin g
+objects.
+3.5.5 Object-level Cryptography
+IPFS is equipped to handle object-level cryptographic op-
+erations. An encrypted or signed object is wrapped in a
+special frame that allows encryption or veriﬁcation of the
+raw bytes.
+type EncryptedObject struct {
+Object []bytes
+// raw object data encrypted
+Tag []bytes
+// optional tag for encryption groups
+}
+type SignedObject struct {
+Object []bytes
+// raw object data signed
+Signature []bytes
+// hmac signature
+PublicKey []multihash
+// multihash identifying key
+}
+Cryptographic operations change the object’s hash, deﬁn-
+ing a diﬀerent object. IPFS automatically veriﬁes signa-
+tures, and can decrypt data with user-speciﬁed keychains.
+Links of encrypted objects are protected as well, making
+traversal impossible without a decryption key. It is possi-
+ble to have a parent object encrypted under one key, and
+a child under another or not at all. This secures links to
+shared objects.
+3.6 Files
+IPFS also deﬁnes a set of objects for modeling a versioned
+ﬁlesystem on top of the Merkle DAG. This object model is
+similar to Git’s:
+1. block: a variable-size block of data.
+2. list: a collection of blocks or other lists.
+3. tree: a collection of blocks, lists, or other trees.
+4. commit: a snapshot in the version history of a tree.
+I hoped to use the Git object formats exactly, but had to
+depart to introduce certain features useful in a distribute d
+ﬁlesystem, namely (a) fast size lookups (aggregate byte siz es
+have been added to objects), (b) large ﬁle deduplication
+(adding a list object), and (c) embedding of commits into
+trees. However, IPFS File objects are close enough to Git
+that conversion between the two is possible. Also, a set of
+Git objects can be introduced to convert without losing any
+information (unix ﬁle permissions, etc).
+Notation: File object formats below use JSON. Note that
+this structure is actually binary encoded using protobufs,
+though ipfs includes import/export to JSON.
+3.6.1 File Object: blob
+The blob object contains an addressable unit of data, and
+represents a ﬁle. IPFS Blocks are like Git blobs or ﬁlesystem
+data blocks. They store the users’ data. Note that IPFS ﬁles
+can be represented by both lists and blobs. Blobs have
+no links.
+
+{
+"data": "some data here",
+// blobs have no links
+}
+3.6.2 File Object: list
+The list object represents a large or deduplicated ﬁle
+made up of several IPFS blobs concatenated together. lists
+contain an ordered sequence of blob or list objects. In a
+sense, the IPFS list functions like a ﬁlesystem ﬁle with in-
+direct blocks. Since lists can contain other lists, topolo-
+gies including linked lists and balanced trees are possible .
+Directed graphs where the same node appears in multiple
+places allow in-ﬁle deduplication. Of course, cycles are no t
+possible, as enforced by hash addressing.
+{
+"data": ["blob", "list", "blob"],
+// lists have an array of object types as data
+"links": [
+{ "hash": "XLYkgq61DYaQ8NhkcqyU7rLcnSa7dSHQ16x",
+"size": 189458 },
+{ "hash": "XLHBNmRQ5sJJrdMPuu48pzeyTtRo39tNDR5",
+"size": 19441 },
+{ "hash": "XLWVQDqxo9Km9zLyquoC9gAP8CL1gWnHZ7z",
+"size": 5286 }
+// lists have no names in links
+]
+}
+3.6.3 File Object: tree
+The tree object in IPFS is similar to Git’s: it represents
+a directory, a map of names to hashes. The hashes reference
+blobs, lists, other trees, or commits. Note that tradi-
+tional path naming is already implemented by the Merkle
+DAG.
+{
+"data": ["blob", "list", "blob"],
+// trees have an array of object types as data
+"links": [
+{ "hash": "XLYkgq61DYaQ8NhkcqyU7rLcnSa7dSHQ16x",
+"name": "less", "size": 189458 },
+{ "hash": "XLHBNmRQ5sJJrdMPuu48pzeyTtRo39tNDR5",
+"name": "script", "size": 19441 },
+{ "hash": "XLWVQDqxo9Km9zLyquoC9gAP8CL1gWnHZ7z",
+"name": "template", "size": 5286 }
+// trees do have names
+]
+}
+3.6.4 File Object: commit
+The commit object in IPFS represents a snapshot in the
+version history of any object. It is similar to Git’s, but can
+reference any type of object. It also links to author objects .
+{
+"data": {
+"type": "tree",
+"date": "2014-09-20 12:44:06Z",
+"message": "This is a commit message."
+},
+"links": [
+ccc111
+ttt111
+ttt222 ttt333
+lll111bbb111 bbb222
+bbb333 bbb444 bbb555
+Figure 2: Sample Object Graph
+> ipfs file-cat <ccc111-hash> --json
+{
+"data": {
+"type": "tree",
+"date": "2014-09-20 12:44:06Z",
+"message": "This is a commit message."
+},
+"links": [
+{ "hash": "<ccc000-hash>",
+"name": "parent", "size": 25309 },
+{ "hash": "<ttt111-hash>",
+"name": "object", "size": 5198 },
+{ "hash": "<aaa111-hash>",
+"name": "author", "size": 109 }
+]
+}
+> ipfs file-cat <ttt111-hash> --json
+{
+"data": ["tree", "tree", "blob"],
+"links": [
+{ "hash": "<ttt222-hash>",
+"name": "ttt222-name", "size": 1234 },
+{ "hash": "<ttt333-hash>",
+"name": "ttt333-name", "size": 3456 },
+{ "hash": "<bbb222-hash>",
+"name": "bbb222-name", "size": 22 }
+]
+}
+> ipfs file-cat <bbb222-hash> --json
+{
+"data": "blob222 data",
+"links": []
+}
+Figure 3: Sample Objects
+
+{ "hash": "XLa1qMBKiSEEDhojb9FFZ4tEvLf7FEQdhdU",
+"name": "parent", "size": 25309 },
+{ "hash": "XLGw74KAy9junbh28x7ccWov9inu1Vo7pnX",
+"name": "object", "size": 5198 },
+{ "hash": "XLF2ipQ4jD3UdeX5xp1KBgeHRhemUtaA8Vm",
+"name": "author", "size": 109 }
+]
+}
+3.6.5 Version control
+The commit object represents a particular snapshot in the
+version history of an object. Comparing the objects (and
+children) of two diﬀerent commits reveals the diﬀerences be -
+tween two versions of the ﬁlesystem. As long as a single
+commit and all the children objects it references are accessi-
+ble, all preceding versions are retrievable and the full his tory
+of the ﬁlesystem changes can be accessed. This falls out of
+the Merkle DAG object model.
+The full power of the Git version control tools is available
+to IPFS users. The object model is compatible, though not
+the same. It is possible to (a) build a version of the Git tools
+modiﬁed to use the IPFS object graph, (b) build a mounted
+FUSE ﬁlesystem that mounts an IPFS tree as a Git repo,
+translating Git ﬁlesystem read/writes to the IPFS formats.
+3.6.6 Filesystem Paths
+As we saw in the Merkle DAG section, IPFS objects can
+be traversed with a string path API. The IPFS File Objects
+are designed to make mounting IPFS onto a UNIX ﬁlesys-
+tem simpler. They restrict trees to have no data, in order
+to represent them as directories. And commits can either
+be represented as directories or hidden from the ﬁlesystem
+entirely.
+3.6.7 Splitting Files into Lists and Blob
+One of the main challenges with versioning and distribut-
+ing large ﬁles is ﬁnding the right way to split them into
+independent blocks. Rather than assume it can make the
+right decision for every type of ﬁle, IPFS oﬀers the followin g
+alternatives:
+(a) Use Rabin Fingerprints [ ?] as in LBFS [ ?] to pick
+suitable block boundaries.
+(b) Use the rsync [ ?] rolling-checksum algorithm, to detect
+blocks that have changed between versions.
+(c) Allow users to specify block-splitting functions highl y
+tuned for speciﬁc ﬁles.
+3.6.8 Path Lookup Performance
+Path-based access traverses the object graph. Retrieving
+each object requires looking up its key in the DHT, connect-
+ing to peers, and retrieving its blocks. This is considerabl e
+overhead, particularly when looking up paths with many
+components. This is mitigated by:
+• tree caching : since all objects are hash-addressed,
+they can be cached indeﬁnitely. Additionally, trees
+tend to be small in size so IPFS prioritizes caching
+them over blobs.
+• ﬂattened trees : for any given tree, a special flattened
+tree can be constructed to list all objects reachable
+from the tree. Names in the flattened tree would
+really be paths parting from the original tree, with
+slashes.
+For example, flattened tree for ttt111 above:
+{
+"data":
+["tree", "blob", "tree", "list", "blob" "blob"],
+"links": [
+{ "hash": "<ttt222-hash>", "size": 1234
+"name": "ttt222-name" },
+{ "hash": "<bbb111-hash>", "size": 123,
+"name": "ttt222-name/bbb111-name" },
+{ "hash": "<ttt333-hash>", "size": 3456,
+"name": "ttt333-name" },
+{ "hash": "<lll111-hash>", "size": 587,
+"name": "ttt333-name/lll111-name"},
+{ "hash": "<bbb222-hash>", "size": 22,
+"name": "ttt333-name/lll111-name/bbb222-name" },
+{ "hash": "<bbb222-hash>", "size": 22
+"name": "bbb222-name" }
+] }
+3.7 IPNS: Naming and Mutable State
+So far, the IPFS stack forms a peer-to-peer block exchange
+constructing a content-addressed DAG of objects. It serves
+to publish and retrieve immutable objects. It can even track
+the version history of these objects. However, there is a
+critical component missing: mutable naming. Without it,
+all communication of new content must happen oﬀ-band,
+sending IPFS links. What is required is some way to retrieve
+mutable state at the same path .
+It is worth stating why – if mutable data is necessary in
+the end – we worked hard to build up an immutable Merkle
+DAG. Consider the properties of IPFS that fall out of the
+Merkle DAG: objects can be (a) retrieved via their hash,
+(b) integrity checked, (c) linked to others, and (d) cached
+indeﬁnitely. In a sense:
+Objects are permanent
+These are the critical properties of a high-performance dis -
+tributed system, where data is expensive to move across net-
+work links. Object content addressing constructs a web with
+(a) signiﬁcant bandwidth optimizations, (b) untrusted con -
+tent serving, (c) permanent links, and (d) the ability to mak e
+full permanent backups of any object and its references.
+The Merkle DAG, immutable content-addressed objects,
+and Naming, mutable pointers to the Merkle DAG, instanti-
+ate a dichotomy present in many successful distributed sys-
+tems. These include the Git Version Control System, with
+its immutable objects and mutable references; and Plan9 [ ?],
+the distributed successor to UNIX, with its mutable Fossil
+[?] and immutable Venti [ ?] ﬁlesystems. LBFS [ ?] also uses
+mutable indices and immutable chunks.
+3.7.1 Self-Certiﬁed Names
+Using the naming scheme from SFS [12, 11] gives us a
+way to construct self-certiﬁed names, in a cryptographical ly
+assigned global namespace, that are mutable. The IPFS
+scheme is as follows.
+1. Recall that in IPFS:
+
+NodeId = hash(node.PubKey)
+2. We assign every user a mutable namespace at:
+/ipns/<NodeId>
+3. A user can publish an Object to this path Signed by
+her private key, say at:
+/ipns/XLF2ipQ4jD3UdeX5xp1KBgeHRhemUtaA8Vm/
+4. When other users retrieve the object, they can check
+the signature matches the public key and NodeId. This
+veriﬁes the authenticity of the Object published by the
+user, achieving mutable state retrival.
+Note the following details:
+• The ipns (InterPlanetary Name Space) separate pre-
+ﬁx is to establish an easily recognizable distinction
+between mutable and immutable paths, for both pro-
+grams and human readers.
+• Because this is not a content-addressed object, pub-
+lishing it relies on the only mutable state distribution
+system in IPFS, the Routing system. The process is
+(1) publish the object as a regular immutable IPFS
+object, (2) publish its hash on the Routing system as
+a metadata value:
+routing.setValue(NodeId, <ns-object-hash>)
+• Any links in the Object published act as sub-names in
+the namespace:
+/ipns/XLF2ipQ4jD3UdeX5xp1KBgeHRhemUtaA8Vm/
+/ipns/XLF2ipQ4jD3UdeX5xp1KBgeHRhemUtaA8Vm/docs
+/ipns/XLF2ipQ4jD3UdeX5xp1KBgeHRhemUtaA8Vm/docs/ipfs
+• it is advised to publish a commit object, or some other
+object with a version history, so that clients may be
+able to ﬁnd old names. This is left as a user option, as
+it is not always desired.
+Note that when users publish this Object, it cannot be
+published in the same way
+3.7.2 Human Friendly Names
+While IPNS is indeed a way of assigning and reassign-
+ing names, it is not very user friendly, as it exposes long
+hash values as names, which are notoriously hard to remem-
+ber. These work for URLs, but not for many kinds of oﬄine
+transmission. Thus, IPFS increases the user-friendliness of
+IPNS with the following techniques.
+Peer Links.
+As encouraged by SFS, users can link other users’ Ob-
+jects directly into their own Objects (namespace, home, etc ).
+This has the beneﬁt of also creating a web of trust (and sup-
+ports the old Certiﬁcate Authority model):
+# Alice links to bob Bob
+ipfs link /<alice-pk-hash>/friends/bob /<bob-pk-hash>
+# Eve links to Alice
+ipfs link /<eve-pk-hash/friends/alice /<alice-pk-hash>
+# Eve also has access to Bob
+/<eve-pk-hash/friends/alice/friends/bob
+# access Verisign certified domains
+/<verisign-pk-hash>/foo.com
+DNS TXT IPNS Records.
+If /ipns/<domain> is a valid domain name, IPFS looks up
+key ipns in its DNS TXT records. IPFS interprets the value
+as either an object hash or another IPNS path:
+# this DNS TXT record
+ipfs.benet.ai. TXT "ipfs=XLF2ipQ4jD3U ..."
+# behaves as symlink
+ln -s /ipns/XLF2ipQ4jD3U /ipns/fs.benet.ai
+Proquint Pronounceable Identiﬁers.
+There have always been schemes to encode binary into
+pronounceable words. IPNS supports Proquint [ ?]. Thus:
+# this proquint phrase
+/ipns/dahih-dolij-sozuk-vosah-luvar-fuluh
+# will resolve to corresponding
+/ipns/KhAwNprxYVxKqpDZ
+Name Shortening Services.
+Services are bound to spring up that will provide name
+shortening as a service, oﬀering up their namespaces to user s.
+This is similar to what we see today with DNS and Web
+URLs:
+# User can get a link from
+/ipns/shorten.er/foobar
+# To her own namespace
+/ipns/XLF2ipQ4jD3UdeX5xp1KBgeHRhemUtaA8Vm
+3.8 Using IPFS
+IPFS is designed to be used in a number of diﬀerent ways.
+Here are just some of the usecases I will be pursuing:
+1. As a mounted global ﬁlesystem, under /ipfs and /ipns.
+2. As a mounted personal sync folder that automatically
+versions, publishes, and backs up any writes.
+3. As an encrypted ﬁle or data sharing system.
+4. As a versioned package manager for all software.
+5. As the root ﬁlesystem of a Virtual Machine.
+6. As the boot ﬁlesystem of a VM (under a hypervisor).
+
+7. As a database: applications can write directly to the
+Merkle DAG data model and get all the versioning,
+caching, and distribution IPFS provides.
+8. As a linked (and encrypted) communications platform.
+9. As an integrity checked CDN for large ﬁles (without
+SSL).
+10. As an encrypted CDN.
+11. On webpages, as a web CDN.
+12. As a new Permanent Web where links do not die.
+The IPFS implementations target:
+(a) an IPFS library to import in your own applications.
+(b) commandline tools to manipulate objects directly.
+(c) mounted ﬁle systems, using FUSE [ ?] or as kernel
+modules.
+4. THE FUTURE
+The ideas behind IPFS are the product of decades of suc-
+cessful distributed systems research in academia and open
+source. IPFS synthesizes many of the best ideas from the
+most successful systems to date. Aside from BitSwap, which
+is a novel protocol, the main contribution of IPFS is this
+coupling of systems and synthesis of designs.
+IPFS is an ambitious vision of new decentralized Internet
+infrastructure, upon which many diﬀerent kinds of applica-
+tions can be built. At the bare minimum, it can be used as
+a global, mounted, versioned ﬁlesystem and namespace, or
+as the next generation ﬁle sharing system. At its best, it
+could push the web to new horizons, where publishing valu-
+able information does not impose hosting it on the publisher
+but upon those interested, where users can trust the content
+they receive without trusting the peers they receive it from ,
+and where old but important ﬁles do not go missing. IPFS
+looks forward to bringing us toward the Permanent Web.
+5. ACKNOWLEDGMENTS
+IPFS is the synthesis of many great ideas and systems. It
+would be impossible to dare such ambitious goals without
+standing on the shoulders of such giants. Personal thanks to
+David Dalrymple, Joe Zimmerman, and Ali Yahya for long
+discussions on many of these ideas, in particular: exposing
+the general Merkle DAG (David, Joe), rolling hash blocking
+(David), and s/kademlia sybill protection (David, Ali). An d
+special thanks to David Mazieres, for his ever brilliant ide as.
+6. REFERENCES TODO
+7. REFERENCES
+[1] I. Baumgart and S. Mies. S/kademlia: A practicable
+approach towards secure key-based routing. In Parallel
+and Distributed Systems, 2007 International
+Conference on, volume 2, pages 1–8. IEEE, 2007.
+[2] I. BitTorrent. Bittorrent and ˆA¸ ttorrent software
+surpass 150 million user milestone, Jan. 2012.
+[3] B. Cohen. Incentives build robustness in bittorrent. In
+Workshop on Economics of Peer-to-Peer systems ,
+volume 6, pages 68–72, 2003.
+[4] J. Dean and S. Ghemawat. leveldb–a fast and
+lightweight key/value database library by google, 2011.
+[5] M. J. Freedman, E. Freudenthal, and D. Mazieres.
+Democratizing content publication with coral. In
+NSDI, volume 4, pages 18–18, 2004.
+[6] J. H. Howard, M. L. Kazar, S. G. Menees, D. A.
+Nichols, M. Satyanarayanan, R. N. Sidebotham, and
+M. J. West. Scale and performance in a distributed ﬁle
+system. ACM Transactions on Computer Systems
+(TOCS), 6(1):51–81, 1988.
+[7] J. Kubiatowicz, D. Bindel, Y. Chen, S. Czerwinski,
+P. Eaton, D. Geels, R. Gummadi, S. Rhea,
+H. Weatherspoon, W. Weimer, et al. Oceanstore: An
+architecture for global-scale persistent storage. ACM
+Sigplan Notices, 35(11):190–201, 2000.
+[8] D. Levin, K. LaCurts, N. Spring, and
+B. Bhattacharjee. Bittorrent is an auction: analyzing
+and improving bittorrent’s incentives. In ACM
+SIGCOMM Computer Communication Review ,
+volume 38, pages 243–254. ACM, 2008.
+[9] A. J. Mashtizadeh, A. Bittau, Y. F. Huang, and
+D. Mazieres. Replication, history, and grafting in the
+ori ﬁle system. In Proceedings of the Twenty-Fourth
+ACM Symposium on Operating Systems Principles ,
+pages 151–166. ACM, 2013.
+[10] P. Maymounkov and D. Mazieres. Kademlia: A
+peer-to-peer information system based on the xor
+metric. In Peer-to-Peer Systems, pages 53–65.
+Springer, 2002.
+[11] D. Mazieres and F. Kaashoek. Self-certifying ﬁle
+system. 2000.
+[12] D. Mazieres and M. F. Kaashoek. Escaping the evils
+of centralized control with self-certifying pathnames.
+In Proceedings of the 8th ACM SIGOPS European
+workshop on Support for composing distributed
+applications, pages 118–125. ACM, 1998.
+[13] J. Rosenberg and A. Keranen. Interactive connectivity
+establishment (ice): A protocol for network address
+translator (nat) traversal for oﬀer/answer protocols.
+2013.
+[14] S. Shalunov, G. Hazel, J. Iyengar, and M. Kuehlewind.
+Low extra delay background transport (ledbat).
+draft-ietf-ledbat-congestion-04. txt, 2010.
+[15] R. R. Stewart and Q. Xie. Stream control transmission
+protocol (SCTP): a reference guide . Addison-Wesley
+Longman Publishing Co., Inc., 2001.
+[16] L. Wang and J. Kangasharju. Measuring large-scale
+distributed systems: case of bittorrent mainline dht. In
+Peer-to-Peer Computing (P2P), 2013 IEEE Thirteenth
+International Conference on , pages 1–10. IEEE, 2013.

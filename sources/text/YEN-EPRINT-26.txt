@@ -1,0 +1,2058 @@
+BeeKEM: Decentralized, Secure and Efficient Group Key Agreement
+Derek Yen∗,1, Andr ´es F ´abrega∗,2, Liangrun Da 3, Martin Kleppmann 4,
+John Mumm 3, Sunoo Park 1, Brooklyn Zelenka 3
+1New York University,{derek.yen, sunoo.park}@nyu.edu
+2Cornell University,andresfg@cs.cornell.edu
+3Ink & Switch,me@liangrunda.com,{john.mumm, brooklyn}@inkandswitch.com
+4University of Cambridge,martin.kleppmann@cst.cam.ac.uk
+Abstract—Group key agreement protocols are essential for
+modern secure messaging. Most existing group key agreement
+protocols assume a centralized model with a semi-trusted
+service that mediates the communication. This is efficient, but
+problematic for some important applications, since a central
+service can be a choke point for surveillance and censorship.
+There is a nascent literature ondecentralizedgroup key agree-
+ment that avoids such reliance, but existing proposals either do
+not scale, with update costs linear or quadratic in the group
+size, or lack proofs of security. Centralized protocols can offer
+much lower (logarithmic) cost.
+We present BeeKEM, the first decentralized group key
+agreement protocol with logarithmic update cost in the com-
+mon case (degrading to linear in the worst case) and proofs
+of security. We provide an open-source implementation and
+demonstrate that it is competitive with OpenMLS. BeeKEM
+opens the door for a range of communication and collaboration
+applications offering not only end-to-end encryption, but also
+metadata privacy and censorship resistance.
+1. Introduction
+Continuous group key agreement (CGKA) is the cryp-
+tographic backbone of modern secure group messaging pro-
+tocols, which are used by billions of people for their private
+communications. For example, Messaging Layer Security
+(MLS) [10] is an IETF standard adopted by RCS on iOS and
+Android, Cisco Webex, Wire, and others [14], [22], [36]. A
+CGKA protocol allows the members of a group to establish
+shared keys for message encryption, to add or remove group
+members, and to periodically update their keys to achieve
+forward secrecy and post-compromise security [7].
+Most popular messaging protocols, like MLS, rely on a
+centralized delivery service through which all communica-
+tion is routed. The central service maintains consistent state
+between users by imposing a total order on past operations,
+such as member addition, removal, or key update. This is
+possible due to the service’s global view of network com-
+munications. Conversely, an adversary who compromises the
+*. These authors contributed equally to this work.
+service can observe all communication patterns, selectively
+delay or drop messages, and deny service. Although such an
+adversary may not be able to read message contents if end-
+to-end encrypted (as in MLS), the service is nonetheless a
+potent choke point for censorship and metadata surveillance.
+The potential for censorship and surveillance is lower in
+peer-to-peer communication, but CGKA is designed for the
+centralized setting. An emerging literature ondecentralized
+CGKA (DCGKA) removes this dependence on a central
+authority, allowing users’ devices to communicate via any
+channel, including peer-to-peer or via anonymity networks.
+Weidner et al. [34] recently introduced security definitions
+and a state-of-the-art protocol construction for DCGKA.
+Unfortunately, their approach is not scalable: key updates
+incur a communication cost ofO(n)wherenis the number
+of group members, while for MLS the cost isO(logn).
+Prior work has shown that group chats with thousands of
+members are used in practice, in contexts such as political
+protests where censorship resistance can be essential [4], yet
+O(n)overhead would be prohibitive in such contexts.
+We introduce BeeKEM, the first DCGKA scheme with
+proofs of security that matches MLS’sO(logn)update
+cost in the common case. In the case of concurrent key
+updates, BeeKEM’s performance degrades gracefully, in the
+worst case reachingO(n), which is on par with Weidner
+et al.’s protocol [34]. We give a formal specification of
+BeeKEM and prove it secure under the existing DCGKA
+security definitions [34]. We also provide an open-source,
+production-ready implementation whose performance we
+evaluate against OpenMLS (a popular MLS implementa-
+tion) [30] and the original DCGKA implementation [34].
+In more detail, our contributions are as follows.
+•CONSTRUCTION: We introduceBeeKEM, a new
+DCGKA schemewhere the communication and
+computation cost of key updates isO(logn)when
+updates are sequential, degrading gradually toO(n)
+as the degree of concurrency increases (§4).
+•MODELING: We define anew security property
+for DCGKA (§3) calledcross-fork security, which
+defends against a type of attack unique to the decen-
+tralized setting. We also introducenew extensions
+
+of existing DCGKA security definitions(§3).
+•PROVABLESECURITY: We giverigorous security
+proofsfor BeeKEM (§5 and Appendix B).
+•IMPLEMENTATION: We provide anopen-source,
+production-ready implementationof BeeKEM 1
+that can support a wide range of decentralized end-
+to-end encrypted collaboration applications.
+•EVALUATION: We evaluate our performance with re-
+spect to Weidner et al. [34] and OpenMLS [30] (§6).
+BeeKEM performs competitively with OpenMLS
+when connectivity is good. It also handles partitions
+that would take MLS offline, at a cost in efficiency.
+•EXTENSIONS: We sketch constructions called
+BeeKEMPQ and BeeKEM FS which respectively
+achieve post-quantum security and stronger forward
+secrecy (§7).
+Broader Impacts.BeeKEM can be used in any applica-
+tion that requires end-to-end encryption (E2EE) for efficient
+group communication. It is suitable for messaging, but it can
+also support other group collaboration applications such as
+collaborative calendars, text editors, spreadsheets, and more.
+A core impact of building BeeKEM is to bring efficient
+E2EE to a wide range of decentralizedlocal-first[26]
+collaboration software. Applications such as an E2EE col-
+laborative document editor Patchwork 2 have already been
+built upon our work which would not be viable withO(n)
+communication overhead in a group or organization with,
+say, thousands of members.
+2. Why Decentralize?
+MLS [12] and other CGKA-based protocols assume a
+centralized delivery service, as noted in Section 1. The
+service may consist of one or more servers. This assumption
+is suitable when all members of the communicating group
+are able to reliably connect to a central service. If some
+users are offline, CGKA protocols allow the users who are
+online to continue communicating. The design of TreeKEM,
+the CGKA underlying MLS [13], heavily relies on the
+assumption of this ordering enforced by the central service.
+The Problem.In centralized protocols, users may be
+online, but unable to communicate with the delivery service,
+and thus cut off from essential communication. For example,
+what if a user can communicate with a subset of other users,
+perhaps via a local network, but not with the service?
+This type of scenario is of growing practical importance.
+In early 2026, Iran enacted a months-long nationwide
+Internet shutdown that allowed people inside the country
+to access domestic Internet services, but limited access
+to the international Internet to a few people with special
+privileges [32]. Since 2026, Russia has imposed intermittent
+Internet restrictions with the aim of pushing domestic users
+1. https://github.com/inkandswitch/keyhive/tree/main/beekem
+2. https://www.inkandswitch.com/project/patchwork/
+towards a national messaging app that supports state surveil-
+lance [33]. Some users circumvent such measures by use of
+Starlink and similar satellite services, at great risk—being
+caught with a Starlink terminal in Iran can mean death [32].
+Protesters in Hong Kong have attempted to use mesh
+networking apps to organize in spite of Internet shutdowns
+in 2014 [9] and 2019 [4], but these apps were found to
+have weak security [3]. Nevertheless, reliance on local net-
+working technology, if implemented well, has the potential
+to enable users to circumvent government censorship, and
+secure communication based on mesh networking is an
+important subject of ongoing research [23].
+Anetwork partitionoccurs when a set of users is split
+into two or more subsets such that communication within
+each subset is possible, but communication across subsets
+is not. In the example of Iran, the Internet shutdown creates
+a network partition where one subset of users is inside the
+country and the other subset is outside. With a centralized
+protocol like MLS, the delivery service will sit on one side
+of the partition or the other (or be rendered ineffective
+by being split across the partition). Consider the impact
+of a partition on a chat group including both international
+journalists and sources within Iran: one of those two subsets
+loses the ability to add/remove members, update keys, or to
+communicate, while the Internet shutdown is in effect.
+Beyond these specific examples, watchdog organisations
+and the United Nations have expressed concern over the
+recent global rise in Internet shutdowns, reporting a record
+313 shutdowns across 52 countries just in 2025 (e.g., [1],
+[29]). Moreover, even absent shutdowns, network unrelia-
+bility remains a significant problem at a global scale [19].
+The Solution.A decentralized protocol like BeeKEM
+overcomes these limitations. During a network partition,
+each subset of users can continue using the features of the
+app as normal. Only users within the same subset will be
+able to see each others’ messages while the partition lasts,
+but once connectivity is restored, they are able to sync and
+catch up on any activity that occurred in the other subsets.
+The decentralized approach does not assume any par-
+ticular network topology, so any communication channel
+can be used. For example, in the case of a national Inter-
+net shutdown, one option would be to have two delivery
+services, one inside the country and one outside, enabling
+communication among domestic and foreign users, respec-
+tively. Communication between the two could occasionally
+be bridged, for example, by those with privileged access to
+both networks, or by volunteers willing to temporarily put a
+satellite Internet terminal on their roof for an hour at night.
+Another advantage of a decentralized architecture is
+metadata privacy. Anonymity networks such as Tor [18] or
+Loopix/Nym [31] allow one-to-one communication without
+revealing to a network observer who is communicating, and
+generalizations to group communication exist [21]. These
+systems take great care to avoid any single node knowing
+who is communicating, lest it be compromised. A central-
+ized delivery service, even if accessed over an anonymity
+network, can be a potent target for adversaries as it can see
+2
+
+all communication. A decentralized protocol can run over
+an anonymity network without creating such a weakness.
+3. Model and Definitions for DCGKA
+Section 3.1 recalls syntax introduced by Weidner et
+al. [34]. Section 3.2 introduces our communication model,
+and Section 3.3 overviews security properties for DCGKAs,
+including both prior definitions and our novel contributions.
+3.1. DCGKA Syntax
+A DCGKA scheme consists of a tuple of algorithms
+that provide support for the basic functioning of a mes-
+saging group, including initialization, membership changes,
+and rotating secrets. The DCGKA abstraction modelslocal
+operations run by group members, which compose into a
+multi-party protocol. Each user is identified by some unique
+identifieridthat belongs to a set of application-specific IDs
+I(e.g., public keys, usernames, or phone numbers), and
+each holds a local state, denoted byst. A DCGKA scheme
+Πconsists of the algorithms listed below, which are run
+locally by a useridwith statest(whom we call thecalling
+user). All algorithms return acontrol message, which the
+calling user broadcasts upon algorithm completion. 3
+•Initialization:st 0 ←Π.Init(id)is invoked when the
+calling user has just joined a group; it takes as input
+idand returns an initial statest 0 for userid.
+•Group Creation:(st ′,R,M,S)←Π.Create(st,I)
+takes as inputstand a set of user IDsid∈I⊆I,
+and returns an updated statest ′ for the calling user, a
+control messageRto be broadcast to the other group
+members, adirect message setM={(id ′,M)} id′∈I
+(indicating messageMto be sent to userid ′ fromid),
+and a newgroup secret 4 S∈S.
+•Member Addition:(st ′,R,M,S)←Π.Add(st,id ′)
+takes as input the calling user’s statestand the ID
+id′ of the group member to be added, and returns
+(st′,R,M,S)as defined underCreate.
+•Member Removal:(st ′,R,M,S)←
+Π.Remove(st,id)takes as inputstand the ID
+id′ of the group member to be removed, and returns
+(st′,R,M,S)as defined underCreate.
+•Update:(st ′,R,M,S)←Π.Update(st)rotates
+the group secret; it takes as inputstand returns
+(st′,R,M,S)as defined underCreate.
+•Message Processing:(st ′,R,M,S s,S r)←
+Π.Process(st,id,R,M)is invoked when a new
+control message is received; it takes as inputst, the
+(authenticated) IDid ′ of the sender of the message,
+the control messageR, and the direct messageM
+fromid′ to the calling user (orεif there is no direct
+3.Direct messages, in contrast, are “chat messages” sent between users.
+4. This is also often referred to as theupdate secretin the (D)CGKA
+literature; we use the termgroup secretas we find it more intuitively
+contrasts withpersonal secretsheld by individual users.
+message); and it returnsst,M,Mas defined under
+Create, and new secretsS s,S r for the sender and
+recipient of the control message, respectively.
+Without loss of generality, our exposition considers a
+single group. Multiple groups can be realized by multiple
+single-group protocols run independently in parallel.
+3.2. Authenticated Causal Broadcast (ACB)
+We work in the communication model ofauthenticated
+causal broadcast(ACB) [34]. In the decentralized setting,
+there is no central authority to impose a global ordering
+on messages; messages can arrive in different orders for
+different users, e.g., due to a network partition. We therefore
+do not assume that messages arrive in the same order for
+all users, only that they arrive incausal order.
+Definition 1(Causal order).Thecausal orderis a partial
+order over operations, denoted≺. We have thata≺b(“a
+causally precedesb” or “bcausally depends upona”) if:
+•aandbwere each performed by the same group
+member, who performedabeforeb; or
+•the group member who performedbdid so after
+having received the message corresponding toa; or
+•(transitivity) there existscsuch thata≺candc≺b.
+If neithera≺bnorb≺a, then we sayaandbare
+concurrent, denoteda∼b. We call the causal ordering
+between operations theircausal relationship.
+An ACB has three properties. First, it delivers messages
+to users in a causal order: ifa≺b, thenaalways arrives
+beforeb. (There is no guarantee about concurrent opera-
+tions, which may arrive in any order, and may be ordered
+differently for different group members.) Second, an ACB
+isreliable: messages eventually arrive. Third, it provides
+authentication: a message’s receiver is assured of who sent
+it and that the message was not modified in transit.
+3.3. DCGKA Security Goals & Threat Model
+The high-level objective of a DCGKA scheme is to
+ensure the confidentiality of update secretsS. We target
+the standard CGKA security properties of (1)Correctness,
+(2)Forward Secrecy, and (3)Post-Compromise Security. We
+additionally introduce and achieve a novel security property
+unique to the decentralized setting, which we call (4)Cross-
+Fork Security(CFS).
+Intuitively, CFS considers attackers who can view group
+state on both sides of a partition; such attackers can use
+state from users compromised on one side of the partition
+to attack the group secret on the other side of the partition.
+This type of attack was first noted informally by Weidner et
+al. [34], but they do not formally define it and their scheme
+is not secure against it. Alwen et al. [8] develop a scheme
+with security against this type of attack, which they call a
+cross-fork attack, albeit in a different (centralized) setting
+from DCGKA. BeeKEM is the first DCGKA scheme with
+security against this type of attack; we formally define CFS
+and prove that BeeKEM achieves a form of it.
+3
+
+Concurrency vs. Security in BeeKEM.BeeKEM’s ro-
+bustness to concurrency and network unreliability across
+long sequences of operations requires users to retain secrets
+longer than is optimal for security, thus weakening Forward
+Secrecy. Section 7 characterizes this tradeoff, explains why
+it may be inherent for DCGKA schemes with sublinear
+update costs, and describes an alternative system design
+BeeKEMFS that strengthens BeeKEM’s security properties
+to full Forward Secrecy (and Cross-Fork Security) at the
+expense of robustness to concurrency.
+The rest of this section informally defines our security
+goals, later formalized in Figure 3 in §5. Forward Secrecy
+and Post-Compromise Security as discussed below are gen-
+eralizations of the respective standard definitions (e.g. [7])
+to the decentralized setting, as presented in [34].
+Terminology.A user’sviewcomprises i) the history of
+operations; ii) group membership; and iii) the group secret
+S(possiblyS=⊥). Users’ views evolve as they process
+operations. Aforkoccurs when users diverge in their views
+of operation history; users with the same view during a fork
+belong to the samebranch.
+1. Correctness.We define correctness for each DCGKA
+operation. The below definitions state requirements follow-
+ing an honest execution of each operation with calling user
+id, assuming sequential operations in isolation. For concur-
+rent operations, behavior is specified by amaterialization, a
+function which dictates the effects of concurrent operations.
+•Create : All users in the initial set of membersIcan
+access all subsequent group secrets (until removed).
+•Add ,Init : An added member, upon runningInit, can
+access all subsequent group secrets (until removed).
+•Remove : A removed user can no longer access group
+secrets subsequent to their removal.
+•Update : The group secret is well defined (S̸=⊥)
+and accessible to all group members inid’s view.
+•Process : Afteridprocesses the message of an op-
+erationopbyid ′,idhas a view of the group in
+which group membership and the group secretSare
+identical toid ′ immediately after performingop.
+We define an additional correctness property which we
+callCorrectness Under Concurrency (CUC), which states
+that if the group is partitioned and updates are performed
+on separate branches, after the partition heals, each userid
+can access every group secretSresulting from anUpdate
+performed by a user whose view includesidas a member.
+CUC can be in tension with the security properties below.
+BeeKEM is parameterized by akey retention parameter
+κ, where users retain theirκmost recent personal secrets,
+in order to access group secrets from other branches. CUC
+is only possible when users retain all personal secrets (κ=
+∞). We define a weaker notionκ-CUC, which states that
+a useridmay recover updates from branches that fork at
+a point causally subsequent to theκ-th most recentUpdate
+performed byid. Then,∞-CUC≡CUC.
+2. Forward Secrecy (FS).Forward Secrecyin the decen-
+tralized setting requires that: a given group secretScannot
+be accessed by an attacker who has compromised a set of
+users where each user has processed an update causally
+subsequent to the update that establishedS.
+BeeKEM achieves a parametrized form of FS adapted
+for decentralized settings with high concurrency. It does not
+achieve full FS for two reasons, both of which relate to
+the fact that to support CUC, users retain personal secrets
+for longer than is ideal for security. The first reason also
+arises in centralized TreeKEM [7], and relates to users who
+update infrequently. The second reason seems inherent to
+the decentralized setting, and can be partially addressed by
+tuning a tradeoff between CUC and FS with a choice of
+parameter. Our alternative system design BeeKEM FS (§7)
+fully addresses both issues at the cost of CUC.
+The First Reason.Correctness requires a group member
+who has not performed an update in a long time 5 to retain
+access to all group secrets during that time. If such a user is
+compromised, all those secrets may be exposed. The weaker
+notion of FS achieved by TreeKEM is calledForward
+Secrecy with Updates (FSU)[7], which weakens FS by
+stipulating that, if a useridis compromised, the adversary
+cannot access secrets prior to the most recent updateby
+userid. By contrast, full FS protects secrets prior to the
+most recent update byanyuser processed byid. 6
+We adapt FSU to the decentralized setting: a group
+secretSestablished by Updateopcannot be accessed by
+an attacker who has compromised a set of users where each
+user has performed an update causally subsequent toop.
+The Second Reason.Consider a group where users per-
+formUpdateoperations during a two-way partition. Users in
+one half of the partition will produce group secrets which
+are accessible to Alice. In the other half, updates will be
+made to Alice’s last known secretsk old from before the fork.
+When the partition heals, to catch up on the other partition’s
+messages, Alice needs those group secrets, which she can
+access only if she retainedsk old. If Alice did anUpdate
+during the partition and deleted her old secretsk old for the
+sake of FS, she would lose her ability to “catch up.”
+Alwen et al. propose a change to TreeKEM in [7] which
+strengthens its FSU to FS. Section 7 discusses an analogous
+decentralized construction, BeeKEMFS, which has the draw-
+back of restricting users’ ability to access group secrets on
+forks. (Forks are not a concern in TreeKEM’s centralized
+context.) We conjecture the tradeoff between CUC and FS
+may be inherent in decentralized settings.
+3. Post-Compromise Security (PCS).PCS requires: if an
+attacker compromises the state of one or more users, if each
+compromised user performs anUpdate, the attacker cannot
+access any group secret causally after all suchUpdates.
+5. By “long time,” we mean “over manyUpdateoperations.”
+6. Note that FSU does not mention “processing” updates because a user
+idinstantaneously processes their own update.
+4
+
+4. Cross-Fork Security (CFS).CFS is a novel security
+property we introduce which is applicable in decentralized
+settings. It formalizes security againstcross-fork attacks,
+where state from a compromised user is used to attack the
+group secret defined by a concurrent update [8]. We first
+state CFS for a single compromised user to build intuition
+before giving the full definition. CFS states that if the group
+forks into branchesb 1,...,b m and the attacker compromises
+a useridwho has performed an updateopon branchb ′,
+the attacker cannot access the group secrets ofUpdate
+operations on any branchb ∗ which diverged fromb ′ prior
+toop. For example, if Alice and Bob concurrently perform
+updates then an attacker obtains Alice’s state, CFS prevents
+the attacker from obtaining Bob’s new group secret (or any
+subsequent group secret established on Bob’s branch). CFS
+only applies while a fork is active; compromises after a fork
+heals are covered by FS.
+For multiple compromised users, CFS states that if
+the group forks into branchesb 1,...,b m and the attacker
+compromises one or more usersid(across branchesB),
+each with a most recent update operationop id, the attacker
+cannot access any group secrets defined on a branchb ∗
+which forked fromBcausally prior to each respectiveop id.
+5.κ-FSU andκ-CFS.As discussed earlier, key reten-
+tion is necessary for CUC. However, such key retention is
+incompatible with FS and CFS. We define weaker security
+notions for FS and CFS which we callκ-FSUandκ-CFS.
+Both are parameterized byκand are equivalent to FSU and
+CFS whenκ= 1; we define them with respect to a single
+compromise for brevity, but the multi-compromise definition
+extends the definitions of FSU and CFS in the natural way.
+κ-FSU requires that: if an attacker compromises the
+state of a userid, they cannot access update secrets from
+update operations prior to theκ-th most recent update byid.
+Likewise,κ-CFS requires: when the group state forks, if an
+attacker compromises the state of a userid, the attacker
+cannot access any group secrets defined on forks which
+occurred before theκ-th most recent update byid.
+When used with key retention parameterκ, BeeKEM
+achievesκ-CUC,κ-FSU, andκ-CFS. Higher values ofκ
+degrade the FS and CFS properties but offer greater access
+to group secrets defined under forking (stronger CUC). Our
+variant construction BeeKEM FS (§7) achieves full FS and
+CFS, but has no support for accessing group secrets defined
+under forking (i.e.,κ= 1). To summarize symbolically:
+FSU:κ-FSU⇐···⇐1-FSU⇔FSU⇐FS
+CFS:κ-CFS⇐···⇐1-CFS⇔CFS
+Example.Figure 1 illustrates the three security properties.
+Threat Model.We follow the standard threat model from
+prior DCGKA literature [34], [35]. We assume users execute
+the protocol honestly. We consider an adversary who may
+compromise users of the group to obtain a snapshot of their
+local state, and who may choose when the ACB delivers
+messages (without interfering with ACB guarantees; see
+id id id×
+Figure 1. An example operation graph for BeeKEM withk= 2, showing
+which group secrets are protected under which security properties when a
+useridhas their state compromised at×. Nodes denoteUpdateoperations;
+nodes labeledidrepresent updates performed byid; edges denote the
+causal order (written left to right to follow time). Blue (solid) boxes are
+protected under2-FSU; red (horizontal stripe) boxes under PCS; and orange
+(vertical stripe) boxes under2-CFS. The group secrets of unboxed nodes
+are accessible to the attacker.
+§3.2). Control over the ACB implies the adversary can cause
+arbitrary network partitions.
+4. Our Construction: BeeKEM
+Section 4.1 provides an initial overview of the BeeKEM
+protocol and its basic operations. Section 4.2 discusses
+cryptographic primitives and requirements of BeeKEM. Sec-
+tion 4.3 describes the BeeKEM construction in detail.
+4.1. Design Overview
+The BeeKEM Tree.BeeKEM belongs to the Asyn-
+chronous Ratcheting Trees (ART) family of protocols, which
+also include the TreeKEM protocol used in MLS [7], [15].
+As such, our scheme is underpinned by one primary data
+structure: a binary tree that encodes group membership and
+the current group secret, which we call theBeeKEM tree.
+The BeeKEM treeBis a perfect binary tree that stores
+the group secretSencrypted at the root. Each user keeps a
+local copy of the tree, which they update as they perform and
+receive operations. Each leaf is either empty or corresponds
+to a group member, containing their unique user identifierid
+and public keypk id. The associated secret keysk id is also
+stored in the user’s local state. User IDs are fixed throughout
+the protocol, but user keys can evolve. The core property of
+the BeeKEM tree is given below.
+Invariant 1.Access to the private key associated with a
+nodev(leaf or inner node) is sufficient to decrypt the
+encrypted private key of any nodeuon the direct path ofv.
+In particular, Invariant 1 implies that possession of any
+personal secretsk id suffices to access the group secretS
+at the root. Thus, any group member can (locally, without
+interaction) recoverSby starting at their leaf and moving up
+the tree, iteratively decrypting inner-node secrets. We refer
+to secret keys of inner nodes assubgroup secrets.
+Next, we describe how BeeKEM implements the
+DCGKA operations defined in Section 3.
+Update & Process.For post-compromise security, group
+members must periodically rotate their keys using the
+Updateoperation (§3). AnUpdateoperation in BeeKEM
+consists ofrotating all secrets in the path from a leaf to
+the root. When a useridperforms an update, they first
+generated=⌈log 2n⌉new public-private key pairs, one
+5
+
+per tree level; note that this leads to a new(pk id,sk id)and
+a newS. They then overwrite each node in the path from
+their leaf to the root by storing theℓ-th new key pair at
+the node on theℓ-th level 7; as before, with public keys in
+the clear, and private keys encrypted. Crucially, each secret
+key is encrypted in a way that preserves Invariant 1. As
+such, all group members retain access toSafter any update.
+The updating user then broadcasts all new public keys and
+ciphertexts (i.e. encrypted secret keys) to other members of
+the group, who modify their local version of the tree on
+these nodes accordingly (using theProcessoperation (§3)).
+“Blanking” Nodes.When the tree is initialized or ex-
+panded, its new nodes are “blank,” without any associated
+data.AddandRemoveoperations can “blank” nodes by
+removing their associated data. When aleafnode is blanked,
+we call it atombstone, and it is given a special value indicat-
+ing its former association with a certain user, distinguishing
+it from an “empty” node that never had associated data.
+Blanked inner nodes look like empty nodes.
+Adding & Removing Members.TheAddandRemove
+operations work similarly, by editing all of a leaf’s ancestors
+up to the root every time a leaf is edited. For anAdd
+operation, the calling useridassociates the new userid ′ with
+an empty leaf of the tree,8 labeling the leaf withid′ and their
+initial public keypk id′ (obtained through our assumed PKI).
+Then, the calling userblanksthat leaf’s ancestor nodes, up to
+and including the root. This is done to preserve Invariant 1:
+at the start of theAddoperation, the ancestors of the leaf of
+id′ contain secret keys whichid′ cannot access. By blanking
+the leaf’s ancestors, the group secret becomes undefined
+(S=⊥). The calling user then broadcasts these changes to
+other members. ARemoveoperation works similarly: the
+calling user blanks the leaf of the removed member and all
+its ancestors, and broadcasts this. Immediately after anAdd
+orRemoveoperation, the group secret is undefined; it will
+be reestablished by the nextUpdateoperation. 9
+Replaying Operations & Handling Concurrency.The
+central challenge of the decentralized setting is that con-
+current operations may be delivered in any order. After
+a user performs an operation, they broadcast a message
+containing the data necessary for other users to implement
+corresponding changes to their copy of the BeeKEM tree.
+In general, if different users receive operations in different
+orders, they may end up with different trees. In contrast, our
+construction carefully ensures all users who have received
+the same set of operations arrive at the same local state.
+BeeKEM handles concurrency by detecting concurrent
+operations andreplayingthem in an order independent of
+the order in which they were received. BeeKEM records
+the entire history of operations in a second data structure, a
+7. Leaves are at level0and the root is at leveld−1.
+8. If there are no more empty leaves, the tree size is expanded. See §4.3.
+9. In some CGKA schemes, the group secret is also defined afterCreate,
+AddandRemove; it is possible to simulate this behavior in BeeKEM
+by having the calling user immediately perform anUpdateafter these
+other operations. BeeKEM is simpler to understand and analyze with group
+secrets only defined byUpdateoperations.
+directed acyclic graph (DAG) which encodes the causal rela-
+tionships between operations and enables efficient detection
+of concurrency. We call this data structure theoperation
+graphand denote it byG. Each user maintains a local copy
+ofG, which is extended whenever they perform a local op-
+eration or process an operation message from another user.
+Users traverseGto replay concurrent operations, such that
+users observe a consistent ordering; §4.3 provides details.
+4.2. Building Blocks
+Notation.λ∈Nis a security parameter andnegldenotes
+a negligible function (inλ). For brevity, we generally omit
+the security parameter from algorithm inputs.
+Assumptions.We assume a public key infrastructure
+(PKI) which allows a useridto provide a public key
+pkid which can later be obtained by another userid ′. The
+PKI will be used when callingAddto include the targeted
+user’s initial key in the group. We further assume a reliable
+broadcast protocol (RBP) [27], such as a gossip network
+that all users are part of.
+Non-Interactive Key Exchange (NIKE).Anon-
+interactive key exchangescheme allows two parties, given
+knowledge of each other’s public keys, to establish a shared
+symmetric key. It is “non-interactive” in the sense that, once
+the public keys have been published, no further commu-
+nication is necessary for the two users to compute their
+shared key. Diffie-Hellman key exchange [17] is a notable
+example of a NIKE scheme. In general, a NIKE is a pair of
+algorithmsNIKE := (Kg,SharedKey)as follows:
+•(pk,sk)← $ NIKE.Kg: A randomized algorithm that
+takesλas implicit input and outputs a key pair(pk,sk).
+•dk←NIKE.SharedKey(pk,sk): A deterministic algo-
+rithm that takes as input a public key from one key
+pair and a secret key from another, and returns a shared
+secret key which we denotedk(for “derived key”).
+TheNIKE.SharedKeyalgorithm has asymmetry property:
+Pr
+(pk1,sk1)
+(pk2,sk2)
+[SharedKey(pk1,sk 2) =SharedKey(pk 2,sk 1)] = 1,
+for(pk 1,sk 1),(pk 2,sk 2)← $ NIKE.Kg. We will rely on
+HKR-CKS security of NIKE schemes, which requires that
+an attacker given a set of public keys cannot distinguish
+between actual shared keys and keys randomly sampled
+from the shared key keyspace. We refer readers to [20] for
+a formal definition. At a high level, HKR-CKS adversaryA
+has a user registration oracle (which returns the generated
+public key), and a challenge/test oracle that takes as input
+a pair of registered users and returns their shared key (in
+the real world) or a freshly generated key (in the ideal
+world). An adversary wins if they can tell which of the
+two worlds they are in; we denoteA’s advantage in doing
+so by Adv hkr-cks
+NIKE (B).
+6
+
+Symmetric Encryption (SE).A symmetric encryption
+scheme is a tuple of algorithmsSE := (Kg,Enc,Dec):
+•sk← $ SE.Kg: A randomized algorithm that takesλas
+implicit input and outputs a (symmetric) secret keysk.
+•ct← $ SE.Enc(sk,m): A randomized algorithm that
+takes as input a secret keyskand a messagem, and
+returns a ciphertextct.
+•m←SE.Dec(sk,ct): A deterministic algorithm that
+takes as input a secret keyskand a ciphertextct.
+We require standard correctness of SE: for any messagem,
+Prsk←$ SE.Kg [SE.Dec(sk,SE.Enc(sk,m)) =m]>1−negl.
+BeeKEM requires that the shared keys obtained from
+the NIKE are compatible with the key space used in the
+symmetric encryption scheme. That is, if one uses the NIKE
+SharedKeyto furnish derived keysdkand uses them as
+secret keysskfor encryption and decryption underSE, the
+encryption and decryption algorithms of the scheme still
+function correctly and securely. 10
+We require standard multi-user IND-CPA [11] security
+of SE, which requires that an attacker that can obtain en-
+cryptions of chosen messages for any user cannot distinguish
+the encryptions of any two challenge messages of the same
+length for any user. Adv mu-cpa
+SE (C)denotes the advantage of
+adversaryAin the IND-CPA game.
+Hash DAG.Ahash DAGis a directed acyclic graph
+(DAG) in which nodes are (formatted) strings containing
+hashes of other nodes, which are treated as their predeces-
+sors in the graph. Hash DAGs may be used to represent a
+history of events and the causal relationships between them,
+where the event with nodeahas its hash contained in the
+node of eventbifa≺b. Intuitively, being able to write
+the hash ofain the description ofbrequires thataexisted
+prior tob, thus implyinga≺bby the definition of causal
+order (Definition 1 (Bullet 2)). More generally, there is a
+path frombtoain a hash DAG if and only ifa≺b.
+BeeKEM constructs its operation graphGas a hash
+DAG. When a user performs an operation, they construct a
+string representation of that operation, including its author,
+the payload of data associated with that operation, and the
+hashes of its predecessor operations. Users also track the
+head operationsof their copy ofG, where theheadsof
+a hash DAG are the nodes which have no successors; a
+(nonempty) hash DAG always has one or more heads. Head
+operations are the most recent operations a user is aware of.
+ACB from Hash DAG over RBP.Our BeeKEM imple-
+mentation uses a standard construction of an ACB from an
+RBP (a weaker communication model) using a digital sig-
+nature scheme and a hash DAG (the operation graph) [24],
+[25]. Hence, while our proofs assume an ACB, our imple-
+mentation only requires an RBP.
+10. In our implementation of BeeKEM (see §6), we use Elliptic-Curve
+Diffie-Hellman as the NIKE and ChaCha20-Poly1305 as the symmetric
+encryption scheme.
+Materialization Function.Recall again that the primary
+challenge of the decentralized setting is managing concur-
+rency. Concurrent messages may be received and processed
+by users in any order, but users must converge upon the
+same group state (i.e., BeeKEM tree) regardless of the order
+messages arrive.
+Formally, a user’s BeeKEM tree should be a function
+only of their operation graph. This deterministic mapping
+from sets of operation messages to BeeKEM trees is called
+thematerializationfunction. Materialization is invoked dur-
+ingProcess; we call the process of reconciling a batch of
+concurrent operations amerge. BeeKEM’s materialization
+function is designed to have the following properties:
+•Strong convergence: Two users who have observed the
+same set of operations compute identical tree state,
+regardless of operations’ order of receipt. (Note that
+this implies agreement not just on the current group
+members but also their placement among the leaves.)
+•Remove liveness: If a user is targeted for removal
+in aRemoveoperation among a batch of concurrent
+operations, that user is not present in the group after
+the merge of those operations.
+•Add liveness under Remove-wins: If a user is targeted
+for addition in anAddoperation among a batch of
+concurrent operations, that user is present in the group
+after merge—unless that same user is targeted by a
+concurrentRemove, which takes precedence.
+•No secret after merge: There is no new group secret
+defined after the merge of concurrent operations. (Only
+anUpdatecan define a group secret.)
+Readers familiar with conflict-free replicated data types
+(CRDTs) may recognize concepts and vocabulary from that
+literature here. BeeKEM is in fact a CRDT.
+4.3. Detailed Description of BeeKEM
+First, we introduce the two data structures BeeKEM
+relies upon (§4.3.1); second, we describe how BeeKEM
+implements the operations of a DCGKA scheme (§4.3.2);
+and third, we explain how BeeKEM handles concurrency
+(§4.3.3). BeeKEM’s complete specification in pseudocode
+is in Fig. 6 and 7 in App. A.
+4.3.1. BeeKEM’s Data Structures.BeeKEM is supported
+by two primary data structures (introduced in §4.1): the
+BeeKEM treeB, which encodes group membership and
+the update secret; and the operation graphG, which stores
+operation history and causal relationships.
+BeeKEM Tree.The BeeKEM tree is a perfect binary tree
+Bthat stores an encryption ofSat the root whenS̸=⊥.
+Each group member maintains a local copy ofB.
+We discuss the structure of a tree of depthd=⌈log 2n⌉.
+A leaf stores(id,pk id)if it is associated with a group mem-
+berid; or(id,⊥)ifidhas been removed from the group; or
+∅if it is empty. An inner node either stores∅, if it is blank;
+or one or moreversions. A version contains i) a public
+7
+
+key, and ii) one or more encryptions of the corresponding
+private key. In the simplest case there is one version with
+one ciphertext; we explain the simple case here then address
+the general case when discussingUpdatein §4.3.2. Letv
+denote an inner node with associated public-private key pair
+(pkv,sk v)and childrenlandr. Invariant 1 requires that
+skv can be computed given access to either child’s secret
+key,sk l orsk r. BeeKEM achieves this by encryptingsk v
+under a symmetric key shared between its children: using a
+NIKE, we derive a shared keydk lr from the keys of both
+children, which is used to encryptc v←$ SE.Enc(dklr,sk v);
+then(pk v,c v)is stored atv. Given a child secret keysk l,
+one can re-compute the shared key as
+dklr←NIKE.SharedKey(pk r,sk l),(1)
+using the siblingr’s public keypk r, which is stored in the
+clear (and vice-versa for the other child’s secret). Having
+thus computeddk lr, one can decryptc v and recoversk v.
+With this structure holding throughout the tree, any group
+member can access all subgroup secrets on their leaf’s path
+to the root, recursively: for each levelℓ∈{0,...,d−2},
+they can use their secret key from levelℓand its sibling
+public key to derive a shared keydkas in (1) and usedk
+to decrypt the level-(ℓ+ 1)ancestor’s subgroup secret.
+Direct Paths & Co-Paths.A leaf’sdirect pathis the path
+of nodes from that leaf to the root. A leaf’sco-pathis the
+ordered set of nodes which are the siblings of each node in
+that leaf’s direct path. By auser’s direct path, we mean the
+user’s leaf’s direct path; likewise for theuser’s co-path.
+Operation Graph.As aforementioned, the operation
+graphGis a hash DAG which records the history of DCGKA
+operations performed by the group. Each user stores a local
+copy ofG, which encodes the operations processed by that
+user so far and allows detection of causal order. When a
+user performs a new operation, they broadcast a message
+containing their current head operations as its predecessors.
+Every node inGstores the type of operation (Create
+Add,Remove, orUpdate) that it corresponds to, the ID of
+the calling user thereof, the hashes of its predecessors in
+G, and other operation-specific fields (e.g., for anAddor
+Remove, theid ′ of the added or removed user).
+4.3.2. BeeKEM’s Operations.
+Group Creation.In BeeKEM, theCreateoperation ini-
+tializes a group with only the calling user as a member. 11
+This results in the calling user creating initial versions of
+BandGin their local state as follows. The initial version
+ofBis a two-level tree, containing only(id,pk id)for the
+calling user in the first leaf, with the other two nodes (i.e.,
+the second leaf and root nodes) empty. As such, there is
+no group secret defined upon group creation. The initial
+version ofGcontains a unique sink of the graph (similar to
+11. While the DCGKA syntax in §3 allowsCreateto take as input a
+set of user IDs to initialize the group with, BeeKEM restricts this set to
+be empty. This is without loss of generality: group members can be added
+immediately after via calls toAdd.
+an “initial commit” in Git), which is the only node with no
+predecessor. Looking ahead, this initial operation is always
+a valid point for beginning a replay of the operation graph.
+Finally, the user storessk id separately in their local state.
+Adding a Member.When a useridperforms anAdd
+operation to add a userid′, they first identify a fresh (empty)
+leaf for the new user and annotate it withid ′ as its owner
+and their public keypk id′. We assume this initial public
+keypk id′ is obtained through a PKI external to BeeKEM,
+which we treat as a black box. The fresh leaf is chosen as
+the rightmost empty leaf in our implementation. 12 If there
+are no empty leaves, then we expand the tree to the next
+power of two to create more empty leaves (the old root
+becomes the left child of the new root). Then, every node
+on the direct path of the leaf forid ′ is blanked, including
+the root. This is done to preserve Invariant 1, as those
+nodes’ subgroup secrets (including the group secret) are
+inaccessible to a member of their subtree after the tree-
+expansion and before the blanking. Notice that there is no
+defined group secret after anAdd; it is only established again
+after a user performs an update. To conclude,idbroadcasts
+(id′,pk id′)as a control message. Finally,Addruns in time
+(logn), wherenis the group size.
+Removing a Member.When useridperforms aRemove
+operation to remove a userid ′, they identifyid ′’s leaf in
+the BeeKEM tree 13 and blank that leaf and all nodes in its
+direct path to the root. This is again to maintain Invariant 1:
+before the blanking, the nodes of the direct path have a
+subgroup secret accessible to a member no longer part of
+the group.Removedoes not free up leaves formerly assigned
+to a group member for use in futureAddoperations. These
+leaves are instead kept astombstonesto help with concurrent
+group changes; strategies to free up tombstones are an opti-
+mization.14 To conclude member removal,idbroadcasts the
+removedid′ as a control message to all the other members of
+the group. As with additions, there is no defined group secret
+immediately following aRemoveoperation; a subsequent
+update operation is required to re-establish the update secret.
+Removealso runs in timeO(logn).
+Group Secret Updates.Before discussing theUpdate
+algorithm, we conclude our description of the general struc-
+ture of the BeeKEM tree. Recall that an inner node may
+have more than one versions; and that a single version may
+have more than one ciphertext. We first explain the cause of
+multiple versions. Under concurrent updates, different forks
+ascribe different public-private key pairs to the same node,
+thus defining different versions. When partition heals, mem-
+bers keep all versions of a node established by concurrent
+operations; such a node is called aconflict node. A causally
+subsequent update supersedes the conflict and establishes a
+12. This is arbitrary; it does not matter which empty leaf is used, as long
+as there is a deterministic way of finding the next fresh leaf to use.
+13. We assume for simplicity of exposition thatAddonly ever targets
+id′ not in the group and thatRemoveonly ever targetsid ′ in the group.
+Our implementation aborts when these conditions do not hold.
+14. Our implementation of BeeKEM frees up tombstones (turning them
+into empty nodes) whenever they form a contiguous right edge.
+8
+
+1
+2 3
+4 5 6 7
+8 9 10 11 12 13 14 15
+Figure 2. A BeeKEM tree showing different types of nodes. Dotted nodes
+denote blank nodes, and the slashed node at 6 is a conflict node. (This tree
+could arise if the users at leaves 12 and 13 concurrently performed updates,
+then the partition healed and the user at leaf 14 was removed.) The user
+at node 10 performs an update. When encrypting the subgroup secret for
+node 2, the user will create a throwaway key pair (as node 4 has an empty
+resolution). When encrypting the group secret at node 1, the user finds the
+resolution of node 3, which is the greyed nodes 12, 13, and 15.
+single version. If the root is a conflict node, we consider the
+group secret undefined, i.e.S=⊥.
+The cause of multiple ciphertexts explains something
+readers may wonder: for a given inner node, why usedkto
+encryptskrather than usedkitself as the subgroup secret?
+This is because situations can arise where the sibling node
+either is blank (and has no public key) or is a conflict node,
+with no canonical public key. In such situations, BeeKEM
+collects the nodes which “ought” to have had access to
+the sibling’s subgroup secret, if it had one, and makessk
+available to them by collecting theirpk, computing corre-
+spondingdk, and encryptingskunder each. This creates
+agreement on the subgroup secretskeven when there is
+no agreement ondk. Formally, theresolutionof a non-
+blank, non-conflict node is defined as just the node itself;
+the resolution of a blank or conflict node is the set of its
+highest descendants which are not blank or conflict nodes.
+Figure 2 gives an example of a node resolution.
+We now present the update algorithm. Letidbe the
+updating user, and letv ℓ denote the level-ℓnode on their
+direct path, forℓ∈ {0,...,d−1}. Thenv 0 isid’s leaf
+andv d−1 is the root. First, useridgeneratesdfresh public-
+private key pairs(pk ℓ,sk ℓ)← $ NIKE.Kg(). Theℓ-th key pair
+(pkℓ,sk ℓ)replaces the keys associated withv ℓ. In particular,
+(pk0,sk 0)are the new keys forid. The user updatesv 0 with
+pk0, and storessk 0 locally. Useridthen travels up their
+direct path iteratively, processing the new key pairs via an
+analogous procedure to that given in (1) for accessing shared
+secrets. For every inner nodev ℓ forℓ∈{1,...,d−1}, the
+updating user enshrines the subgroup secret ofv ℓ as follows.
+First,idtakes the resolution of the co-path sibling ofv ℓ−1
+(said differently: the other child ofv ℓ). Then, for every node
+uin the sibling’s resolution, 15 idtakes its public keypk u
+ℓ−1
+and computes
+dku
+ℓ−1←NIKE.SharedKey(pk u
+ℓ−1,sk ℓ−1),
+wheresk ℓ−1 denotes, as above, the secret key ofv ℓ−1
+(whichidjust sampled). Then,idencrypts the new subgroup
+secretsk ℓ under eachdk u
+ℓ−1 asc u
+ℓ←$ SE.Enc(dku
+ℓ−1,sk ℓ).
+15. In the edge case where the resolution set is empty,idgenerates a
+“throwaway” key pair and publishes itspkat the sibling.
+This creates a new version withpk ℓ and allc u
+ℓ , whichid
+publishes atv ℓ. Ultimately,S=sk d−1 is encrypted and
+stored at the rootv d−1, becoming the new group secret.
+(Accordingly, when a user decrypts the group secret in the
+general case, they skip any blank or conflict nodes on their
+direct path, going up their ancestors: some higher node
+contains a ciphertext they can decrypt.)
+The control message that results from an update contains
+a list of the new versions for each node on the direct
+path; and the set of public keys rendered obsolete by this
+operation.Updateruns in timeO(logn)in the best case,
+where each node of the co-path is non-blank and non-
+conflict. Performance degrades with concurrency, which cre-
+ates conflict nodes; in the worst case it decays toO(n), if
+a resolution set containsO(n)nodes.
+Processing Operations.As described, BeeKEM’s
+Update,Add, andRemoveoperations only result in control
+messages, which are broadcast from the calling user to all
+other group members via an ACB (§3); BeeKEM does not
+rely on direct messages. All three of BeeKEM’s control-
+message types have the same structure: (1) the operation
+that was performed, and (2) the new content for the nodes
+modified by the operation (which updates, additions, and
+blankings). Then,Processsimply involves updating the
+user’s local copies ofGandBaccording to (1) and (2),
+by replaying the operation that was received and appending
+the operation to the operation graphG.
+4.3.3. Handling Concurrency.Recall that BeeKEM can
+detect concurrency using the operation graphG(§4.2).
+When concurrent operations are processed, BeeKEMre-
+playsthe entire history of operations from the initialCreate
+operation,16 using the materialization function to determine
+the effects of concurrent operations and guaranteeing con-
+vergence between users.
+Definition 2(Topological sort).LetGbe a DAG. Atopolog-
+ical sortofGis an ordering of its nodes such that, if directed
+edge(u,v)is inG, thenuprecedesvin the ordering.
+To compute the materialization, the user first (deter-
+ministically) topologically sorts 17 the operation graphG
+with respect to the reverse of the hash edges; the resulting
+topological sort respects the causal order over operations by
+construction (see §4.2). In doing this, the user also identifies
+whereGforks into separate branches; these periods of
+concurrency are calledbatches, and they are also ordered
+with respect to each other by the topological sort.
+The user then applies each sequential operation and each
+batch in the topological sort order. Sequential operations
+are applied one-by-one in the expected way; but when
+encountering a batch, the operations of the batch are applied
+in a special way to handle their concurrency. Within a batch,
+the user iterates over the sorted operations collecting two
+16. An optimization is to periodically checkpoint to replay fewer op-
+erations. In practice we find replaying the full history does not cause
+performance issues.
+17. A topological sort can be computed efficiently for a DAG [16].
+9
+
+sets: a setAof added members; and a setRof removed
+members. The user applies each operation in the batch in the
+topological sort order. When performing concurrentUpdate
+operations, the different versions of a node are all kept
+(unlike sequential updates, which supersede each other).
+If the operation isAddorRemove, they add the targeted
+user to the relevant set. At the end, the members inR
+have their leaves’ direct paths (re-)blanked (as concurrent
+Updates could have populated their direct paths). Then, the
+members inA\Rare sorted in some deterministic way
+(e.g. lexicographic ordering over IDs), removed from the
+tree, then reinserted in that order. This reinsertion is done
+because the same leaf may have been assigned to distinct
+members on different branches.
+BeeKEM Pseudocode.In App. A, we present the com-
+plete BeeKEM protocol as pseudocode in Fig. 6 and 7.
+5. Security Analysis of BeeKEM
+We overview our security analysis of BeeKEM, which
+rigorously demonstrates it achieves security properties from
+§3.3. Full proofs are in App. B.
+Security Definition.Our security and correctness notions
+are captured in the key indistinguishability game introduced
+by Weidner at al. [34], which formalizes the security goals
+for DCGKA schemes (given in §3). Figure 8 in App. B
+provides a full formal definition of the game.
+Key Indistinguishability Game.The ki-DCGKA game
+starts by initializing a CGKA schemeΠand variablesγto
+track the flow of control and direct messages to be delivered.
+After setup, the adversaryAruns with oracle access to
+the operations ofΠand other oracles described below.Ahas
+perpetual access to the list of (control and direct) messages
+exchanged. Using oracles to interface withΠ,Amay create
+a group, modify group membership (i.e., add or remove
+users), trigger updates, and process messages. These oracles
+call the corresponding algorithm inΠ, and add the resulting
+control and direct messages to local variables maintained by
+the game. These messages are delivered when the adversary
+calls a dedicated delivery oracle, which results in each
+receiving user processing the message. Due to the ACB, the
+adversary cannot modify messages, deliver messages out of
+casual order, or forge sender identities.
+The adversary may compromise users of its choice via
+a dedicated Compromise oracle, which reveals the chosen
+users’ local state. In addition, the adversary may obtain any
+user’s group secrets, either via the Reveal oracle (which
+simply reveals the secret), or the Challenge oracle, which
+returns either the real secret or a random string (of the same
+length) depending on the value of a random challenge bit.
+ki-DCGKA is parametrized by asafety predicateP,
+which rules out sets of adversary queries that would lead
+to “trivial wins” that do not violate any of our desired
+security properties (e.g., compromising a member’s state and
+immediately recovering their group secret).Pencodes the
+bee-safeκ(q1, . . . , qn) :
+∀
+ 
+i, js.t.q i =CHALLENGE(id, c)for someid, cand
+qj =COMPROMISE(id ′)for someid ′
+, 
+∃(u1, . . . , uκ)s.t.∀l, q ul =SENDUPDATE(id ′),/ /k-FSU
+q2op(qi)≺q2op(q uκ )≺···≺q2op(q u1 )⪯q2op(q j)
+
+∨
+ 
+∃us.t.q u =SENDUPDATE(id ′),/ /PCS
+q2op(qj)≺q2op(q u)⪯q2op(q i)
+
+∨
+ 
+∃(u1, . . . , uκ)s.t.∀l, q ul =SENDUPDATE(id ′),/ /k-CFS
+(q2op(quκ )≺···≺q2op(q u1 )⪯q2op(q j))
+∧(q2op(qi)∼q2op(q j))
+
+Figure 3.bee-safepredicate, whereq 1,...,q n denote thenoracle queries
+performed by the adversary andκis the parameter controlling the tradeoff
+between fork tolerance and forward secrecy.a⪯bdenotesa≺b∨a=b.
+precise PCS and FS guarantees that a scheme must have if
+secure under the ki-DCGKA game with respect toP.
+We define the advantage of adversaryAover DCGKA
+schemeΠwith respect to safety predicatePas
+Advki-dcgka
+Π,P (A) = Pr
+
+ki-DCGKAA
+Π,P⇒1
+
+.
+BeeKEM Safety Predicate.Figure 3 formally defines the
+safety predicatebee-safethat BeeKEM satisfies. The three
+clauses of the disjunction correspond to the three security
+properties achieved by BeeKEM:κ-FSU, PCS, andκ-CFS
+(see §3.3).bee-safeis parameterized byκ; smaller values
+ofκweaken the predicate, excluding more query sets.
+Theorem 1.LetSEbe a symmetric encryption scheme,
+NIKEbe a non-interactive key exchange scheme compat-
+ible withSE, andΠ=BeeKEM[SE,NIKE]. LetAbe a
+ki-DCGKAadversary that makes at mostcchallenge oracle
+queries and at mostnmember additions. Then, we give
+adversariesB, andCsuch that, for any integerk≥1,
+Advki-dcgka
+Π,bee-safek
+(A)≤
+c·⌈log 2n⌉·
+ 
+Advhkr-cks
+NIKE (B) +Adv mu-cpa
+SE (C)
+
+.
+We present the full proof of this theorem in Appendix B.
+Proof Sketch.We first use a standard hybrid argument to
+bound the advantage of an adversary that performs multiple
+challenge queries by the advantage of an adversary that
+performs a single challenge query. This allows us to focus on
+one challenge query thereafter, which simplifies the proof.
+The core of the proof is then computing the advantage
+of the single-query adversary. We do so via a hybrid ar-
+gument over the nodes that are modified during the update
+that preceded the challenge, which established the current
+group secret at that time. For each node in the update path,
+from the bottom up, we define a pair of hybrids: the first
+replaces computations of NIKE shared keys with random
+keys, invoking NIKE security; and the second replaces en-
+cryptions of subgroup secrets with encryptions of all zeros,
+invoking encryption security. Arguing that the NIKE and
+IND-CPA adversaries can simulate the DCGKA adversary’s
+environment, including DCGKA operation oracles, is non-
+trivial; App. B gives details.
+10
+
+6. Implementation and Evaluation
+We evaluate our implementation and compare it to two
+existing systems: OpenMLS [30], a popular implementation
+of MLS and its centralized TreeKEM protocol [7], and Wei-
+dner et al.’s DCGKA scheme [34], which we call WKHB
+based on the authors’ initials. Our implementation is open
+source;
+Our experiments explore two scenarios. In Section 6.1
+we compare the three implementations in a setting where
+the group members performAdd,Remove, andUpdate
+operationssequentially, i.e., where one user’s operation is
+received by the other users before the next operation is
+generated. We show that in this setting, the cost of MLS
+and BeeKEM grow logarithmically with the group size as
+expected, whereas the cost of WKHB grows linearly.
+In Section 6.2 we measure how BeeKEM’s performan-
+ceis affected by operations performed during a network
+partition, resulting in an operation graph containing con-
+current operations. This experiment shows that the cost
+of resolving conflict nodes in BeeKEM is approximately
+proportional to the fraction of users who calledUpdateat
+least once during the network partition, resulting in a worst-
+case conflict resolution cost that is linear in the group size.
+We perform our experiments by simulating all users,
+and the network between them, on a single machine with
+a 16-core AMD CPU and 128 GB of RAM. We run each
+experiment 5 times and report the median. Run-to-run timing
+is stable: the standard deviation across the 5 repetitions
+stays below 1% of the median for slower (multi-millisecond)
+operations. Greater variance (up to 16%) was observed only
+on sub-millisecond operations where the absolute variance
+is negligible. We therefore omit error bars from our graphs.
+6.1. Best-Case Protocol Comparison
+Sequential execution of operations with no concurrency
+is the best case for BeeKEM, since it avoids introducing
+conflict nodes that would require resolution. For MLS, this
+sequential execution is the only possible mode of operation.
+Fig. 4 shows the CPU time used by each of the three
+systems for different operations at group sizes varying from
+8 to 512 members. “Sender” refers to the cost for the user
+who invokesAdd,Remove, orUpdate. “Recipient” refers to
+the cost for an existing group member callingProcessafter
+receiving the operation from another user. “New recipient”
+refers to the cost ofProcessfor the new member being
+added by anAddoperation.
+For the sender, theO(n)cost ofUpdatein WKHB
+is clearly visible in Fig. 4. BeeKEM has the lowest CPU
+time for both senders and recipients of the three systems
+we compared. We were surprised to see linear growth in
+the OpenMLS CPU time at larger group sizes. On further
+investigation, we found that although the core TreeKEM
+construction in MLS hasO(logn)cost, OpenMLS addi-
+tionally recomputes tree and parent hashes over the whole
+ratchet tree, which hasO(n)cost and becomes a significant
+contributor to CPU time at large group sizes.
+All three systems have a higher cost for the new member
+being added by anAddoperation, since this user needs
+to download a welcome message and compute the current
+group state. In OpenMLS this requiresO(n)work to verify
+the leaf signatures of the whole ratchet tree; in WKHB the
+cost is building the ratchet state for each of thenmembers;
+and for BeeKEM the cost is replaying theO(n)operation
+history. BeeKEM is the most expensive of the three on this
+metric, though they are asymptotically similar. EachUpdate
+grows the welcome message by2.5kB and increases the
+Processtime for that message by 40 µs.
+In order to separate the effects of implementation lan-
+guage (BeeKEM and OpenMLS are written in Rust, WKHB
+in Java) and other implementation details (such as Open-
+MLS’s ratchet tree recomputation) from the core CGKA
+cost, we additionally perform an asymptotic analysis whose
+results are reported in Table 1. We instrument the three im-
+plementations to count the number of invocations of public-
+key cryptographic primitives (Diffie-Hellman, HPKE, signa-
+tures, and asymmetric keypair generation), since these dom-
+inate the runtime, whereas symmetric primitives (hashes,
+KDFs, and AEADs) are comparatively fast. For recipients
+we compute the average number of invocations per group
+member who callsProcess. We then report which ofO(1),
+O(logn),O(n),O(nlogn), orO(n 2)best fits the observed
+invocation counts.We also measure the size of the network
+messages and the size of data in persistent storage (in bytes),
+and likewise map these to a big-O class.
+6.2. BeeKEM Under Network Partitions
+Next, we evaluate BeeKEM’s performance under net-
+work partitions. We do not compare to other implementa-
+tions: MLS cannot operate under partition, and WKHB’s
+behavior under partition is largely the same as in §6.1.
+The scenario we test is a group ofn= 64members
+that is initially connected. A network partition then divides
+it into four equal-sized subsets such that members within
+each subset can communicate, but members across subsets
+cannot. During the network partition,Updateis called by
+Ugroup members, sampled uniformly without replacement.
+IfU >n, once allngroup members have calledUpdate, a
+new round begins and all members are again eligible to be
+sampled. We then end the partition and allow all members
+to communicate again.
+Fig. 5 shows the result of varyingU∈[0,2n]and
+measuring two aspects of post-partition recovery: (1) the
+CPU time for the first group member (chosen randomly)
+to callUpdateafter the end of the partition, and the size
+of the message it generates; and (2) the cumulative CPU
+time until all conflict nodes in the tree have been updated
+through successiveUpdates, and the cumulative network
+traffic this generates. The first metric captures the immediate
+cost of resuming encrypted application traffic; the second
+captures the recovery window before BeeKEM returns to
+the sequential behavior examined in Section 6.1.
+If no member updates during the partition, there are no
+conflicts to resolve. As the fraction of members that have
+11
+
+8 16 32 64 128 256 512
+group size N
+100
+101
+102
+median time (ms)
+Sender
+8 16 32 64 128 256 512
+group size N
+10 1
+100
+median time (ms)
+Recipient
+8 16 32 64 128 256 512
+group size N
+100
+101
+median time (ms)
+New recipient
+WKHB BeeKEM OpenMLS Update Add
+Figure 4. Per-operation, per-user CPU cost as the group size grows. Solid lines are forUpdateoperations; dotted lines forAdd; andRemoveoperations
+are not shown since their cost is very similar toUpdate.
+TABLE 1. ASYMPTOTIC COST OF OPERATIONS PERFORMED SEQUENTIALLY. “SENDER PRIMITIVES”IS THE NUMBER OF PUBLIC-KEY PRIMITIVES
+INVOKED BY THE USER CALLINGAdd/Remove/Update; “RECIPIENT PRIMITIVES”IS FOR A USER CALLINGProcessAFTER RECEIVING THE
+OPERATION. HEREnIS THE GROUP SIZE,h B THE SIZE OF THE OPERATION HISTORY,ANDh D THE SIZE OFWKHB’S GROUP-MEMBERSHIP HISTORY.
+System Operation Sender primitives Recipient primitives Message size Persistent storage
+OpenMLS Update/Remove O(logn) O(1) O(logn)broadcast O(n)Add O(logn) O(1) O(logn)commit plus
+O(n)welcome
+BeeKEM Update/Remove
+followed byUpdate
+O(logn) O(1)existing recipient O(logn)broadcast O(n+h B )
+Addfollowed by
+Update
+O(logn) O(1)existing recipient;
+O(hB )new recipient
+O(logn+h B )with
+welcome history
+WKHB Update/Remove O(n) O(1) O(n) O(n2 +hD)Add O(1) O(1) O(hD)welcome history
+updated during the partition increases, Fig. 5 shows that the
+total post-partition recovery cost increases linearly, but it
+plateaus once each member has updated once, and further
+updates add little further cost. The cost of the first post-
+message update grows more slowly.
+7. BeeKEM Extension Sketches
+We sketch BeeKEM FS and BeeKEM PQ, variant pro-
+tocols that respectively achieve FS and CFS; and post-
+quantum security. We defer a full treatment to future work.
+BeeKEMFS: a fully FS and CFS extension.The
+BeeKEM protocol was designed for a setting where users
+can define group secrets during partition, but re-encrypting
+the data generated and encrypted during the partition may
+be infeasible. Other contexts may feature constraints where
+correctness under concurrency is not as important as more
+robust security properties. We describe BeeKEM FS, a vari-
+ant construction that achieves “full” (rather thanκ-) FS and
+CFS at the expense of CUC: BeeKEM FS still tolerates and
+resolves concurrent operations, but if a user performs an
+Updateunder partition, they cannot later recover any group
+secrets which were defined by members in other branches.
+The key idea is analogous to the fix to TreeKEM in [7]:
+we useUpdatable Public-Key Encryption(UPKE), which
+(informally) ensures that a given public-private key pair is
+only ever used to encrypt a single message. UPKE extends
+standard PKE so thatUPKE.Encoutputs both a ciphertext
+and a new public keypk ′; andUPKE.Decoutputs both the
+message and a new corresponding secret keysk ′.
+The BeeKEM FS tree has a similar structure to
+BeeKEM’s: filled leaf nodes have an associatedidand
+pkid; inner nodes have versions which contain apkand
+several encryptions of the corresponding secret keyskunder
+different public keys. To access the root secret: at levelℓ, the
+user identifiestheirciphertext in the parent (encrypted under
+pkℓ), decrypts the ciphertext undersk ℓ to obtainsk ℓ+1, and
+also a new secret keysk ′
+ℓ, which they retain in their local
+state. The userimmediatelydeletes the old corresponding
+secret keysk ℓ from their local state.
+BeeKEMFS’sUpdateprocedure generates a payload
+which contains changes to both the updating user’s direct
+pathand to their co-path. First, the updating user gener-
+12
+
+0.00 0.25 0.50 0.75 1.00 1.25 1.50 1.75 2.00
+Average updates per member while partitioned
+0
+5
+10
+15
+20
+25
+30CPU wall-clock time (ms)
+(a) Computation
+first post-merge Update
+recovery until conflict-free
+0.00 0.25 0.50 0.75 1.00 1.25 1.50 1.75 2.00
+Average updates per member while partitioned
+0
+25
+50
+75
+100
+125
+150Network message size (KiB)
+(b) Communication
+first post-merge Update
+recovery until conflict-free
+Figure 5. Cost of the first post-partitionUpdate(blue) and cumulative cost of resolving all conflict nodes in the BeeKEM tree (red). Left: CPU time,
+right: network bandwidth.
+ates a sequence ofdpublic-private key pairs(pk ℓ,sk ℓ)for
+ℓ∈{0,...,d−1}, as before. They take(pk 0,sk 0)as their
+new personal public-private key pair. Then, going up the
+tree, at levelℓthey ascribe the key pair(pk ℓ+1,sk ℓ+1)
+to the parent as follows. First, they collect all relevant
+public keys from the sibling’s resolution in a setR; and
+toRthey add their own public key at levelℓ,pk ℓ.
+Then, for each public keypk u in the setR, they compute
+ct,pk′
+u←UPKE.Enc(pk u;sk ℓ+1), and storectunderpk u
+at the parent, and also setpk ′
+u as the new public key ofu.
+Note that this includes the public key on the calling user’s
+side, who then immediately updates the public key of their
+direct path node frompk ℓ to somepk ′
+ℓ; this is necessary to
+preserve the symmetry of the tree. The root secret is thus
+updated toS=sk d−1. Group creation, state initialization,
+and membership changes are identical to BeeKEM. Lastly,
+when a user receives anUpdatemessage, they immediately
+decrypt the group secret and delete their old secret.
+Intuitively, BeeKEM FS achieves FS and CFS because
+users immediately delete their old personal secret upon
+processing anUpdateoperation.
+BeeKEMPQ: A Post-Quantum Extension.Building ef-
+ficient messaging secure against quantum computers is an
+area of active work [28]. Next, we describe BeeKEM PQ, a
+variant DCGKA construction that can be built from crypto-
+graphic primitives with practical, secure PQ instantiations.
+BeeKEMPQ is built using key encapsulation mechanisms
+(KEM), a PQ primitive [2]. We sketch its construction.
+The basic idea is to change computations of shared
+sibling keys from using a NIKE to using a KEM.
+(All other cryptographic primitives remain unchanged, ex-
+cept that we instantiate them with PQ constructions.) A
+KEM is defined by three algorithms:Kg,Encap, and
+Decap[2].(pk,sk)← $ Kg()generates a public-private key
+pair.(c,dk)← $ Encap(pk)“encapsulates” an input public
+key and returns a ciphertextcandderived keydk, which
+can be “decapsulated” viadk←Decap(sk,c). Each node
+in the BeeKEM PQ tree, instead of storing just a public key
+and encrypted subgroup secret, additionally stores ciphertext
+cgenerated byencapsulating the sibling public key, i.e.,
+(c,dk)← $ Encap(pks)wherepk s is the sibling public key.
+The sibling can recoverdkby decapsulatingcwith its
+subgroup secret, i.e.,dk←Decap(sk,c). Keydkis then
+used as the shared key between siblings as in BeeKEM.
+BeeKEMPQ is thus able to achieve PQ security.
+8. Related Work
+DCGKA.Our work contributes to the literature ondecen-
+tralizedcontinuous group key agreement. The state-of-the-
+art DCGKA constructions are Causal TreeKEM [35] and the
+WKHB scheme [34]. BeeKEM notably differs from both.
+Our biggest innovation compared to WKHB is our
+O(logn)update communication cost vsO(n); linear com-
+plexity is not practical for large groups, which are an im-
+portant use case for group messaging (see also §1). WKHB
+achieves better FS than BeeKEM—akin to how TreeKEM
+has worse FS than the naive, linear-time CGKA construction
+via pairwise channels. On the other hand, BeeKEM achieves
+better PCS than WKHB.
+Causal TreeKEM also achievesO(logn)update com-
+munication. Their protocol does not achieve FS for rea-
+sons analogous to BeeKEM (retaining old update secrets
+to handle concurrent updates which arrive later), and it
+lacks formal security proofs and has no implementation. Its
+PCS is also imperfect, as noted in [34]: if an adversary
+compromises multiple users, if those users concurrently
+perform an update, the adversary can compute the new group
+secret that results when all users processes the new updates.
+Causal TreeKEM also requires the additional assumption
+that there exists a commutative/associative operation over
+key pairs to combine updates, whereas BeeKEM relies on
+standard cryptographic primitives.
+A key difficulty faced by both WKHB and Causal
+TreeKEM lies with maintaining PCS under concurrent up-
+dates: indeed, both schemes suffer from attacks in which the
+attacker can compute the new group secret if the compro-
+mised users perform updates concurrently. BeeKEM avoids
+these issues because of theNo secret after mergeproperty
+13
+
+(§4.2): there is no group secret defined via concurrent up-
+dates.
+Other CGKA Variants.While our focus is on DCGKA,
+we briefly note other CGKA variants in prior work [5],
+[6], [8]. Some of these share similar motivation to ours,
+but in centralized settings. For example, concurrent CGKA
+schemes support concurrent updates [5], [6], but they do not
+support processing operations that occurred before the latest
+processed update (a narrow form of concurrency).
+Fork-resilient CGKA (FR-CGKA) [8] is also motivated
+by the problem of key agreement over unreliable infrastruc-
+ture. Unlike our serverless setting, which supports message
+delivery over any medium (including, e.g., sneakernets), FR-
+CGKA operates in the server-aided CGKA model, which
+relies on a central (but possibly untrusted or unreliable)
+infrastructure for message delivery. In FR-CGKA, users’
+states and group secrets may diverge; accordingly, FR-
+CGKA schemes also face the possibility of cross-fork at-
+tacks [8], related to our notion of cross-fork security for
+DCGKA. Like BeeKEM, there exist FR-CGKA schemes
+with logarithmic communication cost and security against
+cross-fork attacks [8], but these have not been accompanied
+by an implementation (as far as we are aware, there are no
+FR-CGKA schemes with available implementations). More
+broadly, FR-CGKA and DCGKA have not been closely con-
+nected in prior literature; an examination of the relationship
+between the models would be interesting future work (in
+particular, to what extent attacks and security techniques in
+one model are applicable in the other).
+9. Conclusion
+We introduce BeeKEM, the first DCGKA scheme to
+achieve logarithmic update costs, thus bringing DCGKA
+performance up to par with that of centralized CGKA. We
+prove the security of BeeKEM, and provide a production-
+ready implementation as an open-source artifact. Our evalu-
+ation shows that BeeKEM’s performance is comparable to,
+and in some cases better than, state-of-the-art CGKA. Our
+BeeKEM implementation enables E2EE in a wide range of
+decentralizedlocal-firstcollaboration software; such appli-
+cations have already been built on our work.
+10. Acknowledgments
+The authors would like to thank Matthew Weidner and
+Zachary DeStefano for providing feedback on an earlier
+version of this paper. Brooklyn Zelenka, John Mumm, and
+Martin Kleppmann are funded by the Advanced Research
++ Invention Agency (ARIA) through project code MSAI-
+PR01-P043. Martin Kleppmann also gratefully acknowl-
+edges his crowdfunding supporters including SoftwareMill.
+References
+[1] Access Now. Rising and resisting in the darkness: internet shutdowns
+in 2025. Access Now, March 2026.
+[2] Gorjan Alagic. Recommendations for key-encapsulation mechanisms.
+Technical Report NIST SP 800-227 ipd, National Institute of Stan-
+dards and Technology, 2025.
+[3] Martin R. Albrecht, Jorge Blasco, Rikke Bjerg Jensen, and Lenka
+Marekov´a. Mesh messaging in large-scale protests: Breaking
+Bridgefy. InTopics in Cryptology – CT-RSA 2021: Cryptographers’
+Track at the RSA Conference 2021, Virtual Event, May 17–20, 2021,
+Proceedings, page 375–398, Berlin, Heidelberg, 2021. Springer-
+Verlag.
+[4] Martin R Albrecht, Jorge Blasco, Rikke Bjerg Jensen, and Lenka
+Marekov´a. Collective information security in large-scale urban
+protests: the case of Hong Kong. In30th USENIX Security Sym-
+posium. USENIX, 2021.
+[5] Jo ¨el Alwen, Benedikt Auerbach, Miguel Cueto Noval, Karen Klein,
+Guillermo Pascual-Perez, and Krzyzstof Pietrzak. DeCAF: Decen-
+tralizable CGKA with fast healing. InSecurity and Cryptography for
+Networks: 14th International Conference, SCN 2024, Amalfi, Italy,
+September 11–13, 2024, Proceedings, Part II, page 294–313, Berlin,
+Heidelberg, 2024. Springer-Verlag.
+[6] Jo ¨el Alwen, Benedikt Auerbach, Miguel Cueto Noval, Karen Klein,
+Guillermo Pascual-Perez, Krzyzstof Pietrzak, and Michael Walter.
+CoCoA: Concurrent continuous group key agreement. In Orr Dunkel-
+man and Stefan Dziembowski, editors,Advances in Cryptology – EU-
+ROCRYPT 2022, pages 815–844, Cham, 2022. Springer International
+Publishing.
+[7] Jo ¨el Alwen, Sandro Coretti, Yevgeniy Dodis, and Yiannis Tselekou-
+nis. Security analysis and improvements for the IETF MLS standard
+for group messaging. In Daniele Micciancio and Thomas Ristenpart,
+editors,Advances in Cryptology – CRYPTO 2020, pages 248–277,
+Cham, 2020. Springer International Publishing.
+[8] Jo ¨el Alwen, Marta Mularczyk, and Yiannis Tselekounis. Fork-
+resilient continuous group key agreement. InAdvances in Cryptology
+– CRYPTO 2023: 43rd Annual International Cryptology Conference,
+CRYPTO 2023, Santa Barbara, CA, USA, August 20–24, 2023, Pro-
+ceedings, Part IV, page 396–429, Berlin, Heidelberg, 2023. Springer-
+Verlag.
+[9] Jacob Aron and Aviva Rutkin. Hong Kong protesters use a mesh
+network to organise.New Scientist, September 2014.
+[10] Richard Barnes, Benjamin Beurdouche, Raphael Robert, Jon Millican,
+Emad Omara, and Katriel Cohn-Gordon. The Messaging Layer
+Security (MLS) protocol. IETF RFC 9420, https://www.rfc-editor.
+org/rfc/rfc9420.html, July 2023.
+[11] Mihir Bellare and Chanathip Namprempre. Authenticated encryption:
+Relations among notions and analysis of the generic composition
+paradigm.Journal of cryptology, 2008.
+[12] Benjamin Beurdouche, Eric Rescorla, Emad Omara, Srinivas Inguva,
+and Alan Duric. The Messaging Layer Security (MLS) architecture.
+IETF RFC 9750, https://www.rfc-editor.org/rfc/rfc9750.html, April
+2025.
+[13] Karthikeyan Bhargavan, Richard Barnes, and Eric Rescorla.
+TreeKEM: Asynchronous decentralized key management for large
+dynamic groups. https://inria.hal.science/hal-02425247/, 2018.
+[14] Cisco Webex. End-to-end encryption for Webex Meetings and
+Webex Calling. https://help.webex.com/en-us/article/5h5d8ab/
+End-to-end-encryption-for-Webex-Meetings-and-Webex-Calling#
+section nbd hmq z5b, 2025.
+[15] Katriel Cohn-Gordon, Cas Cremers, Luke Garratt, Jon Millican, and
+Kevin Milner. On ends-to-ends encryption: Asynchronous group
+messaging with strong security guarantees. InProceedings of the
+2018 ACM SIGSAC Conference on Computer and Communications
+Security, CCS ’18, page 1802–1819, New York, NY , USA, 2018.
+Association for Computing Machinery.
+[16] Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, and
+Clifford Stein.Introduction to Algorithms, chapter 20.4. MIT Press,
+April 2022.
+14
+
+[17] Whitfield Diffie and Martin Hellman. New directions in cryptography.
+IEEE Transactions on Information Theory, 22(6):644–654, 1976.
+[18] Roger Dingledine, Nick Mathewson, and Paul Syverson. Tor: The
+second-generation onion router. Technical Report ADA465464, Naval
+Research Laboratory, Washington DC, 2004.
+[19] Mat Ford. Internet (un)reliability around the world. Internet Society
+Pulse, Oct 2022.
+[20] Eduarda S. V . Freire, Dennis Hofheinz, Eike Kiltz, and Kenneth G.
+Paterson. Non-interactive key exchange. In Kaoru Kurosawa and
+Goichiro Hanaoka, editors,Public-Key Cryptography – PKC 2013,
+pages 254–271, Berlin, Heidelberg, 2013. Springer Berlin Heidelberg.
+[21] Daniel Hugenroth, Martin Kleppmann, and Alastair R. Beresford.
+Rollercoaster: An efficient group-multicast scheme for mix networks.
+In30th USENIX Security Symposium, pages 3433–3450, 2021.
+[22] IETF News. End-to-end encryption based on the IETF-developed
+Messaging Layer Security set be used on 100s of millions of mobile
+devices. https://www.ietf.org/blog/rcs-adopts-mls/, 2025.
+[23] David Inyangson, Sarah Radway, Tushar M. Jois, Nelly Fazio, and
+James Mickens. Amigo: Secure group mesh messaging in realistic
+protest settings. In Chun-Ying Huang, Jyh-Cheng Chen, Shiuh-Pyng
+Shieh, David Lie, and V ´eronique Cortier, editors,Proceedings of the
+2025 ACM SIGSAC CCS 2025, Taipei, Taiwan, October 13-17, 2025,
+pages 4244–4258. ACM, 2025.
+[24] Martin Kleppmann. Making CRDTs Byzantine fault tolerant. In
+Proceedings of the 9th Workshop on Principles and Practice of Con-
+sistency for Distributed Data, PaPoC ’22, pages 8–15. Association
+for Computing Machinery, 2022.
+[25] Martin Kleppmann and Heidi Howard. Byzantine eventual consis-
+tency and the fundamental limits of peer-to-peer databases.
+[26] Martin Kleppmann, Adam Wiggins, Peter van Hardenberg, and Mark
+McGranaghan. Local-first software: You own your data, in spite of
+the cloud. In2019 ACM SIGPLAN International Symposium on New
+Ideas, New Paradigms, and Reflections on Programming and Software
+(Onward!), pages 154–178. ACM, October 2019.
+[27] Jo ˜ao Leit ˜ao, Jos ´e Pereira, and Lu ´Is Rodrigues. Gossip-based broad-
+cast. In Xuemin Shen, Heather Yu, John Buford, and Mursalin
+Akon, editors,Handbook of Peer-to-Peer Networking, pages 831–860.
+Springer US, 2010.
+[28] Rohan Mahy and Richard Barnes. ML-KEM and Hybrid Cipher
+Suites for Messaging Layer Security. Internet Draft draft-ietf-mls-
+pq-ciphersuites-02, Internet Engineering Task Force, 2026. Work in
+Progress.
+[29] Vibhu Mishra. UN warns of rising internet shutdowns as digital
+blackouts spread worldwide, Jan 2026.
+[30] Phoenix R&D and Cryspen. OpenMLS, 2026. OpenMLS is a Rust
+implementation of the Messaging Layer Security (MLS) protocol, as
+specified in RFC 9420.
+[31] Ania M Piotrowska, Jamie Hayes, Tariq Elahi, Sebastian Meiser, and
+George Danezis. The Loopix anonymity system. InUSENIX Security
+Symposium, 2017.
+[32] The Economist. Iran’s regime walls off the internet.
+https://www.economist.com/middle-east-and-africa/2026/03/26/
+irans-regime-walls-off-the-internet, March 2026.
+[33] The Economist. Russia wants to limit contact with the
+outside world. https://www.economist.com/europe/2026/03/26/
+russia-wants-to-limit-contact-with-the-outside-world, March 2026.
+[34] Matthew Weidner, Martin Kleppmann, Daniel Hugenroth, and Alas-
+tair R. Beresford. Key agreement for decentralized secure group mes-
+saging with strong security guarantees. InACM SIGSAC Conference
+on Computer and Communications Security (CCS), 2021.
+[35] Matthew A Weidner. Group messaging for secure asynchronous
+collaboration. Master’s thesis, University of Cambridge, 2019.
+[36] Wire. Demystifying MLS: How a new standard is
+redefining secure collaboration. https://wire.com/en/blog/
+messaging-layer-security-mls-explained, 2025.
+Appendix A.
+BeeKEM pseudocode
+We present BeeKEM as pseudocode in Figures 6 and 7.
+Appendix B.
+Details of Security Analysis
+Proof of Theorem 1.Similar to [7], our proof will consist
+of two steps: first, we bound the advantage of an adversary
+that makesnchallenge queries by one that makes a single
+challenge query; and second, we bound the advantage of an
+adversary that performs a single challenge query.
+Lemma 1.LetSEbe a symmetric encryption scheme,
+NIKEbe a NIKE scheme compatible withSE, andΠ=
+BeeKEM[SE,NIKE]. LetAbe aki-DCGKAadversary that
+makescqueries to the challenge oracle. There exists a
+ki-DCGKAadversaryA ′ that makes a single query to the
+challenge oracle such that, for any integerk≥1,
+Advki-dcgka
+Π,bee-safek
+(A)≤c·Adv ki-dcgka
+Π,bee-safek
+(A′).
+We omit the proof of Lemma 1 as it follows from a
+standard hybrid argument on challenge queries.
+Theorem 2.Exactly the same as Theorem 1, except thatA
+makesonly onechallenge oracle query.
+Proof (Theorem 2).LetQ= (q 1,...,q e)be the queries
+made byA, and letq ch :=CHALLENGE(id,c)be the
+(unique) challenge query. LetBbe the BeeKEM tree stored
+instates[id], the game variable that stores the local state of
+each user at the timeq i is called. In BeeKEM, only update
+operations generate new group secrets (§4.3). So,Bwas gen-
+erated by the last queryq up∈Qperformed by the adversary
+beforeq ch corresponding to an update processed byid. Let:
+id∗ be the user that triggered the update (id∗ may beid);d≤
+⌈log2n⌉be tree depth at the time of update; andv 0,...,v d
+beid’s direct path.q up generates(pk 0,sk 0)← $ NIKE.Kg
+forid∗ and storespk 0 atv 0; for everyj∈{1,...,d−1}
+thereafter, it generates(pk j,sk j)← $ NIKE.Kg, computes
+cj,u←SE.Enc(dk u
+j,sk j)for alluin the sibling resolution,
+wheredk u
+j ←NIKE.SharedKey(sk j−1,pk u
+j−1), and stores
+(pkj,{c j,u})atv j.
+We proceed via a hybrid argument over nodesv0,...,v d.
+•Real world: Game G 0 corresponds to ki-DCGKA con-
+ditioned on challenge bitb= 1.
+•Forj∈[1,d]:
+•NIKE hybrid: Game G 2j−1 is identical to game
+G2j−2, except that alldk u
+j during queryq up
+are computed by sampling keys as random from
+NIKE’s key space, as opposed to viaSharedKey.
+•Encryption hybrid: Game G 2j is identical to game
+G2j−1 except that allSE.Enc(dk u
+j,sk j)during
+queryq up are replaced bySE.Enc(dk u
+j,0|skj|).
+•Ideal world: The last game from the previous step, G 2d,
+is equal to ki-DCGKA conditioned onb= 0, since the
+root secret key is independent of the rest ofB.
+15
+
+Π.Create(st,I) :
+/ /assumes user has calledΠ.Init(st,ε)first
+assertst.G=ε∧I=∅
+pk←PKI.Access(st.id)
+Π.create-helper(st,id,pk)
+op←"create"{public-key:pk}
+st.G.record(op)
+return{st:st,R:op,M:∅,S:⊥}
+Π.create-helper(st,id,pk) :
+st.root←B.buildBalancedTree(2)
+st.leaf←B.getFreshLeaf(st.root)
+B.setMember(st.leaf,id,pk)
+st.G←G.create()
+return
+Π.Add(st,id ′) :
+assertid ′ /∈st.root
+ifshould-replay(st) :Π.replay(st)
+pk←PKI.Access(id ′)
+Π.add-helper(st,id ′,pk)
+op←"add"{added-id:id ′,public-key:pk}
+st.G.record(op)
+return{st,R:op,M:∅,S:⊥}
+Π.add-helper(st,id ′,pk) :
+f←getFreshLeaf(st.root)
+B.setMember(f,id ′,pk)
+ifB.is-full(st.root) :st.r←doubleTree(st.root)
+p←getParent(st.leaf)
+blankPath(p,st.root)
+return
+Π.Remove(st,id ′) :
+assertid ′∈st.root
+ifshould-replay(st) :Π.replay(st)
+removed-keys←Π.remove-helper(st,id ′)
+op←"remove"{removed-id:id ′,
+removed-keys:removed-keys}
+st.G.record(op)
+return{st,R:op,M:∅,S:⊥}
+Π.remove-helper(st,id ′) :
+l←getMemberNode(st.root,id ′)
+removed-keys←blankPath(leaf,st.root)
+returnremoved-keys
+Π.Update(st) :
+ifshould-replay(st) :Π.replay(st)
+version-path←{}
+removed-keys←∅
+/ /update caller’s personal keypair
+pk′
+leaf,sk ′
+leaf←Kg(1 λ)
+st.sk←sk ′
+leaf
+removed-keys←getPks(st.leaf)
+new-version←(pk ′
+leaf,ε)
+st.leaf.setVersions({new-version})
+version-path[st.leaf]←{new-version}
+/ /iteratively update direct path nodes
+v←st.leaf
+skv←st.sk
+whilev̸=st.root:
+p←getParent(v)
+pk′
+p,sk ′
+p←Kg(1 λ)
+sib←getSibling(v)
+newCts←{}
+forpku∈getResolutionPks(sib) :
+dk′
+u←NIKE.SharedKey(pku,skv)
+ctu←SE.Enc(dk ′
+u;sk ′
+p)
+newCts[pku]←ct u
+removed-keys←removed-keys∪p.getPks
+new-version←(pk ′
+p,newCts)
+p.setVersions({new-version})
+version-path[p]←{new-version}
+v←p
+skv←sk ′
+p
+op←"update"{leaf:st.leaf,
+version-path:version-path,
+removed-keys:removed-keys}
+st.G.record(o)
+return{st:st,R:op,M:∅,S:sk v}
+Π.update-helper(st,version-path) :
+assertpath-is-valid(st.root,version-path)
+for(v,new-version)∈version-path:
+updated-versions←∅
+/ /only keep versions whose public keys haven’t been removed
+for(pkv,cts)∈v.getVersions() :
+ifpk v /∈st.removed-keys:
+updated-versions←updated-versions∪{(pk v,cts)}
+updated-versions←updated-versions∪new-version
+setVersions(v,updated-versions)
+return
+Figure 6. Full specification of the BeeKEM protocol, part 1.
+We now analyze pairs of neighboring hybrids.
+For NIKE Hybrids.We designBsuch that∀j∈[1,d],
+ Pr [G 2j−1 = 1 ]−Pr [G 2j−2 = 1 ]≤Adv hkr-cks
+NIKE (B)
+.
+AdversaryBrunsAand simulates the ki-DCGKA game,
+but uses the challenge oracle in its own HKR-CKS [20]
+game to to compute everydk u
+j during queryq up. To do
+so, duringq up,Bfirst computes(pk j,sk j)as usual, and
+then calls the HKR-CKS registration oracleu+ 1times to
+obtain(pk ∗
+0,pk∗
+1,...,pk ∗
+u); keypk ∗
+0 is used as the public
+key for nodev j−1, and all other keys are used as the public
+keys of the nodes in the sibling resolution. Then,Bcalls its
+test oracleutimes with inputs(pk ∗
+0,pk∗
+i )i∈{1,...,u} to obtain
+challenge keys(ck 1,ck 2,...,ck u); notice that all challenge
+keys are either fresh keys, or computed viaSharedKey. Then
+Busesck i to computec i
+j←$ SE.Enc(cki,sk j), and stores
+(pkj,{c i
+j}i∈[u])inv j. Notice thatBcan compute nodes
+above leveljand belowj−1by following the BeeKEM
+protocol honestly.
+16
+
+Π.DecryptSecret(st) :
+ifshould-replay(st) :Π.replay(st)
+assertΠ.has-root-key(st)
+/ /iteratively decrypt parent subgroup secret
+v←st.leaf
+skv←st.sk
+whilev̸=st.root:
+p←getParent(v)
+ifisBlank(p)∨isConflict(p) :/ /skip such parents
+v←p
+continue
+(pkp,ctMapp)←getVersions(p)[0]/ /parent has one version
+sib←getSibling(v)
+forpku∈getResolutionPks(sib) :
+dku←NIKE.SharedKey(pku,skv)
+ctu←ctMapp[pku]
+skp←SE.Dec(dku;ctu)
+ifsk p =⊥:continue
+assertskp̸=⊥
+v←p
+skv←skp
+returnskv
+Π.Process(st,id,R,M) :
+op←R
+assertop.predecessors⊆G/ /opis in causal order
+ifop.predecessors⊆G.head(G) :/ /operation is not concurrent
+ifshould-replay(st) :
+Π.replay(st)
+Π.apply(st,op)
+else:/ /operation is concurrent
+ifst.pending-structural-ops:
+st.G.record(op)
+else ifop.τ="add"∨op.τ="remove":
+st.pending-structural-ops←true
+st.G.record(op)
+else:
+Π.apply(st,op)
+S←Π.DecryptSecret(st)/ /possibly⊥
+return{st:st,R:ε,M:ε,S s :S,S r :S}
+Π.Init(id,G) :
+st.id←id;st.G←G
+st.pending-structural-ops←false
+pk,sk←NIKE.Kg(1 λ)
+PKI.Register(id,pk)
+st.sk←sk
+st.retainedKeys.register(pk,sk)
+Π.replay(st)/ /restores user state
+return
+Π.has-root-key(st) :
+return|st.root.getVersions()|= 1
+Π.should-replay(st) :
+heads←G.head(st.G)
+returnst.pending-structural-ops∨(|heads|>1)
+Π.replay(st) :
+batches←topo-sort(st.G)
+forbatch∈batches:
+Π.apply-batch(st,batch)
+st.pending-structural-ops←false
+return
+Π.apply-batch(st,ops) :
+forop∈ops:
+Π.apply(st,op)
+removed-members←{op.id|op.τ="remove",op∈ops}
+added-members←{op.id|op.τ="add",op∈ops}
+added-members←added-members\removed-members
+sort-added-leaves(st,added-members)
+forid∈removed-members:
+blankPath(st,op.id)
+return
+Π.apply(st,op) :
+matchop.τ:
+"add":Π.add-helper(st,op.id,op.pk)
+"remove":Π.remove-helper(st,op.id)
+"update":Π.update-helper(st,op.version-path)
+"create":Π.create-helper(st,op.id,op.public-key)
+return
+Figure 7. Full specification of the BeeKEM protocol, part 2.
+Let us discuss howBsimulates other queries forA.
+ki-DCGKA queries that modify group membership modify
+tree structure, but do not require cryptographic operations.
+SoBcan execute the protocol honestly to simulate these.
+Similarly, updates that are independent ofq up (i.e., which
+did not establish or use anypk u
+j−1), do not rely on anydk u
+j ,
+and soBcan also execute the protocol honestly to simulate
+these. Future updates can be computed by following the
+protocol honestly, sinceBknows all relevant public keys in
+the update path ofq up.
+Our remaining focus is thus on earlier updates from
+sibling resolutions. First, consider each update operation
+{qk
+up}k∈[u] that precededq up and establishedpk k. A prob-
+lem for our reduction approach above is that thepk ∗
+k thatB
+obtained from its game needs to be consistent with the public
+key for thej-th node generated earlier duringq k
+up. Fortu-
+nately, by definition, the sibling of the updating leaf inq k
+up
+is theleaf in the challengedq up, so all keys in the co-path
+of the updating nodes ofq k
+up are available toB. Then, by
+NIKEsymmetry,Bcan computedkusing thesecret key of
+the sibling: inq k
+up, computingdkasSharedKey(sk j−1,pk∗
+k)
+instead ofSharedKey(sk ∗
+k,pk j−1).
+For Encryption Hybrids.We designCs.t.∀j∈[1,d],
+ Pr [G 2j = 1 ]−Pr [G 2j−1 = 1 ]≤Adv mu-cpa
+SE (C)
+.
+AdversaryCrunsAand simulates the ki-DCGKA game, but
+uses the challenge oracle in its own mu-CPA game to com-
+17
+
+ki-DCGKAA
+Π[DGM],P :
+forid∈I:states[id]←Π.Init(id)
+ctr[·]←0
+ctrM[·,·],dirM[·,·],scrts[·,·],addTrgt[·,·]←ε
+needsRes[·,·],chal[·,·],dlvd[·,·,·]←false
+b← ${0,1}
+win←0
+queries←()
+b′←$AO(ctrM,dirM)
+ifb ′ =b:win←1
+ifP(queries) = 0 :win←0
+returnwin
+REVEAL(id,c) :
+ifscrts[id,c] =ε:return⊥
+ifchal[id,c]̸=false:return⊥
+chal[id,c]←true
+returnscrts[id,c]
+CHALLENGE(id,c) :
+ifscrts[id,c] =ε:return⊥
+ifchal[id,c]̸=false:return⊥
+S1←scrts[id,c];S 0←${0,1} |S0|
+chal[id,c]←true
+returnSb
+COMPROMISE(id) :
+returnstates[id]
+CREATEGROUP(id 0,I) :
+ifctrM[.,.]̸=ε:return⊥
+ifid 0∈I:return⊥
+(st,R,M,S)←Create(states[id 0],I)
+ifR=ε∨S=ε:win←1
+states[id0]←st;scrts[id 0,1]←S
+ctrM[id0,1]←R;dirM[id 0,1]←M
+ctr[id0]←1
+needsRes[id0,1]←true
+dlvd[id0,1,id 0]←true
+MODUSER(id,id ′,Op) :
+ifOp/∈{Add,Remove}:return⊥
+if¬valid-member(id)∨id=id ′ :return⊥
+ctr[id]←ctr[id] + 1;c←ctr[id]
+(st,R,M,S)←Op(states[id],id ′)
+ifR=ε∨S=ε:win←1
+states[id]←st;scrts[id,c]←S
+ctrM[id,c]←R;dirM[id,c]←M
+ifOp=Add:addTrgt[id,c]←id ′
+else:needsRes[id,c]←true
+dlvd[id,c,id]←true
+SENDUPDATE(id) :
+if¬valid-member(id) :return⊥
+ctr[id]←ctr[id] + 1;c←ctr[id]
+(st′,R,M,S)←Update(states[id])
+ifR=ε∨S=ε:win←1
+states[id]←st;scrts[id,c]←S
+ctrM[id,c]←R;dirM[id,c]←M
+needsRes[id,c]←true
+dlvd[id,c,id]←true
+DELIVER(id,c,id ′) :
+ifin-history(id,c,id ′) :return⊥
+if¬should-receive(id,c,id ′) :return⊥
+if¬casually-ready(id,c,id ′)
+∧add-ready(id,c,id ′) :return⊥
+ifctrM[id,c] =ε:return⊥
+(st,R,M,S s,Sr)←
+Process(states[id′],id,ctrM[id,c],ctrM[id,c,id ′])
+states[id′]←st
+ifshould-decrypt(id,c,id ′) :
+ifS s̸=scrts[id,c] :win←1
+else ifS s̸=ε:win←1
+mustRes←
+ 
+needsRes[id,c]∧
+should-decrypt(id,c,id ′)
+
+∨adds-member(id,c,id ′)
+ifmustRes∧(R=ε∨S r =ε) :win←1
+ifR̸=ε:
+ctr[id′]←ctr[id ′] + 1;c ′←ctr[id ′]
+ctrM[id′,c ′]←R;dirM[id ′,c ′]←M
+scrts[id′,c ′]←S r;dlvd[id ′,c ′,id ′]←true
+dlvd[id,c,id ′]←true
+Figure 8. Key indistinguishability security for DCGKA schemes with respect to corrupted predicateP. AdversaryAhas access to oraclesO=
+{REVEAL,CHALLENGE,COMPROMISE,CREATEGROUP,MODUSER,SENDUPDATE,DELIVER}.
+pute everySE.Enc(dk u
+j,sk j)during queryq up. Concretely,
+Ccalls its key generation oracleutimes, and then calls
+its challenge oracle (once per key index) with challenge
+messagessk j and0 |skj|. Finally, it embeds the resulting
+challenge ciphertext as the ciphertext inv j. Sincedk u
+j is now
+random from the previous hybrid transition,Bsimulates the
+correct distribution forA.
+The only place where node ciphertexts interact with
+other operations are future update operations that require
+decryption ofSE.Enc(dk u
+j,sk j). However, such decryptions
+will fail ifsk j is the all-zero string. So, to get around this,
+Csimply maintains maintain a lookup table for subgroup
+secretssk j, returning them whenever a node decryption is
+performed, instead of runningSE.Dec. All other operations
+can be simulated honestly, as they are independent ofsk j.
+Combining all hybrid transitions, we thus get that
+Advki-dcgka
+Π,bee-safek
+(A)≤⌈log 2n⌉·
+ 
+Advhkr-cks
+NIKE (B)+Advmu-cpa
+SE (C)
+
+Simulating Compromise Queries.We have not yet ex-
+cluded the possibility thatAperforms a compromise query
+whichB/Ccannot provide a convincing response for. We
+now argue thatbee-safe(Figure 3) restrictsAsuch thatB
+andCcan simulate responses to its compromises.
+First consider the NIKE adversaryB. It answers some
+of its update oracle queries with public keyspk ∗ obtained
+from its HKR-CKS registration oracle (the corresponding
+18
+
+valid-member(id) :
+∃(T∈ctrM) (dlvd[T, id])
+in-history(id, c, id′) :
+∃(T∈ctrM) (ctrM[id, c]⪯T∧dlvd[T, id ′])
+should-decrypt(id, c, id′) :
+id′∈DGM({T∈ctrM|T⪯ctrM[id, c]})
+should-receive(id, c, id′) :
+id′∈DGM({T∈ctrM|T⪯ctrM[id, c]
+∨in-history(T, id′)})
+casually-ready(id, c, id′) :
+∀(T∈ctrM) (T≺ctrM[id, c] =⇒in-history(T, id ′))
+add-ready(id, c, id′) :
+(addTrgt[id, c] =id ′)∧∀(T∈ctrM)
+ 
+(T≺ctrM[id, c]
+∧should-decrypt(T, id ′)) =⇒dlvd[T, id ′]
+
+adds-member(id, c, id′) :
+letS={T∈ctrM|in-history(T, id ′)}in 
+DGM(S∪{ctrM[id, c]})\DGM(S)̸=∅
+
+Figure 9. Helper predicates for DCGKA security game (Figure 8). Deterministic functionDGMis adecentralized group membership function[34], which
+takes as input a set of control messages and their casual relationships, and outputs the set of group members resulting from the scheme.
+secret keys are unknown toB).Bassociates thesepk ∗ with
+nodes which can access the group secret established byq up.
+SupposeAperforms a compromise queryq c which would
+obtain the personal secret of a leaf which is either (i) one
+of these HKR-CKS keyssk ∗ or (ii) which is able to obtain
+such an HKR-CKS key via Invariant 1. Such an adversary
+Awould not satisfybee-safe, as by construction,q c obtains
+key material which can access the challenged secretq up.
+Therefore, any validAonly performs compromise queries
+whichBcan faithfully simulate.
+Now considerC.Csimulates the encryptions performed
+during the updateq up by replacing the encryptions of
+subgroup secretsSE.Enc(dk j,sk j)with encryptions from
+its CPA challenge oracle on challenge pairs(sk j,0|skj|).
+Suppose thatAperforms a compromiseq c which obtains
+a personal secret which can access anydk j on the updated
+path: the distribution of the ciphertexts, givendk j, would be
+incorrect. Once again, such anAis excluded bybee-safe,
+by construction ofq c. Hence, bothBandCsucceed in
+simulating responses for anyAvalid underbee-safe.
+19

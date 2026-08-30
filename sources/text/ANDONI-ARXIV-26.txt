@@ -1,0 +1,1763 @@
+Efficient Algorithms for Adversarially Robust Approximate
+Nearest Neighbor Search
+Alexandr Andoni ∗ Themistoklis Haris † Esty Kelman ‡ Krzysztof Onak §
+January 5, 2026
+Abstract
+We study the Approximate Nearest Neighbor (ANN) problem under a powerful adaptive
+adversary that controls both the dataset and a sequence ofQqueries.
+Primarily, for the high-dimensional regime ofd=ω(√Q), we introduce a sequence of algo-
+rithms with progressively stronger guarantees. We first establish a novel connection between
+adaptive security andfairness, leveraging fair ANN search (Aumüller et al., 2022) to hide in-
+ternal randomness from the adversary with information-theoretic guarantees. To achieve data-
+independent performance, we then reduce the search problem to a robust decision primitive,
+solved using a differentially private mechanism (Hassidim et al., 2022) on a Locality-Sensitive
+Hashing (LSH) data structure. This approach, however, faces an inherent√nquery time barrier.
+To break the barrier, we propose a novel concentric-annuli LSH construction that synthesizes
+these fairness and differential privacy techniques. The analysis introduces a new method for ro-
+bustly releasing timing information from the underlying algorithm instances and, as a corollary,
+also improves existing results for fair ANN.
+In addition, for the low-dimensional regimed=O(√Q), we propose specialized algorithms
+that provide a strong “for-all” guarantee: correctness oneverypossible query with high probabil-
+ity. Weintroducenovelmetriccoveringconstructionsthatsimplifyandimprovepriorapproaches
+for ANN in Hamming andℓp spaces.
+∗Department of Computer Science, Columbia University. Email:andoni@cs.columbia.edu
+†Computer Science Department, Boston University. Email:tharis@bu.edu
+‡Department of Computer Science and Department of Computing & Data Sciences, Boston University and CSAIL,
+Massachusetts Institute of Technology. Supported in part by the National Science Foundation under Grant No.
+2022446 and in part by NSF TRIPODS program (award DMS-2022448). Email:ekelman@mit.edu.
+§Faculty of Computing and Data Sciences, Boston University. Email:konak@bu.edu
+arXiv:2601.00272v1  [cs.DS]  1 Jan 2026
+
+Contents
+1 Introduction 3
+1.1 Roadmap and Discussion . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+1.2 Our Results and Techniques . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+2 Related and Concurrent Work 7
+2.1 Comparison with Feng et al. (2025) . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+3 Preliminaries 8
+4 Fairness Implies Robustness 9
+5 Assumption-Free Robust Searching via Bucketing 11
+5.1 Weak Decision ANN . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+5.2 Bucketing-Based Search . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+6 Relaxed Fair ANN via Concentric LSH Annuli 13
+7 Robust ANN Improvements 14
+7.1 Analysis . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+8 Conclusion 18
+A Notation Table 23
+B Background from Differential Privacy 23
+B.1 Definition of differential privacy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+B.2 The Laplace Mechanism and its properties . . . . . . . . . . . . . . . . . . . . . . . . 24
+B.3 Properties of differential privacy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+B.4 Robustification via Privacy Over Internal Randomness . . . . . . . . . . . . . . . . . 25
+C Proof of Theorem C.1 25
+D Improved Robust ANNS Algorithms with∀guarantees 28
+D.1 AFor-allguarantee in the Hamming cube . . . . . . . . . . . . . . . . . . . . . . . . 29
+D.1.1 Improving the query runtime via sampling . . . . . . . . . . . . . . . . . . . . 31
+D.1.2 Utilizing the optimal LSH algorithm . . . . . . . . . . . . . . . . . . . . . . . 32
+D.2 Discretization of continuous spaces through metric coverings . . . . . . . . . . . . . . 32
+D.2.1 Metric coverings in continuous spaces . . . . . . . . . . . . . . . . . . . . . . . 32
+D.2.2 The robust ANN algorithm . . . . . . . . . . . . . . . . . . . . . . . . . . . . 34
+D.2.3 Removing the dependency on the scale . . . . . . . . . . . . . . . . . . . . . . 35
+2
+
+1 Introduction
+Randomness is a crucial tool in algorithm design, enabling resource-efficient solutions by circum-
+venting the worst-case scenarios that plague deterministic approaches (Motwani and Raghavan,
+1996). The classical analysis of such algorithms assumes anoblivioussetting, where data up-
+dates and queries are fixed beforehand. However, this assumption breaks down in the face of an
+adaptive adversary, who can issue queries based on the algorithm’s previous outputs. These
+outputs can leak information about the algorithm’s internal randomness, allowing an adversary to
+construct query sequences that maliciously break the algorithm’s performance guarantees (Hardt
+and Woodruff, 2013; Gribelyuk et al., 2024).
+Significant progress has been made in designing adversarially robust algorithms forestimation
+problems, where the output is a single value (Lai and Bayraktar, 2020; Hassidim et al., 2022;
+Chakrabarti et al., 2021; Attias et al., 2024; Ben-Eliezer et al., 2022a; Woodruff and Zhou, 2022;
+Cherapanamjeri et al., 2023). A common defense involves sanitizing the output, for example, by
+rounding or adding noise, often borrowing techniques from differential privacy to ensure the output
+reveals little about the algorithm’s internal state (Hassidim et al., 2022; Attias et al., 2024; Beimel
+et al., 2022). However, these techniques do not directly apply tosearch problems. In a search
+problem, the algorithm must return a specific element from a given dataset. Outputting a raw data
+point can leak substantial information, and there is no obvious way to add noise or otherwise obscure
+the output without violating the problem’s core constraint of returning a valid dataset element.
+Perhaps the most fundamental search problem isApproximate Nearest Neighbor (ANN) Search,
+which has numerous applications ranging from data compression and robotics to DNA sequencing,
+anomaly detection and Retrieval-Augmented Generation (RAG) (SantaLucia et al., 1996; Kalantidis
+and Avrithis, 2014; Ichnowski and Alterovitz, 2015; Verstrepen and Goethals, 2014; Tagami, 2017;
+Bergman et al., 2020; Han et al., 2024; Kitaev et al., 2020). Formally, we define the problem as
+follows:
+Definition 1.1 (The(c,r)-ANN problem).Given a datasetSofnpoints in a metric space
+(M,||·||)and a radiusr>0, letB S(q,r) :={p∈S:||p−q||≤r}. Given a query pointq∈Mand
+approximation parameterc≥1, the goal is to build a data structure which finds a point inBS(q,cr)
+ifB S(q,r)̸=∅. IfB S(q,cr) =∅, the algorithm is required to answer⊥. Apart from queries, the
+datasetSitself may also be obliviously updated via additions or deletions of points.
+A data structure for solving this problem is evaluated in terms of its space complexity, query
+runtime, and update runtime as functions of the dataset sizen, the parametercand possibly the
+total number of queries.
+Achieving the desired trade-off of sublinear query time and near-linear space has largely been
+possible only through randomization. Indeed, one of the most prominent family of algorithms for
+ANN is based onLocality-Sensitive Hashing (LSH), which has been the subject of a long and fruitful
+line of research in the oblivious setting (Gionis et al., 1999; Jafari et al., 2021; Andoni, 2009; Andoni
+et al., 2018, 2017b, 2016; Andoni and Indyk, 2017; Andoni et al., 2017a; Indyk and Motwani, 1998;
+Broder et al., 1998; Andoni and Beaglehole, 2022). ANN Algorithms that rely on LSH achieve
+query time complexity ofeO(dnρ)∗ and space complexityeO(n1+ρ), wheredis the dimension ofM
+andρ=ρ(c)∈(0,1)is a fixed constant depending oncand the LSH construction †.
+∗We use the eOnotation to hide polylogarithmic factors.
+†For example, whenM={0,1} k under the Hamming distance andc≥1is the approximation parameter,
+the state-of-the-art construction of Andoni and Razenshteyn (2015) yieldsρ= 1
+2c−1 . We shall useρandρ(c)
+interchangeably.
+3
+
+The vulnerability of these classical randomized structures was recently highlighted by Kapralov
+et al. (2024), who demonstrated an attack on standard LSH data structures. They showed that an
+adaptive adversary can use a polylogarithmic number of queries to learn enough about the internal
+hashfunctionstoforcethealgorithmtofail. Inspiredbytheirwork, whichreliesoncertainstructural
+properties of the dataset (e.g., an “isolated” point), we consider a powerful adversarial model where
+theadversary chooses both the dataset and the sequence of queries. We study the following question:
+Can search problems like ANN be solved efficiently in the face of adversarial queries?
+Our adversarial model for the(c,r)-ANN problem empowers the adversary by giving them
+unbounded computational resources, the ability to specify the datasetScompletely, the ability
+to obliviously choose a sequence of updates to that dataset, and, perhaps most importantly, the
+ability to choose each query based on the full history of their interaction with the algorithm. While
+alternative adversarial models could be considered, our chosen framework maximizes generality to
+demonstrate that efficient data structures remain achievable even under broad constraints.
+1.1 Roadmap and Discussion
+We begin by placing our results in the broader context of adversarial robustness, which has primarily
+followed two paradigms. The first isrobustification via privacy(Hassidim et al., 2022), where
+multiple independent copies of an algorithm are aggregated using a differentially private mechanism.
+Privacyobfuscatestheinternalrandomness, preventinganadaptiveadversaryfrompredictingfuture
+behavior. The second isfor-allalgorithms (Gilbert et al., 2007), which succeed on every input, but
+typically incur high runtime or space overhead due to discretization and union bounds, making
+them problem-specific.
+The ANN problem poses a further challenge: it is asearchproblem rather than an estimation
+problem, so adding noise to outputs would destroy correctness. One natural way to resolve this
+is by reducing search to collections ofdecisionproblems that admit privacy-based robustification.
+In ANN, partitioning the dataset and solving weak decision problems in each part allows robust
+recovery of a valid neighbor while retaining sublinear query time and space. We believe that the
+idea of reducing from search to robust decision may extend to other search problems.
+Our main conceptual contribution is identifying a third route to robustness:fairness. Informally,
+fair algorithms avoid bias toward particular outputs and maintain statistical independence across
+repeated queries. Such algorithms are inherently robust, as they reveal little information about
+internal randomness. We formalize this intuition, showing that fairness can be viewed as a valuable
+tool towards establishing robustness. From this perspective, fairness and differential privacy can be
+seen as two instantiations of a common underlying principle:
+Robustness follows from stability with respect to internal randomness.
+Finally, these approaches can be combined. By merging fairness-based robustness with privacy-
+based robustification and exploiting ANN’s geometric structure via a concentric annuli construction,
+we achieve improved tradeoffs for robust nearest neighbor search.
+1.2 Our Results and Techniques
+In this section we present our technical insights in detail
+4
+
+Robust(c,r)–ANN
+Fairness⇒Robustness
+Claim 4.3
+Concentric Annuli + Fairness + DP
+Theorem 1.4
+Weak-Decision + DP
+(Bucketing)
+Theorem 1.3
+For-all Algorithms
+(ℓp Spaces)
+Appendix D
+Figure 1: Roadmap of results.
+Robustness and FairnessWe first recognize a connection between robustness and fairness.Fair
+ANN algorithms output a point uniformly at random from a set of valid near neighbor candidates.
+Such algorithms have already been rigorously studied in the context of LSH by Aumüller et al.
+(2022), who also studied notions of approximate fairness. We show that the robust ANN problem
+can be solved simply by invoking an algorithm for the exact fair ANN problem.
+Theorem 1.2.Letn(q,r) :=|B S(q,r)|be theS-density of ther-ball centered atq∈M. There
+exists an adversarially robust(c,r)-ANN algorithm that usesO(n 1+ρ(c) log(nQ))bits of space and
+O(d·(n ρ(c) + n(q,cr)
+n(q,r)+1 ) log(nQ))time per query.
+Though very space efficient, the query complexity of this algorithm unfortunately depends on
+the density ratioDof points between thecr-ball and ther-ball for a queryq. The adversary can
+craft a dataset where this ratio is large, severely degrading performance. This drawback is also
+shared by the algorithm of Feng et al. (2025), though they exhibit a dependency on the density
+s:=n(q,cr), which is strictly greater thanD(see Table 1).
+Remark.The link between fairness and robustness is not limited to ANN. From this perspective,
+fairness is not just a “nice to have” property, but is inextricably linked with security.
+Assumption-Free Searching via BucketingTo mitigate data dependencies, we propose a
+meta-algorithm that reduces a search problem to a weak decision problem. In this problem, positive
+instances correspond to the existence ofr-close neighbors to a queryq, while negative instances
+showcase the absence ofcr-close neighbors. Such a weak decision problem can be solved obliviously
+simply by using a classic LSH data structureD. Unlike the search problem, an oblivious decider
+can be robustified by applying the well-known Differential Privacy (DP) obfuscation technique of
+(Hassidim et al., 2022): we maintain√Qcopies ofDand combine their responses in a private
+manner with respect to the random bits of each copy.
+To perform the search, we then partitionS∈Mn into buckets of size roughly√nand instantiate
+a copy of the robust weak decider in each bucket. We can use these copies to identify a bucket that
+contains a suitable point to output and then exhaustively search that bucket to produce the final
+answer:
+Theorem 1.3.There exists an adversarially robust algorithm for the(c,r)-ANN problem, success-
+fully answering up toQqueries with probability at least1−Θ(δ). The algorithm useseO(n1+ρ/(2−ρ)√Q)
+space andeO(dn1/(2−ρ))time per-query, whereρ=ρ(c)∈(0,1).
+5
+
+Metric Query Time Space Update Time
+Theorem 1.2 (Fairness) eO(d·(D+n ρ)) eO(n1+ρ) eO(d·(D+n ρ))
+Theorem 1.3 (Bucketing) eO(dn
+1
+2−ρ ) eO(√Q·n
+2
+2−ρ ) eO(dn
+ρ
+2−ρ
+√Q)
+Theorem 1.4 (Concentric Annuli)
+β= Θ( log logc
+logc )
+eO(dnβ) O(√Q·n 1+β) eO(dnβ√Q)
+(Feng et al., 2025)‡ O(d·s·n ρ) O(√Q·s·n 1+ρ) eO(dnρ·s· √Q)
+Table 1: Algorithms for the(c,r)-ANN problem in LSH-equipped metric spaces.
+Breaking the√nBarrier via Concentric LSH AnnuliThe bucketing method yields a query
+time complexity that is always at leastO(√n), which is not ideal considering that LSH methods
+can induce the exponent ofnto be arbitrarily close to0by increasing the approximation parameter
+c. To go beyond this barrier, we introduce aconcentric annuli construction.
+We partition the(r,cr)-annulus into several smaller, concentric sub-annuli and apply the fair
+ANN algorithmA fair within each one. A simple counting argument guarantees that at least one
+of these sub-annuli must have a low point-density ratio, implying thatAfair within that annulus
+terminates within an acceptable runtime threshold with probability at least0.9. For each annulus
+that does not exceed this threshold, we obtain an estimate to the probability that the corresponding
+Afair copy terminates quickly. We then pick a favorable annulus to run a held-outtestingcopy of
+Afair and output a point. To maintain robustness however, we must be careful to ensure that
+annulus selection is done in a way such that the adaptive adversary cannot overfit to our internal
+randomness. To do this we apply the DP robustification framework on the selection process of the
+annuli by estimating the probabilities each copy ofAfair terminates within a predetermined runtime
+threshold. Our algorithm is both assumption-free and enjoys a better runtime thanO(√n).
+Theorem 1.4.There exists a robust algorithm for solving the(c,r)-ANN problem that that uses
+space eO(√Q·n 1+β), whereβ= min k∈Z≥1 max{ρ(c1/k),1/k}. The query runtime is eO(dnβ)time
+with probability at least1−δ.
+For many metric spaces, the value ofβresolves nicely. For the hypercube{0,1} d under the
+Hamming distance we haveρ(c) = 1
+2c−1, which yieldsβ= Θ( log logc
+logc )→0asc→∞, which is not
+the case with the exponent 1
+2−ρ(c) of Theorem 1.3. As a corollary, this technique also allows us to
+achieve purely sublinear time for a class of “relaxed” fair ANN problems.
+For-all AlgorithmsFor low-dimensional metric spaces, we develop algorithms for ANN that
+provide a powerfulfor-all guarantee: with high probability, the data structure correctly answers
+every possiblequeryq∈ M. Our approach builds on a discretization technique applied to an
+LSH data structure, a paradigm explored in prior work (Cherapanamjeri and Nelson, 2020, 2024;
+Bateni et al., 2024). We refine this line of research by introducing a novel, simpler metric covering
+construction, improving the space complexity by a logarithmic factor, and using sampling to improve
+the time complexity by a factor ofd. We present our result for the Hamming hypercube below,
+including results forℓp spaces in Appendix D.
+‡The work of Feng et al. (2025) concurrently studies the robust ANN problem. We present a comparison of our
+results with their algorithm, as well as a more extended discussion of related work, in Section 2.
+6
+
+Theorem 1.5.For the(c,r)-ANN problem in thed-dimensional Hamming hypercube{0,1}d, there
+exists an algorithm that correctly answers all possible queries with at least0.99probability. The
+space complexity iseO(d·n 1+ρ+o(1))and query time is eO(d·n ρ), whereρ= 1
+2c−1.
+Remark (The Price of For-All Algorithms).Despite their remarkable guarantees, for-all al-
+gorithms have significant drawbacks. Their space complexity scales by a factor ofd, making them
+intractable for high-dimensional metric spaces. This is a direct consequence of the large number
+of hash functions required to ensure a tiny probability of error for any query. Furthermore, these
+algorithms lack the generality of their adaptive counterparts; they are metric-space dependent and
+must be tailored to the specific metric space being used.
+2 Related and Concurrent Work
+The challenge of designing algorithms robust to adversarial queries is well-studied, particularly in
+privacy and statistics (Bassily et al., 2015; Smith, 2017; Bassily et al., 2016), where Differential
+Privacy is a central tool for ensuring robustness (Dwork et al., 2015a; Dinur et al., 2023). The
+question of adversarial robustness was formally introduced to streaming algorithms by Ben-Eliezer
+et al. (Ben-Eliezer et al., 2022b), motivated by attacks on linear sketches (Hardt and Woodruff,
+2013), and has since inspired a long line of work on robustifying various streaming algorithms
+(Hassidim et al., 2022; Chakrabarti et al., 2021; Lai and Bayraktar, 2020; Chakrabarti and Stoeckl,
+2024; Stoeckl, 2023; Woodruff and Zhou, 2022; Ben-Eliezer et al., 2022a).
+Our work is most directly inspired by the framework of Hassidim et al. (Hassidim et al., 2022),
+who used Differential Privacy to solve estimation problems robustly, and by Cherapanamjeri et
+al. (Cherapanamjeri et al., 2023), who applied this framework with low query time overhead. While
+weadaptasimilarapproach, theirmethodsarefundamentallylimitedtoestimationanddon’textend
+to search problems like NNS, where the output must be a specific dataset element. The difficulty
+of robust search is further highlighted by Beimel et al. (Beimel et al., 2022), who established lower
+bounds showing that robust algorithms for certain search problems are inherently slower than their
+oblivious counterparts, motivating our investigation.
+Different works further reinforce the unique challenges of robust search. Work on robust graph
+coloring, for example, also requires techniques beyond simple noise addition due to its discrete
+output space (Chakrabarti et al., 2021; Behnezhad et al., 2025). Our approach is also distinct
+from Las Vegas LSH constructions (Pham and Pagh, 2016; Wei, 2022). While these methods
+guarantee no false negatives, they remain vulnerable to adversaries who can inflate their expected
+runtime (Kapralov et al., 2024). Our focus, in contrast, is on robustifying traditional Monte Carlo
+algorithms.
+Finally, our approach builds on the use of discretization and net-based arguments to achieve
+’for-all’ guarantees for ANN. This technique was previously used for robust distance estimation
+(Cherapanamjeri and Nelson, 2020), for ANN in conjunction with partition trees (Cherapanamjeri
+and Nelson, 2024) and for efficient centroid-linkage clustering (Bateni et al., 2024). We contribute
+a simpler and more streamlined construction that offers a modest performance improvement over
+this prior work.
+2.1 Comparison with Feng et al. (2025)
+Our work was developed concurrently and independently with Feng et al. (2025). Our approaches,
+assumptions, and performance guarantees differ significantly.
+7
+
+MethodologyFeng et al. (2025) propose a method tightly coupled to the structure of DP noise
+via a reduction to the private selection problem. In contrast, our “search-to-decision” and
+fairness frameworks are more general, treating the DP component as a black-box primitive.
+AssumptionsTheir algorithm’s complexity depends on a near-neighbor density bounds, where
+|BS(q,cr)|≤s. We present the first algorithms whose query runtimes are independent of the
+input dataset, making them robust to worst-case data distributions.
+PerformanceTheir query time scalesmultiplicativelywith the number of points in the annulus,
+|BS(q,cr)|, while our algorithms are either purely sublinear or their query time dependsad-
+ditivelyonly on the density ratioD= |BS(q,cr)|
+|BS(q,r)| . Crucially, this dependency onDdoes not
+affect our space complexity, which still grows by an additional factor of√Q.
+3 Preliminaries
+In this section we present necessary definitions of the problems we address and the computational
+models we consider. For a comprehensive notation table, see Table 2. For background on differential
+privacy theorems and concepts, see Appendix B.
+TheAdversarialRobustnessModelAnalgorithmisadversariallyrobustifitcorrectlyanswers
+a sequence of adaptively chosen queries with high probability. This is formalized (Ben-Eliezer et al.,
+2022b) through the following interactive game:
+Definition 3.1.Consider the following gameGbetweenAlgorithm(A) andAdversary(B):
+1.Setup Phase:The adversary chooses a datasetS. The algorithmAthen uses its private
+internal randomnessR setup ∈ {0,1}∗ to preprocessSand build a data structureD. The
+adversary may know the code forAbut not the specific instance ofRsetup.
+2.Query Phase:The game proceeds forQrounds. In each roundi∈[Q]:
+•The adversary adaptively chooses a queryqi. This choice can depend on the datasetSand
+the history of all previous queries and their corresponding answers,(q1,a 1),...,(q i−1,ai−1).
+•The algorithmAuses its data structureDand potentially new private randomnessR i∈
+{0,1}∗ to compute and return an answerai.
+3.Winning Condition:The algorithm fails if there exists at least one roundi∈[Q]for which
+the answerai is an incorrect response to the queryqi.
+We say that an algorithmAisδ-adversarially robust if for any dataset and any strategy the
+adversary can employ, the probability that the algorithm fails is at mostδ. The probability is taken
+over the algorithm’s entire internal randomness (Rsetup,R 1,...,R Q).
+Remark (Oblivious Updates).Our framework also supports oblivious updates to the dataset.
+The adversary selects a series of update timesteps in advance in the form of additions or deletions
+of points. These updates are interleaved with the query phases during the game. We briefly discuss
+how efficiently updates can be implemented in our algorithms; we are not concerned with robustness
+as our algorithms works with respect to arbitrarily chosen datasetsS.
+8
+
+Approximate Nearest Neighbor Search and LSHIn theNearest Neighborsproblem, we seek
+to find a point in our input dataset that minimizes the distance to some query point.
+Definition 3.2 (ANN).Letc >1andr >0be positive constants. In the(c,r)–Approximate
+Nearest-Neighbors Problem (ANN)we are given as input a setS⊂Mwith|S|=nand a
+sequence of queries{qi}Q
+i=1 withq i∈M. For each queryq i, if there existsp∈B S(qi,r), we are
+required to output some pointp′∈B S(qi,cr). IfB S(qi,cr) =∅, we are required to output⊥. In
+the case whereBS(qi,r) =∅̸=B S(qi,cr)we can either output a point fromBS(qi,cr)or⊥. Our
+algorithm should successfully satisfy these requirements with probability at least2/3.
+A prevalent method for solving ANN is Locality Sensitive Hashing (LSH):
+Definition 3.3 (Locality Sensitive Hashing, (Har-Peled et al., 2012)).A hash familyHof
+functions mappingMto a set of buckets is called a(c,r,p1,p 2)–Locality Sensitive Hash Family
+(LSH)if the following two conditions are satisfied:
+•Ifx,y∈Mhave||x−y||≤r, thenPr h∈H[h(x) =h(y)]≥p 1.
+•Ifx,y∈Mhave||x−y||≥cr, thenPr h∈H[h(x) =h(y)]≤p 2.
+wherep 1≫p 2 are parameters in(0,1). We often assume that computinghin ad–dimensional
+metric space requiresO(d)time. We assume that the LSH constructions we consider aremonotone,
+which means thatPr[h(x) =h(y)]monotonically decreases as||x−y||increases.
+Given a construction of a(c,r,p 1,p 2)–LSH for a metric space, we can solve the(c,r)–ANN
+problem by amplifying the LSH guarantees. This is done via an“OR of ANDs”construction: we
+sampleL:=p −1
+1 =n ρ hash functionsh 1,...,h L forρ(c)∈(0,1)by concatenating the outputs of
+k=⌈log 1/p2n⌉“prototypical” LSH functions inH, as shown in (Indyk and Motwani, 1998).
+Theorem 3.4.If ad–dimensional metric space admits a(c,r,p1,p 2)–LSH family, then we can solve
+the(c,r)–ANN problem on it usingO(n 1+ρ)space andO(dn ρ)time per query, whereρ= log(1/p1)
+log(1/p2).
+4 Fairness Implies Robustness
+We first establish a connection between robustness and fairness. We refine the definition of fairness
+in ANN given by Aumüller et al. (2022) to enable the proofs that follow.
+Definition 4.1 (Exact Fair(c,r)-ANN).A data structure solves theExact Fair(c,r)ANN
+problemif, conditioned on all answers returned so far being correct, the following holds for every
+roundiand every transcriptT i−1:
+1. IfB S(qi,r)̸=∅, then the conditional distributionLis uniform:
+L(ai|T i−1,qi) =Unif(B S(qi,r)).
+Otherwise the algorithm outputs⊥.
+2. The conditional distributionL(ai|T i−1,qi)does not depend on the setup randomnessRsetup.
+We first show that the exact fair ANN algorithm of Aumüller et al. (2022) fits our definition.
+They use a standard(r,cr,p 1,p 2)-LSH family withρ= log(1/p 1)/log(1/p 2). The data structure
+consists ofL= Θ(n ρ log(nQ))independent hash tables, yielding eO(n1+ρ)space. Given a queryq,
+the algorithm collects the candidate setC(q)from all tables and applies the exact neighborhood
+sampling procedure of Aumüller et al. (2022, Section 3.5), which uses rejection sampling and fresh
+per-query randomness.
+9
+
+Theorem 4.2.There exists a randomized(c,r)-ANN data structure usingO(n 1+ρ log(nQ))space
+with the following properties. For any fixed queryqindependent ofR setup, with probability at least
+1− 1
+nQ overR setup, the candidate setC(q)contains all points ofB S(q,r). Conditioned on this
+event, the algorithm returns an element ofBS(q,r)that is exactly uniformly distributed and whose
+distribution is independent ofRsetup. Moreover, the expected query time forqis bounded:
+O
+
+d·
+
+nρ + n(q,cr)
+n(q,r) + 1
+
+·log(nQ)
+
+.
+Proof.Fix any queryqthat is independent ofR setup. For anyp∈B S(q,r), the probability thatp
+fails to collide withqin allLtables is at most(1−p 1)L. By a union bound over the at mostn
+data points, our choice ofLyields
+Pr
+Rsetup
+[∃p∈B S(q,r)/∈C(q)]≤n(1−p 1)L≤ 1
+nQ.
+LetE q denote the complementary event thatBS(q,r)⊆C(q)and condition onE q.
+Conditioned onEq, the candidate setC(q)contains the entirer-neighborhood ofq. The query
+algorithm then applies the exact neighborhood sampling procedure of Aumüller et al. (2022, Sec-
+tion 3.5) to the candidate setC(q). By the correctness of that procedure, the returned point is
+distributedexactly uniformlyoverB S(q,r).
+Moreover, the random choices that determine the output (rejection sampling coins and random
+swaps) are generated freshly at query time and are independent of both the preprocessing random-
+nessR setup and any prior interaction transcript. Since the candidate setC(q)itself depends only on
+qandR setup, it follows that conditioned onEq and for any transcriptTthe conditional distribution
+L(a|T,q)is exactly uniform overB S(q,r)and does not depend onR setup.
+LetA fair be the Exact Fair ANN algorithm given by Theorem 4.2. We now show that fairness
+implies adversarial robustness. Intuitively, conditioning on success up to roundi−1preserves
+independence between the adversary’s next query and the preprocessing randomness, allowing us
+to apply the per-query LSH guarantee at every round.
+Claim 4.3 (Fairness Implies Robustness).The algorithmAfair is 1
+n-adversarially robust forQ
+adaptive queries.
+Proof.Without loss of generality, we can consider the adversary as deterministic. LetFi denote
+the event that the algorithm fails (i.e., the candidate set does not contain the fullr-ball) at round
+i, and letSi =Ti
+j=1¬Fj denote the event of success up to roundi.
+We first prove by induction onithat, conditioned onSi−1, the transcript of interactionsTi−1 =
+(q1,a 1,...,q i−1,ai−1)is independent of the setup randomnessR setup. Fori= 1, the transcript is
+empty and the claim is immediate. Assume the claim holds fori−1. Conditioned onSi−1, exact
+fairness implies that the distribution ofai−1 given(T i−2,qi−1)does not depend onR setup. Hence
+extending the transcript fromTi−2 toT i−1 preserves independence fromRsetup. Since the adversary
+is deterministic, the next queryqi =B(T i−1)is a function ofTi−1 and therefore is also independent
+ofR setup conditioned onSi−1.
+We can now apply the per-query guarantee of Theorem 4.2 toqi, yielding
+Pr[Fi|S i−1]≤ 1
+nQ.
+10
+
+Finally, by the union bound for sequential events,
+Pr
+" Q[
+i=1
+Fi
+#
+≤
+QX
+i=1
+Pr[Fi|S i−1]≤ 1
+n.
+Updates to the datasetSThe fair ANN data structure also supports oblivious dynamic up-
+dates. An insertion is handled by hashing the new point into each of theLLSH tables using the fixed
+preprocessing hash functions. A deletion is handled by removing the point from the correspond-
+ing buckets, which can be implemented either by maintaining bucket pointers or by querying the
+data structure with the point itself and deleting it from the resulting candidate lists. Each update
+touches the same set of hash tables and incurs the same asymptotic cost as a query. Consequently,
+the expected update time matches the expected query time up to constant factors.
+Both operations depend only on the preprocessing randomness and do not use transcript-
+dependent randomness. Moreover, the exact neighborhood sampling procedure is unchanged and
+continues to use fresh per-query randomness. Therefore, exact fairness and the robustness analysis
+remain valid under any sequence of oblivious updates.
+5 Assumption-Free Robust Searching via Bucketing
+A major limitation of the fair algorithm is that it only works efficiently when the dataset does not
+induce a high density ratio, which is not guaranteed ifSis picked by the adversary. Ideally, we
+aim to obtain sublinear algorithms that work without any assumptions on the input dataset. To do
+this, we introduce a search-to-decision framework:
+5.1 Weak Decision ANN
+Definition 5.1 (Weak-Decision-ANN).Consider the metric spaceMand letS⊆Uwith
+|S|=nbe an input point dataset. Letr >0,c>1be two parameters andq∈Mbe an adaptively
+chosen query. IfB S(q,r)̸=∅, then we should answer1. IfB S(q,cr) =∅, we must answer0. In
+any other case, any answer is acceptable. LetD(S,q,c,r)⊆{0,1}denote the set of correct answers
+to this weak decision problem for datasetS, parametersc,rand queryq.
+LetAbe an algorithm for solving the weak decision ANN problem, though not necessarily
+robustly. We can design an adversarially robust deciderA dec by usingA, while only increasing
+the space by a factor of√Q. Adhering to the framework of Hassidim et al. (2022), we maintain
+L= eΘ(√Q)copies of the data structuresD 1,...,D L generated byAusingLindependent random
+strings, and then for each queryqwe combine the answers ofAprivately. As opposed to the
+original framework of (Hassidim et al., 2022), we do not need to use a private median algorithm,
+which simplifies the analysis. To keep the query time small, we utilize privacy amplification by
+subsamplingk≪Lcopies per query (Theorem B.8). Our algorithm appears below as Algorithm 1.
+Toanalyzethisalgorithm, wearguethatforalli∈[Q], atleast 8
+10 ofthekanswersa ij arecorrect,
+even in the presence of adversarially generated queries. To do this, we first need to show that the
+algorithm is(ε,δ)-differentially private with respect to the input random stringsRwhich are used to
+specify the chosen LSH functions, whereδis the desired failure probability andεis an appropriately
+picked constant. As a result, if we setL= Θ(ε−1 log1.5(1/δ)·√2Q)andk= Θ(log(Q/δ))we obtain
+a robust decider that succeeds with probability at least1−Θ(δ). Our analysis (Theorem C.1)
+11
+
+Algorithm 1The robust deciderA dec (based on an oblivious deciderA)
+1:Inputs:Random stringR=σ 1◦σ 2◦···σ L.
+2:Parameters: Number of queriesQ, number of copiesL, number of sampled indicesk.
+3:Receive input datasetS⊆Ufrom the adversary, wheren=|S|.
+4:InitializeD 1,...,D L whereD i←A(S)on random stringσ i.
+5:fori= 1toQdo
+6:Receive queryq i from the adversary.
+7:J i←Samplekindices in[L]with replacement.
+8:Leta ij←D j(qi)∈{0,1}andN i := 1
+k|{j∈J i|a ij = 1}|.
+9:Let bNi =N i +Lap
+  1
+k
+
+.
+10:Output1[ bNi> 1
+2]
+is included in full in Appendix C. It uses technical tools from Differential Privacy to adapt the
+robustification argument of Ben-Eliezer et al. (2022b) for our setting. The main difference between
+their analysis and ours is that we can avoid using a black-box private median algorithm; the Laplace
+mechanism suffices for our needs.
+5.2 Bucketing-Based Search
+To perform the final search, we partition our point datasetSinton1−α segments, forα∈(0,1). We
+then instantiate a copyAi≡A dec ofA dec in each segment. When a query comes in, we forward it
+to eachAi and if some segment answers1, we perform an exhaustive search in the segment to find
+a point inBS(q,cr).
+Algorithm 2Robust ANN via Weak Decisions and Bucketing
+1:Parameters: Error probabilityδ >0, number of queriesQ
+2:Partition point setSarbitrarily intoκ=n 1−α segmentsL 1,...,L κ of sizen/κ.
+3:Initializeκindependent copiesA 1,...,A κ ofA dec, each withδ′ =δ/κ
+4:fori= 1toQdo
+5:Receive queryq i from the adversary.
+6:forj= 1toκwhereA j(qi) = 1do
+7:forp∈L j do
+8:ifp∈B S(q,cr)then
+9:Outputpand proceed to the next query.
+10:Output⊥and proceed to the next query.
+Lemma 5.2.Algorithm 2 is aδ-adversarially robust algorithm for the ANN problem.
+Proof.Suppose the adversary has won. The algorithm can only make a mistake when all the data
+structures reply with0, even though there is a pointp∈B S(q,r). Consider the segmentL i for
+whichp∈L i, and examine it in isolation. Because all the copies of AlgorithmAdec are initialized
+independently from each other, the adversary successfully inducesAi to make a mistake, which by
+assumption happens with probability at mostκδ′ =δover all the segments via union bound.
+Now we proceed to the proof of Theorem 1.3:
+12
+
+Proof of Theorem 1.3.We createn1−α segments, each containingnα points. Recall that a single
+copy of AlgorithmAdec takes eO(n1+ρ√Q)pre-processing time and space, andeO(nρ)time and space
+per query. Each copyAi runs onnα points, so for pre-processing, our algorithm uses
+eO
+
+n1−α(nα)1+ρp
+Q
+
+= eO
+
+n1+αρp
+Q
+
+bits of space for creatingn1−α copiesA 1,...,A L. On the other hand, to process a single query the
+algorithm uses
+eO
+ 
+n1−α·(nα)ρ +nα
+= eO
+ 
+n1−α+αρ +nα
+time. To balance the summands in the query complexity term, we set
+n1−α+αρ =n α =⇒α= 1
+2−ρ
+This proves Theorem 1.3 and concludes the analysis of Algorithm 2.
+The biggest advantage of our algorithm is that it does not make any assumptions on the input
+dataset. However, it achieves sublinear query time as1
+2−ρ <1whenρ<1. Furthermore, the space
+complexity of our algorithm for small values ofQis superior to the space complexity of even the
+oblivious ANN algorithm that has space complexityn1+ρ.
+Finally, updates are easily implemented in our framework as well, with insertions and deletions
+being performed in every LSH copy we maintain. We buildL=eO(√Q)LSH data structures, each of
+which hasnρ/(2−ρ) hash functions to update, which yields the final update time complexity. We also
+need to update our buckets, but we only need to update one bucket at a time as the partitioning
+over the dataset can be arbitrary. For more efficient performance, in practice we could perform
+updates lazily, only modifying the data structures we use just-in-time.
+6 Relaxed Fair ANN via Concentric LSH Annuli
+As a warm-up, we first present an algorithmic improvement to Theorem 4.2 for fair ANN, removing
+the dependency on the ration(q,cr)
+n(q,r) which could grow as big asnin the query time. We achieve
+purely sublinear time for a relaxed fairness guarantee:
+Definition 6.1 (Relaxed Fairness in ANN).LetSbe the input dataset andq∈Mbe a query
+point. IfB S(q,r)̸=∅, the algorithm aims to output some point chosen uniformly at random,
+independently of past queries, fromBS(q,r′), wherer′∈[r,cr]is a random variable depending onq
+andS. Otherwise, ifB S(q,r) =∅, the algorithm can either answer⊥or output a uniformly random
+point fromBS(q,r′)withr ′∈(r,cr].
+Consider the following sequence of radii betweenrandcr, interspersed so that the ratio between
+two consecutive ones is constant:r 0 =r,r 1,...,r k−1,rk =crare defined asr i =c ′·r i−1 for
+i∈{1,...,k}, wherec ′ = k√c. We createkinstances ofA fair, where thei-th instance is initialized
+with parameters(c′,rk). We run each instance to output a point uniformly fromBS(q,ri). Letting
+ρ(c′)be the LSH-ρconstant depending on the new approximating parameterc′, if we observe an
+instance running for longer than100·dn max{ρ(c′),1/k} timesteps, we stop the execution and switch
+to the next instance.
+Claim 6.2.Consider a queryqand supposeB S(q,r)̸=∅. There existsi∈{0,...,k−1}such that:
+n(q,ri+1)
+n(q,ri) ≤n
+1
+k (1)
+13
+
+Proof.Sincen(q,r)≥1it also holds thatn(q,r i)≥1for alli∈ {0,...,k}. Suppose that for
+alli∈{0,...,k−1}it holds that n(q,ri+1)
+n(q,ri) > n
+1
+k. Then, via a telescoping product we arrive at a
+contradiction:
+n(q,cr)
+n(q,r) = n(q,r 1)
+n(q,r 0)· n(q,r 2)
+n(q,r 1)··· n(q,rk−1)
+n(q,rk−2)· n(q,cr)
+n(q,rk−1) >
+
+n
+1
+k−1
+k−1
+=n
+Claim 6.2 shows that ifBS(q,r)̸=∅we output a uniformly sampled point from someBS(q,ri),
+wherer i is a random variableRdepending onS,qand our algorithm’s randomness. On the other
+hand, ifB S(q,r) =∅, we either output⊥if all the copiesD i time-out, or a uniformly sampled
+point from some sphereBS(q,ri). In either case, we enjoy the relaxed fairness guarantee of Def-
+inition 6.1. For the runtime, our algorithm takes spaceO(kn1+ρ(c′))for pre-processing, and time
+eO(dk·max{n ρ(c′),n 1/k})for answering each query. Choosingkthat minimizes this exponent we get
+the following theorem:
+Theorem 6.3.There exists an algorithm for solving the relaxed fair(c,r)-ANN problem that uses
+eO(dnβ)time per query andeO(n1+ρ(c1/¯k))space for pre-processing, where¯k= arg min
+k∈Z
+max{ρ(c1/k),1/k}
+andβ= max{ρ(c 1/¯k),1/ ¯k}.
+Solving forβis metric space dependent. For the hypercube, we can useρ(c) = 1
+2c−1 and a
+back-of-the-envelope calculation yieldsk= Θ( logc
+log logc ). To nail down the constants precisely, we
+pick:
+β= min
+
+max
+ 1
+⌊k∗⌋, 1
+2c1/⌊k∗⌋−1
+
+,max
+ 1
+⌈k∗⌉, 1
+2c1/⌈k∗⌉−1
+
+with our algorithm having runtimeeO(dnβ)and space complexity eO(√Q·n 1+β). For instance, if
+c= 4we havek ∗ = 2.48, soβ= 1/3, while forc= 10we havek ∗≈3.15soβ= 1/3. We plot the
+solutions forβforc∈[2,100]in Figure 2, both for the Hamming distance andℓ 2 distance metrics.
+Note thatβ→0asc→∞.
+Figure 2: Solutions forβfor different values ofcin the hypercube (left) andℓ 2 (right) domains.
+7 Robust ANN Improvements
+We now combine our concentric annuli technique with fair ANN to develop a more efficient and
+robust algorithm. The core idea is to use a set of parallel instances to dynamically identify an
+14
+
+annulus that is likely to yield a fast solution for a given query, and then carefully release this
+information to maintain adaptive security.
+We again partition the space intok≥1concentric annuli(ri−1,ri], wherer0 =randr i =c′·ri−1
+forc ′ = k√c. For each annulusi, we instantiate two independent copies of the base algorithm: a
+testinginstanceA i←A fair(c′,ri−1)and a held-outexecutioninstanceA (i)
+fair←A fair(c′,ri−1). Our
+goal is to find an annulus whose algorithm terminates within a pre-determined runtime threshold
+with large probability. We formalize this notion as follows.
+Definition 7.1 (Good Annuli).LetT i be the random runtime of the testing instanceAi. The
+i-th annulus is agood annulusif its probability of fast termination,pi, is high:
+pi := Pr[Ti≤4d(n ρ(c′) +n 1/k) log(nQ)]≥0.999
+Upon receiving a queryq, we estimate each probabilitypi with an additive error of at mostηby
+observing the fraction ofΘ(η−2 log(kQ/δ))independent sub-trials ofA i that halt within the time
+bound. Letˆpi be this empirical estimate forpi. We identify candidate annuli with an indicator
+vectorˆα∈{0,1} k, where:ˆαi =1[ ˆpi≥0.998].
+With high probability,ˆαi = 1implies that annulusiis good. A similar argument to Claim 6.2
+guarantees that at least one good annulus must exist. We therefore find the first indexi∗ for which
+ˆαi∗ = 1and run the corresponding execution instanceA(i∗)
+fair to completion. This approach yields a
+solution ineO(d(nρ(c′) +n 1/k))time with probability at least0.998
+To ensure robustness, the release of the vectorˆα(and thus the choice ofi∗) must not reveal
+information about the internal randomness of our algorithm instances. We therefore use the DP-
+based robustification framework of Hassidim et al. (2022) to releaseˆαprivately. While this increases
+the space complexity by a factor of√Q, it allows us to achieve a considerably better, assumption-
+free, and purely sublinear query time. Algorithm 3 presents the details of our approach.
+To tackle updates, we again simply count the number of LSH data structures we maintain and
+scale by the number of hash functions (see Table 1)
+7.1 Analysis
+First we show that the vectorˆa(q)is produced robustly.
+Lemma 7.2.With probability at least1−Θ(δ)over all queries and annuli, the vectorsˆpcomputed
+by Algorithm 3 are such that:
+||ˆp−p||∞≤η
+This holds despite the adversary’s action to establish the opposite.
+Proof.Our argument mimics the proof of Theorem C.1 in that it invokes the robustification frame-
+work of Hassidim et al. (2022).
+First, producingˆpoverQtimesteps is(ε,δ)-private with respect to the random strings our
+algorithm uses. This follows from the application of the Laplace mechanism with sensitivity 1
+s
+(Theorem B.2) and from privacy amplification by subsampling (Theorem B.8). Furthermore, if
+eachˆpi is produced privately with respect to the input randomness, we can invoke the parallel
+composition theorem of DP (Theorem B.5) to show that the entire release ofˆpis private without
+additionalcosttotheprivacyparameters. Asweknow, privacywithrespecttotheinputrandomness
+implies robustness, so we now have to calculate the cost of privacy in our approximation algorithm.
+15
+
+Algorithm 3Improved Robust ANN Search
+1:Input:Queryq∈M, parametersc,r,k≥1andδ∈(0,0.0025)
+2:procedureInitialize
+3:Letc ′← k√candr 0←r.
+4:Letη= 0.001,m=η −2 log(Qk/δ)andL= 2400 log 1.5(1/δ)√2Q.
+5:fori= 1,...,kdo
+6:LetN=m×Landr i←c′·ri−1.▷Testing Instance Grid
+7:InstantiateNcopiesA i,jm,jL←A fair(c′,ri−1)for(j m,jL)∈[m]×[L].
+8:InstantiateA (i)
+fair←A fair(c′,ri−1)▷Execution Instances
+9:procedureQuery(q)
+10:fori∈{1,...,k}do
+11:LetS trunc←4d(n 1/k +nρ(c′)) log(nQ)▷Letp j←Pr[T j <S trunc].
+12:J i←Samples= 2
+η log(Qk/δ)indices(j m,jL)∈[m]×[L]with replacement.
+13:forj:= (j m,jL)∈J i do
+14:▷ T i,jm,jL is the execution time of testing instanceAi,jm,jL.
+15:Letep ij←1[T i,jm,jL <S trunc].
+16:Letˆp i← 1
+s
+P
+j∈Ji
+epij +Lap( 1
+s).
+17:Setˆa(q) i←1[ˆp i≥0.998].
+18:ifˆa(q) = ⃗0then
+19:return⊥
+20:else
+21:i ∗←min{i∈{1,...,k}|a(q) i = 1}▷Find most significant bit index
+22:returnA (i∗)
+fair (q)
+It suffices to argue that for a fixedi∈[k]we have|ˆpi−pi|≤η. Fixing some query andi∈[k]
+we know by the triangle inequality and a standard Chernoff bound (sincem= Ω(η−2 log(Qk/δ)))
+that:
+|pi−ˆpi|≤
+
+pi− 1
+s
+X
+j∈Ji
+epi
+
++
+
+1
+s
+X
+j∈Ji
+epij−bpi
+
+≤ η
+2 +
+
+1
+s
+X
+j∈Ji
+epij−bpi
+
+The latter term of the above sum is the error incurred via the privatization process. We can bound
+it by using our known bound on the magnitude of Laplacian noise (Lemma B.3):
+
+1
+s
+X
+j∈Ji
+epij−bpi
+
+=
+
+1
+s
+X
+j∈Ji
+epij− 1
+s
+X
+j∈Ji
+epij +Lap
+1
+s
+
+≤ 1
+s· η
+2·s= η
+2
+This happens with probability at least1−e −ηs≥1− 1
+poly(kQ/δ). Taking a union bound overk
+annuli andQqueries establishes the lemma.
+Corollary 7.3.Since Algorithm 3 generates vector⃗ a∈{0,1}k by post-processing, this also implies
+thatais generated robustly.
+Next, we argue that the output point of the algorithm is produced correctly and within the
+claimed runtime and space complexity.
+16
+
+ri+1ri
+Figure 3: Our concentric LSH construction. In green lies the setBS(q,r i), and blue represents the annulus
+that extends toBS(q,r i+1)
+Theorem 7.4.Algorithm 3 is a(δ+ 1
+poly(n))-robust(c,r)–ANN algorithm that uses pre-processing
+space eO(√Q·n 1+ρ(c′)), wherec′ =c 1/¯k and ¯k= arg mink∈Z≥1
+ 
+β:= max{ρ(c 1/k),1/k}
+
+. Each query
+takes eO(dnβ)time with probability at least0.998.
+Proof.We maintainΘ(klog 2.5(kQ)√Q)testing instances, as well askexecution instances. This
+means our total space complexity is:
+Θ
+
+klog 2.5(kQ/δ)
+p
+Q·n 1+ρ(c′) +kn 1+ρ(c′)
+
+= eO(k
+p
+Q·n 1+ρ(c′)).
+For the query runtime, supposeBS(q,r)̸=∅. As we argued in Claim 6.2, there must exist some
+annulusℓfor which the density ratio is at mostn1/k. For that annulus, Theorem 4.2 implies that:
+Pr
+h
+Tℓ<4(n ρ +n 1/k) log(nQ)
+i
+≥1− 1
+poly(n)≫0.999
+Therefore, there always exists a good annulus whenBS(q,r)̸=∅.
+By Lemma 7.2 we have that a good annulus will, with high probability be captured by Algo-
+rithm 3. Conversely, ifˆa(q)i = 1, thenpi≥0.999−η= 0.998. As a result, ifi ∗ is the MSB ofa, the
+corresponding execution instanceA(i∗)
+fair runs in timeO(dnβ)with probability at least0.998. Overall,
+to process one query, we run allks=O(log(Qk))truncated copies ofA ij. Thus, our algorithm
+takesO(dlog(nQ)·n β)per query, as initially claimed.
+Finally, to argue robustness, we know from Lemma 7.2 that releasing vectorˆais done robustly.
+Also, Claim 4.3 tells us that the held-out execution copy is robust, given that the MSBi∗ is produced
+fromavia a fixed function (post-processing). Overall, the output of Algorithm 3 is adversarially
+robust with probability at least1−δ− 1
+poly(n), accounting for the probability that any of the fair
+ANN algorithms fail.
+Finally, we use the median amplification trick to get a high probability guarantee on the runtime.
+We maintaint= Θ(log(Q/δ))independent copies of the algorithm above and declare the runtime
+17
+
+to be the median runtime. A standard Chernoff bound argument shows that the probability any of
+Qqueries failing is at mostδ/Q, which by union bound makes the failure probability at mostδ, as
+desired.
+8 Conclusion
+This study presents a series of algorithms for solving ANN against adaptive adversaries. Our
+approaches, which integrate principles of fairness and privacy with novel data constructions, are
+efficient and input-independent. Our work raises several intriguing questions for future research:
+Can we establish time and space lower bounds for robust algorithms? Can the powerful link between
+fairness and robustness be extended to other domains, like estimation problems? Lastly, a practical
+implementation of our approach and the nuances it presents in a real system are also important
+avenues to investigate.
+Acknowledgments
+The authors would like to thank the organizers of the Summer Program on Sublinear Algorithms
+at the Simons Institute, where this work was initiated. We are grateful to Sofya Raskhodnikova
+for early discussions that helped formulate the problem, and to Adam Smith for explaining the
+recent status of techniques in adaptive data analysis. We also thank Christian Sohler for valuable
+discussions regarding his paper, and Rathin Desay for his helpful comments.
+References
+Andoni, A. (2009).Nearest neighbor search: the old, the new, and the impossible. PhD thesis,
+Massachusetts Institute of Technology.
+Andoni, A. and Beaglehole, D. (2022). Learning to hash robustly, guaranteed. InInternational
+Conference on Machine Learning, pages 599–618. PMLR.
+Andoni, A. and Indyk, P. (2017). Nearest neighbors in high-dimensional spaces. InHandbook of
+Discrete and Computational Geometry, pages 1135–1155. Chapman and Hall/CRC.
+Andoni, A., Indyk, P., and Razenshteyn, I. (2018). Approximate nearest neighbor search in high
+dimensions. InProceedings of the International Congress of Mathematicians: Rio de Janeiro
+2018, pages 3287–3318. World Scientific.
+Andoni, A., Laarhoven, T., Razenshteyn, I., and Waingarten, E. (2016). Lower bounds on time-
+space trade-offs for approximate near neighbors.arXiv preprint arXiv:1605.02701.
+Andoni, A., Laarhoven, T., Razenshteyn, I., and Waingarten, E. (2017a). Optimal hashing-based
+time-space trade-offs for approximate near neighbors. InProceedings of the twenty-eighth annual
+ACM-SIAM symposium on discrete algorithms, pages 47–66. SIAM.
+Andoni, A. and Razenshteyn, I. (2015). Optimal data-dependent hashing for approximate near
+neighbors. InProceedings of the forty-seventh annual ACM symposium on Theory of computing,
+pages 793–801.
+18
+
+Andoni, A., Razenshteyn, I., and Nosatzki, N. S. (2017b). Lsh forest: Practical algorithms made
+theoretical. InProceedings of the Twenty-Eighth Annual ACM-SIAM Symposium on Discrete
+Algorithms, pages 67–78. SIAM.
+Attias, I., Cohen, E., Shechner, M., and Stemmer, U. (2024). A framework for adversarial streaming
+via differential privacy and difference estimators.Algorithmica, pages 1–56.
+Aumüller, M., Har-Peled, S., Mahabadi, S., Pagh, R., and Silvestri, F. (2022). Sampling a near
+neighbor in high dimensions—who is the fairest of them all?ACM Transactions on Database
+Systems (TODS), 47(1):1–40.
+Bassily, R., Nissim, K., Smith, A., Steinke, T., Stemmer, U., and Ullman, J. (2016). Algorithmic
+stability for adaptive data analysis. InProceedings of the forty-eighth annual ACM symposium
+on Theory of Computing, pages 1046–1059.
+Bassily, R., Smith, A., Steinke, T., and Ullman, J. (2015). More general queries and less general-
+ization error in adaptive data analysis.arXiv preprint arXiv:1503.04843.
+Bateni, M., Dhulipala, L., Fletcher, W., Gowda, K. N., Hershkowitz, D. E., Jayaram, R., and
+Lacki, J. (2024). Efficient centroid-linkage clustering.Advances in Neural Information Processing
+Systems, 37:49649–49683.
+Behnezhad, S., Rajaraman, R., and Wasim, O. (2025). Fully dynamic (∆+ 1)-coloring against
+adaptive adversaries. In Azar, Y. and Panigrahi, D., editors,Proceedings of the 2025 Annual
+ACM-SIAM Symposium on Discrete Algorithms, SODA 2025, New Orleans, LA, USA, January
+12-15, 2025, pages 4983–5026. SIAM.
+Beimel, A., Kaplan, H., Mansour, Y., Nissim, K., Saranurak, T., and Stemmer, U. (2022). Dynamic
+algorithms against an adaptive adversary: generic constructions and lower bounds. InProceedings
+of the 54th Annual ACM SIGACT Symposium on Theory of Computing, pages 1671–1684.
+Ben-Eliezer, O., Eden, T., and Onak, K. (2022a). Adversarially robust streaming via dense-sparse
+trade-offs. InSymposium on Simplicity in Algorithms (SOSA), pages 214–227. SIAM.
+Ben-Eliezer, O., Jayaram, R., Woodruff, D. P., and Yogev, E. (2022b). A framework for adversarially
+robust streaming algorithms.ACM Journal of the ACM (JACM), 69(2):1–33.
+Bergman, L., Cohen, N., and Hoshen, Y. (2020). Deep nearest neighbor anomaly detection.arXiv
+preprint arXiv:2002.10445.
+Broder, A. Z., Charikar, M., Frieze, A. M., and Mitzenmacher, M. (1998). Min-wise independent
+permutations. InProceedings of the thirtieth annual ACM symposium on Theory of computing,
+pages 327–336.
+Bun, M., Nissim, K., Stemmer, U., and Vadhan, S. (2015). Differentially private release and learning
+of threshold functions. In2015 IEEE 56th Annual Symposium on Foundations of Computer
+Science, pages 634–649. IEEE.
+Chakrabarti, A., Ghosh, P., and Stoeckl, M. (2021). Adversarially robust coloring for graph streams.
+arXiv preprint arXiv:2109.11130.
+Chakrabarti, A. and Stoeckl, M. (2024). Finding missing items requires strong forms of randomness.
+In39th Computational Complexity Conference (CCC 2024). Schloss Dagstuhl–Leibniz-Zentrum
+für Informatik.
+19
+
+Charikar, M. S. (2002). Similarity estimation techniques from rounding algorithms. InProceedings
+of the thiry-fourth annual ACM symposium on Theory of computing, pages 380–388.
+Cherapanamjeri, Y. and Nelson, J. (2020). On adaptive distance estimation.Advances in Neural
+Information Processing Systems, 33:11178–11190.
+Cherapanamjeri, Y. and Nelson, J. (2024). Terminal embeddings in sublinear time.TheoretiCS, 3.
+Cherapanamjeri, Y., Silwal, S., Woodruff, D. P., Zhang, F., Zhang, Q., and Zhou, S. (2023). Robust
+algorithms on adaptive inputs from bounded adversaries.arXiv preprint arXiv:2304.07413.
+Datar, M., Immorlica, N., Indyk, P., and Mirrokni, V. S. (2004). Locality-sensitive hashing scheme
+based on p-stable distributions. InProceedings of the twentieth annual symposium on Computa-
+tional geometry, pages 253–262.
+Dinur, I., Stemmer, U., Woodruff, D. P., and Zhou, S. (2023). On differential privacy and adap-
+tive data analysis with bounded space. InAnnual International Conference on the Theory and
+Applications of Cryptographic Techniques, pages 35–65. Springer.
+Dwork, C., Feldman, V., Hardt, M., Pitassi, T., Reingold, O., and Roth, A. (2015a). Generalization
+in adaptive data analysis and holdout reuse.Advances in neural information processing systems,
+28.
+Dwork, C., Feldman, V., Hardt, M., Pitassi, T., Reingold, O., and Roth, A. L. (2015b). Preserving
+statistical validity in adaptive data analysis. InProceedings of the forty-seventh annual ACM
+symposium on Theory of computing, pages 117–126.
+Dwork, C., McSherry, F., Nissim, K., and Smith, A. (2006). Calibrating noise to sensitivity in
+private data analysis. InTheory of Cryptography: Third Theory of Cryptography Conference,
+TCC 2006, New York, NY, USA, March 4-7, 2006. Proceedings 3, pages 265–284. Springer.
+Dwork, C., Rothblum, G. N., and Vadhan, S. (2010). Boosting and differential privacy. In2010
+IEEE 51st annual symposium on foundations of computer science, pages 51–60. IEEE.
+Feng, S., Feng, Y., Li, G. Z., Song, Z., Woodruff, D., and Zhang, L. (2025). On differential privacy
+for adaptively solving search problems via sketching. InForty-second International Conference
+on Machine Learning.
+Gilbert, A. C., Strauss, M. J., Tropp, J. A., and Vershynin, R. (2007). One sketch for all: fast
+algorithms for compressed sensing. InProceedings of the thirty-ninth annual ACM symposium on
+Theory of computing, pages 237–246.
+Gionis, A., Indyk, P., and Motwani, R. (1999). Similarity search in high dimensions via hashing.
+InProceedings of the 25th International Conference on Very Large Data Bases, VLDB ’99, page
+518–529, San Francisco, CA, USA. Morgan Kaufmann Publishers Inc.
+Gribelyuk, E., Lin, H., Woodruff, D. P., Yu, H., and Zhou, S. (2024). A strong separation for
+adversarially robustℓ 0 estimation for linear sketches. In2024 IEEE 65th Annual Symposium on
+Foundations of Computer Science (FOCS), pages 2318–2343. IEEE.
+Han, I., Jayaram, R., Karbasi, A., Mirrokni, V., Woodruff, D. P., and Zandieh, A. (2024). Hyper-
+attention: Long-context attention in near-linear time. InInternational Conference on Learning
+Representations (ICLR). arXiv preprint arXiv:2310.05869.
+20
+
+Har-Peled, S., Indyk, P., and Motwani, R. (2012). Approximate nearest neighbor: Towards removing
+the curse of dimensionality.Theory of Computing, 1(8):321–350.
+Hardt, M. and Woodruff, D. P. (2013). How robust are linear sketches to adaptive inputs? In
+Proceedings of the forty-fifth annual ACM symposium on Theory of computing, pages 121–130.
+Hassidim, A., Kaplan, H., Mansour, Y., Matias, Y., and Stemmer, U. (2022). Adversarially robust
+streaming algorithms via differential privacy.Journal of the ACM, 69(6):1–14.
+Ichnowski, J.andAlterovitz, R.(2015). Fastnearestneighborsearchinse(3)forsampling-basedmo-
+tion planning. InAlgorithmic Foundations of Robotics XI: Selected Contributions of the Eleventh
+International Workshop on the Algorithmic Foundations of Robotics, pages 197–214. Springer.
+Indyk, P. and Motwani, R. (1998). Approximate nearest neighbors: towards removing the curse of
+dimensionality. InProceedings of the thirtieth annual ACM symposium on Theory of computing,
+pages 604–613.
+Jafari, O., Maurya, P., Nagarkar, P., Islam, K. M., and Crushev, C. (2021). A survey on locality
+sensitive hashing algorithms and their applications.arXiv preprint arXiv:2102.08942.
+Kalantidis, Y. and Avrithis, Y. (2014). Locally optimized product quantization for approximate
+nearest neighbor search. InProceedings of the IEEE conference on computer vision and pattern
+recognition, pages 2321–2328.
+Kapralov, M., Makarov, M., andSohler, C.(2024). Ontheadversarialrobustnessoflocality-sensitive
+hashing in hamming space.arXiv preprint arXiv:2402.09707.
+Kitaev, N., Kaiser, Ł., and Levskaya, A. (2020). Reformer: The efficient transformer. InInterna-
+tional Conference on Learning Representations (ICLR). arXiv preprint arXiv:2001.04451.
+Lai, L. and Bayraktar, E. (2020). On the adversarial robustness of robust estimators.IEEE
+Transactions on Information Theory, 66(8):5097–5109.
+Motwani, R. and Raghavan, P. (1996). Randomized algorithms.ACM Computing Surveys (CSUR),
+28(1):33–37.
+Pham, N. and Pagh, R. (2016). Scalability and total recall with fast coveringlsh. InProceedings of
+the 25th ACM International on Conference on Information and Knowledge Management, pages
+1109–1118.
+SantaLucia, J., Allawi, H. T., and Seneviratne, P. A. (1996). Improved nearest-neighbor parameters
+for predicting dna duplex stability.Biochemistry, 35(11):3555–3562.
+Shalev-Shwartz, S. and Ben-David, S. (2014).Understanding machine learning: From theory to
+algorithms. Cambridge university press.
+Smith, A. (2017). Information, privacy and stability in adaptive data analysis.arXiv preprint
+arXiv:1706.00820.
+Stoeckl, M. (2023). Streaming algorithms for the missing item finding problem. InProceedings of
+the 2023 Annual ACM-SIAM Symposium on Discrete Algorithms (SODA), pages 793–818. SIAM.
+21
+
+Tagami, Y. (2017). Annexml: Approximate nearest neighbor search for extreme multi-label classifi-
+cation. InProceedings of the 23rd ACM SIGKDD international conference on knowledge discovery
+and data mining, pages 455–464.
+Verstrepen, K. and Goethals, B. (2014). Unifying nearest neighbors collaborative filtering. In
+Proceedings of the 8th ACM Conference on Recommender systems, pages 177–184.
+Wei, A. (2022). Optimal las vegas approximate near neighbors inℓp.ACM Transactions on Algo-
+rithms (TALG), 18(1):1–27.
+Woodruff, D. P. and Zhou, S. (2022). Tight bounds for adversarially robust streams and sliding
+windows via difference estimators. In2021 IEEE 62nd Annual Symposium on Foundations of
+Computer Science (FOCS), pages 1183–1196. IEEE.
+22
+
+A Notation Table
+Notation Description
+n Number of points in the datasetP⊆Rd
+d Dimension of the ambient space
+Q Number of (possibly adaptive) queries
+r Target radius for the(c,r)-ANN problem
+c>1 Approximation factor
+q A query point
+BS(q,r) Ball of radiusrcentered atq, intersected with datasetS
+n(q,r) Number of dataset points inBS(q,r)
+ρ(c) LSH exponent for approximation factorc
+Adec Weak(c,r)-ANN decision algorithm
+Afair Fair ANN algorithm whose output distribution is independent
+of past queries
+α Bucketing parameter (segment size exponent)
+Si Thei-th bucket/segment of the dataset
+k Number of concentric annuli (or subsampling parameter,
+context-dependent)
+ri Radius of thei-th annulus,ri =c i/kr
+c′ Per-annulus approximation factor,c′ =c 1/k
+β Query-time exponentβ= min k max{ρ(c1/k),1/k}
+L Number of independent algorithmic copies (for robustness)
+m Number of runtime trials per copy
+Ti,j Runtime of thej-th copy on annulusi
+Strunc Runtime truncation threshold
+Ni Fraction of copies that halt within timeStrunc on annulusi
+ˆNi Noisy estimate ofNi released via the Laplace mechanism
+ε Differential privacy parameter
+δ Failure probability parameter / DP parameter
+Table 2: Summary of notation used throughout the paper.
+B Background from Differential Privacy
+Our work leans heavily on results from differential privacy, so we give the necessary definitions and
+results here.
+23
+
+B.1 Definition of differential privacy
+Definition B.1 (Differential Privacy).LetAbe any randomized algorithm that operates on
+databases whose elements come from some universe. For parametersε >0andδ∈[0,1], the
+algorithmAis(ε,δ)–differentially private (DP) if for any two neighboring databasesS∼S ′ (ones
+that differ on one row only), the distributions on the algorithm’s outputs when run onSvsS′ are
+very close. That is, for anyS∼S′ and any subset of outcomesTof the output space ofAwe have:
+Pr[A(S)∈T]≤e ε·Pr[A(S′)∈T] +δ
+B.2 The Laplace Mechanism and its properties
+Theorem B.2 (The Laplace Mechanism, (Dwork et al., 2006)).Letf:X ∗ →Rbe a
+function. Define its sensitivityℓto be an upper bound to how muchfcan change on neighboring
+databases:
+∀S∼S ′ :|f(S)−f(S ′)|≤ℓ
+The algorithm that on inputS∈X ∗ returnsf(S) +Lap
+ ℓ
+ε
+
+is(ε,0)–DP, where
+Lap(λ;x) := 1
+2λ exp
+
+−|x|
+λ
+
+is the Laplace Distribution overR.
+We will make use of the following concentration property of the Laplace Distribution:
+Lemma B.3.Form≥1, letZ 1,...Zm∼Lap(λ)be iid random variables. We have that:
+Pr
+
+m
+max
+i=1
+Zi>λ(ln(m) +t)
+
+≤e−t
+B.3 Properties of differential privacy
+Differential Privacy has numerous properties that are useful in the design of algorithms. The
+following theorem is known as “advanced adaptive composition” and describes a situation when DP
+algorithms are linked sequentially in an adaptive way.
+Theorem B.4 (Advanced Composition, (Dwork et al., 2010)).Suppose algorithmsA1,...,A k
+are(ε,δ)–DP. LetA ′ be the adaptive composition of these algorithms: on input databasex, algorithm
+Ai is provided withx, and, fori≥2, with the outputy i−1 ofA i−1. Then, for anyδ ′∈(0,1),
+AlgorithmAis(eε, eδ)–DP with:
+eε=ε·
+p
+2kln(1/δ′) + 2kε2 and eδ=kδ+δ ′
+There is also a composition theorem concerning situations where the dataset is partitioned:
+Theorem B.5 (Parallel Composition).Letf 1,...,f k be(ε,0)-DP mechanisms andXbe a
+dataset. SupposeXis partitioned intokpartsX 1,...,X k and letf(X) = (f 1(X1),...,f k(Xk)).
+Thenfis(ε,0)-DP.
+The next theorem dictates that post-processing the output of a DP algorithm cannot degrade its
+privacy guarantees, as long as the processing does not use information from the original database.
+24
+
+Theorem B.6 (DP is closed under Post-Processing).LetA:Un→Y m andB:Y m→Z r be
+randomized algorithms, whereU,Y,Zare arbitrary sets. IfAis(ε,δ)–DP, then so is the composed
+algorithmB(A(·)).
+The following theorem showcases the power of DP algorithms in learning.
+Theorem B.7 (DP and Generalization, (Bassily et al., 2016; Dwork et al., 2015b)).Let
+ε∈(0,1/3)andδ∈(0,ε/4). LetAbe a(ε,δ)–DP algorithm that operates on databases inX n and
+outputsmpredicate functionsh i :X→{0,1}fori∈[m]. Then, ifDis any distribution overX
+andSconsists ofn≥ 1
+ε2·log
+  2εm
+δ
+
+iid samples fromD, we have for alli∈[m]that:
+Pr
+S∼Dn
+hi←A(S)
+"
+1
+|S|
+X
+x∈S
+hi(x)−E
+x∼D
+[hi(x)]
+≥10ε
+#
+≤ δ
+ε
+In other words, a privately generated predicate is a good estimator of its expectation under any
+distribution on the input data. A final property of privacy that we will use is a boosting technique
+through sub-sampling:
+Theorem B.8 (Privacy Amplification by Subsampling, (Bun et al., 2015; Cherapanam-
+jeri et al., 2023)).LetAbe an(ε,δ)–DP algorithm operating on databases of sizem. Forn≥2m,
+consider an algorithm that for input a database of sizen, it subsamples (with replacement)mrows
+from the database and runsAon the result. Then this algorithm is(ε′,δ′)–DP for
+ε′ = 6εm
+n andδ ′ = exp
+6εm
+n
+
+· 4m
+n ·δ
+B.4 Robustification via Privacy Over Internal Randomness
+A recurring tool used in this work is that we can obtain robustness against adaptive queries by
+enforcingstabilitywithrespecttothealgorithm’sinternalrandomness, ratherthantheinputdataset
+(Hassidim et al., 2022). Concretely, we view the random coins used by the algorithm as a (hidden)
+database and require that the observable transcript of interaction be differentially private with
+respect to changes in this randomness. DP then implies that no adaptively chosen sequence of
+queries can significantly depend on or overfit to particular random choices made during setup or
+execution. We explicitly utilize and refine such arguments in the proof of Appendix C.
+C Proof of Theorem C.1
+In this section we include a formal analysis of the construction of Algorithm 1. We prove the
+following theorem:
+Theorem C.1.LetAbe an oblivious decider algorithm for ANN that usess(n)space andt(n)time
+per query. Letε= 0.01,δ <ε/4and suppose we setL= 24ε −1 log1.5(1/δ)·√2Qandk= log(Q/δ).
+Then, the algorithmA dec is an adversarially robust decider that succeeds with probability at least
+1−Θ(δ)usings(n)· eO
+ √Q
+
+bits of space andeO(t(n))time per query.
+First, we show that the algorithm is differentially private with respect to its input randomness.
+Lemma C.2.Letε= 0.01andδ < ε/4. AlgorithmA dec is(ε,δ)–DP with respect to the string of
+randomnessR.
+25
+
+Proof.We analyze the privacy of the algorithmAdec given in Algorithm 1 with respect to the string
+of randomnessR, which we interpret as its input. Suppose we let
+ε′ = ε
+2
+p
+2Qln(1/δ)
+For alli∈[Q], we claim that the response to queryqi is(ε′,0)–DP with respect toR. This is because
+the statisticNi defined in Line 8 of Algorithm 1 has sensitivity1/kand therefore by Theorem B.2,
+after applying the Laplace mechanism in Line 9, we have that releasingbNi is(1,0)–DP with respect
+to the stringsR. The binary output based on comparingbNi with the constant threshold1/2is still
+(1,0)-DP by post-processing (Theorem B.6).
+SinceL≥2k, using the amplification by sub-sampling property (Theorem B.8), we get that
+each iteration is(ε′,0)–DP, because for large enoughQwe have:
+6k
+L = 6·0.01(logQ+ log 1
+δ )
+24 log 1
+δ
+q
+2Qlog 1
+δ
+= 6εlog 1
+δ + 6εlogQ
+24·log 1
+δ
+q
+2Qln
+  1
+δ
+ (Sinceε= 0.01)
+< 2ε
+4
+q
+2Qln
+  1
+δ
+
+=ε′
+Finally, by adaptive composition (Theorem B.4), afterQadaptive steps our resulting algorithm is
+(ε′′,δ)-DP where:
+ε′′ =ε′
+s
+2Qln
+1
+δ
+
++Q(ε′)2 = ε
+2 + ε2
+4 ln
+  1
+δ
+≤ε
+forε≤2 lnδ −1, which is satisfied forδ∈(0,0.0025). Thus, AlgorithmA dec is(ε,δ)–DP with
+respect to its inputs – the random stringsR.
+Next, we show that a majority of the data structuresDi output accurate verdicts with high proba-
+bility, even against adversarially generated queries.
+Lemma C.3.With probability at least1−δ, for alli∈[Q], at least0.8Lof the answersa ij are
+accurate responses to the decision problem with queryqi.
+Proof.The central idea of the proof, as it appeared in (Hassidim et al., 2022), is to imagine the
+adversaryBas a post-processing mechanism that tries to guess which random strings leadAto
+making a mistake.
+Imagine a wrappermeta-algorithmC, outlined as Algorithm 4, that takes as input the random
+stringR=σ 1◦r 2◦···◦σ L, which is generated according to some unknown, arbitrary distribution
+R. This algorithmCsimulates the game betweenA dec andB: It first runsBto provide some input
+datasetS⊆UtoA dec, which is seeded with random strings inR. Then,CusesBto queryA dec
+adaptively with queries(q1,...,q Q). At the same time, it simulatesAdec to receive answersa1,...,a Q
+that are fed back toB. By Lemma C.2, the output(a1,...,a Q)is produced privately with respect
+toR, regardless of how the adversary makes their queries.
+26
+
+At every stepi, onceBhas provided⃗ qi = (q1,...,q i)and has gotten backianswers(a 1,...,a i)
+fromA dec, our meta-algorithmCpost-processesthis transcript{(q j,aj)}i
+j=1 to generate a predicate
+h⃗ qi :{0,1} ∗→{0,1}. This predicate tells which stringsσ∈{0,1} ∗ lead algorithmAto successfully
+answer query prefix⃗ qi on input datasetS, in the decision-problem regime. More formally:
+h⃗ qi(σ) :=
+^
+1≤j≤i
+{A(σ)(S,qj)∈D(S,q j,c,r)}(2)
+Note that this definition captures the intermediate case in which any answer of the algorithm is
+considered correct.
+Algorithm 4The meta-algorithmC, ran foristeps
+1:Inputs:Random stringR=σ 1◦σ 2◦···σ L, descriptions of AlgorithmsAdec andB.
+2:SimulateBto obtain a datasetS⊂U.
+3:InitializeA dec with random strings(σ1,...,σ L)and the datasetS.
+4:fori∈Qdo
+5:SimulateBto produce a queryq j based on the prior history of queries and answers.
+6:SimulateAon queryq j to produce an answer.
+7:Compute (via post-processing of query/answer history) predicateh ⃗ qi(·)from Equation 2.
+8:Output(h ⃗ q1,...,h ⃗ qQ).
+Generating these predicates is possible becauseh⃗ qi only depends on⃗ qi, which is a substring of
+the output history thatChas access to. As a result,Ccan produceh⃗ qi by (say) calculating its value
+for each value ofRexhaustively§. BecauseCis only allowed to post-process the query/answer vector
+(q1,a 1,...,q i,ai), the output predicateh⃗ qi is also generated in a(ε,δ)–DP manner with respect to
+σ1,...,σ L, by Theorem B.6.
+Given theseQprivately generated predicates, and sinceL> 1
+ε2 log 2εQ
+δ for large enoughQ, by the
+generalization property of DP (Theorem B.7) we have that¶ with probability at least1−δ
+ε = 1−Θ(δ)
+it holds for any distributionRand for alli∈[Q]that:
+
+E
+σ∼R
+
+h⃗ qi(σ)
+
+− 1
+L
+LX
+j=1
+h⃗ qi(σj)
+
+≤10ε= 1
+10 (3)
+But ifRis the uniform distribution, thenEσ∼R
+
+h⃗ qi(σ)
+
+is simply the probability thatAgives
+an accurate answer on thefixedquery sequence⃗ qi. SinceAis an oblivious decider, Equation 3
+implies that:
+E
+σ∼R
+
+h⃗ qi(σ)
+
+≥ 9
+10 (4)
+Further, 1
+L
+PL
+j=1h⃗ qi(σj)is the fraction of random strings that leadA 2 to be correct. Thus, by
+Equation 4, this fraction is at least
+  9
+10− 1
+10
+
+L= 0.8Lfor alli∈[Q].
+We are now ready to prove the main theorem of this section.
+§We assumeChas unbounded computational power.
+¶Assumingδ∈(0,ε/4).
+27
+
+Proof of Theorem C.1.Let us condition on the event that Lemma C.3 holds, which happens with
+probability at least1−Θ(δ). Then, for alli∈[Q], the fraction of correct answers to queryq i is
+either at least0.8, whenBS(qj,r)̸=∅, or at most1−0.8 = 0.2, otherwise. Now we need to account
+for the error introduced by subsampling, which is done via the following lemma:
+Lemma C.4.LetL∈Nand suppose that at least anα-fraction ofLstructures aregood, where
+α∈{0.8,0.2}. Letj 1,...,j k be sampled independently and uniformly from[L](with replacement),
+and define
+¯N= 1
+k
+kX
+t=1
+Xt, X t :=1[structurej t is good].
+Then fork≥40 log(Q/δ),
+Pr
+" ¯N≤0.6ifα= 0.8,
+¯N≥0.4ifα= 0.2
+#
+≤δ/Q.
+Proof.The random variablesX 1,...,X k are i.i.d. Bernoulli(α), henceE[ ¯N] =α.
+Case 1:α= 0.8.We apply a multiplicative Chernoff bound. For any0<γ <1,
+Pr[ ¯N≤(1−γ)α]≤exp
+
+−γ2αk
+2
+
+.
+Setting(1−γ)α= 0.6givesγ= 1/4, and therefore
+Pr[ ¯N≤0.6]≤exp
+
+−(1/4)2·0.8
+2 k
+
+= exp(−k/40).
+Case 2:α= 0.2.By symmetry,
+Pr[ ¯N≥0.4]≤exp(−k/40).
+Choosingk≥40 log(Q/δ)yields the claimed bounds.
+Finally, by Lemma B.3, we require that the maximum Laplacian noise not exceed0.1with high
+probability:
+Pr [|Zi|>0.1] = Pr
+
+|Zi|> 1
+k (ln(1) + 0.1k)
+
+≤e−0.1k (5)
+Since our threshold for deciding isbNi :=N i +Zi≥0.5, we can see that settingk= Ω(log(Q/δ))
+will make the probability in Equation 5 at mostδ
+Q, implying, by union bound, thatAdec outputs
+the correct answer at every timestepi∈[Q]with high probability.
+D Improved Robust ANNS Algorithms with∀guarantees
+In this section, we will discuss another path to adversarial robustness for search problems –providing
+afor-allguarantee. We will focus on the ANN problem for this section, due to its ubiquity and
+importance, as well as its amenity to the techniques we discuss.
+28
+
+D.1 AFor-allguarantee in the Hamming cube
+We present the Hamming Distance ANN case first because it is the most naturalfor-allguarantee
+one can give. This is because the space we are operating over is discrete, and we can easily union-
+bound over all possible queries and only incur a cost polynomial to the dimensiondof the metric
+space.
+Theorem D.1.There exists an adversarially robust algorithm solving the(c,r)–ANN problem in the
+d–dimensional Hamming Hypercube that can answer every possible query correctly with probability
+at least1−1/n 2. The space requirements areeO(d·n 1+ρ+o(1)), and the time required per query is
+eO(d2·nρ), whereρ= 1/c.
+Proof.First, let us recall the standard LSH in the Hamming Hypercube: We are given a point set
+S⊆{0,1} d with|S|=n. We receive queriesq∈{0,1} d. Our Locality Sensitive Hash familyH
+is defined as follows: Pick some coordinatei∈[d]and hashx∈{0,1} d according tox i∈{0,1}.
+This functionhacts as a hyperplane separating the points in the hypercube into two equal halves,
+depending on thei-th coordinate. Samplinghuniformly at random fromHis equivalent to sampling
+i∈[d]uniformly at random. We can easily see thatHis an(r,cr,p 1,p 2)–LSH family, as:
+Pr
+h∼H
+[h(p) =h(q)] = d−||p−q||
+d =
+(
+≥1− r
+d :=p 1,when||p−q||≤r
+≤1− cr
+d :=p 2,when||p−q||≥cr
+We now go through the typical amplification process for LSH families (Gionis et al., 1999).
+Instead of sampling just one coordinate, we samplek. And instead of sampling just one hash
+function, we sampleLdifferent onesh 1,...,h L∈H k and require that a close point collides withq
+at least once. With this scheme, we know that if we fixq∈{0,1}d andp∈B S(q,r)we have:
+Pr [∃i∈[L] :h i(p) =h i(q)]≥1−(1−p k
+1)L
+Furthermore, if||p−q||≥cr, we must have:
+Pr [∃i∈[L] :h i(q) =h i(p)]≤Lp k
+2
+Now, we want to guarantee that with high probability there doesn’t exist any queryq∈{0,1}d
+such that for all pointsp∈BS(q,r)we haveh i(q)̸=h i(p)for alli∈[L]. In other words, we want:
+Pr
+h
+∃q∈{0,1} d :∀p∈B S(q,r)∀i∈[L] :h i(p)̸=h i(q)
+i
+≤ 1
+n
+We can use the union bound to get:
+Pr
+h
+∃q∈{0,1} d :∀p∈B S(q,r)∀i∈[L] :h i(p)̸=h i(q)
+i
+≤
+X
+q∈{0,1}d
+Pr [∀p∈B S(q,r)∀i∈[L] :h i(p)̸=h i(q)]
+So it suffices to establish that for fixedq∈{0,1}d we have:
+Pr [∀p∈B S(q,r)∀i∈[L] :h i(p)̸=h i(q)]≤ 1
+n2d
+29
+
+We can weaken this statement and union-bound as follows:
+Pr [∀p∈B S(q,r)∀i∈[L] :h i(p)̸=h i(q)]≤Pr [∃p∈B S(q,r)̸∃i∈[L] :h i(p) =h i(q)]
+≤
+X
+p∈BS(q,r)
+Pr [̸∃i∈[L] :h i(p) =h i(q)]
+≤|B S(q,r)|·(1−p k
+1)L
+≤n(1−p k
+1)L
+So it suffices to require that:
+(1−p k
+1)L≤ 1
+n22d (6)
+On the other hand, the expected number of points inS\BS(q,cr)that we will see in the same
+buckets asqis:
+E[|p∈S\B S(q,cr)|∃i∈[L] :h i(p) =h i(q)|] =
+X
+p∈S\BS(q,cr)
+Pr [∃i∈[L]|h i(p) =h i(q)](7)
+≤nLp k
+2 (8)
+We can now combine Equation 6 and Equation 8 to work out the values ofkandL. First, we want
+to getO(L)time in expectation, so we requirepk
+2≤1/n, which gives:
+k≥log 1/p2(n)
+Now, letp 1 =p ρ
+2. Substituting, we resolve the value ofLas:
+L≥n ρdlogn
+With that in place, we can see that our algorithm takesO(L)time with high probability. Indeed,
+letXbe the number of points inS\B S(q,cr)that are hashed to some common bucket withq.
+Using a simplified Chernoff bound, we have that:
+Pr [X≥10L]≤2 −10L = 1
+n10dnρ≪ 1
+nΩ(1)
+which implies that our runtime per query isO(L)with high probability. As for the value of the
+constantρwe have by definition that:
+ρ:= logp 1
+logp 2
+= log
+ 
+1− r
+d
+
+log
+ 
+1− cr
+d
+≈ 1
+c
+Overall, evaluating our hash function requires eO(logn)time, and evaluating distances between
+points requiresO(d)time. We maintainO(d·n ρ logn)hash tables, meaning that on a single query
+we spendO(d2·nρ logn)time. For pre-processing, apart from storing the entire dataset indnspace,
+we takeO(d·n 1+ρ+o(1))space to construct our data structure.
+30
+
+D.1.1 Improving the query runtime via sampling
+We can improve the dependency ondfor the query runtime by using sampling to find a good bucket.
+The following theorem encapsulates this finding, reducing the runtime complexity by a factor ofd:
+Theorem D.2.There exists an adversarially robust algorithm solving the(c,r)–ANN problem in
+thed–dimensional Hamming Hypercube that can answer all possible queries correctly with probability
+at least1−1/n 2. The space requirements areeO(d·n 1+ρ+o(1))and the time required per query is
+eO(d·n ρ), whereρ= 1/c.
+Proof.From our analysis above, we know that we takeL=n ρ·dlogndifferent hash functions.
+Consider some queryq. We analyze the expected number of buckets that contain some point
+p∈B S(q,r). LetX q be a random variable representing the number of bucketsi∈[L]for which
+some point inBS(q,r)lies in bucketi. Define the following indicator random variable:
+1 i =
+(
+1,if some pointp∈B S(q,r)lies in bucketi∈[L]
+0,otherwise
+By linearity of expectation, we can now write:
+E[Xq] =
+LX
+i=1
+Pr[1 i = 1]
+=
+LX
+i=1
+Pr
+
+ [
+p∈BS(q,r)
+{hi(p) =h i(q)}
+
+
+≥L·p k
+1
+=L·(p 2)ρk
+≥ L
+nρ
+=dlogn
+By using the Chernoff bound, we can see that with high probability,Xq is close to its expectation:
+Pr
+
+Xq≤ 1
+2dlogn
+
+≤e−dlogn
+8 = 1
+nd/8≪ 1
+n
+Let us, then, condition onXq > 1
+2dlogn. On query time, we can simply samplem= Θ(nρ logn)
+buckets uniformly at random from[L]. We know that with probability at leastdlogn
+2nρdlogn = 1
+2nρ, a
+single randomly selected bucket contains some point fromBS(q,r). So, for allmof the selections
+to not contain such a point, the probability is at most:
+
+1− 1
+nρ
+nρ logn
+≤e−logn = 1
+n
+So, with probability at least1− 1
+n we find a bucket containing a good point. Since, with high
+probability, the number of points inP\BS(q,cr)in any bucket areO(L), we see that this sampling
+method improves the query runtime toO(nρ logn).
+31
+
+D.1.2 Utilizing the optimal LSH algorithm
+Our earlier exposition used the original LSH construction for the Hamming Hypercube (Indyk and
+Motwani, 1998) that achievesρ= 1/c. We can also use the state-of-the-art approach from (Andoni
+and Razenshteyn, 2015) that achievesρ= 1
+2c−1 in place of Theorem D.1. This slightly improves the
+exponent onn:
+Theorem D.3.There exists an adversarially robust algorithm solving the(c,r)–ANN problem in
+thed–dimensional Hamming Hypercube that can answer all possible queries correctly with probability
+at least0.99. The space complexity isO(d·n 1+ρ+o(1)), and the time required per query isO(d·nρ),
+whereρ= 1
+2c−1. These runtime guarantees hold with high probability.
+The analysis is identical, so we will not repeat it again: Since the algorithm succeeds with
+constant probability, and we want it to succeed on all2d possible queries, we boost its success
+probability to1− 1
+100·2d. This way, after the union bound, any query succeeds with probability at
+least0.99. Furthermore, the analysis of the sampling algorithm for improving the query runtime in
+Theorem D.2 also remains the same. All that changes between using the standard Hamming norm
+LSH as opposed to the optimal one is the ratioρ:=log(1/p1)
+log(1/p2).
+D.2 Discretization of continuous spaces through metric coverings
+Thefor-allalgorithm we presented as Theorem D.2 cannot be applied outside of discrete spaces,
+however, because the key to our analysis was the union bound over all the possible queries.
+To simulate a similar argument for solving ANN in continuous,ℓp spaces, we can consider
+a strategy of discretizing the space. We place special “marker” points and guarantee that some
+version of the ANN problem is solvable around them. Then, when a query comes in, we find its
+corresponding marker point, and solve the ANN problem for it. We show that the answer we get is
+valid for the original query as well, so long as the “neighborhood” around the marker points is small
+enough. A similar strategy and covering construction appeared in (Cherapanamjeri and Nelson,
+2024), although they did not make algorithmic use of the ability to project any query point to the
+covering set. Instead, their algorithm deems it sufficient to be successful on every point on just the
+covering set.
+D.2.1 Metric coverings in continuous spaces
+To initiate our investigation, we need the definition of ametric covering:
+Definition D.4.Consider a metric spaceM= (Rd,||·|| p)with metricµ. LetU⊂R d be a bounded
+subset. A set bS⊆R d is called an∆-coveringofUif for allq∈Uthere exists somebs∈ bSsuch
+that
+||q−bs||p≤∆
+Suppose thatUis a bounded subset ofRd. We can construct the following the following∆-covering
+ofU: LetC:= sup
+x∈U
+||x||∞ and suppose{ui}d
+i=1 is an orthonormal basis spanningU. We know that
+||x||∞≤Cfor allx∈U, so let us define:
+bS=
+dX
+i=1
+bαiui,where
+bαi∈{−C,−C+ε,...,C−ε,C}
+32
+
+for some choice ofεthat we will decide later. This is a standard construction forℓ2 that we now
+extend toℓp (Shalev-Shwartz and Ben-David, 2014). As defined, we have:
+bS
+ =
+2C
+ε
+d
+q
+p∗
+r
+Figure 4: An illustration of anr-covering.
+Now, fix someq∈U. We can write:
+q=
+dX
+i=1
+αiui
+For alli∈[d], letbα i be such thatαi∈bαi±ε. Letbs:=
+dP
+i=1
+bαiui. Now we have that:
+||q−bs||p
+p =
+
+
+dX
+i=1
+(αi−bαi)ui
+
+
+p
+p
+=
+dX
+i=1
+|αi−bαi|p≤dε p
+Now, let us set:
+ε= ∆
+d1/p =⇒ ||q−bs||p≤∆
+Our construction thus has size:
+|bS|=
+ 
+2Cd1/p
+∆
+!d
+33
+
+D.2.2 The robust ANN algorithm
+With this construction in mind, our algorithm for robust(c,r)–ANN inℓp space follows as Algorithm
+5. The algorithm remains agnostic to the specific LSH data structure that could be used to solve
+ANN inℓ p metric spaces obliviously (Charikar, 2002; Datar et al., 2004), but assumes that the
+success probability over a set of queries in that data structure can be boosted by increasing the
+number of hash functions taken. This was the case for the Hamming norm as well.
+Algorithm 5Robustℓ p ANN through discretization
+1:Parameters:Max-normC, runtime/accuracy tradeoff∆>0, LSH parametersc,r>0.
+2:Receive point datasetS⊂Uwith|S|=nfrom the adversary.
+3:Let bSbe a∆-covering ofUas constructed in Section D.2.1, and letc ′← cr−∆
+r+∆ .
+4:Initialize an LSH data structureDfor solving(c ′,r+ ∆)–ANN that answers all queries in bS
+correctly with high probability.
+5:whileAdversary provides queriesdo
+6:Receive queryq∈Ufrom the adversary.
+7:Findbs∈ bSsuch that||q−bs|| p≤∆.
+8:QueryDonbsand output whatever it outputs.
+Theorem D.5.There exists an adversarially robust algorithm solving the(c,r)–ANN problem in
+the(R d,ℓp)metric space that can answer an unbounded number of adversarial queries. Assumming
+that the input dataset and the queries are all elements ofU={x∈Rd|||x|| p≤C}for someC >0,
+the pre-processing space iseO(nT)and the time per query iseO(T), where:
+T=O
+"
+d·n ρ′
+log
+ 
+Cd1/p
+cr
+!#
+(9)
+where:
+ρ′ = (10 +c) 2
+161c2−20c−100
+Proof.First, to argue for correctness, letqbe any query. Suppose there exists some pointx∈S
+with||x−q|| p≤r. Then, by triangle inequality it holds that:
+||x−bs||p≤||x−q|| p +||bs−q||p≤∆ +r
+Thus, with high probability,Dwill find some pointx′∈Swith||x ′−bs||p≤cr−∆. For that point,
+we have that:
+||x′−q|| p≤||x′−bs||p +||bs−q||p≤cr−∆ + ∆ =cr
+Therefore, Algorithm 5 will output a correct answer. If there doesn’t exist such a pointx, it is valid
+for our algorithm to output⊥, so are done.
+For the runtime, recall that|bS|≤O(2Cd 1/p/∆)d. Hence, in order to guarantee success for all
+queries inbS, a similar analysis as to the one for the Hamming Hypercube shows thatDtakes up:
+O
+"
+d·n 1+ 1
+2c′2−1 log
+ 
+2Cd1/p
+∆
+!#
+34
+
+space for pre-processing and
+O
+"
+n
+1
+2c′2−1 log
+ 
+2Cd1/p
+∆
+!#
+time per query processed, where
+c′ := cr−∆
+r+ ∆
+Note that we use the optimal LSH algorithm forℓp spaces, which guaranteesρ= 1
+2c2−1. Our only
+constraint is that we must have∆<cr. If we set∆ = c
+10r, we get a per-query runtime of:
+O
+"
+n1+ 1
+2c′2−1 log
+ 
+20Cd1/p
+cr
+!#
+,wherec ′ = 9c
+10 +c
+D.2.3 Removing the dependency on the scale
+Our algorithm from Theorem D.5 crucially depends onlogC, whereCis a bounding box for the
+query and input point space in theℓp norm. We can remove the dependency onCby designing our
+covering to be data dependent, instead paying an additional logarithmic factor.
+A
+B
+C
+Figure 5: Data-Dependent Discretization of the input query space.
+Our new coveringbS′ will be a collection ofn∆-coverings, as constructed in Algorithm 5, each
+one discretizing ther-ball around a pointp∈S. The number of points in this new covering is:
+|bS′|≤O
+
+n·
+ 
+r·d 1/p
+cr
+!d
+ =O
+
+n·
+ 
+d1/p
+c
+!d
+ (10)
+Note that the size of this covering improves upon the(nd)d size of the covering given in (Chera-
+panamjeri and Nelson, 2024), which results in a slightly better runtime. This new covering notably
+35
+
+does not cover every possible query. However, it covers exactly the queries we care about. This
+improved covering leads to the followingfor-allguarantee for robust ANN:
+Theorem D.6.There exists an adversarially robust algorithm solving the(c,r)–ANN problem in
+the(R d,ℓp)metric space that can answer an unbounded number of adversarial queries. The pre-
+processing time / space iseO(nT)and the time per query iseO(T/d), where:
+T=O
+h
+d·n ρ′
+(dlogd+ logn)
+i
+(11)
+where:
+ρ′ = 1
+2c′2−1 = (10 +c) 2
+161c2−20c−100
+Proof.We distinguish between two cases:
+1. If a queryqis not included in anyB S(p,r)for anyp∈S, then the answer can safely be⊥
+becauseB S(q,r) =∅necessarily. Thus, we can just run the default LSH algorithm and simply
+output whatever it outputs.
+2. Otherwise, a queryqcan be included in someBS(p,r)for somep∈S. Then, suppose bs′∈ bS′
+is a point in our covering such that||q−bs′||p≤∆. Then:
+||p− bs′||p≤||p−q|| p +||bs′−q|| p≤r+ ∆(12)
+Thus, as we argued before, with high probabilityDfinds some pointx∈Swith||x− bs′||p≤
+cr−∆, and for that point we have:
+||x−q|| p≤||x− bs′||p +||bs′−q|| p≤cr−∆ + ∆ =cr(13)
+which means our algorithm will output a correct answer.
+As before, our algorithm’s space and runtime guarantees scale withlog|bS′|.
+36

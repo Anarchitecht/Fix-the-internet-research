@@ -1,0 +1,2458 @@
+Anonymous Counting Tokens
+Fabrice Benhamouda1⋆, Mariana Raykova2, and Karn Seth2
+1 Amazon Web Services
+2 Google
+Abstract. We introduce a new primitive called anonymous counting tokens (ACTs) which allows
+clients to obtain blind signatures or MACs (aka tokens) on messages of their choice, while at the
+same time enabling issuers to enforce rate limits on the number of tokens that a client can obtain for
+each message. Our constructions enforce that each client will be able to obtain only one token per
+message and we show a generic transformation to support other rate limiting as well. We achieve this
+new property while maintaining the unforgeability and unlinkability properties required for anonymous
+tokens schemes. We present four ACT constructions with various trade-offs for their efficiency and
+underlying security assumptions. One construction uses factorization-based primitives and a cyclic
+group. It is secure in the random oracle model under the q-DDHI assumption (in a cyclic group) and
+the DCR assumption. Our three other constructions use bilinear maps: one is secure in the standard
+model under q-DDHI and SXDH, one is secure in the random oracle model under SXDH, and the most
+efficient of the three is secure in the random oracle model and generic bilinear group model.
+1 Introduction
+Counting unique users can be a useful signal for different applications to measure service usage and user
+interest. In many contexts, however, the content for which we want to measure interest may be sensitive,
+so we would like to guarantee anonymity for the user while still providing accurate counts. The anonymity
+property becomes challenging when untrustworthy users may try to inflate the counts. As a concrete example,
+we consider the k-anonymity server developed in the context of Privacy Sandbox [Gra22]. The goal of this
+server is to count how many users have joined different user interest groups. Users should not be linkable to
+any specific interest groups. At the same time, it is important to obtain an accurate count of the number
+of users in each interest group. In particular, each user should not be counted multiple times. In addition,
+users should be allowed to join as many interest groups as they wish.
+There is seemingly a tension between the desirable anonymity that does not allow mapping the count con-
+tribution to the user identity and the ability to bound contributions from each user. Multiparty computation
+(MPC) [Ode09] and in particular secure aggregation constructions [BIK+17, BBG+20] enable computing
+aggregates over user inputs while maintaining privacy for concrete contributions. However, these solutions
+do not allow users to be anonymous while at the same time limiting the rate of their input contributions.
+Anonymous credential tools such as blind signatures [Cha82] and anonymous tokens [DGS+18, KLOR20,
+SS22] provide capabilities to convey trust across different contexts while providing anonymity. In the setting
+of anonymous tokens, during token issuance, the user identity is known to an issuer who can provide a token
+that encodes a limited amount of information. The token is associated with a user-provided message or a
+random message that the issuer should not learn. In our initial example of counting the number of users in
+each interest group, the message would be the interest group name. The token can later be redeemed in a
+different context where the user is anonymous. At redemption, the message is revealed. In order to be able
+to use these tokens to count the number of users in each interest group, it is crucial that each user can only
+contribute a single token. In other words, anonymous tokens redemption (or issuance) should be restricted
+(or rate limited) to a single token per user and per message. More generally, anonymous tokens allowing
+redemption of a small fixed number of tokens per user and per message can be considered.
+A recent IETF draft proposed by four large tech companies (Google, Apple, Cloudflare, Fastly) [HIP+22]
+is highlighting two other applications of such rate-limited or counting tokens: rate-limiting anonymous tokens
+⋆ Work done while employed at Algorand Foundation, prior to joining Amazon.
+
+per website (or “origin”) to avoid abuse, and implementing metered paywall for a given website. In both cases,
+anonymous tokens need to be associated with the website, and rate limits need to be applied per message.
+The IETF draft proposes a solution that relies on two non-colluding servers: an attester and an issuer.
+The attester sees the information used for rate limiting in the clear (that is the “origin” or website in the
+applications above). Instead, if we were able to design an anonymous token scheme restricting each user to
+only receive a small number of tokens per (hidden, underlying) message, we could provide a solution for the
+IETF draft applications without the need for two separate servers.
+The challenge in designing the rate-limiting capability on the private message authenticated in anonymous
+tokens lies in the following fact: users should be able to obtain blind tokens for many messages (e.g., be able
+to contribute to the counts for many different user interest groups in the first example, or visiting many
+different paywall-metered websites in the last example). And all these messages should remain hidden from
+the issuer. Only violations of the rate-limiting rules should be detectable before such tokens are redeemed.
+At the same time, different users should be able to obtain anonymous tokens for the same message, as many
+users will join the same interest group or visit the same website. Therefore tokens for the same message from
+different users need to be distinct. In particular, tokens cannot computed deterministically from the message
+(as it is the case in Privacy Pass [DGS+18]).
+We note that anonymous tokens with public or private metadata such as [SS22, CDV23] do not help
+building the applications above. Indeed, in these schemes the metadata needs to be revealed to the issuer
+in order for the issuer to be able to apply rate limits. In the interest group example, this means the issuer
+would know which interest group a user is joining.
+Contributions. In this paper we propose a new notion of anonymous tokens which we callanonymous
+counting tokens (ACTs). This primitive offers an additional rate-limiting property that guarantees that no
+user will be able to redeem with the same verifier more than one token for the same message. Conceptually
+there are two approaches to enforcing the rate-limiting property in the anonymous token functionality. This
+can be done either at issuance by enabling the issuer to detect repeated token requests for the same message
+from the same user, or at redemption by enabling the verifier to identify if two tokens for the same message
+were issued to the same user. With the first approach, the challenge is to preserve the blind property of
+the requests as long as there are no repeating message requests, and to reveal only the one bit information
+whether a message in a request has been queried before. With the second approach, the challenge is to enable
+the verifier to detect when the two tokens for the same message were issued to the same user while preserving
+the unlinkability property.
+We present two conceptual approaches for building ACTs. One enables rate limiting at issuance and one
+enables it at redemption. Both of them assume that each user registers a public key with the issuer and
+this public key enables the rate limiting of one token per message per user. Recall that at issuance, users
+identify themselves to the issuer and can thus be associated to their registered public keys. Note that such
+registration is necessary: if there was no registration mechanism, tokens would information theoretically be
+completely independent of the user identity and it would be impossible to ensure a given user does not
+create and redeem two tokens for the same message (unless tokens are deterministic functions of messages in
+which case the issuer could know when two different users ask the same message, which in turn would break
+unlinkability).
+Our first construction uses a PRF evaluation as the token issuance mechanism. This mechanism has been
+leveraged in previous anonymous token constructions [DGS+18, KLOR20, SS22]. Our first construction is
+in the random oracle model (ROM) and relies on the q-Decisional Diffie-Hellman Inversion assumption
+(q-DDHI) assumption in a group of prime order.
+Our second set of constructions leverages the notion of equivalence class signatures (EQS) [FG18, FHS19]
+to construct an ACT scheme. Existing EQS schemes rely on bilinear maps. We present three instantiations
+of our EQS-based ACT construction. The first one is in the standard model and assumes the SXDH and
+q-DDHI assumptions over bilinear groups to support shortO(logλ) messages (λ is the security parameter).
+The second instantiation is proven in the ROM under just the SXDH assumption and supports any length
+of message. The last instantiation uses much stronger security assumptions: it is only proven in the ROM
+and generic bilinear group model (GBGM) but achieves significantly shorter tokens. Our three instantiations
+2
+
+are based on two generic transforms of EQS into ACT, however, our third instantiation is an optimization
+whose security is proven directly in the ROM and GBGM and does not directly follow from the security of
+the generic transform.
+Tables 1 and 2 summarize the communication costs and assumptions trade-offs of our constructions.
+Our four constructions are the four first constructions of anonymous counting tokens: there are no prior
+such constructions. We provide four different constructions as parties implementing anonymous counting
+tokens may have different preferences for cryptographic assumptions and tools used in the constructions. For
+example, in enterprise products (targeted by the IETF draft [HIP+22]), adding pairing-based libraries can
+be quite challenging due to non-technical reasons (e.g., audit requirements, complex approval process, etc).
+Tables 1 and 2 also contain comparisons to selected related works which donot achieve the anonymous
+counting tokens property. We include them for an informative comparison of what it takes to add the
+additional properties we need. Privacy Pass [DGS+18] achieves unforgeability and unlinkability, but has
+no notion of an underlying message on which rate limiting can be done. [TCR+22] extends Privacy Pass
+to support public metadata, which can be viewed as a message. However, the public metadata is revealed
+to both the issuer and the verifier and thus cannot be used in our context. [FHS19] enables multi-show
+anonymous credentials, a very different primitive that allows a user to get a credential on a set of messages,
+but without blind issuance. The credential can be redeemed multiple times while remaining unlinkable with
+the issuance and the other redemptions. Several of our constructions can be seen as extensions of [FHS19] to
+support blind issuance and a throttling mechanism, so we include it to give a sense of the extra cost incurred
+for these additional properties. We note that the costs in Table 2 for [FHS19] are for a single message or
+attribute, but their scheme supports vectors of messages/attributes.
+Table 1: Summary of our constructions and selected previous work
+Cons. PubV Assumptions |msg| Extra
+4.3 × DCR +q-DDHI any counting
+5.1 ✓ SXDH + 2|msg|-DDHIG1 O(log(λ)) counting
+6.3 ✓ ROM + SXDH any counting
+8.1 ✓ ROM + GBGM any counting
+[DGS+18] × ElGamal-OMD n/a n/a
+[TCR+22] × ROM + OM-Gap-SDHI any public metadata
+[FHS19] ✓ ROM + GBGM any multi-show
+Extra properties are properties beyond anonymous token base properties. Our constructions are the only anonymous counting tokens.
+See text for detail. PubV refers to public verifiability (i.e., whether anyone can verify a token from the public parameters).
+Assumptions: DCR = decisional composite residuosity assumption, SXDH = symmetric external decisional Diffie-Hellman assumption,
+q-DDHI = decisional Diffie-Hellman inversion assumption (q is the number of signature queries made by the adversary), ROM = random
+oracle model, GBGM = generic bilinear group model, all of our constructions but the first one use pairings. ElGamal-OMD = ElGamal
+One-More-Decryption assumption. OM-Gap-SDHI = (m,n) One-More-Gap-Strong Diffie-Hellman Inversion assumption.
+1.1 Technical Approach
+Next, we overview the main technical challenges and ideas for our constructions.
+ACT from PRF.We start with our first construction. It follows the idea of previous anonymous tokens
+schemes to make the tokens be PRF evaluations under the issuer’s secret key. A first construction attempt
+might be to make the anonymous tokens deterministic. This is what Privacy Pass [DGS+18] does, where
+tokens are PRF evaluations of the users’ messages. This, however, is possible in Privacy Pass only because the
+tokens there do not correspond to messages that have meaning for the application and instead are sampled
+at random for every token issuance. For our ACT scheme, we need the user to be able to choose the message.
+If the tokens are a deterministic function of the message alone (and not of the user identity), then the issuer
+will know when two users ask for the same message which would violate the unlinkability. Thus, we need to
+have a randomized issuance algorithm.
+3
+
+Table 2: Performance of our constructions and selected previous work
+Cons. |blindRequest| | blindToken| | tok|
+4.3 5× Ped + 4× CS + 12× Zp + 11× ZN 1× Ped + 1× Zp + 3× ZN 1× G
+5.1 7× G1 + 6× G2 5× G1 + 1× G2 23× G1 + 12× G2
+6.3 2× Zp + 3× G1 5× G1 + 1× G2 23× G1 + 12× G2
+8.1 2× Zp + 2× G1 2× G1 + 1× G2 3× G1 + 1× G2
+[DGS+18] 1× G 1× G + 2× Zp λ
+[TCR+22] 1× G + 1× Zp 1× G + 2× Zp 1× G
+[FHS19] Zp + G1 2× G1 + G2 3× G1 + G2 + 2× Zp
+Only our four constructions are anonymouscounting tokens. The other constructions are just for reference and do not achieve the
+counting property. See text for detail.
+Constructions 5.1 and 6.3 (long version) are instantiated using the EQS construction from 7.1, and the elementM′
+1 and M′
+3 are not
+included in tok as they can be recomputed.
+G denotes a cyclic group (and by extension a group element fromG) with orderp, G1 and G2 are asymmetric bilinear maps groups,CS
+is a Camenish-Shoup ciphertext,Ped is a Pedersen commitment on a strong RSA group.
+Using Edwards25519 [BDL+12] for G, 1× G = 32 bytes. Using BLS12-381 [Bow17] as bilinear group,1× G1 = 48 bytes, 1× G2 = 96
+bytes. For both Edwards25519 and BLS12-381, 1× Zp = 32 bytes. Using the NIST recommendation [Bar16] for 128-bit safe-RSA
+modulus (that is3072 bits), 1× Ped = 384 bytes and 1× CS = 1, 536 bytes.N refers to this RSA modulus, andlog(N ) = 3072 bits.
+To give insight into our construction, we start with an overview of some unsuccessful ideas for build-
+ing anonymous counting tokens from the randomized version of the Okamoto-Schnorr Privacy Pass tokens
+introduced by Kreuter et al. [KLOR20]. Contrary to Privacy Pass, tokens generated by these schemes are
+randomized (and not deterministic). Like in Privacy Pass, the client sends the following blinded request to
+the issuer: r· H(msg), where r is chosen a random inZp by the client and whereH is a hash function into a
+cyclic group G of orderp (where DDH is hard).H is modeled as a random oracle in the proof and we use
+the additive notation forG.
+A first idea to construct an ACT is to have each client always use the same fixed randomnessr to blind
+their requests. This would allow the issuer to detect when the same user makes two requests for the same
+message. We would argue the unlinkability of the requests by remarking those can also be seen as PRF
+evaluations using the keyr, which is only known by the client. The client could provide the issuer with a
+commitment to this PRF keyr (as part of the registration process). And the client would then prove the
+correctness of the message included in each blinded request with respect to the committed key, using a
+zero-knowledge proof.
+This idea would actually work. Unfortunately, the resulting protocol would be quite inefficient as the
+zero-knowledge proof made by the client requires proving the correct evaluation of the hash functionH.
+We note that the Pedersen hash (H(m) = m1G1 +··· +mnGn, wheremi is the i-th bit of the messagem
+and Gi is a generator ofG) has good algebraic properties which may allow for an efficient zero-knowledge
+proof. However, it cannot be used in this setting since its linear properties enable an attack on the rate
+limiting as follows:H(1||0||... ||0) + H(0||1||0||... ||0) = H(1||1||0||... ||0), which allows to get a fresh token
+on 1||1||0||... ||0 by querying messages1||0||... ||0 and 0||1||... ||0.
+AnotheroptioncouldbetouseSNARK/STARK/Bulletproofs-friendlyhashfunctionssuchasMiMC[AGR +16]
+and Poseidon [GKR+21]. However, this would first introduce the new non-standard assumptions that are
+used for the security of these hash functions. Additionally, depending on the proof system used, there will be a
+need for more assumptions (for example non-falsifiable assumptions for SNARKs). Furthermore, those proof
+techniques are generic and use circuits. This significantly increases the prover’s complexity (which is used
+in the token request that is computed by weak user devices, in many cases). Furthermore, the proof needs
+to prove not only correct hash evaluation, but also mapping to the elliptic curve, and exponentiation/scalar
+multiplication. The Poseidon costs in Section 6 of [GKR+21] report around 40ms for a SNARK just proving
+correct Poseidon hash evaluation: the subsequent scalar multiplication would at least double this time to >
+80ms. These costs appeared to be much higherthan our approach. In addition, without a trusted setup, only
+STARKs and Bulletproofs can be used and they are about 10x more expensive than SNARKs for Poseidon
+evaluation.
+Yet another tempting way to get an efficient scheme would be to only require the client to prove the
+blinded request is of the formr· T for some group elementT, and not proving knowledge ofmsg such that
+4
+
+T = H(msg). We may think we can argue unforgeability since the client will only be able to extract a valid
+signature if they know a correct hash preimage ofT (due to the form of the tokens in [KLOR20]).
+While the above reasoning does guarantee the regular unforgeability property, it fails to protect against
+the adversary being able to obtain two tokens for the same value, which is required by ACT. The issue stems
+from the fact that the resulting tokens are of the formxH(msg) +yS where (x,y ) is the secret key of the
+issuer andS is a random element that comes with the token. Now, we can observe that the token is additively
+homomorphic with respect to the hash of the message. With this observation, an attacker can obtain a token
+for message msg without directly asking for it, by additively sharingH(msg) as A +B = H(msg). Then the
+client can request two tokens, sending blind requestsrA and rB. The client can prove correctness for its
+requests as long as it does not have to prove knowledge of hash preimages ofA and B. Then, using the
+additive properties of the tokens, it can recover a token forH(msg) which will be different from any previous
+token issued directly for that value.
+Thus, we adopt a different pseudorandom function which has a structure that facilitates composition with
+sigma protocols for proof of correctness of evaluation (in particular, it does not involve a hash function).
+This is the Dodis-Yampolskiy verifiable pseudorandom function [DY05]. We instantiate it in a single group
+as a PRF without public verifiability, as in the work of Miao et al. [MPR+20]. However, this on its own
+does not solve the question of the randomized issuance algorithm. One option is to add to the message a
+random value, which changes for every issuance, and make the token the PRF evaluation under the issuer’s
+key on the message plus randomness. To ensure the rate limiting we will use a different PRF which the user
+evaluates only on the message under its registered key and provides this to the issuer during issuance to
+prove non-repeating message requests.
+The way we choose to combine message and randomness as input for the PRF evaluation (to generate
+the token) leverages the functionF(sk = (u, y), msg; r) = ( msg + u + r· y), which is used by Boneh and Boyen
+to construct short signatures without random oracle [BB04]. In the proof of their construction, they show
+how this function no longer has the limitation to short messages of the Dodis-Yampolskiy’s variant as long
+as r is chosen at random and can be controlled by the reduction.
+We further observe that the randomnessr for the issuance needs to be chosen jointly by the client and
+the issuer. If the client can choose the randomness on its own, then it can force homomorphism of the tokens,
+which could create forgery issues similar to the one discussed above. If the issuer controls the randomness,
+then this becomes an easy fingerprinting mechanism, which violates unlinkability. While we can generate the
+randomness with an interactive coin-tossing protocol, we observe that the issuer’s randomness does not need
+to be private with respect to the client since we just want to enforce that the randomness is chosen honestly.
+Thus, we apply the Fiat-Shamir transformation to generate the issuer’s randomness in a non-interactive
+manner [FS87, AFK22].
+ACT from EQS.The second general construction approach for ACT that we present views the tokens as
+signatures with certain homomorphic properties which allow the client to adapt a signature for a message
+⃗M to a signature of a transformed message⃗M′ =f (⃗M). The set of allowed transformationf is limited and
+fixed. In particular, equivalence class (EQS) signatures [FG18, FHS19] enable the client to sign vectors of
+messages and the adaptation functionality allows the client to transform the signature into a signature of
+a new vector that is in the linear span of the signed message. This transformation is used as part of the
+blinding and unblinding operations in previous anonymous tokens and blind signatures constructions.
+Taking this approach, of course, creates challenges for the rate-limiting property. Seemingly a client might
+be able to create multiple tokens from the same initial signature. To prevent this we need to embed the rate-
+limiting check but this time during redemption. This can be achieved similarly to the above construction
+using a PRF evaluation on the message with a key that each user commits with the issuer. The challenge
+when doing this check during redemption is to remove the link to the client identity while maintaining the
+ability to verify that the PRF value was generated by a key registered by a real client.
+Our approach to satisfy the above requirements is to have the client embed a PRF evaluation on the
+message under their registered key in the blind signature request. We show how we can do this using two
+different PRF constructionsPRF(u, msg) = u· H(msg) and PRF(u, msg) = ( msg + u)−1· G (the latter being
+the Dodis-Yampolskiy PRF). In the first case, unlike our first PRF-based ACT construction, we are able
+5
+
+to use a random-oracle-based PRF without having to proof correct evaluation (in zero-knowledge) of the
+hash function H. Concretely, the EQS construction allows us to sign vectors of messages. And we sign a
+vector of the formµ· (G, H(msg), u· H(msg)). Thus, the client just needs to prove the DDH relation between
+(H(msg), u·H(msg)) and the registered client key(G, u·G). Combining the unforgeability of EQS (for messages
+that are not a multiple of a signed message) with a check by the verifier that the first message in the redeemed
+token signature is G, we can guarantee that the client can create only one valid token from each blinded
+response it gets from the issuer. In the second case (i.e., the Dodis-Yampolskiy PRF case), the client can
+directly efficiently prove that the message in its blinded request is of the formµ· (G, (msg + u)· G, msg· G).
+The above two constructions are generic transformations from any EQS to ACT. Instantiating them yields
+multiple concrete efficient ACT constructions under various security assumptions. In particular, we obtain an
+ACT construction with security in the standard model based on the SXDH and q-DDHI assumption, using
+the Dodis-Yampolskiy PRF construction together with the following EQS construction. The EQS signature
+is a normal signature. The adaptation of the signature of a message⃗M to a message⃗M′ =ρ⃗M is a ZK proof
+of knowledge of a valid signature on⃗M and of a scalarρ such that ⃗M′ = ρ⃗M. For the concrete efficient
+instantiation of this EQS construction we use the efficient Jutla-Roy structure-preserving signatures [JR17]
+together with Groth-Sahai zero-knowledge proofs [GS08, EG14]. This construction has a restriction that it
+can support only short messages of lengthO(logλ) because the Dodis-Yampolskiy function is an adaptively
+secure PRF only over polynomial-size domains. The message length restriction can be solved by hashing the
+message using a hash function modeled as a random oracle. Hashing the message this way makes Dodis-
+Yampolskiy adaptively secure because, instead of having to guess the message forged by the adversary, the
+reduction just needs to guess which random oracle query will be used for the forgery. However, if we are
+willing to use the random oracle model, our second generic transformation (based on the random-oracle-based
+PRF PRF(u, msg) = u· H(msg) instead of the Dodis-Yampolskiy PRF) is more efficient.
+Finally, we present an optimized ACT construction with security in the generic bilinear group model
+(GBGM) and random oracle model (ROM). Conceptually this construction can be viewed as an optimization
+oftheinstantiationofourACTfromEQSwhichrelieson u·H(msg)asPRFandusestheEQSfromFuchsbauer
+et al. [FHS19] and Fiat-Shamir transforms of Sigma protocols as ZK proofs. We prove the resulting scheme
+directly in the ROM and GBGM.
+Other Related Work.We remark that the EQS scheme from [FHS19] has been used in [HS21] to construct
+anonymous credentials that are also “tag-based” and “aggregatable”. However, we do not know how to use
+these extra properties to construct anonymous counting tokens, because, like metadata, the tag has to be
+known by the issuer, which would break unlinkability.
+1.2 Organization of the Paper
+After recalling preliminaries in Section 2, we define formally the notion of ACT in Section 3. We then present
+our construction of anonymous counting tokens (ACT) from Oblivious PRF in Section 4 and our two generic
+transforms of ACT from equivalence-class signature schemes (EQS) in Section 5. Combined with the EQS
+schemes in the full version of the paper [BRS23], these two generic transforms yield our concrete constructions
+of ACT from EQS that do not rely on the generic bilinear group model (GBGM). In Section 8 we show that
+an optimization of the second transform from Section 5 can be instantiated very efficiently in the GBGM.
+We conclude with a generic transformation that enables ACTs with different rate limits in Section 9.
+2 Preliminaries
+We denote by λ the security parameter. PPT means probabilistic polynomial time. negl(λ) indicates a
+quantity negligible in the security parameter, that is, for any positive integerk and for any large enoughλ,
+negl(λ)≤ 1/λk.
+6
+
+2.1 Cyclic Groups, Bilinear Groups, and Associated Assumptions
+Our constructions make use of cyclic groups and bilinear groups. We denote byG the generator of a cyclic
+group G of prime orderp. We use additive notation. We denote byG∗ the set G\{ 0}.
+A bilinear group is a set of three groups(G1, G2, GT ), all of orderp with generators (G1, G2, GT ), so that
+there exists an efficient bilinear mape : G1× G2→ GT (called a pairing) such thate(G1, G2) = GT. The
+target groupGT is also denoted additively and we use• to denote the pairing operation:e(G1, G2) = G1• G2.
+The symmetric external Diffie-Hellman (SXDH) assumption in a bilinear group(G1, G2, GT ) states that
+the decisional Diffie-Hellman (DDH) assumption holds inG1 and G2. The DDH assumption inG states that
+PPT adversariesA: Pr[x,y← Zp,A(G, xG, yG, (xy)· G) = 1]− Pr[x,y,z ← Zp,A(G, xG, yG, z· G) = 1]
+≤ negl(λ).
+The q-decisional Diffie-Hellman inversion (q-DDHI) assumption in the groupG states that for any PPT
+adversariesA: Pr[x← Zp,A(G, xG,..., x qG, (1/x)· G) = 1]− Pr[x,y← Zp,A(G, xG,..., x qG, y· G) = 1]
+≤ negl(λ).
+2.2 Pseudorandom Function
+A pseudorandom functionPRF :K×X→Y is a function such that
+ Pr
+h
+K←$K,APRF(K,·)(1λ) = 1
+i
+− Pr
+h
+AO(·)(1λ) = 1
+i≤ negl(λ)
+where O :X→Y is a random oracle.
+We need to consider a stronger definition whereA is also given some public informationpkK derived from
+K←$K, e.g., pkK = K· G where G is a generator of a cyclic group:
+ Pr
+h
+K←$K,APRF(K,·)(pkK) = 1
+i
+− Pr
+h
+K←$K,AO(·)(pkK) = 1
+i≤ negl(λ) (1)
+Finally, we also consider aselective version whereA must make all its query to its oraclePRF/O before
+receiving any answer and before seeingpkK.
+Dodis-Yampolskiy Pseudorandom Function.The Dodis-Yampolskiy function [BB04, DY05] is defined
+byFDY(u, msg) = 1
+u+msg G, with keyK = u. We recall the following two lemmas that follow from the proof
+of weakly unforgeable signature scheme in Boneh-Boyen [BB04] and the pseudorandomness of the VRF in
+Dodis-Yampolskiy [DY05].3
+Lemma 2.1. If the q-DDHI assumption holds in group G with generator G, the functionFDY(u, msg) =
+(u + msg)−1· G is aselectively pseudorandom function (when the adversary can make up toq queries), even
+when the adversaries seespku = u· G after its selective queries.
+Using the same idea as in [DY05], we also get the following lemma:
+Lemma 2.2. If the 2α-DDHI assumption holds in groupG with generator G, the functionFDY(u, msg) =
+(u + msg)−1· G is pseudorandom function whenmsg∈{ 0, 1}α, even when the adversaries seespku = u· G
+(see Eq.(1)).
+In particular, the Dodis-Yampolskiy PRF is pseudorandom under a standard assumption for input mes-
+sage sizes that are logarithmic in the security parameter.
+3 Contrary to [BB04], we use a decisional assumption instead of the computationalq-SDH because we want pseu-
+dorandomness and not unpredictability. Contrary to [DY05], we have the PRF value inG1 instead of GT and our
+assumption is thusq-DDHI instead ofq-DBDHI, and we do not need to have a bilinear map. Appendix A of Miao
+et al. [MPR+20] shows the proof underq-DDHI. The only difference with our case is that we allow the adversary
+to see pk = u· G, which can easily be simulated the same way as in [DY05]. Simulatingpk = u· G is why we rely
+on q-DDHI instead of just(q− 1)-DDHI as would [MPR+20] require.
+7
+
+2.3 Camenisch-Shoup Encryption
+The homomorphic encryption introduced by Camenisch and Shoup [CS03] is an additively homomorphic
+encryption. It additionally supports verifiable decryption, which enables a party holding the decryption
+key to prove the correctness of the decryption of a given ciphertext. Here, we define the encryption and
+decryption algorithms. We use the verifiable decryption proofs implicitly in our constructions. We use the
+additive notation for the CS algorithms except for decryption. That is, we write the multiplicative group
+Z∗
+N 2 additively, except in the description of the decryption algorithm. Later, in our constructions, we will
+refer only to the decryption algorithm by name and never use the multiplicative notation.
+– CS.Gen(1λ): Generate twoℓ-bit primesp′ andq′ such thatp = 2p′ + 1 andq = 2q′ + 1 are primes and set
+N =pq. Choose randomR←$ Z∗
+N 2 and set G = 2N R be a 2N-th residue.4 Choose randomx←$ Z⌊N/4⌋
+and set Y =xG. Set H = 1 +N mod N 2, PK← (N, G, Y, H) and SK←x. Remark thatH is a generator
+of the subgroup of orderN of Z∗
+N 2.
+– CS.Enc(PK,m∈ Zn): Output (rG,m H +rY)∈ Z∗
+N 2× Z∗
+N 2 where r←$ Z⌊N/4⌋.
+– CS.Dec(SK, ct = (u,e )): Outputm = ( e
+ux−1) mod N 2
+N (in multiplicative notation).
+2.4 Non-Interactive Zero-Knowledge Argument of Knowledge
+A (non-interactive) zero-knowledge argument has the following algorithms:
+– crs← ZK.Setup(R): generates public parameters (common random string)ZK.crs for the prove relation-
+shipR. (We assumeR implicitly defines the security parameterλ).
+– π← ZK.Prove(R, crs,ϕ,w ): generates a proofπ that the prover knows a witnessw such that the input
+statementϕ satisfies the relationR(ϕ,w ).
+– false/true← ZK.Verify(R, crs,ϕ,π ): verifies the correctness of the proof for a statementϕ.
+RelationR and CRSZK.crs are omitted when clear from the context (or not used). To simplify notation,
+we also often write:
+ZK{∃w :ϕ} or ZK{ Kw :ϕ}
+instead of ZK.Prove(R, crs,ϕ,w ). “ K” is used instead of “∃” when the ZK argument is an argument of
+knowledge and satisfies computational knowledge soundness. We abuse notation and do not explicitly include
+as part of the witness random coins of algorithms in the statement. For example, we may write:
+ZK{∃x :c = Enc(pk,x ), com = Commit(prm,x )}
+without making explicit the randomness used by the encryption and commitment algorithms.
+For some of the ZK arguments in this work, completeness holds for a smaller language than soundness.
+In that case, the notation above corresponds to the soundness language. The language for completeness is
+implicitly defined by the way the statement is constructed.
+2.5 Zero Knowledge
+ZK has the following properties.
+Perfect Completeness.This property guarantees that an honestly generated proof for a true statement passes
+verification. For all relationsR and (ϕ,w )∈R , for all crs← ZK.Setup(R) and honestly generated proofs
+π← ZK.Prove(R, crs,ϕ,w ), the verification passes:
+true = ZK.Verify(R, crs,ϕ,π ).
+4 Recall this is using additive notation forZ∗
+N 2. In usual multiplicative notation, this corresponds to:G = R2N mod
+N 2.
+8
+
+Computational Zero-knowledge.This property refers to the fact that the proof does not reveal any additional
+information about the witness apart from the correctness of the statement. For all relationsR and all PPT
+adversariesA, there exists a simulatorSim that can generate public parameters together with a trapdoor
+trap which can enable it to generate verifying proofs without knowing a witness.
+ Pr
+h
+crs← ZK.Setup(R),AZK.Prove(R,crs,·,cot)(crs) = 1
+i
+− Pr
+h
+(crs, trap)← Sim(R),ASim′(R,trap,·,·)(crs) = 1
+i≤ negl(λ)
+where Sim′(R, trap,ϕ,w ) ignores its last argumentw and returns Sim(R, trap,ϕ ).
+Computational Soundness. This property captures the idea that no adversary can generate a proof on a false
+statement. For all relationshipsR and for every PPT adversaryA:
+Pr[crs← ZK.Setup(R), (ϕ,π )←A (crs) :
+true = ZK.Verify(R, crs,ϕ,π ) and ∄w, (ϕ,w )∈R ]≤ negl(λ). (2)
+Computational Knowledge Soundness.This property is stronger than computational soundness. It says that
+for all relationshipsR and for every PPT adversaryA there exists an extractorExtract such that for every
+valid proof that the adversary generates, the extractor can extract a valid witness (potentially by running the
+adversary multiple times) and the extractor-generated CRS is indistinguishable from an honestly generated
+CRS. The definition is adapted from [BPW12] removing the access to a simulation oracle, simplifying it by
+allowing the extractor to select the random coins of the adversary and allowing the use of a CRS (the latter
+is to allow constructions in the standard model). Concretely, we have:
+Pr
+h
+(crs, trap)← Extract(R), ρ← rndA, (ϕ,π )←A (crs;ρ),
+w← ExtractA(trap,ϕ,π,ρ ) :
+true = ZK.Verify(R, crs,ϕ,π )and (ϕ,w ) /∈R
+i
+≤ negl(λ)
+(extractability) where rndA is the distribution of random coins of the adversary, and for every arbitrary
+adversaryB (even non-polynomial time):
+ Pr[crs← ZK.Setup(R) : 1 = B(crs)]
+− Pr[(crs, trap)← Extract(R) : 1 = B(crs)]
+≤ 1
+2 + negl(λ)
+(statistical setup indistinguishability).
+Note that setup indistinguishability is only needed for constructions with a CRS and is trivial for con-
+struction like Fiat-Shamir. We require statistical setup indistinguishability because in our equivalence-class
+signature construction, setup indistinguishability is used between two non-polynomial-time games.
+In the random oracle model, the extractor sees all random oracle queries made byA in the first step and
+controls the random oracle in the second step. Note that we do not require the existence of a straightline
+extractor, so we can use Fiat-Shamir arguments based on Sigma protocols in the random oracle model
+(without assuming algebraic adversaries or generic group model). However, this means that our security
+reductions can only extract one (or a logarithmic number of) adversarially-generated proofs at a time.
+We also assume that ZK arguments for different relationshipsR use different random oracles. In practice,
+this just means prefixing hash queries for different relationships by different values (i.e., domain separation).
+Construction of ZK Arguments.We now recall the two constructions we will be using in this paper:
+one from Sigma protocol and one based on Groth-Sahai proofs [GS08, EG14].
+9
+
+Sigma Protocols. A Sigma protocol [Cra97, CDS94] for a relationshipR is a 3-move public coin protocol
+between a prover and a verifier both of which know an inputϕ and the prover knowsw such thatR(ϕ,w ).
+The prover sends the first message, which most often is some type of a commitment to a random value, the
+verifier provides a challenge as a second message and the third message is the prover’s response computed
+based on the first two messages and the witnessw.
+Sigma protocols provide knowledge soundness as long as the prover can answer with verifying proofs more
+than one different challenge for the same first message. There exists an extractor that, given two transcripts
+with a common first message extracts a witness.
+The Fiat-Shamir transform [FS87] can be applied to obtain a non-interactive version of any public coin
+protocol including the Sigma protocols. When analyzed in the random oracle (RO) model this transformation
+preserves the knowledge soundness property. The knowledge extractor needs to rewind the adversary and
+knowledge soundness is proven using the forking lemma [PS96, BPW12]. While interactive Sigma protocols
+are only proven to be zero-knowledge for honest verifiers, their non-interactive versions with Fiat-Shamir
+provide regular zero-knowledge.
+Sigma protocols allow proving knowledge of committed or encrypted values as well as some classes of
+relations between those values. We will use several instances of Sigma protocols in our constructions.
+Groth-Sahai Proofs. Groth-Sahai proofs are (non-interactive) ZK arguments invented by Groth and Sahai
+in [GS08] and fine-tuned by Escala and Groth in [EG14]. They allow to efficiently prove any set of pairing
+equations over a bilinear group. Contrary to Fiat-Shamir proofs, they are in the standard model with a
+common reference string. In addition, they are arguments of knowledge (with straightline extractor) when
+witnesses are restricted to be group elements inG1 or G2 (as opposed to scalars inZp).
+2.6 Signature Schemes
+A signature scheme is defined as follows:
+– (pk, sk)← KGen(1λ) generates a public/secret key pair.
+– ρ← Sign(sk, msg) outputs a signatureρ for message msg.
+– false/true← Verify(pk, msg,ρ ): verifies the signatureρ.
+Correctness ensures that for any key pair(pk, sk)← KGen(1λ), for any messagemsg, for any signature
+ρ← Sign(sk, msg), the signature passes the verification:true = Verify(pk, msg,ρ ).
+A signature scheme is said existentially unforgeable under chosen-message attacks (EUF-CMA) if for any
+PPT adversaryA:
+ Pr[(pk, sk)← KGen(1λ), (msg,ρ )←A Sign(sk,·)(pk) :
+true = Verify(pk,ρ, msg)and msg /∈QSign]
+≤ negl(λ)
+where QSign is the set of all messages queried to the oracleSign(sk,·).
+2.7 Commitment Schemes
+We define commitment schemes as a pair of two algorithmsCOM = (COM.Setup, Commit) where Setup(1λ)
+outputs (public) commitment parametersprm, and Commit(prm, msg;t) returns a commitmentcom of mes-
+sage msg using randomnesst. Public parameters are often omitted when clear from the context.
+10
+
+Pedersen Commitments.We will use the Pedersen commitment scheme when we need binding and hiding
+properties. We use Pedersen commitment over a groupG where the Strong RSA assumption [BP97, FO97]
+holds. This will be needed since, in some cases, the committed values come from groups of different orders.
+The parameters for the commitment are group generatorsG, H∈ Z∗
+N, whereN is a Strong RSA modulus.
+As for Camenisch-Shoup (Section 2.3), we use the additive notation forZ∗
+N instead of the multiplication
+notation. The commitment of a valuex is of the form Commit(x;r) = xG +rH where r←$ Z⌊N/4⌋. The
+binding property of the commitment scheme requires that the prover does not know the discrete log relation
+between the generatorsG and H.
+Extractable Commitments.These are commitments that have an extractable mode in which the commit-
+ment parameters are generated together with a trapdoortrap. There exists an extractorE which can extract
+the committed valuem←E (trap, Commit(m)) using the trapdoor trap. We will use the Camenisch-Shoup
+encryption as an extractable commitment where in the normal mode, the secret key (i.e. the discrete log of
+Y) is not known, while in the trapdoor mode, the secret key is the trapdoor.
+2.8 Equivalence-Class Signature Schemes (EQS)
+Equivalence class signatures (EQS) [FHS19] are signatures for equivalence classes where a signature for a
+representative of the equivalence class can be transformed into a signature for any other representative in
+the same class using only public parameters. The EQS schemes that we use allow signing messages that are
+vectors of group elements⃗M∈ G∗ℓ
+1 and provide the following signature adaptation property: a signature
+for ⃗M can be adapted into signatures of any multipleµ⃗M, for µ∈ Z∗
+p. We exclude the 0 element for all
+coordinates of⃗M as well as forµ to match [FHS19].
+As in [FG18], we use a slightly weaker definition than the original EQS notion: we allow the adapted
+signatures to be of a different format than the original signatures. The original signatures are called pre-
+signatures. We also only require computational signature adaptation instead of perfect signature adaptation:
+an adversary cannot computationally distinguish an (adapted) signature on the same message computed
+from two different pre-signatures, even if the adversary generated the secret key. We also allow for a common
+reference string (that is generated by a trusted party).
+EQS. An equivalence class signature scheme consists of the following algorithms:
+– crs← EQS.Setup(PG ): on input a bilinear groupPG, generate a CRScrs.
+– (pk, sk)← EQS.KGen(crs): on input a CRScrs generates secret and public keys which define pre-signature
+spaceR and signature spaceS.
+– ρ← EQS.Sign(crs, sk,⃗M∈ G∗ℓ
+1 ): generates a pre-signatureρ for the representative⃗M = ⃗ mG1∈ G∗ℓ
+1 of
+the class Span(⃗M) = Span(⃗ m)·G1.
+– σ← EQS.Adapt(crs, pk,⃗M∈ G∗ℓ
+1 ,ρ ∈R ,µ ∈ Z∗
+p): transforms a pre-signatureρ for a representative⃗M
+into a signature for⃗M′ =µ· ⃗M.
+– false/true← EQS.Verify(crs, pk,⃗M′∈ G∗ℓ
+1 ,σ ∈S ): verifies signatureσ for representative ⃗M′ using the
+public key pk.
+When clear from the context,crs is omitted. Compared with [FG18],EQS.Adapt also takes as input⃗M
+(wlog since⃗M could also be included inρ).
+Perfect Correctness. An EQS is correct if, for any honestly generated pre-signature, any resulting adapted
+signature verifies. That is, for any⃗M∈ G∗ℓ
+1 and µ∈ Z∗
+p:
+crs← EQS.Setup(PG ), (pk, sk)← EQS.KGen(crs),
+ρ← EQS.Sign(crs, sk,⃗M), σ ← EQS.Adapt(crs, pk,⃗M,ρ,µ )
+we have:
+true = EQS.Verify(crs, pk,µ· ⃗M,σ ).
+11
+
+Game EUF-CMAA(λ)
+PG← GGen(λ)
+(crs, trap)← EQS.Setup(PG )
+(pk, sk)← EQS.KGen(crs)
+QSign :=∅
+(⃗M′∗∈ G∗ℓ
+1 ,σ∗∈S )←A Sign(·)(crs, pk)
+return true = Verify(pk,⃗M′∗,σ∗) and
+∀⃗M∈Q Sign, ⃗M′∗ /∈ Span(⃗M)
+Oracle Sign(⃗M∈ G∗ℓ
+1 )
+QSign :=QSign∪{ ⃗M}
+ρ← EQS.Sign(crs, sk,⃗M)
+return ρ
+Game SIG-ADPA(λ)
+PG← GGen(λ)
+crs← EQS.Setup(PG )
+(pk,⃗M,ρ,µ,ρ ′, state)←A (crs)
+bchl←${0, 1}
+σ0← EQS.Adapt(crs, pk,⃗M,ρ,µ )
+σ1← EQS.Adapt(crs, pk,µ⃗M,ρ′, 1)
+abort if σ0 =⊥ or σ1 =⊥
+bguess←A (state,σ bchl )
+return (bchl == bguess)
+Fig.1: EUF-CMA and signature adaptation security game for EQS
+Existential Unforgeability. We recall the notion of existential unforgeability under chosen-message attacks
+from [FHS19].
+Definition 2.3. An EQS schemeEQS = (Setup, KGen, Sign, Adapt, Verify) satisfies existential unforgeability
+under chosen-message attacks (EUF-CMA) if for all PPT adversariesA:
+Adveuf-cma
+EQS,A (λ) := Pr[EUF-CMAA(λ) = 1] = negl(λ),
+where EUF-CMAA(λ) is defined in Fig. 1.
+Fuchsbauer and Gay introduced a weaker EUF-CoMA notion in [FG18]. This notion requires the adver-
+sary in the security game to provide the discrete logarithms of all group elements. In our first construction
+of ACT from EQS (Construction 5.1), we could use this weak EUF-CoMA definition if we add a ZK proof of
+knowledge of the discrete logarithms of the message elements. However, such proof is very expensive (unless
+using Fiat-Shamir in the generic group model or the algebraic group model, but such proofs are much harder
+since extraction in the GGM or the AGM requires careful consideration of how the proof of the full scheme
+works).
+Signature Adaptation. An EQS satisfies signature adaptation if a malicious signer cannot distinguish be-
+tween two signatures on the same message⃗M′∈ G∗ℓ
+1 adapted from two pre-signatures on two potentially
+different messages. Contrary to [FHS19], we allow signature adaptation to hold only computationally. We
+also implicitly assume thatEQS.Adapt fails if the pre-signatureρ is invalid, which is why we don’t have a
+verification algorithm forρ. More formally, we define signature adaptation as follows.
+Definition 2.4. An EQS scheme EQS = ( Setup, KGen, Sign, Adapt, Verify) satisfies signature adaptation if
+for all PPT adversariesA:
+Advsig-adp
+EQS,A (λ) :=| Pr[SIG-ADPA(λ) = 1]− 1/2| = negl(λ),
+where the gameSIG-ADPA(λ) is defined in Fig. 1.
+3 Definitions
+In this section, we defineanonymous counting tokens(ACTs) with public (respectivelyprivate) key verifia-
+bility. Theprivate key verifiability version includes thegrey-background text, while the public verifiability
+version does not.
+12
+
+Definition 3.1 (ACT). An anonymous counting token (ACT) schemewith private key verifiability consists
+of the following algorithms:
+– (pprmS, privprmS)← ACT.GenParam(1λ): generates parameters for the ACT scheme. These are parame-
+ters that will be reused throughout the execution of token issuance. Outputs private parametersprivprmS
+for the token issuer and public parameterspprmS for the ACT scheme.
+– (pprmC, privprmC)← ACT.ClientRegister(pprmS): on input the public parameters for the ACT scheme,
+this algorithm generates private parametersprivprmC for the client and public parameterspprmC.
+– (blindRequest, randmsg)← ACT.Request(pprmS, privprmC, msg): on input the public parameterspprmS for
+the ACT scheme, the private parameters for a clientpprmC and a messagemsg, generate a blinded token
+issuance requestblindRequest and state informationrandmsg.
+– (blindToken, tag )← ACT.Sign(privprmS, pprmC, blindRequest) on input the private parameters for the
+issuer server privprmS, the public parameters for the clientpprmC and the blinded requestblindRequest,
+generate a blinded token. There is an optional outputtag which the issuer can use for throttling one token
+per message per client.
+– (msg, tok)← ACT.Unblind(pprmS, privprmC, blindToken, randmsg): on inputs the public parameterspprmS
+for the ACT scheme and the private parameters for a clientpprmC and a blind token blindToken and
+randomness randmsg used to blind the request for the message, generate the unblinded token tok for
+message msg).
+– (bit, tag )← ACT.Verify(vrfyprm, msg, tok): on input the verification parameters for the ACT scheme
+vrfyprm := ( pprmS, privprmS), which consist of the public parameterspprmS for the ACT scheme, the
+private parameter for the issuer server privprmS, a messagemsg and a tokentok, output verification bit
+bit. There is an optional outputtag which the issuer can use for throttling one token per message per
+client.
+Figure 2 presents the interactions between a client and an issuer server during token issuance and verifi-
+cation using the algorithms of the ACT scheme. The client has the public parameters of the scheme and the
+server has the public keysC registered by clients as well as a set of tagsT which it uses to throttle issuance
+at a single token per message per client. In order for the server to be able to enforce that each client gets
+at most one token per message, the server will obtain a tag that allows it to detect when the same client
+tries to obtain more than one token per message. This tag will be related to the message and the client’s
+registered key but will only reveal whether more than one token per message is obtained/used by the same
+client. An ACT construction may enforce the throttling property either at issuance (i.e., the client cannot
+obtain a second token for the same message) or during verification where a client cannot redeem more than
+one token for the same message. For each of our constructions, we will specify which of the two functionalities
+it provides.
+ACT Correctness.An ACT scheme is correct if any honestly generated token verifies. That is for any sets
+of issuer’s and client’s parameters
+(pprmS, privprmS)← ACT.GenParam(λ),
+(pprmC, privprmC)← ACT.ClientRegister(pprmS),
+and any messagemsg, the following holds
+(blindRequest, randmsg)← ACT.Request(pprmS, privprmC, msg)
+blindToken← ACT.Sign(privprmS, pprmC, blindRequest)
+(msg, tok)← ACT.Unblind(pprmS, privprmC, blindToken, randmsg)
+true← ACT.Verify(vrfyprm, msg, tok).
+13
+
+Client(pprmS, privprmC, msg) Issuer(privprmS,C,T )
+(bR, r)← ACT.Request(pprmS, privprmC, msg)
+state← state∪ (msg, r)
+bR
+(bT, tag )
+← ACT.Sign(privprmS, pprmC, bR)
+if∃ tag,
+if tag∈T , abort, elseT =T∪ tag
+bT
+(msg, t)← ACT.Unblind(pprmS, privprmC, bT, r)
+msg, t
+(bit, tag )← ACT.Verify(vrfyprm, msg, t)
+if∃ tag,
+if tag∈T , ; abort, elseT =T∪ tag
+if bit = false, abort
+Fig.2: Token issuance and verification forACT (Definition 3.1).
+3.1 Security Properties
+Unforgeability. The first security property is unforgeability, which guarantees that an adversary cannot
+generate tokens for more messages than the ones it has requested signatures and it also cannot generate
+more than one signature for a message per registered client key. This holds even when the adversary can
+register public parameters for many clients.
+Definition 3.2 (Unforgeability). An anonymous counting token schemeACT is unforgeable if for any
+PPT adversaryA and any max(T)≥ 0, max(R)≥ 0 (the maximum number of queries):
+Advomuf
+ACT,A(λ) := Pr
+
+OMUFACT,A(λ) = 1
+
+= negl(λ).
+where OMUFACT,A(λ) is defined in Figure 3.
+Unlinkability. ThenextACTpropertyis unlinkability whichguaranteesthateventheissuercannotlinkclient
+token requests with redeemed tokens, except if it can trivially do so. Definition relies onUNLINKACT,A(λ)
+is defined in Figure 4.
+The high-level idea of the game is the following. The adversary plays the role of the issuer, can register as
+many clients as it wants in via theGetPrm oracle, and can ask those clients to generate blind token requests
+for messages of its choice via theRequest oracle. It needs to be distinguish blind token requestsbT for two
+different client/message pairs (oracle Chlissue); or it needs to distinguish redeemed/unblind tokens for the
+same message but two different issuance sessions (oracleChlredeem). As the adversary can always provide
+wrong blindToken(as issuer), in that latter, we request thatACT.Unblind succeeds on both the blind tokens
+provided by the adversary.
+Our unlinkability notion assumes that the issuer parameterspprmS and privprmS are honestly generated.
+We informally discuss how to remove this requirement in each of our constructions.
+Definition 3.3 (Unlinkability).An anonymous token schemeACTis unlinkable if for anyPPT adversary
+A:
+Advunlink
+ACT,A(λ) :=|2 Pr
+
+UNLINKACT,A(λ) = 1
+
+− 1| = negl(λ),
+where UNLINKACT,A(λ) is defined in Figure 4.
+14
+
+Game OMUFACT,A(λ)
+(pprmS, privprmS)← ACT.GenParam(1λ)
+R← 0, T← 0, state←{}, tags←{}
+output←A Register(·),Sign(·),Verify(·)(pprmS)
+(msgi, toki)i∈[T+1] := output
+return
+∀ i̸=j∈ [T + 1], (msgi, toki)̸= (msgj, tokj)
+and
+
+/ /Type 1 forgery:
+
+∀i∈ [T + 1],
+ACT.Verify(vrfyprm, msgi, toki) = ( true, tagi ),
+∀ i̸=j∈ [T + 1], (msgi, tagi)̸= (msgj, tagj)
+
+or
+/ /Type 2 forgery:
+
+∃ S⊂ [T],∃msg : |S|> R and
+∀i∈S, msgi = msg and
+∀i∈S, ACT.Verify(vrfyprm, msgi, toki) = true
+
+
+Oracle Register(pprmC)
+state← state∪ pprmC
+R← R + 1
+Oracle Sign(pprmC, bR)
+if pprmC /∈ state, return ⊥
+T = T + 1
+(bT, tag )
+← ACT.Sign(privprmS, pprmC, bR)
+if tag∈ tags, return ⊥
+tags← tags∪ tag
+return bT
+Oracle Verify(msg, tok)
+bit← ACT.Verify(vrfyprm, msg, tok)
+return bit
+Fig.3: Unforgeability game for an ACT scheme. The appropriate boxedinstructions are included depending
+on whether rate limiting is done at issuance (boxed instructions inSign) or at redemption (boxed instruction
+in main game).
+4 Anonymous Counting Tokens from Oblivious PRF
+In this section, we present our first anonymous counting tokens construction which leverages oblivious pseu-
+dorandom functions. We make use of the extended Boneh-Boyen PRF functionF (sk = ( u, y), msg, r) =
+(msg + u + r· y)−1· G where G is a generator of a groupG, which was used by Boneh and Boyen [BB04] to con-
+struct short signatures without oracles. The Dodis-Yampolskiy function [DY05]FDY(u, msg) = ( msg+u)−1·G
+can be viewed as a special case of this function where the keyy is set to zero. For our construction and
+proofs, we need the property thatF is pseudorandom when evaluated on adversarially chosen messages and
+on randomness that is sampled uniformly at random.
+4.1 Extended Boneh-Boyen Pseudorandom Function
+In this section, we prove the pseudorandom properties we will use for the Boneh-Boyen PRF function
+F (sk = (u, y), msg, r) = ( msg + u + r· y)−1· G. Concretely, we prove the following lemma:
+Lemma 4.1. IfFDY(msg, u) = ( msg + u)−1· G is a selectively pseudorandom function over the groupG
+with generator G, the functionF (sk = ( u, y), msg, r) = ( u + msg + r· y)−1· G is an extended pseudorandom
+function, that is:
+Adveprf
+PRF,A(λ) := Pr[EPRFA(λ) = 1] = negl(λ),
+where EPRFA(λ) is defined in Fig. 5.
+Recall that Lemma 2.1 shows thatFDY satisfies the premise.
+15
+
+Game UNLINKACT,A(λ)
+(pprmS, privprmS)← ACT.GenParam(1λ)
+bchl←${0, 1}
+bguess←A O(pprmS, privprmS)
+return (bchl == bguess)
+GetPrm()
+(pprmC, privprmC)
+← ACT.ClientRegister(pprmS)
+return pprmC
+Request(pprmC, msg)
+abort if pprmC not from GetPrm
+abort if (pprmC, msg)∈Q′
+(bR, r)
+← ACT.Request(pprmS, privprmC, msg)
+Q =Q∪ (pprmC, msg, bR, r)
+Q′ =Q′∪ (pprmC, msg)
+return bR
+Chlissue(pprmC, msg0, msg1)
+abort if pprmC not from GetPrm
+abort if (pprmC, msg0) or (pprmC, msg1)∈Q′
+abort if msg0 = msg1
+(bR, r)← ACT.Request(privprmC, msgbchl )
+Q′ =Q′∪ (pprmC, msg0)∪ (pprmC, msg1)
+return bR
+Chlredeem(pprm0, pprm1, bR0, bR1, bT0, bT1)
+abort if (pprm0,⋆, bR0,⋆ ) /∈Q
+abort if (pprm1,⋆, bR1,⋆ ) /∈Q
+Find (pprmb, msgb, bRb, rb)∈Q
+and delete them (forb∈{ 0, 1})
+(msg′
+0, tok0)←
+ACT.Unblind(pprmS, privprm0, bT0, r0)
+(msg′
+1, tok1)←
+ACT.Unblind(pprmS, privprm1, bT1, r1)
+abort if msg0̸= msg1
+abort if msg′
+0̸= msg0 or msg′
+1̸= msg1
+return tokbchl
+Fig.4: Unlinkability game for an ACT scheme, where A has access to oracles O =
+GetPrm(·), Request(·), Chlissue(·), Chlredeem(·)
+Proof. Assuming there exists an adversaryA that distinguishesF from random with T evaluations and
+R challenge queries, we build and adversaryB that distinguishesFDY with the same number of selective
+evaluation and challenge queries as follows. Here, we consider a variant of the selective version of Eq. (1),
+whereB also is given access to an evaluation oracleEval(msg) (instead of a singleChallenge oracle that either
+matches PRF =F or O in Eq. (1)). Usual hybrid techniques can reduce this variant to the selection version
+of Eq. (1).
+B generates a randomy∈ Zp and providesy· G toA.B makes T evaluation queries on random messages
+(msgi)i∈[T] to obtains (Fi)i∈[T] and R challenge queries on random messages(msg′
+j)j∈[R] to obtain (Ej)j∈[R].
+On thei-th evaluation querymi fromA,B chooses ri = y−1· (msgi−mi), and returns(ri, Fi). Similarly, on
+the j-th challenge querym′
+j fromA,B chooses r′
+j = y−1· (msg′
+j−m′
+j), and returns (r′
+i, Ei).B returns the
+same guess as the guess ofA.
+The view ofA is identical to the one in experimentEPRFA(λ) in Lemma 4.1 since all valuesri and r′
+j
+are distributed uniformly at random since the messagesmsgi, msg′
+j are random. Therefore, the probability
+of success ofA is bounded by the probability of the selective adversary against the Dodis-Yampolskiy
+pseudorandom function.
+⊓ ⊔
+4.2 Verifiable Oblivious Pseudorandom Function
+We will need to evaluate obliviously the functionF (sk = ( u, y), msg, r) = ( msg + u + r· y)−1· G: one party
+has the secret keysk while the other party has a message(msg, r) as input. We call the resulting protocol a
+verifiable oblivious pseudorandom function (VOPRF).
+WedonotproveseparatepropertiesfortheVOPRFandweproveeverythingtheACTsecurityproperties.
+Informally,thesecuritypropertythatwewillbeprovingisthatgivenpublicparametersandcommittedinput,
+16
+
+Game EPRFA(λ)
+(u, y)←$ Z2
+p
+sk← (u, y)
+bchl←${0, 1}
+bguess←A Eval(·),Challenge(·)(u· G, y· G)
+return (bchl == bguess)
+Oracle Eval(msg)
+r←$R
+returnF (sk, msg, r)
+Oracle Challenge(msg)
+r←$R
+E0← F(sk, msg, r)
+E1←$V
+return Ebchl
+Fig.5: Extended pseudorandom function
+the protocol that consists of the steps: the client runsEncodeMsg, the server runsEval and the clients runs
+Decode to obtain its output, is a malicious secure computation protocol where the clients receives output
+F (msg, r) and the server learns nothing.
+The protocol is used as part of the final ACT protocol, where we implicitly assume inputs and keys to
+be previously committed.
+Definition 4.2 (Verifiable Oblivious Pseudorandom Function).A verifiable oblivious pseudoran-
+dom function (VOPRF) for the function F defined in Section 4.1 consists of the following algorithms
+(VOPRF.GenParam, VOPRF.EncodeMsg, VOPRF.Eval, OPRF.Decode):
+– (pprm, privprm)← VOPRF.GenParam(1λ) takes an input the security parameter and generates public and
+private parameters
+– (digest, state)← VOPRF.EncodeMsg(pprm, (msg, r), (tmsg,t r)) takes as input a message, randomnessr, as
+well as randomnesstmsg,tr used to commit msg and r (defined in this way for composition with other
+protocols), and outputs a digest and a state. The digest includes a proof of correct evaluation with respect
+to committed input and public parameters.
+– blindPRF ← VOPRF.Eval(privprm, digest) takes a digest with a proof of correctness and PRF private
+parameters, and outputs a valueblindPRF. The valueblindPRF includes a proof of correct evaluation.
+– τ← VOPRF.Decode(state, blindPRF) takes a valueblindPRF, and outputs the valueτ =F (sk, msg, r) (at
+least if everything was generated honestly).
+Client(pprmS, (msgi)i∈[T]) Issuer(privprmS)
+ 
+(bRi, statei)← OPRF.EncodeMsg(pprmS, msgi, ri,t msgi,t ri )
+
+i∈[T]
+(bRi)i∈[T]
+ 
+r′
+i← OPRF.Eval(privprmS, bRi)
+
+i∈[T]
+(r′
+i)i∈[T]
+ 
+ri← OPRF.Decode(statei, r′
+i)
+
+i∈[T])
+Fig.6: Oblivious Evaluation of PRF.
+17
+
+4.3 ACT Construction
+Assuming we have a VOPRF (with the right properties) for the extended Boneh-Boyen PRF functionF (sk =
+(u, y), msg, r) = ( msg + u + r· y)−1· G, we construct an ACT from this VOPRF.
+Construction 4.3 (ACT from VOPRF).Let G be a cyclic group of prime orderp with generator G,
+VOPRF = ( VOPRF.GenParam, VOPRF.EncodeMsg, VOPRF.Eval, VOPRF.Decode) be the verifiable oblivious
+pseudorandom function defined in Construction 4.4,COMPed = ( COMPed.Setup, CommitPed) be the Peder-
+sen commitment scheme over a strong-RSA group (a hiding and binding commitment scheme),COMExt =
+(COMExt.Setup, CommitExt) be an extractable commitment scheme defined as theCS encryption scheme (see
+Section 2.7),FDY be the Dodis-Yampolskiy (selective) PRF overG,5 and ZK be a sound zero-knowledge
+argument scheme. We construct an anonymous counting token schemeACT as follows:
+ACT.GenParam(1λ): Generate
+1. (PKVOPRF, SKVOPRF)← VOPRF.GenParam(1λ). Note that PKVOPRF contains (public) parameters prmExt
+for the extractable commitment scheme andprmPed for the Perdersen hiding and binding commitment.
+Output: pprmS← PKVOPRF
+privprmS← SKVOPRF
+ACT.ClientRegister(pprmS): Generate
+1. a Dodis-Yampolskiy PRF key uC←$ Zp,
+2. a commitment comuC← CommitPed(uC;tuC )
+Output: pprmC← comuC
+privprmC← uC
+ACT.T okenRequest(pprmS, privprmC, msg):
+1. Compute a commitment to the messagecommsg← CommitExt(H(msg);rmsg).
+2. Compute
+– Dodis-Yampolskiy PRF evaluationv←F DY(uC, H(msg)).
+– Proof of correct PRF evaluation
+πv : ZK{∃h, uC,t msg,t uC : v =FDY(uC,h ),
+commsg = CommitExt(h;tmsg), comuC = CommitPed(uC;tuC )}
+3. Generate a randomrC and commitment comrC← CommitExt(rC;trC ).
+4. Hash the transcript to get random valuerS← H(trnc) where
+trnc = (pprmS, comuC, commsg, v, comrC ).
+5. Compute r← rC + rS, commit comr← CommitPed(r;tr) and generate a proof:
+πr : ZK{∃ rC,t rC,t r : r = rC + rS,
+comrC = CommitExt(rC,t rC ), comr = CommitPed(r;tr)}.
+(The above 3 steps are used to create a random valuer that neither the issuer nor the client control as
+explained in Section 1.1.)
+5 This PRF is used for the rate limitation of the client. VOPRF does not evaluate this PRF but rather evaluatesF
+defined in Section 4.1.
+18
+
+6. Compute first OPRF message on inputmsg with randomness r
+(VOPRF.state, VOPRF.digest)← VOPRF.EncodeMsg(PKVOPRF, (H(msg), r), (tmsg,t r)).
+Output: blindRequest← (commsg, v,π v, comrC, comr,π r, VOPRF.digest)
+randmsg← (msg, r, VOPRF.state)
+ACT.Sign(privprmS, pprmC, blindRequest)
+1. Parse blindRequest = (commsg, v,π v, comrC, comr,π r, VOPRF.digest).
+2. Parse privprmS = skOPRF.
+3. Compute rS← H(trnc) as in ACT.Request.
+4. Verify the proofsπv and πr and abort if any of them doesn’t verify.
+5. Compute the second message of theVOPRF evaluation
+blindPRF← VOPRF.Eval(skVOPRF, VOPRF.digest).
+Output: blindToken← blindPRF
+tag← v
+ACT.Unblind(pprmS, privprmC, blindToken, randmsg)
+1. Parse blindToken = blindPRF.
+2. Parse randmsg = (msg, r, VOPRF.state).
+3. Decode the returned token (implicitly verifying its correctness):
+τ← VOPRF.Decode(VOPRF.state, blindPRF).
+4. Set the signaturetok← (r,τ )
+Output: (msg, tok)
+ACT.V erify(pprmS, privprm, msg, tok)
+1. Parse privprmS = skVOPRF and tok = (r,τ ). Set bit← false.
+2. IfF (skVOPRF, H(msg), r) = τ, set bit← true.
+Output: bit
+4.4 Verifiable Oblivious Pseudorandom Function Construction
+Next, we present our construction of a verifiable oblivious pseudorandom function which closely follows the
+construction of distributed oblivious PRF of Miao et al. [MPR+20]. The main difference is that [MPR+20]
+relies on the selective pseudorandom property of the Dodis-Yampolskiy function while we use the extended
+Boneh-Boyen PRF functionF (sk = (u, y), msg, r) = ( msg + u + r· y)−1· G.
+19
+
+Construction 4.4. Let COMPed be the Pedersen commitment scheme,CS be the Camenisch-Shoup encryp-
+tion scheme, and COMExt be extractable commitment instantiated asCS encryption (but with a different
+public key, whose secret key is known by the issuer, contrary to the secret key ofCOMExt).We assume
+for simplicity that we use the same modulusN for CS, COMExt, and COMPed. We construct an VOPRF
+(VOPRF.GenParam, VOPRF.EncodeMsg, VOPRF.Eval, VOPRF.Decode) as follows:
+VOPRF.GenParam(1λ):
+1. Generate CS parameters(pkCS← (N, GCS, YCS, HCS), skCS←x)← CS.Gen(1λ).
+2. Generate extractable commitment parametersprmExt← COMExt.Setup(1λ).
+3. Generate Pedersen commitment parametersprmPed← COMPed.Setup(1λ). We use the same modulusN
+for the two commitment schemes and the CS scheme above.
+4. Sample random keysu, y←$ Z|G| for the functionF.
+5. Encrypt ctu← CS.Enc(pkCS, u) = (ru· GCS, u· HCS +ru· YCS) where ru←$ Z⌊N/4⌋.
+6. Encrypt cty← CS.Enc(pkCS, y) = (ry· GCS, y· HCS +ry· YCS) where ry←$ Z⌊N/4⌋.
+Output: pprmS← (pkCS, prmPed, prmExt, ctu, cty)
+privprmS← (u, y, skCS)
+VOPRF.EncodeMsg(pprmS, (msg,r )∈ Z2
+|G|, (tmsg,tr)):6
+1. Commit commsg← CommitExt(msg;tmsg), comr← CommitPed(r;tr).
+2. Sample a←$ Zp and b←$ Zp2·2λ.
+3. Compute commitments with randomnessta,tb,tr←$ Z⌊N/4⌋
+coma← CommitExt(a;ta), comb← CommitPed(b;tb),
+comr← CommitPed(r;tr).
+4. Let α =a· msg, γ =a·r. Compute commitments:
+comα← CommitPed(α,tα), comα← CommitPed(γ,tγ)
+5. Compute encryption ofβ =a· msg +a· (u +r· y) +b·p (implicitly defined):
+ctβ = CS.Enc(pkCS,β ) = Enc(pkCS,a· msg +b·p) +a· ctu +a·r· cty.
+6. Generate a ZK proof
+π = ZK{∃ a,b, msg,r,α,γ,t a,tb,t msg,tr,tα,tγ s.t. :
+ctβ = Enc(pkCS,a· msg +b·p) +a· ctu +a·r· cty,
+coma = CommitExt(a;ta), comb = CommitPed(b;tb),
+comr = CommitPed(r;tr), commsg = CommitExt(msg;tmsg),
+comα = CommitPed(a· msg;tα), comγ = CommitPed(a·r;tγ),
+a<p · 22λ+1,α<p · 22λ+1,r<p · 22λ+1,b<p 2· 23λ+1}.
+Output: digest← (ctβ, coma, comb, commsg, comr, comα, comγ,π )
+state← (a,b )
+VOPRF.Eval(privprmS, digest):
+6 Note that when called from the ACT,msg will actually be a hash of some messageH(msg).
+20
+
+1. Parse digest← (ct,π ). Ifπ does not verify, abort.
+2. Compute β← CS.Dec(skCS, ct). Ifβ≥p32λ+1, abort.
+3. Compute commitment comβ = CommitPed(β;rβ) where rβ←$ Z⌊N/4⌋.
+4. Set F =β−1· G.
+5. Generate a ZK proof
+π = ZK{β,rβ, skCS s.t. : ct = (G′,β· HCS + skCS· G′), YCS = skCS· GCS,
+comβ = CommitPed(β;rβ), F =β−1· G,β <p 3· 23λ+1}.
+Output: blindPRF← (F, comβ,π )
+VOPRF.Decode(state, blindPRF):
+1. Parse blindPRF = (F, comβ,π ), state = (a,b ).
+2. If π does not verify, abort.
+3. Set F′ =a· F.
+Output: τ← F′
+Security Proof. We start with the intuition for our security proof. The first observation is that in the case
+of a single client, anACT forgery corresponds to generating a new evaluation of thePRFF on a message
+that has not been queried. To formalize this, we leverage the result of Miao et al. [MPR+20, Theorem B.1]
+which constructs a distributed oblivious PRF evaluation protocol with malicious security on committed
+inputs for the Dodis-Yampolskiy PRF. Their result essentially shows that the VOPRF Construction 4.4
+withFDY(u, msg) = ( u + msg)−1· G is a secure two-party computation protocol where the client obtains
+PRF(u, msg) and the server has no output. This means that if we instantiated theACT construction with
+this VOPRF construction, then the ACT scheme will be unforgeable for a single client who chooses its
+messages selectively. Then, we show how we can reduce the unforgeability of theACT construction with
+PRFFDY(u, y, msg, r) = ( u + msg + r· y)−1· G to the single client unforgeability of the ACT with the
+Dodis-Yampolskiy PRF. This reduction will follow the ideas of the reduction from unforgeability to weak
+unforgeability for the Boneh-Boyen signatures [BB04].
+TheunlinkabilityoftheschemefollowsfromtheselectivepseudorandompropertyoftheDodis-Yampolskiy
+PRF. It indeed shows that the unlinkability adversary only obtains pseudorandom tokens that do not reveal
+any information about the underlying input messages.
+We start by recalling the theorem of Miao et al. [MPR+20].
+Theorem 4.5 ([MPR+20, Theorem B.1]).The constructions of Figure 6 instantiated withF (u, msg) =
+FDY(u, msg) = ( u+msg)·G (instead of the extended Boneh-Boyen functionF as written in Construction 4.4)
+and the algorithms from Construction 4.4 for oblivious evaluation, is a secure two-party computation protocol
+for which there exist simulatorsSimC which simulates the view of the client andSimS which simulate the
+view of the server.
+We proceed to formalize the single client unforgeability security which the above theorem will enable us
+to prove. The main difference of this weaker unforgeability notion, apart from considering a single user, is
+the following: it requires that the user commits to all messages it will use to query for tokens before the PRF
+key is chosen.
+Definition 4.6 (Single Client Unforgeability). An anonymous counting token schemeACT is single
+client unforgeable if for anyPPT adversaryA and any T≥ 0
+Advsc−omuf
+ACT,A,T(λ) := Pr
+
+SC-OMUFACT,A,T(λ) = 1
+
+= negl(λ).
+where SC-OMUFACT,A,T(λ) is defined in Figure 3.
+21
+
+Game SC-OMUFACT,A,T(λ)
+prmExt← GenExt(1λ)
+(msgi, CommitExt(msgi,t msgi ))i∈[T], pprmC←A (prmExt)
+(pprm′
+S, privprmS)← ACT.GenParam′(1λ)
+/Generates all ACT parameters except prmExt, which was generated above/
+pprmS = pprm′
+S∪ prmExt
+(blindRequesti)i∈[T], pprmC←A (pprm) where blindRequesti[1] = CommitExt(msgi)
+/Each blindRequesti is generated with respect to one of the committed messages/
+output←A
+
+pprmS, (ACT.Sign(privprmS, pprmC, blindRequesti))i∈[T]
+
+(msg′
+i, tok′
+i)i∈[T+1] := output
+return
+
+∀i∈ [T + 1], ACT.Verify(vrfyprm, msg′
+i, tok′
+i) = true
+
+Fig.7: (Selective) Single Client unforgeability game for an ACT scheme
+We translate Theorem 4.5 into a statement about single client unforgeability in the next lemma.
+Lemma 4.7. The ACT scheme from Construction 4.3 instantiated with the VOPRF from Construction 4.4
+with y = 0 satisfies single client unforgeability.
+Proof. Assume there is an adversaryA that wins the single client unforgeability game in Figure 3 whereA
+declares all of its queries together non-adaptively, with non-negligible probability. We construct two PPT
+adversariesBZK, which breaks the soundness of theZK scheme, andBOPRF which breaks the security of the
+protocol for the distributed oblivious PRF evaluation.
+BOPRF interacts with its challenger to obtainPRF parameters which it sends toA. It invokes the client
+simulator SimC that exists from Theorem 4.5 to interact and answer the signing queries fromA. LetA
+returns output (msgi,τi)i∈[T+1], thenB returns (msgi,τi)i∈[T+1] as a forgery for the PRF.
+We analyze the probability of success forBOPRF. Assuming the soundness of the ZK protocol, all re-
+quested messagesmsgi must be different since correspondingtagi =FDY(uC, H(msg)) are different. Therefore,
+(msgi,τi)i∈[T+1] are valid forgeries for the PRF.
+Thus, we can bound the success probability forA as follows:
+Advomuf
+ACT,A(λ)≤ Advomuf
+OPRF,A(λ) + T· Advsnd
+ZK,BZK (λ). (3)
+This concludes the proof. ⊓ ⊔
+Next, we proceed to prove theACT unforgeability using the single user unforgeability from above.
+Theorem 4.8. The ACTscheme from Construction 4.3 instantiated with the VOPRF from Construction 4.4
+with y̸= 0 satisfies unforgeability from Definition 3.2.
+Proof. Let us assume there is an adversaryA against the unforgeability game forACT, we show how we can
+construct an adversaryB against the construction with single user unforgeability above (which setsy = 0).
+We note that as in Lemma 10 of [BB04], there are actually 2 classes of adversaries that require 2 different
+types of reductions to single user unforgeability. For simplicity of exposition,B will give a reduction to single-
+user unforgeability that addresses only the first type of adversary. We will point out where this reduction
+can fail, and then give a second reduction for adversaries that consistently cause the first reduction to fail.
+We first assume, without loss of generality, thatA only makes successful queries to theVerify oracle on
+tokens that it received as the output ofSign. AnA that makes successful queries toVerify on tokens not
+received fromSign can directly be turned into one that creates a successful forgery of Type 1 or 2 by guessing
+22
+
+which ofA’s calls toVerify would succeed and using the input to the call as a forgery together withT honest
+calls to Sign.
+With this restriction in mind, we give our construction ofB breaking single user unforgeability.B re-
+ceives from its challenger extractable commitment parametersprmB
+Ext. It generates newT random messages
+(msgi)i∈[T] and commits to them(comi = CommitExt(H(msgi)))i∈[T].B receives the rest of the parameters
+pprm′ for the ACT from its challenger and interacts with its challenger to obtain tokens(τi)i∈[T] for the
+committed messages. Let(ai)i∈[T] be the randomnessB used to computeEncCS(pkCS,ai(H(msgi) + u) +bq)
+in its requests and(blindPRFi)i∈[T] be the responses it received from its challenger for the PRF evaluation
+on all messages.
+B simulates public parameters forA as follows: it generates parameters for an extractable commitment
+together with a trapdoor prmA
+Ext, trapA
+Ext, generates y←$ Zp, and provides pprm← (pprm′, prmA
+Ext, cty =
+Enc(pkCS, y)) toA as public parameters.
+B initializesQ = ∅ and answers the i-th random oracle query fromA as follows: on input trnc =
+(pprm, comuC, commsg, v, comrC ), extracts H(msg) (just the hash value, not the preimagemsg) and rC from
+the commitments commsg and comrC, sets the RO answerrS = ( H(msgi)− H(msg))· y−1− rC (i.e., msgi =
+msg + (rC + rS)· y). It adds(commsg, H(msg), H(msgi)) toQ.
+B answers signing queries fromA as follows: it extractsH(msg) as above. It verifies the proof of correct
+evaluation of the PRFFDY(uC, H(msg)), and if it fails or shows repeating messages, aborts. It extracts the
+value a from coma. If∃ (commsg, H(msg), H(msgi))∈ Q, return ai·a−1· blindPRFi. If (commsg, H(msg),
+H(msgi)) /∈Q ,B aborts.B uses a commitment to0 as the commitment toβ in the rseponse, and uses the
+ZK simulator to simulate the proof of response.
+B answersverificationqueriesfrom Aasfollows:oninput (msg, r,τ ),checkwhether ∃ (commsg, H(msg), H(msgi))∈
+Q. If this does not hold, returnfalse. If it holds, check whetherH(msg) + r· y = H(msgi). If the check fails,
+return false. Otherwise, ifτ = toki, return true, else returnfalse.
+Let (msg′
+i, r′
+i,τ′
+i )i∈[T+1] be a successful forgery returned byA.B returns the same set to its challenger.
+We argue that the view ofA is indistinguishable from that in the security gameOMUFACT,A,R,T(λ) in
+Definition 3.2. For all signing queries for whichA queries the random oracle with the correct transcript,
+the responses are the correct PRF evaluation. Assuming the soundness of the ZK, signing queries where the
+adversary has not queried the RO for the corresponding randomness value, cannot have valid ZK proofs in
+the query. Assuming the ZK soundness and the pseudorandom function properties,A will not be able to
+guess a correct token for a message if it has not queried the RO on the corresponding randomness and then
+the OPRF for the corresponding evaluation.
+We now analyze the probability of success forB. We first consider the case when all the valuesτ′
+i output
+byA are distinct. This implies that the valuesmsg′
+i + y· r′
+i are also all distinct (except wheny is 0, which
+happens with probability 1
+p). IfA generated Type 1 forgery, then assuming ZK soundness all msg′
+i are
+different and hence this is also a valid forgery forB. Now we argue that if the ZK protocol is sound, then
+A could not have generated a forgery of Type 2, which is of the form(msg′, r′
+i,τ′
+i )i∈[R+1]. The ZK soundness
+guarantees thatB would not have answered more thanR requests for the same message. Then the only
+other option for forgery is ifA made another query for messagemsg′
+j and∃ k∈ [R + 1] made such that
+H(msg′
+k) + y· r′
+k = H(msg′
+j) + y· r′
+j, which we have, for the time being, assumed does not happen.
+Thus, we can bound the success probability forA as:
+Advomuf
+ACT,A(λ)≤ Advsc-omuf
+ACT,A (λ) + T· Advsnd
+ZK,BZK (λ) (4)
+We now consider the case when the valuesτ′
+i output byA are not all distinct. Since this is a successful
+forgery, this implies∃i,j ∈ [T + 1] such that (msg′
+i, r′
+i)̸= (msg′
+j, r′
+j) but msg′
+i + y· r′
+i = msg′
+j + y· r′
+j. If there
+exists an adversaryA⋆ that produces such a forgery with non-negligible probability, then we show how to
+construct an adversaryB⋆ that breaks single user unforgeability. As in Lemma 10 of [BB04], we will show
+thatA⋆ can learn something extra abouty that it shouldn’t learn.
+We constructB⋆ as follows.B⋆ initally proceeds exactly as B:B⋆ receives extractable commitment
+parameters prmB⋆
+Ext. It generates new T random messages (msgi)i∈[T], receives the rest of the parameters
+pprm′ for the ACT from its challenger and interacts with its challenger to obtain tokens(τi)i∈[T] for the
+23
+
+committed messages. As earlier, let(ai)i∈[T] be the randomnessB⋆ used in its requests and(blindPRFi)i∈[T]
+be the responses it received from its challenger for the PRF evaluation on all messages.
+As earlier,B⋆ generates fresh parameters for the extractable commitment together with a trapdoor
+prmA
+Ext, trapA
+Ext, but instead of generatingy←$ Zp,B⋆ instead uses the encryptionctu = EncCS(pkCS, u) re-
+ceived from its challenger as part ofpprm′ as y, and generates a freshu′←$ Zp. It forwards these parameters to
+A⋆ as public parameters (that is, it provides the freshly generatedprmA
+Ext as the extractable commitment pa-
+rameters, providesctu received from the challenger as the encryption ofy, and providesctu′ = EncCS(pkCS, u′)
+as the encryption ofu).
+B⋆ initializesQ =∅ and answers thei-th random oracle query fromA⋆ as follows: on input trnc =
+(pprm, comuC, commsg, v, comrC ), extractsH(msg)and rC from the commitmentscommsg and comrC. Ifcommsg =
+−u′ or H(msgi) = 0,B⋆ aborts. Otherwise, it computesri = (H(msg)+ u′)·H(msgi)−1 and sets the RO answer
+rS = ri− rC. Note that this makes it so thatH(msg) + u′ + ri· u = ri· (H(msgi) + u).
+B⋆ answers signing queries fromA⋆ as follows: it extractsH(msg) as above. It verifies the proof of correct
+evaluation of the PRFFDY(uC, H(msg)), and if it fails or shows repeating messages, aborts. It extracts the
+valuea from coma. If∃ (commsg, H(msg), H(msgi))∈Q , returnai·r−1
+i ·a−1·blindPRFi in theVOPRFresponse,
+using a commitment to0 as the commitment toβ in the reponse, and using the ZK simulator to simulate
+the proof of response. If(commsg, H(msg), H(msgi)) /∈Q ,B⋆ aborts.
+We observe that in the returned value,blindPRFi =a−1
+i · (u + H(msgi))−1· G, soai· r−1
+i ·a−1· blindPRFi =
+a−1· r−1
+i · (u + H(msgi))−1· G. Since we choseri so that H(msg) + u′ + ri· u = ri· (H(msgi) + u), we have that
+the returned value corresponds toa−1· (H(msg) + u′ + ri· u)−1· G, which is of the correct form.
+B⋆ answersverificationqueriesfrom A⋆ asfollows:oninput (msg, r,τ ),checkwhether ∃ (commsg, H(msg), H(msgi))∈
+Q. If this does not hold, returnfalse. If it holds, check ifr = ri and ifτ = tokri
+i . If these both hold, return
+true, else returnfalse.
+Now, wheneverA⋆ outputs a forgery with (msg, r,τ ) and (msg′, r′,τ ) that are both correctly verifying
+tokens, this implies thatmsg + u′ + u· r = msg′ + u′ + u· r′.B⋆ can therefore solve foru and use it to create
+a forgery for the underlying single-user game.
+We show thatB⋆ has a similar advantage in the SC-OMUF game asA⋆ has in the OMUF game.
+We do so by defining a sequence of hybrid games as below:
+Hyb1 The real execution ofA⋆ with the OMUF challenger.
+Hyb2 Same as above, but the OMUF challenger keeps track of the queriesQ made to the RO, and aborts if
+A⋆ makes a successfulSign call with a valid ZK proof, withcommsg and comrC that it has never queried
+to the RO.
+Hyb3 Same as above, but the OMUF challenger extracts all witnesses fromA⋆’s ZK proofs and checks them
+for soundness, aborting otherwise.
+Hyb4 Same as above, except the OMUF challenger uses the ZK simulator for the proofs it sends toA⋆. (In
+particular, the proof for theVOPRF response in Sign)
+Hyb5 Same as above, except the OMUF challenger uses a commitment to0 instead of a commitment toβ in
+the VOPRF response (but continues simulating the proof with the correct PRF output)
+Hyb6 Same as above, except the OMUF challenger pre-selects T messages msgi at the start of the inter-
+action, and programs the RO to generate r as B⋆ does. Namely, on the i’th RO query with pass-
+ing proofs containing, say,commsg, comrC, the OMUF challenger extractsH(msg) and rC and computes
+ri = (H(msg) + u)· H(msgi)−1 and sets the RO answerrS = ri− rC.
+Hyb7 Same as above, except that the OMUF challenger precomputesblindPRFi on the valuesmsgi at the start,
+and uses these in the responses toSign asB⋆ does. Namely, the OMUF challenger looks up theSign
+query in the RO query listQ to find the correspondmsgi, blindPRFi and ri, extractsa from the query,
+and usesai· r−1
+i ·a−1· blindPRFi in its Sign response.
+Hyb8 Same as above, except the OMUF uses an internally simulated SC-OMUF challenger to generateτi and
+blindPRFi at the start of the interaction. The OMUF also forwards thectu from the internal SC-OMUF
+challenger toA⋆ in the position ofcty, asB⋆ does.
+Hyb9 The interaction ofB⋆ with the SC-OMUF challenger.
+24
+
+We can see that each sequence of hybrids above is indistinguishable.Hyb1 and Hyb2 are indistinguishable
+based on soundness of the ZK proof inSign together with the negligible collision probability of the RO. The
+indistinguishability ofHyb3 and Hyb4 directly follow from the security of the corresponding ZK proofs.Hyb5
+depends on the hiding property ofcom. Hyb6 is identical except when H(msg) = u which should happen
+with negligible probability by the exponential size ofp and the security ofctu. The remaining hybrids are
+identically distributed using our initial assumption thatA⋆ never makes successfulVerify queries except on
+tokens that were received viaSign.
+Puttingthesetogether,if A⋆ interactingwiththeOMUFchallengercanproduceaforgery (msg′
+i, r′
+i,τ′
+i )i∈[T+1]
+such that∃i,j ∈ [T+1] such that(msg′
+i, r′
+i)̸= (msg′
+j, r′
+j), thenB⋆ can produce a similar output with negligibly
+close probability while interacting with the SC-OMUF challenger, and can use this forgery to extract theu
+of the SC-OMUF challenger to win the SC-OMUF game.
+This concludes the proof of unforgeability.
+⊓ ⊔
+Unlinkability.Next we prove the unlinkability of ACT Construction 4.3.
+Theorem 4.9. If FDY(msg, u) = ( msg + u)−1 is selectively pseudorandom, ZK is a zero-knowledge ZK
+argument, then the ACT scheme in Construction 5.1 satisfies unlinkability from Definition 3.3, whenH is
+modelled as a random oracle.
+Recall thatFDY is selectively pseudorandom. Note that we do not needFDY to be pseudorandom since
+it is always evaluated on hashes of messages and not messages themselves.
+Proof. We consider the following hybrids
+Hyb1 This is the regular execution of the unlinkability game.
+Hyb2 In this game we start to simulate the ZK that the client provides for the honest evaluation ofv =
+FDY(uC,h ) in Request (with h = H(msg)). This indistinguishability follows from the ZK properties.
+Hyb3 In this game instead ofv =FDY(uC, H(msg)), the client provides a truly random value. The indistin-
+guishability follows from the selective pseudorandom property ofFDY and the fact H is modeled as a
+random oracle. More precisely, using a classical hybrid argument, we just need to handle a single client
+C at a time. Let us show a reduction from selective pseudorandom ofFDY to distinguishing when v
+is uniformly random or computed honestly for C. Assuming qH requests are made to H in total, the
+reduction first generatesqH random scalarsh1,...,h qH and ask the PRF oracle their PRF value. Then
+the reduction starts simulating the game. For each query toH on a new input of the formmsg, the
+reduction answers with the next availablehi. This allows the reduction to use the PRF values output by
+the PRF oracle to compute the valuev. If the PRF oracle actually evaluatedFDY, then the reduction
+would perfectly simulate the game whenv are honestly computed forC. Otherwise, it would perfectly
+simulate the game whenv is chosen uniformly at random forC.
+Hyb4 In this game we choose a set of fixed messagesmsg′
+i and then program the random oracleH so that it
+determines the randomness ri for each execution in such a way that for thei-th execution (bRi, ri)←
+ACT.Request(pprmS, privprmC, msgi)(whichincludesthecalls ACT.Request(pprmS, privprmbchl, msgbchl )from
+the challenge oracle) we have thatmsg′
+i = H(msg) + ri· y.
+Hyb5 In this game we use the issuer simulator from Theorem 4.5 to generate the response for theACT.Request
+oracle calls and answerACT.Unblindqueries by returningF ((u, y), H(msg), ri) =FDY(u, msg′
+i)the random
+value ri associated with the respective execution. The indistinguishability follows from the security of
+the simulator.
+The answers to the oracle queries in this hybrid are independent of the valuebit (we have mapped the
+challenge queries to the same fixed messages). Therefore, the adversary succeeds with only negligible prob-
+ability. ⊓ ⊔
+25
+
+Parameter Generation for Unlinkability.Unlinkability assumes that the ACT parameters are gener-
+ated honestly and the issuer only sees the secret key. These parameters include Camenish-Shoup encryption
+parameters (twice, one for the CS encryption for which the issuer knows the secret key, and one for the
+extractable commitment for which the issuer does not know the secret key and Pedersen commitment pa-
+rameters over a group where the Strong RSA holds, as well as encryption of the issuer’s private keys for
+Boneh-Boyen function. We can distribute the generation of these parameters across multiple parties. Both
+CS and Pedersen parameters require the generation of group where the Strong RSA assumption holds. This
+can be done in a distributed way leveraging proof techniques for showing that the modulusN is a product of
+two large safe primes [GMR98, CM99]. The public parameters for theCS encryption and extractable com-
+mitment can be generated by sampling in a distributed manner theCS private key (which forCS encryption
+will be given to the issuer) and of the extractable commitment secret key (which is destroyed), and then
+computing the shares of the corresponding public keys.
+Instantiation. We recall that we use a single RSA modulusN for all the RSA-based primitives. We estimate
+the communications costs ofblindRequest sent from the user to the server which consists of
+– VOPRF.digest and the message and randomness commitments which amounts to4 Pedersen commit-
+ments, 3 CS ciphertexts and 13 scalars of total 9 log(p) + 7 log(N ) + 27λ bits (see Appendix A for
+description of the sigma protocol in Construction A.4 and the cost estimate.)
+– v,π v which is 1 additional Pedersen commitment, and4 scalars of total size2 log(p) + 2 log(N ) + 8λ (we
+note that we can optimize the Pedersen commitment and the scalars to be smaller here but we will count
+them as the ones above for simplicity). Alongside this, we also send 1 group element corresponding to
+the actual VRF output.
+– comrC,π r which contains 1 additional extractable commitment, and 3 scalars of total size log(p) +
+2 log(N ) + 6λ.
+So we have a total for blindRequest: 5 Pedersen commitments,4 CS ciphertexts, 1 group element and 20
+scalars of total size12 log(p) + 11 log(N ) + 41λ.
+The communication forblindToken is the same as that forEval in the underlyingVOPRF. This consists
+of 1 group element of log(p) bits and a Sigma protocol. The Sigma protocol is the same as the proof in
+Figure 14, Section C.7.2 [MPR+20]. Applying the optimization described in Appendix A, this sigma protocol
+has communication cost1 Pedersen commitment and3 scalars of total size3 log(N ) + 6λ bits. Therefore the
+total for Eval is 1 group element, 1 Pedersen commitment, and scalars of total size3 log(N ) + 6λ.
+5 ACTs from Equivalence-Class Signature
+In this section, we present ACT constructions from equivalence-class signatures (EQS). Note that these
+constructions will have the functionality where the rate-limiting of a single token per message per client
+will be enforced during token redemption. In particular, theACT verification will output the verification bit
+of the validity of the token and a tag that is a pseudorandom value derived from the client’s key and the
+message. The issuer can compare this tag against its database of redeemed message tags and reject the token
+if this value occurs there. However, this latter rate-limiting step is not part of theACT verification algorithm
+itself.
+We present two ACT constructions which differ in the type of PRF used to enforce the rate-limiting
+property. The first one is based on the Dodis-Yampolskiy PRF and can be instantiated in the standard
+model but is limited to messages of size logarithmic in the security parameter. The second one has two
+versions: the long version is provably secure in the random oracle model, while the short version is provably
+secure in the generic bilinear group and random oracle model when instantiated with a specific scheme.
+5.1 ACT from EQS and Dodis-Yampolskiy PRF for Small Messages
+We start with anACT construction from EQS and the Dodis-Yampolskiy PRF.
+26
+
+Construction 5.1 (ACT from EQS and Dodis-Yampolskiy). Let EQS = ( EQS.Setup, EQS.KGen,
+EQS.Sign, EQS.Adapt, EQS.Verify) be an equivalence-class signature scheme over a bilinear groupPG =
+(G1, G2, GT ). We use the Dodis-Yampolskiy pseudorandom functionFDY(u,x ) = ( u +x)−1· G1 over the
+cyclic group G1. We assume messagesmsg are in a subset ofZ∗
+p of size polynomial in the security parameter
+λ. An anonymous counting token constructionACT consists of the following algorithms:
+ACT.GenParam(1λ): Generate
+1. a bilinear groupPG← GGen(1λ) and an extra random generatorG′
+1∈ G1
+2. ZK argument CRSZK.crs← ZK.Setup(R) whereR is implicitly defined inACT.Request (ZK.crs is used
+implicitly when generating and verifying ZK proofs),
+3. EQS CRS crs← EQS.Setup(PG ), and EQS keys(pk, sk)← EQS.KGen(crs).
+Output: pprmS← (ZK.crs, crs, pk)
+privprmS← (pprmS, sk).
+ACT.ClientRegister(pprmS):
+1. Generate a Dodis-YampolskiyPRF key uC←$ Zp,
+2. Set UC = uC· G1.
+Output: pprmC← UC
+privprmC← uC
+ACT.T okenRequest(pprmS, privprmC, msg∈ Z∗
+p):
+1. Generate a random valueµ←$ Z∗
+p.
+2. Set ⃗M← (M1 =µ−1· G1, M2 =µ−1·F DY(uC, msg), M3 = (µ−1msg)· G′
+1).
+3. Generate a proofπ⃗M:
+π⃗M : ZK
+
+∃ µ−1, uC∈ Zp : M′
+1 =µ−1· G1, M′
+2 =µ−1(uC + msg)−1· G1,
+M3 = (µ−1msg)· G1, UC = uC· G1
+	
+Output: blindRequest← (⃗M,π⃗M)
+randmsg← (msg,⃗M,µ )
+ACT.Sign(privprmS, pprmC, blindRequest)
+1. Parse blindRequest = (⃗M,π⃗M).
+2. If verification ofπ⃗M fails, abort.
+3. Run ρ← EQS.Sign(crs, sk,⃗M).
+Output: blindToken←ρ
+ACT.Unblind(pprmS, privprmC, blindToken, randmsg)
+1. Parse randmsg = (msg,⃗M,µ ), blindToken =ρ.
+27
+
+2. Set ⃗M′← (G1,FDY(uC, msg), msg· G′
+1).
+3. Compute σ← EQS.Adapt(crs, pk,⃗M,ρ,µ ).
+4. If σ =⊥, abort.
+Output:
+
+msg, tok← (⃗M′,σ )
+
+ACT.V erify(pprmS, privprm, msg, tok)
+1. Set bit← true.
+2. Parse tok = (⃗M′ = (M′
+1, M′
+2, M′
+3),σ ).
+3. If M′
+1̸= G1 or M′
+3̸= msg· G′
+1, set bit← false.
+4. If false = EQS.Verify(pk,⃗M′,σ ), set bit← false.
+Output: (bit, M2)
+Perfect correctness is straightforward.
+6 Proofs for ACT from EQS Constructions
+Unforgeability.
+Theorem 6.1. If EQS provides EUF-CMA security, ZK is a sound ZK argument, then theACT scheme in
+Construction 5.1 satisfies unforgeability from Definition 3.2.
+Note that unforgeability does not rely on the pseudorandomness of the Dodis-Yampolskiy PRF.
+Proof. Assume there is an adversaryA that wins the unforgeability security game in Figure 3 with non-
+negligible probability. We construct two PPT adversaries:BEQS which breaks theEUF-CMA security of the
+EQS andBZK which breaks the soundness of theZK scheme. We show that:
+Advomuf
+ACT,A(λ)≤ (T + R + 1)· Adveuf-cma
+EQS,BEQS (λ) + T· Advsnd
+ZK,BZK (λ). (5)
+where Advsnd
+ZK,BZK (λ) is the probability defined in Eq. (2) on Page 9 (which itself implicitly defines a soundness
+game SNDBZK (λ)), T is the number of queries to theSign oracle andR is the number of queries to theRegister
+oracle.
+Construction of the adversaries. Let us first constructBEQS.BEQS obtains pk from the challenges for the
+EQS scheme and provides it as public parameters toA.BEQS answers signing queries ⃗Mj,π⃗Mj
+fromA as
+follows. Ifπ⃗Mj
+fails to verify, abort. ElseA queries the EQS challenger for signatures and returns the result.
+We consider the outputT = (msgi, toki)i∈[T+1] thatA generates. We writetoki = (⃗M′
+i,σi). At the end,BEQS
+does the following:
+– IfA produced a Type-1 forgery, it uniformly at random choosesi∗∈ [T + 1] and return thei∗-th token
+toki∗ = (⃗M′
+i∗,σi∗ ) to the EQS challenger as its forgery.
+– IfA produced a Type-2 forgery with setS⊂ [T]. Assume without loss of generality that|S| = R+1.BEQS
+select uniformly at randomi∗∈S and outputs thei∗-th token toki∗ = (⃗M′
+i∗,σi∗ ) to the EQS challenger
+as its forgery.
+Now, let us constructBZK.BZK runs the ZK challenger from the soundness game and get the CRS (if
+any). Then it simulates perfectly theEQS game toA. At the end,BZK does the following:
+28
+
+– IfA produced a Type-1 forgery, it outputs⊥ to the ZK soundess challenger.
+– IfA produced a Type-2 forgery with setS⊂ [T]. Assume without loss of generality that|S| = R + 1.BZK
+select uniformly at randomj∗∈ [T] and outputs thej∗-th query (⃗Mj∗,π⃗Mj∗ ) made byA to ACT.Sign to
+the ZK challenger (as a proof of an invalid statement).
+Remark thatBEQS andBZK cannot know (in polynomial time) whether the output to theirEQS/ZK
+challenger is valid, i.e., if they will win theEQSBEQS (λ) and SNDBZK (λ) games. However, this is not an issue
+to prove that the advantage of at least one of those two adversaries is non-negligible if the advantage ofA
+in OMUFA(λ) is non-negligible.
+Our proof strategy is the following. We define eventsE1EQS,i, E2EQS,k, E2ZK,j for i∈ [T + 1], k∈ [R],
+j∈ [T] so that:
+– Exactly one of these events must happen if the adversary wins.
+– Conditioned on any of these events, eitherBEQS orBZK wins EUF-CMA or soundness respectively.
+Note that we do not need that these events can efficiently be checked for the proof to go through.
+Definition of Events.Let us first define eventsE1EQS,i that are associated with a Type-1 forgery In that case,
+A generated T + 1 token by doingT signature queries. Vectors⃗M′
+i in tokens toki are of the form(G1, Fi, Ei)
+and are such that all pairs(Fi, Ei) are distinct. Therefore, vectors⃗M′
+i and ⃗M′
+j from two different tokenstoki
+and tokj cannot be in the span of the same element⃗M∈ G3
+1 SinceA queries Sign only T times and there are
+T + 1 valid tokenstoki, there existsi∈ [T + 1] so that⃗M′
+i is not in the span of any⃗M queried to Sign. And
+toki = (⃗M′
+i,σi) is a forgery for the EQS scheme.
+We defineE1EQS,i the event thatA produced a Type-1 forgery and⃗M′
+i is not in the span of any⃗M queried
+to Sign, and no eventE1EQS,i′ happened fori′ <i . (This last constraint is to ensure that the eventsE1EQS,i
+are disjoint.) Equivalently,E1EQS,i is defined as the event thatA produced a Type-1 forgery and⃗M′
+i if the
+first of the vectors
+n
+⃗M′
+i′
+o
+i′
+that is not in the span of any⃗M queried to Sign.
+Let us now consider Type-2 forgeries. Let us show that at least one of the following events must happen:
+– Event E2EQS,k:A made a Type-2 forgery (and not a Type-1 forgery) for a setS ={i1,...,i R} with
+i1 <··· < iR, so that⃗M′
+ik is not in the span of any⃗M queried to Sign, and so that no eventE2EQS,k′
+happened fork′≤k.
+– Event E2ZK,i:
+• Amade a Type-2 forgery (and not a Type-1 forgery) and
+• its i-th signing query is (⃗Mi, G1,π⃗Mi
+) where π⃗Mi
+is valid but proves a wrong statement, that is
+⃗Mi̸= (µ−1G1, µ−1(u + msg)−1G1, µ−1msg) for u such that the client public parameter isU = uG1
+and
+• no event E2EQS,k nor E2ZK,j happened forj′ <j and anyk.
+Let us assume by contradiction that none of the events happened (assumingA made a Type-2 forgery).
+Then since noE2EQS,k happened, each ⃗M′
+ik is in the span of some queried message⃗Mjk (in thejk-th query
+to Sign). As before, we can prove thatjk are necessarily all distinct. Since there areR + 1 of them and there
+are only R clients, at least two of them (fork =α andβ) were made for the same clientU∗ = u∗G1. We can
+write these two queries as follows for someµ1,µ 2,ζ 1,ζ 2∈ Zp
+⃗Mjα =µ1⃗M′
+kα =µ1(G1,ζ 1· G1, msg· G1) (6)
+⃗Mjβ =µ2⃗M′
+kβ =µ2(G1,ζ 2· G1, msg· G1), (7)
+where msg is the message on which the Type-2 forgery was made. Since tags must be different, we have
+ζ1̸=ζ2. But since the zero-knowledge proofs were all proving valid statements (as no eventE2sk,i occurred),
+we also have that:
+ζ1 = (msg + u∗)−1 =ζ2.
+This is a contradiction. So at least one of the events must happen.
+29
+
+Conclusion of the Proof.Since at least one of the eventsE1,i, E2EQS,k, E2ZK,i must happen and these events
+are disjoint, we have that from the total probability rule:
+Advomuf
+ACT,A(λ) = Pr[OMUFA(λ) = 1]
+=
+T+1X
+i=1
+Pr[OMUFA(λ) = 1 and E1EQS,i] +
+RX
+k=1
+Pr[OMUFA(λ) = 1 and E2EQS,j]
++
+TX
+j=1
+Pr[OMUFA(λ) = 1 and E2EQS,j]
+In addition, looking at the definition ofBEQS and from the fact this reduction perfectly simulates the
+oracles forA:
+T+1X
+i=1
+Pr[OMUFA(λ) = 1 and E1EQS,i]
+=
+T+1X
+i=1
+Pr
+h
+EUF-CMABEQS (λ) = 1 and E1EQS,i
+i∗ =i
+i
+= Pr[i∗ =i]−1
+T+1X
+i=1
+Pr
+h
+EUF-CMABEQS (λ) = 1 and E1EQS,i and i∗ =i
+i
+≤ Pr[i∗ =i]−1
+T+1X
+i=1
+Pr
+h
+EUF-CMABEQS (λ) = 1 and i∗ =i
+i
+= (T + 1)· Pr
+h
+EUF-CMABEQS (λ) = 1
+i
+.
+Similarly, we have:
+RX
+k=1
+Pr[OMUFA(λ) = 1 and E2EQS,k]≤ R· Pr
+h
+EUF-CMABEQS (λ) = 1
+i
+TX
+j=1
+Pr[OMUFA(λ) = 1 and E2ZK,j]≤ T· Pr
+
+SNDBZK (λ) = 1
+
+Together this yields Eq. (5).
+⊓ ⊔
+Unlinkability.
+Theorem 6.2. If EQS provides signature adaption,ZK is a zero-knowledge ZK argument, the Dodis-Yampolskiy
+FDY(u, msg) = (1/(u + msg))· G1 is pseudorandom even whenuG1 is public, and the DDH assumption holds
+in G1 (which is implied by the SXDH assumption), then theACT scheme in Construction 5.1 satisfies un-
+linkability from Definition 3.3.
+Recall from Section 2.2 that Dodis-Yampolskiy is pseudorandom under the2α-DDHI assumption inG1
+when the input messages come from a subset of size2α of Z∗
+p.
+Proof. We do the proof using hybrid games:
+Hyb0 This hybrid is the unlinkability security game.
+30
+
+Hyb1 This hybrid is the same as the previous one with the following syntactic change: in any token request
+(whether to Request oracle or Chlissue oracle), ⃗M is computed as⃗M =µ−1⃗M′ where:
+⃗M′ = (M′
+1, M′
+2, M′
+3) = ( G1,FDY(uC, msg), msg· G1)
+And in any associatedUnblind computation (via a query toChlredeem), the same⃗M′ as the one used in
+the token request is used instead of re-computing⃗M′.
+Hyb2 This hybrid is similar to the previous one except now all theZK CRS and allZK proofs are simulated.
+This hybrid is computationally indistinguishable from the previous one thanks to the zero-knowledge
+property of the ZK argument.
+Hyb3 This hybrid is similar to the previous one except that for every token request and associated unblind
+query to Chlredeem (if any), M′
+2 is chosen uniformly at random. This hybrid is indistinguishable from the
+previous one assumingFDY is pseudorandom.
+Hyb4 This hybrid is similar to the previous one except that in anyUnblind computation, instead of computing
+σ as:
+σ← EQS.Adapt(crs, pk,⃗M,ρ,µ )
+it is computed as:
+ρ′← EQS.Sign(crs, sk,⃗M′), σ ← EQS.Adapt(crs, pk,⃗M′,ρ′, 1)
+Remember that in the unlinkability game,privprmS is chosen by the challenger so the challenger knows
+privprmS = sk.
+This hybrid is computationally indistinguishable from the previous one under signature adaptation of
+the EQS scheme.
+Given another generatorG′′
+1 of G1, we can write:
+⃗M′ = (G1, βG′′
+1, msgG′
+1)
+where we setM′
+2 =βG′′
+1 as a uniformly random element fromG1. We can then write
+⃗M = (νG1, β· (ν· G′′
+1 ), msg· (ν· G′
+1)) (8)
+where ν = µ−1 is uniformly random inZ∗
+p and different for each token request. Remark indeed that in
+this hybridµ is only used once per token request when setting⃗M =µ−1⃗M′.
+Hyb5 This hybrid is similar to the previous one except that in any token request computation,⃗M is now chosen
+uniformly at random fromG3
+1 instead of as specified in Eq. (8).
+This hybrid is computationally indistinguishable from the previous one under the DDH assumption in
+G1. Indeed, the DDH assumption can be used to show that(νG1, ν· G′′
+1, ν· G′
+1) are indistinguishable
+from random group elements inG3
+1.
+In the last hybrid, the output of any token request is independent of the inputsmsg and uC. The output of
+an unblind request only includes the underlying message and is independent of the output of the associated
+token request: no element from the computation of the token request is used when unblinding in the last
+hybrid except the message. Thus from the adversary point of view, in the last hybridbchl is uniformly random
+and the adversary’s advantage is 0. This concludes the proof. ⊓ ⊔
+Parameter Generation for Unlinkability.Unlinkability assumes that the ACT parameters are generated
+honestly and the issuer only sees the secret key. To alleviate this requirement, we can instead work in the
+CRS model, where the ZK and EQS CRS are put in the CRS and generated by a trusted party. The EQS
+signature adaptation holds even for maliciously generatedpk, but our unlinkability proof usessk. Therefore,
+we would also need that the issuer includes inpprmS a zero-knowledge proof of knowledge of the EQS secret
+key sk for the unlinkability proof above to go through. This can be done efficiently using either Groth-Sahai
+proofs or Fiat-Shamir proofs.
+The same discussion applies to Construction 6.3.
+31
+
+Instantiation. The construction in Construction 5.1 can be instantiated in the standard model using the
+EQS from Section 6.1. in the full version of the paper [BRS23] and using Groth-Sahai proofs for the ZK
+argument. Following the notations from [EG14], the Groth-Sahai proof will need to make (with the cost in
+the number of group elements):
+– 3× scaG2 for the commitments toµ−1, uC, and msg
+↬ cost = 6× G2
+– 4× MConstG2 to prove the following 4 equations:
+M′
+1• G2 = G1• (µ−1· G2) M′
+2• (uC· G2) + M′
+2• (msg· G2) = G1• (µ−1· G2)
+M′
+3• G2 = M′
+1• (msg· G2) UC• G2 = G1• (uC· G2)
+↬ cost = 4× G1
+6.1 ACT from EQS and a Random-Oracle-Based PRF
+The second ACT construction from EQS leverages the PRF in the RO modelPRF(K,x ) = K· H(x) where
+H :{0, 1}∗→ G1 is a hash function that can be modeled as a random oracle. This PRF was folklore and has
+been formally defined in [NPR99].
+The ACT construction is similar to Construction 5.1 but the message⃗M generated by ACT.Request is
+generated as:
+⃗M←
+ 
+M1 =µ−1· G1, M2 =µ−1· uC· H(msg), M3 =µ−1· H(msg)
+
+instead of
+⃗M←
+ 
+M1 =µ−1· G1, M2 =µ−1· (uC + msg)−1· G1, M3 = (µ−1msg)· G1
+
+.
+Note that in both casesM2 = PRF(uC, msg), but with a different PRF. Importantly the statements proven
+by the ZK proof in this new construction do not need to evaluate the hash functionH, so they can be still
+efficiently instantiated with Fiat-Shamir or Groth-Sahai.
+We present two versions: thelong version uses dimension-3 vectors⃗M and includes M1 (like the Dodis-
+Yampolkiy-based construction), while the short version uses dimension-2 vectors withoutM1. The short
+version is not proven unforgeable but we show that a specific instantiation of it is unforgeable in Section 8,
+in the generic (bilinear) group model.
+Construction 6.3 (ACTfromEQSandRandomOracle( longandshortversions)). Let (EQS.Setup,
+EQS.KGen, EQS.Sign, EQS.Adapt, EQS.Verify)beanequivalence-classsignaturescheme.Ananonymouscount-
+ing token constructionACT consists of the following algorithms:
+ACT.GenParam(1λ): Generate
+1. a bilinear groupPG← GGen(1λ),
+2. ZK argument CRSZK.crs← ZK.Setup(R) whereR is implicitly define inACT.Request (ZK.crs is used
+implicitly when generating and verifying ZK proofs),
+3. EQS CRS crs← EQS.Setup(PG ), and EQS keys(pk, sk)← KGen(crs).
+Output: pprmS← (ZK.crs, crs, pk)
+privprmS← (pprmS, sk).
+ACT.ClientRegister(pprmS):
+1. Generate a PRF key uC←$ Zp.
+32
+
+2. Set UC = uC· G1.
+Output: pprmC← UC
+privprmC← uC
+ACT.T okenRequest(pprmS, privprmC, msg):
+1. Generate a random valueµ←$ Z∗
+p.
+2. Compute M′
+3← H(msg) and M′
+2← uC· H(msg).
+3. Set ⃗M← (M1 =µ−1· G1, M2 =µ−1· M′
+2, M3 =µ−1· M′
+3).
+4. Generate a proofπ⃗M:
+π⃗M : ZK
+
+∃uC∈ Zp : M2 = uC· M3 and UC = uC· G1)
+	
+Output: blindRequest← (⃗M,π⃗M)
+randmsg← (msg,⃗M,µ )
+ACT.Sign(privprmS, pprmC, blindRequest)
+1. Parse blindRequest = (⃗M,π⃗M).
+2. If verification ofπ⃗M fails, abort.
+3. Run ρ← EQS.Sign(crs, sk,⃗M).
+Output: blindToken←ρ
+ACT.Unblind(pprmS, privprmC, blindToken, randmsg)
+1. Parse randmsg = (msg,⃗M,µ ), blindToken =ρ.
+2. Set ⃗M′← (G1, uC· H(msg), H(msg)).
+3. Compute σ← EQS.Adapt(crs, pk,⃗M,ρ,µ ).
+4. If σ =⊥, abort.
+Output:
+
+msg, tok← (⃗M′,σ )
+
+ACT.V erify(pprmS, privprm, msg, tok)
+1. Set bit← true.
+2. Parse tok = (⃗M′ = (M′
+1, M′
+2, M′
+3),σ ).
+3. If M′
+1̸= G1 or M′
+3̸= H(msg), set bit← false.
+4. If false = EQS.Verify(crs, pk,⃗M′,σ ), set bit← false.
+Output: (bit, M2)
+Perfect correctness is straightforward.
+33
+
+Unforgeability of the Long version.
+Theorem 6.4. If EQS provides EUF-CMA security, ZK is a sound ZK argument, and H is a collision-
+resistant hash function, then the long version of theACT scheme in Construction 6.3 satisfies unforgeability
+from Definition 3.2.
+Note that unforgeability does not rely on the pseudorandomness and does not modelH as a random
+oracle but just requiresH to be collision resistant. On the other hand, the theorem only holds for the long
+version and not the short version.
+Proof. We do a proof by an hybrid argument:
+Hyb0 This hybrid corresponds to the unforgeability game.
+Hyb1 This hybrid is similar to the first hybrid except the challenger aborts if the adversary produces two
+tokens for two messagesmsg̸= msg′ so that H(msg) = H(msg′).
+The two games are indistinguishable by collision resistance ofH.
+Now, a similar proof to the one for Theorem 6.1 can be done to reduce EUF-CMA security ofEQS
+and soundness of the ZK argument toHyb1. Concretely, the only two changes are in the argument that, at
+least one of theE1EQS,i, E2EQS,k or E2ZK,j must happen (recall those events from the proof of Theorem 6.1).
+Assuming a Type-1 forgery, one of theE1,i must happen since we ensured that all hashesH(msg) are distinct
+and then the argument is the same as in Theorem 6.1. For the Type-2 forgery events, if none happen,
+we have a similar arguments as in the previous proof, except that Eqs. (6) and (7) are replaced by: there
+µ1,µ 2, Z1, Z2, M′
+3∈ Zp
+⃗Mjα =µ1⃗M′
+kα =µ1(G1, Z1, M′
+3)
+⃗Mjβ =µ2⃗M′
+kβ =µ2(G1, Z2, M′
+3),
+(where M′
+3 = H(msg)) and since tags are differentZ1̸= Z2. On the other hand, the zero-knowledge proof are
+assumed at this point to be proving valid statement which ensures that:
+Z1 = u∗· M′
+3 = Z2
+which allows to conclude the proof as before. ⊓ ⊔
+Unlinkability.
+Theorem 6.5. If EQS provides signature adaption,ZK is a zero-knowledge ZK argument, and the DDH as-
+sumption holds inG1 (which is implied by the SXDH assumption), then theACT scheme in Construction 5.1
+satisfies unlinkability from Definition 3.3, whenH is modeled as a random oracle.
+Contrary to the construction Construction 5.1, we do not require messages to be short for unlinkability
+to hold asPRF : (u, msg)7→ u· H(msg) is pseudorandom for any the message input set{0, 1}∗, assuming the
+DDH assumption inG1 and when H is modelled as a random oracle (even whenu· G1 is public).
+The proof of pseudorandomness ofPRFis done by a direct reduction to DDH: given a tuple(G1,X,Y,Z )∈
+G4
+1 that is either a Diffie-Hellman tuple or a random tuple, setu·G1 =X. For each querymsg to H, generate a
+fresh tuple (G1,X,Y msg,Z msg) using random self-reducibility of DDH (so that(Ymsg,Z msg) is a fresh random
+Diffie-Hellman pair with regards to (G1,X ) if (G1,X,Y,Z ) was a Diffie-Hellman tuple, and is uniformly
+random otherwise). Then setH(msg) = Ymsg. Now for any queryPRF(u, msg), simulate a query toH(msg)
+if msg was not queried to H, and return Zmsg. When (G1,X,Y,Z ) is a Diffie-Hellman tuple, the PRF is
+evaluated properly while when it is a random tuple, the queriesPRF(u, msg) are all answered uniformly at
+random.
+Proof. The proof is similar to the one of Theorem 6.2. The main difference is that the Dodis-Yampolkiy PRF
+is replaced by the PRFPRF : (u, msg)7→ u· H(msg) that is proven above pseudorandom even whenu· G1 is
+public. ⊓ ⊔
+34
+
+Instantiation. The long version of Construction 6.3 can be instantiated in the random oracle model using
+the EQS from Section 6.1. in the full version of the paper [BRS23] and using a Fiat-Shamir proof for the ZK
+argument.
+Concretely, the Fiat-Shamir proof needs to prove thatlogG1 (UC) = log M3 (M2) and consists of the follow-
+ing:
+– Generate random scalarv←$ Z∗
+p.
+– Compute the Fiat-Shamir commitments:V ←v· G1, W←v· M3.
+– Derive the Fiat-Shamir challenge:c← H′(UC,⃗M,V,W ), where H′ :{0, 1}∗→ Zp is a hash function that
+will be modeled as a random oracle.
+– Compute the Fiat-Shamir response:ξ←v +c· uC.
+– Set the proof to be:π⃗M← (ξ,c )∈ Z2
+p.7
+The proof is verified by computingV′←ξ· G1−c· UC andW′←ξ· M3−c· M2, and then checking whether
+c = H′(UC,⃗M,V′,W′).
+7 Equivalent-Class Signature Constructions
+In this section, we present two EQS constructions from bilinear maps: one with security from any signature
+scheme and ZK argument of knowledge, and one in the generic bilinear maps model, which achieves better
+concrete efficiency. The former construction can be efficiently instantiated in the standard model under the
+SXDH assumption.
+7.1 EQS in the Standard Model
+We formally provide a generic construction of an EQS scheme from any signature scheme and ZK argument.
+The idea of the construction was already present for example in the introduction of [FG18].
+Construction 7.1. Let (KGen, Sign, Verify) be a (classical) existentially unforgeable (EUF-CMA) signature
+scheme with message spaceGℓ
+1 and ZK be a ZK argumentof knowledge system.
+EQS.Setup(1λ): Generate
+1. ZK parameters crs← ZK.Setup(R) for the relationR defined implicitly below inEQS.Sign (crs is used
+implicitly when generating and verifying ZK proofs)
+Output: crs
+EQS.KGen(crs):
+Output: (pk, sk)← KGen(1λ)
+EQS.Sign(crs, sk,⃗M∈ Gℓ
+1):
+Output: ρ← Sign(sk,⃗M)
+EQS.Adapt(crs, pk,⃗M,ρ,µ ):
+7 Actually the challengec can be reduced toλ bits while keeping the security of the Fiat-Shamir transform.
+35
+
+1. Immediately return⊥ if false = Verify(pk,⃗M,ρ ).
+2. Set Υ←µG2 and ⃗M′←µ· ⃗M.
+3. Generate the ZK proof:
+π : ZK
+
+K⃗M∈ Gℓ
+1, KΥ∈ G2, Kρ :
+true = Verify(pk,⃗M,ρ )and ⃗M′• G2 = ⃗M•Υ
+	
+Output: σ←π
+EQS.V erify(crs, pk,⃗M′,σ ): runs the ZK verification algorithm onσ.
+The reason why we prove knowledge ofΥ =µG2 instead of directlyµ is that Groth-Sahai proofs allow to
+prove efficiently knowledge of group elements but not knowledge of scalar (which would require a bit-by-bit
+approach or something similar, which is much less efficient). Note that an argument of knowledge ofµ could
+be used instead if the ZK proof system is more efficient this way, since knowledge ofµ∈ Zp implies knowledge
+of Υ∈ G2.
+EUF-CMA.
+Theorem 7.2. If (KGen, Sign, Verify) is an EUF-CMA signature scheme andZK is a knowledge-sound ZK
+argument, then theEQS scheme in Construction 7.1 satisfies EUF-CMA.
+Proof. Let us call Condition(⋆) this part of the condition to win the EUF-CMA game:
+∀⃗M∈Q Sign, ⃗M′∗ /∈ Span(⃗M),
+where ⃗M∗ is the message from the forgery.
+We do a proof by hybrid games:
+Hyb0 This hybrid corresponds to the EQS EUF-CMA gameEUF-CMAA(λ), defined in Fig. 1. Note that the
+game is not polynomial time: Condition(⋆) may not be checked in polynomial time without knowing
+the discrete logarithm of the forged message (or of the signed messages).
+Hyb1 This hybrid is similar to the previous hybrid except theZK setup is done by the extractor from the
+knowledge soundness. This game is statistically indistinguishable from the previous one under setup
+indistinguishability from the knowledge soundness. Note that it is important here that setup indistin-
+guishability is a statistical property as this hybrid (and the previous one) are not polynomial-time.
+Hyb2 This hybrid is similar to the previous hybrid except that afterA outputs (⃗M∗,σ∗) and after verifying
+σ∗ (but before checking Condition(⋆)), the hybrid aborts (and return 0) if the extractorExtract cannot
+extract a valid witness out ofσ∗ =π∗.
+This hybrid is computationally indistinguishable from the previous one under extractability of the ZK
+argument of knowledge, because the added abort event happens with negligible probability (and up to
+the abort even, the hybrid runs in polynomial time).
+Let ⃗M∗∈ Gℓ
+1, Υ∗∈ G2, ρ∗ be the extracted witness.
+Hyb3 This hybrid is similar to the previous hybrid except before checking Condition(⋆), we abort if⃗M∗ is one
+of the queries⃗M∈Q Sign.
+This hybrid is perfectly indistinguishable from the previous one since the new abort is only triggered
+when Condition(⋆)does not hold. Indeed, validity of the extracted witness implies that⃗M′∗•G2 = ⃗M∗•Υ∗
+which in turns implies that⃗M′∗∈ Span(⃗M∗) and Condition (⋆) does not hold (for⃗M = ⃗M∗∈Q Sign).
+36
+
+Hyb4 This hybrid is similar to the previous hybrid except we do not test Condition(⋆) anymore. The winning
+probability of the adversary in this hybrid is at most the one in the previous hybrid.
+We now reduce EUF-CMA of the underlying signature scheme to this last hybrid. The extractedρ∗ is a
+valid signature on⃗M∗ that was never queried before.
+This concludes the proof. ⊓ ⊔
+Signature Adaptation.
+Theorem 7.3. If ZK is a zero-knowledge argument, then the EQS scheme in Construction 7.1 satisfies
+signature adaptation.
+Proof. We do a proof by hybrid games:
+Hyb0 This hybrid corresponds to the EQS signature adaptation gameSIG-ADPA(λ), defined in Fig. 1.
+Hyb1 This hybrid is similar to the previous one except the two signaturesσ0 and σ1 are now simulated using
+the ZK simulator (andcrs is also simulated). In particularσ0 and σ1 are computed just from⃗M′ =µ⃗M
+(and pk), without usingρ and ρ′ provided by the adversary.
+This hybrid is computationally indistinguishable from the previous one becauseZK is zero-knowledge.
+We conclude by remarking thatσ0 andσ1 are computed exactly the same way in the last hybrid and the
+probability of the adversary guessingbchl is therefore exactly1/2. ⊓ ⊔
+EfficientInstantiationintheStandardModel. Toefficientlyinstantiatetheabovegenericconstruction,
+we need an efficient signature scheme and an efficient ZK proof system. For standard model instantiation, one
+solution is to use Groth-Sahai ZK arguments and structure-preserving signature (SPS) schemes. A structure-
+preserving signature scheme is such that verification consists in pairing-product equations so that it can be
+efficiently verified by Groth-Sahai arguments.
+Concretely, we can use the Jutla-Roy SPS scheme from [JR17]. Signatures are vectorsρ∈ G5
+1× G2
+(independent ofℓ) while verification is done using only two pairing-product equation. Following the notations
+from [EG14], the Groth-Sahai proof will need to make (with the cost in number of group elements):
+– 5× comG1 + 1× encG2 for the commitment toρ
+↬ cost = 10× G1 + 2× G2
+– ℓ× comG1 for the commitment of⃗M
+↬ cost = 2ℓ× G1 + 0× G2
+– 1× scaG2 for the commitment ofµ (which can be extracted asΥ =µG2)
+↬ cost = 0× G1 + 2× G2
+– 1× PConstG2 + 1× PPE proof of equations for the verification ofρ (the former is the left part of the
+verification equation in [JR17, Fig. 2] and the latter for the right part of it)
+↬ cost = 4× G1 + 6× G2
+– 1× MEG1 proof for the equation⃗M′• G2 = ⃗M•Υ
+↬ cost = 2× G1 + 4× G2
+In totalσ contains (16 + 2ℓ)× G1 + 12× G2 group elements.
+7.2 EQS in the Generic Bilinear Group Model
+Fuchsbauer, Hanser, and Slamanig constructed an efficient EQS in the generic group model in [FHS19]. This
+EQS satisfies our (weaker) security notions when applying the following minor changeEQS.Adapt aborts if
+the signature does not verify.
+37
+
+8 ACTs in the Generic Bilinear Group Model
+In this section, we show that the short variant of Construction 6.3 is unforgeable in the generic bilinear group
+model and random oracle model, when implemented with the EQS scheme from [FHS19] and Fiat-Shamir
+for equality of discrete logarithms for theZK proof in ACT.Sign (as in the instantiation in Section 6.1). It
+achieves better concrete efficiency than all our other constructions at the cost of security holding in the
+generic bilinear group model (GBGM).
+For the sake of completeness, we describe the full protocol below.
+Construction 8.1 (ACT in GBGM).LetPG = (G1, G2, GT ) be a bilinear group,H :{0, 1}∗→ G1 and
+H′ :{0, 1}∗→ Zp be two hash functions that will be modeled as two random oracles. In this construction,
+we denote elements fromG2 with a hat, e.g., ˆX2, matching notation from [FHS19] (except the generators
+G1 and G2). Vectors⃗M have two elements indexed 2 and to match Construction 6.3. Recall thatGT is also
+written additively and that we use• to denote the pairing operatione(X, ˆY) = X• ˆY. An anonymous counting
+token construction ACT consists of the following algorithms:
+ACT.GenParam(1λ): Generate
+1. a bilinear groupPG← GGen(1λ)
+2. EQS secret keysk = (x2,x 3)←$ (Z∗
+p)2
+3. EQS public keypk← (ˆX2←x2· G2, ˆX3←x3· G2)
+Output: pprmS← pk,
+privprmS← sk.
+ACT.ClientRegister(pprmS):
+1. Generate a PRF key uC←$ Zp,
+2. Set UC← uC· G1
+Output: pprmC← UC
+privprmC← uC
+ACT.T okenRequest(pprmS, privprmC, msg):
+1. Generate random scalarsv,µ←$ Z∗
+p.
+2. Compute M′
+3← H(msg) and M′
+2← uC· H(msg).
+3. Set ⃗M← (M2 =µ−1M′
+2, M3 =µ−1M′
+3)
+4. Compute the Fiat-Shamir commitments:V =v· G1, W =v· M3.
+5. Derive the Fiat-Shamir challenge:c← H′(UC,⃗M,V,W ).
+6. Compute the Fiat-Shamir response:ξ←v +c· uC.
+7. Set the proof to be:π⃗M← (ξ,c ).
+Output: blindRequest← (⃗M,π⃗M)
+randmsg← (msg,⃗M,µ )
+ACT.Sign(privprmS, pprmC, blindRequest)
+38
+
+1. Parse blindRequest = (⃗M, π⃗M = (ξ,c )).
+2. Verify the ZK proof π⃗M: namely compute V′ ← ξG1− cUC, W′ ← ξM3− cM2, and abort if c ̸=
+H′(UC,⃗M, V′, W′).
+3. Generate a randomy←R Z∗
+p.
+4. Compute the EQS signature:Z←y· (x2· M2 +x3· M3), Y←y−1· G1, and ˆY←y−1· G2.
+Output: blindToken←ρ = (Z, Y, ˆY)
+ACT.Unblind(pprmS, privprmC, blindToken, randmsg)
+1. Parse randmsg = (msg,⃗M,µ ), blindToken =ρ = (Z, Y, ˆY).
+2. Generate a random scalarψ←$ Z∗
+p.
+3. Compute σ← (Z′←µψZ, Y′←ψ−1Y, ˆY′←ψ−1 ˆY)
+4. Set ⃗M′← (uC· H(msg), H(msg)).
+5. Abort if M′
+2• ˆX2 + M′
+3• ˆX3̸= Z• ˆY or if Y• G2̸= G1• ˆY or Y = 0 or ˆY = 0.
+Output:
+
+msg, tok← (M′
+2, σ← (Z′, Y′, ˆY′))
+
+ACT.V erify(pprmS, privprm, msg, tok)
+1. Parse tok = (M′
+2, σ= (Z′, Y′, ˆY′)).
+2. Compute M′
+3← H(msg).
+3. Set bit← true.
+4. If M′
+2• ˆX2 + M′
+3• ˆX3̸= Z• ˆY or Y• G2̸= G1• ˆY or Y = 0 or ˆY = 0, set bit← false.
+Output: (bit, tag← M′
+2).
+Correctness and unlinkability follow from correctness and unlinkability of Construction 6.3.
+Unforgeability.
+Theorem 8.2. If (G1, G2, GT ) is modelled as a generic bilinear group, ifH and H′ are modelled as a random
+oracle, then theACT scheme in Construction 6.3 satisfies unforgeability from Definition 3.2.
+The generic bilinear group model was introduced in [Nec94, Sho97]. In the generic group model, group
+elements are represented by random strings or handles and there is an oracle that returns the handles for
+the sum of two group elementsX +Y in the same group, and the pairing of a group element inG1 and a
+group element inG2.
+Proof. The challenger answers every queryH(msg) by picking a fresh random scalarhmsg←$ Zp and setting
+H(msg) = hmsg· G1.
+We denote byblindRequestj = (⃗Mj,πj) thej-th query toSign, byyj the scalary∈ Zp used by the oracle
+for this query, and byρj = (Zj, Yj, ˆYj) the output of the oracle. We denote bytoki = (M′
+i,2,σi) thei-th token
+output on the adversary, bymsgi the associated message, and by⃗M′
+i the associated vector⃗M′
+i = (M′
+i,2, M′
+i,3)
+where M′
+i,3 = H(msgi).
+We represent all group elements that the adversary sees (by query the group oracles or any other oracle)
+as (Laurent) polynomial with indeterminatex1, x2, yj (for j∈ [T]), andhmsg (for queries msg to H). We
+recall that the Schwartz-Zippel lemma ensures that working with such Laurent polynomials, instead of their
+39
+
+actual evaluation is indistinguishable from the adversary point of view, as with overwhelming probability,
+two different Laurent polynomials will yield two different elements when evaluated on random points.
+Now, we follow the proof of [FHS19]8. The only difference is that the constant termsπ⋆ of the polynomials
+generated by the adversary (p.17) are no more scalars but instead multilinear polynomials in the{hmsg}.
+The other coefficients (ρ⋆,χ⋆,ψ⋆) are all still scalars.
+Following the proof, we get that for every message⃗M′i = (M′
+i,2, M′
+i,3), for which the adversary provide a
+signature σi = (Z′
+i, Y′
+i, ˆY′
+i), there existsji∈ [T], andαi∈ Zp such that:
+⃗M′i =αi· ⃗Mji
+(In the proof from [FHS19],αi is the productρz,nψy,n, and as argued above those coefficients are scalars,
+and do not contain anyhmsg.)
+Type-1 Forgeries.Let us first rule out Type-1 forgeries. If such a forgery happens, since there areT + 1valid
+tokens output by the adversary but onlyT queries to Sign, there must existi̸=i′ and j =ji =ji′, so that:
+⃗M′i =αi· ⃗Mj and ⃗M′i′ =αi′· ⃗Mj
+Since M′
+i,3 = H(msgi) = hmsgi· G1 and M′
+i′,3 =hmsgi′· G1, we have that:
+hmsgi =αiMj,3 and hmsgi′ =αi′Mj,3
+which is impossible sincehmsgi and hmsgi′ are two different indeterminates.
+Type-2 Forgeries.If such a forgery happens, since there are onlyR registered users but R + 1 forgeries for
+the same messagemsg, there must existi̸=i′, j =ji, andj′ =ji′ so that:
+⃗M′i =αi· ⃗Mj and ⃗M′i′ =αi′· ⃗Mj′
+and thej-th andj′-th query toSign were made for the same clientC, with public parameterspprmC = U.
+With a similar reasoning as for Type-1 forgeries, we get that:
+Mj,3 = Mj′,3 = H(msg) = hmsg (9)
+Let us now show that log Mj,2· log U = log Mj,3 where log represents the discrete logarithm in base
+G1 or equivalently, the evaluation of the Laurent polynomials. Since the signing query was successful, the
+Fiat-Shamir proof was successful, and the adversary producedV′, W′ so that:
+V′ =ξG1−cU and W′ =ξMj,3−cMj,2
+where c = H′(UC,⃗Mj,V′,W′). This can be rewritten in matrix form:
+ log V′
+log W′
+
+=Γ·
+ ξ
+−c
+
+where Γ =
+ 1 log Mj,3
+log U log Mj,2
+
+If Γ is invertible, the above system has a unique solution, so the above proof can hold only for a single
+c = H′(UC,⃗Mj,V′,W′). Since H′ is modeled as a random oracle, it would output the only possiblec with
+probability 1/p.Thus,exceptwithnegligibleprobability, Γ isnotinvertibleandthus log Mj,2·log U = log Mj,3.
+The same holds true forlog Mj′,2· log U = log Mj′,3.
+We conclude using Eq. (9) thatM′
+j,2 = M′
+j′,2. So the tags (tag) of both forgeries are identical, which
+means such a Type-2 forgery cannot happen. ⊓ ⊔
+8 Eprint version https://eprint.iacr.org/archive/2014/944/20210121:101436
+40
+
+Parameter Generation for Unlinkability.Unlinkability assumes that the ACT parameters are generated
+honestly and the issuer only sees the secret key. Following the discussion in Section 6, it is sufficient to add
+a Fiat-Shamir proof of knowledge of the discrete logarithmsx2 and x3 in pprmS to get unlinkability even
+for maliciously-generated parameters. Note that we do not need a CRS for this construction and that those
+proofs are extremely efficient (namely consisting of two scalars fromZp).
+9 General Rate Limiting
+Our ACT constructions guarantee that each registered client can obtain a single token per message. A
+generalization of this property is to enforce a different threshold of how many tokens per message a client
+can obtain. The challenge here is to enforce this without revealing to the issuer or verifier how many tokens
+a client has obtained for a specific message, as long as it is below the threshold.
+One approach to achieve that from an ACT construction that supports one token per message rate limit
+is to change the input on which we evaluate thePRF under the client’s key, which is used to enforce rate
+limiting. In particular, if we want to allow2k different tokens per message, we will evaluate thatPRF on
+inputs of the formmsg||s where msg is the actual message that will be used for the token verification ands
+is a value of lengthk bits which can be chosen by the client. Thus, a client can generate2k different inputs
+for the rate-limitingPRF for each message and hence can obtain2k tokens per message. The issuer will not
+be able to distinguish requests for the same message vs requests for different messages as long as no more
+than 2k requests per message have been submitted by a client.
+The only remaining part is to have the client give a proof that it has added a suffix ofk bits to its message
+before evaluating the rate-limitingPRF. Unfortunately providingsin the clear does not preserve unlinkability
+across clients. Even though it could be chosen at random in[0, 2k− 1] by the client, the same values for
+the same message can be used only for tokens that belong to different clients. This leaks information about
+clients: if the verifier sees two redemptions with the same values, it learns they correspond to two different
+clients.
+Thus we need to provide a ZK proof for the correct length ofs without revealing it. This can be done
+by the client committing to thek bits of its values = s1∥... ∥sk and proving that givenCommit(msg) the
+value that is input for the rate-limiting PRF evaluation is of the form2k· msg +Pk−1
+i=0 2i·si+1.
+References
+AFK22. Thomas Attema, Serge Fehr, and Michael Klooß. Fiat-shamir transformation of multi-round interactive
+proofs. In Eike Kiltz and Vinod Vaikuntanathan, editors,TCC 2022, Part I, volume 13747 ofLNCS,
+pages 113–142. Springer, Heidelberg, November 2022.
+AGR+16. Martin R. Albrecht, Lorenzo Grassi, Christian Rechberger, Arnab Roy, and Tyge Tiessen. MiMC: Efficient
+encryption and cryptographic hashing with minimal multiplicative complexity. In Jung Hee Cheon and
+Tsuyoshi Takagi, editors,ASIACRYPT 2016, Part I, volume 10031 ofLNCS, pages 191–219. Springer,
+Heidelberg, December 2016.
+AOS02. Masayuki Abe, Miyako Ohkubo, and Koutarou Suzuki. 1-out-of-n signatures from a variety of keys. In
+Yuliang Zheng, editor,ASIACRYPT 2002, volume 2501 ofLNCS, pages 415–432. Springer, Heidelberg,
+December 2002.
+Bar16. Elaine Barker. Recommendation for key management, part 1: General, 2016-01-28 2016.
+BB04. Dan Boneh and Xavier Boyen. Short signatures without random oracles. In Christian Cachin and Jan
+Camenisch, editors,EUROCRYPT 2004, volume 3027 ofLNCS, pages 56–73. Springer, Heidelberg, May
+2004.
+BBG+20. James Henry Bell, Kallista A. Bonawitz, Adrià Gascón, Tancrède Lepoint, and Mariana Raykova. Secure
+single-server aggregation with (poly)logarithmic overhead. In Jay Ligatti, Xinming Ou, Jonathan Katz,
+and Giovanni Vigna, editors,ACM CCS 2020, pages 1253–1269. ACM Press, November 2020.
+BDL+12. Daniel J. Bernstein, Niels Duif, Tanja Lange, Peter Schwabe, and Bo-Yin Yang. High-speed high-security
+signatures. J. Cryptogr. Eng., 2(2):77–89, 2012.
+41
+
+BIK+17. Keith Bonawitz, Vladimir Ivanov, Ben Kreuter, Antonio Marcedone, H. Brendan McMahan, Sarvar Patel,
+Daniel Ramage, Aaron Segal, and Karn Seth. Practical secure aggregation for privacy-preserving machine
+learning. In Bhavani M. Thuraisingham, David Evans, Tal Malkin, and Dongyan Xu, editors,ACM CCS
+2017, pages 1175–1191. ACM Press, October / November 2017.
+Bow17. Sean Bowe. Bls12-381: New zk-snark elliptic curve construction. https://electriccoin.co/blog/
+new-snark-curve/, March 2017.
+BP97. Niko Bari and Birgit Pfitzmann. Collision-free accumulators and fail-stop signature schemes without trees.
+In Walter Fumy, editor,EUROCRYPT’97, volume 1233 ofLNCS, pages 480–494. Springer, Heidelberg,
+May 1997.
+BPW12. David Bernhard, Olivier Pereira, and Bogdan Warinschi. How not to prove yourself: Pitfalls of the Fiat-
+ShamirheuristicandapplicationstoHelios. InXiaoyunWangandKazueSako,editors, ASIACRYPT 2012,
+volume 7658 ofLNCS, pages 626–643. Springer, Heidelberg, December 2012.
+BRS23. Fabrice Benhamouda, Mariana Raykova, and Karn Seth. Anonymous counting tokens. Cryptology ePrint
+Archive, Paper 2023/320, 2023.https://eprint.iacr.org/2023/320.
+CDS94. Ronald Cramer, Ivan Damgård, and Berry Schoenmakers. Proofs of partial knowledge and simplified
+design of witness hiding protocols. In Yvo Desmedt, editor,CRYPTO’94, volume 839 ofLNCS, pages
+174–187. Springer, Heidelberg, August 1994.
+CDV23. Melissa Chase, F. Betül Durak, and Serge Vaudenay. Anonymous tokens with stronger metadata bit hiding
+from algebraic macs. InAdvances in Cryptology – CRYPTO 2023, 2023.
+Cha82. David Chaum. Blind signatures for untraceable payments. In David Chaum, Ronald L. Rivest, and Alan T.
+Sherman, editors,CRYPTO’82, pages 199–203. Plenum Press, New York, USA, 1982.
+CM99. Jan Camenisch and Markus Michels. Proving in zero-knowledge that a number is the product of two
+safe primes. In Jacques Stern, editor,EUROCRYPT’99, volume 1592 ofLNCS, pages 107–122. Springer,
+Heidelberg, May 1999.
+Cra97. Ronald Cramer. Modular design of secure yet practical cryptographic protocols. PhD thesis, University of
+Amsterdam, 1997.
+CS03. Jan Camenisch and Victor Shoup. Practical verifiable encryption and decryption of discrete logarithms. In
+Dan Boneh, editor,CRYPTO 2003, volume 2729 ofLNCS, pages 126–144. Springer, Heidelberg, August
+2003.
+DGS+18. Alex Davidson, Ian Goldberg, Nick Sullivan, George Tankersley, and Filippo Valsorda. Privacy pass:
+Bypassing internet challenges anonymously.PoPETs, 2018(3):164–180, July 2018.
+DY05. Yevgeniy Dodis and Aleksandr Yampolskiy. A verifiable random function with short proofs and keys. In
+Serge Vaudenay, editor,PKC 2005, volume 3386 ofLNCS, pages 416–431. Springer, Heidelberg, January
+2005.
+EG14. Alex Escala and Jens Groth. Fine-tuning Groth-Sahai proofs. In Hugo Krawczyk, editor, PKC 2014,
+volume 8383 ofLNCS, pages 630–649. Springer, Heidelberg, March 2014.
+FG18. Georg Fuchsbauer and Romain Gay. Weakly secure equivalence-class signatures from standard assump-
+tions. In Michel Abdalla and Ricardo Dahab, editors,PKC 2018, Part II, volume 10770 ofLNCS, pages
+153–183. Springer, Heidelberg, March 2018.
+FHS19. Georg Fuchsbauer, Christian Hanser, and Daniel Slamanig. Structure-preserving signatures on equivalence
+classes and constant-size anonymous credentials.Journal of Cryptology, 32(2):498–546, April 2019.
+FO97. Eiichiro Fujisaki and Tatsuaki Okamoto. Statistical zero knowledge protocols to prove modular polynomial
+relations. In Burton S. Kaliski Jr., editor,CRYPTO’97, volume 1294 ofLNCS, pages 16–30. Springer,
+Heidelberg, August 1997.
+FS87. Amos Fiat and Adi Shamir. How to prove yourself: Practical solutions to identification and signature
+problems. In Andrew M. Odlyzko, editor,CRYPTO’86, volume 263 ofLNCS, pages 186–194. Springer,
+Heidelberg, August 1987.
+GKR+21. Lorenzo Grassi, Dmitry Khovratovich, Christian Rechberger, Arnab Roy, and Markus Schofnegger. Po-
+seidon: A new hash function for zero-knowledge proof systems. In Michael Bailey and Rachel Greenstadt,
+editors, USENIX Security 2021, pages 519–535. USENIX Association, August 2021.
+GMR98. RosarioGennaro,DanieleMicciancio,andTalRabin. Anefficientnon-interactivestatisticalzero-knowledge
+proof system for quasi-safe prime products. In Li Gong and Michael K. Reiter, editors,ACM CCS 98,
+pages 67–72. ACM Press, November 1998.
+GMY03. Juan A. Garay, Philip D. MacKenzie, and Ke Yang. Strengthening zero-knowledge protocols using sig-
+natures. In Eli Biham, editor, EUROCRYPT 2003, volume 2656 of LNCS, pages 177–194. Springer,
+Heidelberg, May 2003.
+42
+
+Gra22. KevinGraney. PrivacySandboxk-anonymityServer. https://github.com/WICG/turtledove/blob/main/
+FLEDGE_k_anonymity_server.md#privacy-enhancements-we-are-exploring , 2022.
+GS08. Jens Groth and Amit Sahai. Efficient non-interactive proof systems for bilinear groups. In Nigel P. Smart,
+editor, EUROCRYPT 2008, volume 4965 ofLNCS, pages 415–432. Springer, Heidelberg, April 2008.
+HIP+22. Scott Hendrickson, Jana Iyengar, Tommy Pauly, Steven Valdez, and Christopher A.
+Wood. Rate-Limited Token Issuance Protocol. https://datatracker.ietf.org/doc/
+draft-privacypass-rate-limit-tokens/, 2022.
+HS21. Lucjan Hanzlik and Daniel Slamanig. With a little help from my friends: Constructing practical anonymous
+credentials. In Giovanni Vigna and Elaine Shi, editors,ACM CCS 2021, pages 2004–2023. ACM Press,
+November 2021.
+JR17. Charanjit S. Jutla and Arnab Roy. Improved structure preserving signatures under standard bilinear
+assumptions. In Serge Fehr, editor,PKC 2017, Part II, volume 10175 ofLNCS, pages 183–209. Springer,
+Heidelberg, March 2017.
+KLOR20. Ben Kreuter, Tancrède Lepoint, Michele Orrù, and Mariana Raykova. Anonymous tokens with private
+metadata bit. In Daniele Micciancio and Thomas Ristenpart, editors,CRYPTO 2020, Part I, volume
+12170 ofLNCS, pages 308–336. Springer, Heidelberg, August 2020.
+MPR+20. Peihan Miao, Sarvar Patel, Mariana Raykova, Karn Seth, and Moti Yung. Two-sided malicious security
+for private intersection-sum with cardinality. In Daniele Micciancio and Thomas Ristenpart, editors,
+CRYPTO 2020, Part III, volume 12172 ofLNCS, pages 3–33. Springer, Heidelberg, August 2020.
+Nec94. V. I. Nechaev. Complexity of a determinate algorithm for the discrete logarithm. Mathematical Notes,
+55(2):165–172, 1994.
+NPR99. Moni Naor, Benny Pinkas, and Omer Reingold. Distributed pseudo-random functions and KDCs. In
+Jacques Stern, editor,EUROCRYPT’99, volume 1592 ofLNCS, pages 327–346. Springer, Heidelberg, May
+1999.
+Ode09. Goldreich Oded. Foundations of Cryptography: Volume 2, Basic Applications. Cambridge University Press,
+1st edition, 2009.
+PS96. David Pointcheval and Jacques Stern. Security proofs for signature schemes. In Ueli M. Maurer, editor,
+EUROCRYPT’96, volume 1070 ofLNCS, pages 387–398. Springer, Heidelberg, May 1996.
+Sho97. Victor Shoup. Lower bounds for discrete logarithms and related problems. In Walter Fumy, editor,
+EUROCRYPT’97, volume 1233 ofLNCS, pages 256–266. Springer, Heidelberg, May 1997.
+SS22. Tjerand Silde and Martin Strand. Anonymous tokens with public metadata and applications to private
+contact tracing. In Ittay Eyal and Juan A. Garay, editors,FC 2022, volume 13411 ofLNCS, pages 179–199.
+Springer, Heidelberg, May 2022.
+TCR+22. Nirvan Tyagi, Sofía Celi, Thomas Ristenpart, Nick Sullivan, Stefano Tessaro, and Christopher A Wood.
+A fast and simple partially oblivious prf, with applications. InAdvances in Cryptology–EUROCRYPT
+2022: 41st Annual International Conference on the Theory and Applications of Cryptographic Techniques,
+Trondheim, Norway, May 30–June 3, 2022, Proceedings, Part II, pages 674–705. Springer, 2022.
+Appendix
+A Sigma Protocols
+Definition A.1 (SigmaProtocol). A sigma protocol proving a relationR consists of three PPT algorithms
+(C,R,V):
+– α←C (x,w ;r): given a statementx and a witnessw output initial messageα computed with randomness
+r.
+– β←R (x,w,r,e ): using the statementx and the witnessw together with the randomness used to generate
+the first message, compute a responseβ to a challengee.
+– bit←V (x,α,β,e ): compute verification bitbit for a statementx using the initial messageα, the random
+challenge e and the responseβ.
+Figure 8 show the interactions between a proverP and a verifierV in a sigma protocol. Using the Fiat-
+Shamir heuristic sigma protocol can be made interactive by samplinge using a random oracle on the input
+and output from the first message.
+43
+
+P(x,w ) V(x)
+Sample randomnessr
+α←C (x,w ;r)
+α
+e Sample challengee
+β←R (x,w,r,e )
+β
+bit bit←V (x,α,β,e )
+Fig.8: Interactive Sigma Protocol.
+Previous work have proven composition for sigma protocols for AND and OR relations as well as general
+monotone formulas [CDS94, AOS02, GMY03]. Here we overview some of the building block sigma protocols
+that we use in our constructions. To optimize communication efficiency, we note that the verifier can derive
+message α from β, e and the statement, thusα does not need to be sent.
+Construction A.2. Sigma protocols for proving knowledge and equality over committed values with Ped-
+ersen commitment comx =xG +rH and Comenisch-Shoup encrypted valueEnc(x) = (aGCS,x HCS +aYCS).
+– C(x,w ;r): Generate random valuesy,r′,b and output
+comr =yG +r′H, Enc(y) = (bGCS,y HCS +bYCS).
+– R(x,w,r,e ): Compute and outputα =y +e·x, H′ = (r′ +e·r)· H, H′′ = (b +e·a).
+– V(comx, Enc(x), comr, Enc(y),α, H′, H′′,e ): Output the bit of checking that both comparisons hold:
+e· (comx) + comr =α· G + H′
+e· Enc(x) + Enc(y) = α· GCS + H′′.
+Construction A.3. Let PRF(u, msg) = ( u + msg)−1· G, then we instantiate the proof
+πPRF : ZK{∃ msg, u : F = (u + msg)−1· G,
+commsg = msg· HCS +rmsg· YCS,
+˜commsg = msg· G +rmsg· H,
+comu = u· G +ru· H}
+as a sigma protocol as follows:
+– C(F, commsg, ˜commsg, comu, u, msg;r):
+α← (com′
+msg = msg′· HCS +r′
+msg· YCS
+˜com′
+msg = msg′· G +r′
+msg· H
+com′
+u = u′· G +r′
+u· H,
+F′ = (msg′ + u′)F)
+44
+
+– R(F, commsg, comu, u, msg;r,e ): Output
+β←
+
+msg′′ = msg′ +e· msg, r′′
+msg =r′
+msg +e·rmsg
+u′′ = u′ +e· u, r′′
+u =r′
+u +e· u
+
+– V(F, commsg, comu,α,β,e ) Check that all of the following hold:
+com′
+m +e· commsg = msg′′· HCS +r′′
+msg· Y′
+CS
+˜com′
+m +e· ˜commsg = msg′′· G +r′′
+msg· H
+˜com′
+m +e· commsg = msg′′· HCS +r′′
+msg· H′
+CS
+com′
+u +e· comu = u′′· G +r′′
+u· HCS
+(msg′′ + u′′)· F = F′ +e· G
+msg′′ <=q· 22λ+1
+u′′ <=q· 22λ+1
+The communication of the above protocol is 1 Pedersen commitment (in addition to 1 Extractable
+commitment tom and a Pedersen commitment tok, which we assume have already been communicated to
+the verifier), and4 scalars. Of the scalars, 2 are of sizelog(p) + 2λ bits, and 2 arelog(N ) + 2λ bits, where
+N is the RSA modulus for the Pedersen Commitments and Camenisch Shoup encryption, andp is the size
+of the DY-PRF group. The total size of the scalars is2 log(p) + 2 log(N ) + 8λ bits.
+Construction A.4. Let CS be the Camenisch Shoup encryption, which is also used for the extractable
+commitment CommitExt with a different set of parameters, andCommitPed be the Pedersen commitment,
+then we instantiate
+π = ZK{∃ a,b, msg,r,t a,tb,t msg,tr,tar s.t. :
+ctβ = Enc(PKCS,a· msg +b·p) +a· ctu +a·r· cty),
+coma = CommitExt(a,ta), comr = CommitPed(r,tr), comar = CommitPed(a·r,tar),
+comb = CommitPed(b,tb), commsg = CommitExt(msg,t msg),
+a<p · 22λ+1,r<p · 22λ+1,b<p 2· 23λ+1}.
+– C(x,w ;r) where:
+• statement: commsg, comr, coma, comb, comar, comam, ctβ, ctu = (Uctu, Wctu ), cty = (Ucty, Wcty )
+• witness:
+commsg = (Umsg =tmsg· GExt, Wmsg = msg· HExt +tmsg· YExt)
+comr =rG +trH
+coma = (Ua =ta· GExt, Wa =a· HExt +ta· YExt)
+comb =bG +tbH
+comar = (a·r)· G + (a·tr)· H
+comam = (a· msg)· HExt + (a·tmsg)· YExt
+Enc(PKCS,a· msg +b·p) = (tEnc· GCS, (a· msg +b·p)· HCS + (tEnc· YCS))
+ctβ = Enc(PKCS,a· msg +b·p) +a· ctu +a·r· cty = (Uβ, Wβ)
+Uβ =tEnc· GCS +a· Uctu +a·r· Ucty
+Wβ = (a· msg +b·p)· H +a· Wctu + (a·r)· Wcty +tEnc· YCS
+45
+
+• Generate δ as:
+˜commsg = (t′
+msg· GExt, msg′HExt +t′
+msgYExt)
+˜comr =r′G +t′
+rH,
+˜coma = (t′
+aGExt,a′GExt +t′
+aHExt),
+˜comb =b′G +t′
+bH,
+˜comar =α′
+arG +t′
+arH,
+ˆcomar =a′comr
+˜comam =α′
+amHExt +t′
+amYExt
+ˆcomam =a′Wmsg
+˜Uβ =t′
+Enc· GCS +a′· Uctu +α′
+ar· Ucty
+˜Wβ = (α′
+am +b′·p)·H +a′· Wctu +α′
+ar· Wcty +t′
+Enc· YCS
+– R(x,w,r,e ): Compute and returnτ as
+msg′′ = msg′ +e· msg
+t′′
+msg =t′
+msg +e·tmsg
+r′′ =r′ +e·r
+t′′
+r =t′
+r +e·tr
+a′′ =a′ +e·a
+t′′
+a =t′
+a +e·ta
+b′′ =b′ +e·b
+t′′
+b =t′
+b +e·tb
+α′′
+ar =α′
+ar +e·a·r
+t′′
+ar =t′
+ar +e·a·tr
+α′′
+am =α′
+am +e·a· msg
+t′′
+am =t′
+am +e·a·tmsg
+t′′
+Enc =t′
+enc +e·tEnc
+– V(x,δ,τ,e ): Check:
+46
+
+(t′′
+msg· GExt, msg′′· HExt +t′′
+msg· YExt) = ˜commsg +e· commsg
+r′′G +t′′
+r H = ˜comr +e· comr
+(t′′
+a· GExt,a′′· HExt +t′′
+a· YExt) = ˜coma +e· coma
+b′′G +t′′
+b H = ˜comb +e· comb
+a′′· comr = ˆcomar +e· comar
+α′′
+ar· G +t′′
+ar· H = ˜comar +e· comar
+a′′· Wmsg = ˆcomam +e· comam
+α′′
+am· HExt +t′′
+am· YExt = ˜comam +e· comam
+˜Uβ +e· Uβ =t′′
+Enc· GCS +a′′· Uctu +α′′
+ar· Ucty
+˜Wβ +e· Wβ = (α′′
+am +p·b′′)· HCS +a′′· Wctu +α′′
+ar· Wcty +t′′
+Enc· YCS
+msg′′ <=q· 22λ+1
+r′′ <=q· 22λ+1
+a′′ <=q· 22λ+1
+b′′ <= 2q· 23λ+1
+Using the optimization we discussed above, the communication cost of the above protocol is the size of
+the statement, which is4 Pedersen commitments,2 extractable commitments and1 CS ciphertext (assuming
+that ctu, cty are known to the verifier), and13 scalars corresponding to the openings. Of the scalars, we have
+3 of size log(p) + 2λ, 2 of size2 log(p) + 2λ, 1 of size2 log(p) + 3λ and 7 of sizelog(N ) + 2λ. In total, the
+scalars have size9 log(p) + 7 log(N ) + 27λ bits.
+47
