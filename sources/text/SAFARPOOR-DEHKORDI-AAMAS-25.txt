@@ -1,476 +1,1352 @@
-[2501.16624] More Efficient Sybil Detection Mechanisms Leveraging Resistance of Users to Attack Requests 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
+More Efficient Sybil Detection Mechanisms Leveraging
+Resistance of Users to Attack Requests∗
+Ali Safarpoor Dehkordi
+Australian National University
+Canberra, Australia
+ali.safarpoordehkordi@anu.edu.au
+Ahad N. Zehmakan
+Australian National University
+Canberra, Australia
+ahadn.zehmakan@anu.edu.au
+ABSTRACT
+We investigate the problem of sybil (fake account) detection in
+social networks from a graph algorithms perspective, where graph
+structural information is used to classify users as sybil and benign.
+We introduce the novel notion of user resistance to attack requests
+(friendship requests from sybil accounts). Building on this notion,
+we propose a synthetic graph data generation framework that sup-
+ports various attack strategies. We then study the optimization
+problem where we are allowed to reveal the resistance of a sub-
+set of users with the aim to maximize the number of users which
+are discovered to be benign and the number of potential attack
+edges (connections from a sybil to a benign user). Furthermore, we
+devise efficient algorithms for this problem and investigate their
+theoretical guarantees. Finally, through a large set of experiments,
+we demonstrate that our proposed algorithms improve detection
+performance notably when applied as a preprocessing step for dif-
+ferent sybil detection algorithms. The code and data used in this
+work are publicly available on GitHub.1
+CCS CONCEPTS
+• Theory of computation → Graph algorithms analysis ; •
+Human-centered computing→ Social networks.
+KEYWORDS
+Sybil Detection, Social Networks, Algorithmic Graph Data Mining
+ACM Reference Format:
+Ali Safarpoor Dehkordi and Ahad N. Zehmakan. 2025. More Efficient Sybil
+Detection Mechanisms Leveraging Resistance of Users to Attack Requests.
+In Proc. of the 24th International Conference on Autonomous Agents and
+Multiagent Systems (AAMAS 2025), Detroit, Michigan, USA, May 19 – 23,
+2025, IFAAMAS, 16 pages.
+1 INTRODUCTION
+Motivation. Online social networks (OSNs) like Facebook, Insta-
+gram, and Twitter (now X) have become essential parts of our lives.
+They are places where we connect with friends and family, get the
+latest news, plan events, and even conduct business. Thus, they
+have revolutionized many fundamental aspects of our lives.
+∗This is the full version of the paper accepted in The 24th International Conference on
+Autonomous Agents and Multiagent Systems (AAMAS 2025) with appendices.
+1GitHub repository: https://github.com/aSafarpoor/AAMAS2025-Paper/tree/main
+This work is licensed under a Creative Commons Attribution Inter-
+national 4.0 License.
+Proc. of the 24th International Conference on Autonomous Agents and Multiagent Systems
+(AAMAS 2025), Y. Vorobeychik, S. Das, A. Nowé (eds.), May 19 – 23, 2025, Detroit, Michigan,
+USA. © 2025 International Foundation for Autonomous Agents and Multiagent Systems
+(www.ifaamas.org).
+However, the rapid growth of OSNs has raised privacy and secu-
+rity concerns as malicious entities exploit them for identity theft
+and spreading harmful content. A key element is sybils (also re-
+ferred to as “fake”, “malicious”, and “fraudulent” accounts), used
+for spamming, malware, and phishing, causing financial and repu-
+tational damage [1, 31]. Thus, detecting sybils is crucial for a safer
+online environment.
+Early Detection Mechanisms. Detecting sybils can be con-
+ducted in different stages of the formation. The first stage is during
+registration, by using data like IP, Captcha, and location [25, 44],
+The next stage to detect sybils that pass through the registration is
+based on their first actions after joining the network, such as the
+ratio of accepted friend requests, the randomness of the requests
+sent, or the total number of requests, cf. [8, 9].
+Late Detection Mechanisms. While many sybils can be caught
+using early detection mechanisms, more sophisticated attackers
+can bypass these by mimicking benign users. Numerous studies
+have focused on identifying these hard-to-find accounts. Some
+research analyzes the content provided by users to detect fake or
+malicious activities, cf. [32]. Other studies [12, 23] examine user
+profiles, considering factors such as profile pictures, the number
+of followers and followings, or the volume of activities like the
+number of posts. While these methods are more in-depth than the
+early detection mechanisms, they may still fail to identify sybils
+that sophisticatedly mimic benign users’ behavior.
+Graph Based Detection Mechanisms. While sybils have a
+lot of power over manipulating information such as their IP, user-
+name, number of posts, and profile pictures, which are used by the
+aforementioned methods, they have very little control over their
+position with respect to the overall network structure. Thus, a nat-
+ural question arises: can network structural information be used to
+detect sophisticated sybil attacks? More precisely, suppose we are
+given a graph𝐺, corresponding to a social network, where some
+nodes (users) are labeled sybil or benign. The goal is to label the
+remaining nodes as accurately as possible. Prior work has leveraged
+various methods such as random walk [20], belief propagation [38],
+and graph neural networks (GNN) [40].
+Shortcomings of Exiting Methods.The existing algorithms [27,
+37, 43] are usually designed under the homophily assumption and
+very limited number of attack edges, that is, most edges (links)
+in the graph are between nodes of the same type (sybil-to-sybil
+or benign-to-benign) with significantly fewer edges in between
+(sybil-to-benign or benign-to-sybil). Due to the lack of real-world
+data, these algorithms are usually tested on synthetic graph models,
+which are tailored to possess such homophily properties. How-
+ever, based on current research [39], we know that the homophily
+property is not satisfied in many real-world examples.
+arXiv:2501.16624v1  [cs.SI]  28 Jan 2025
 
- 
- Skip to main content 
- 
- 
- 
- 
+Missing Piece of Puzzle. One key aspect that steers the forma-
+tion of connection in a network is how benigns react to friendship
+requests from sybils. We introduce the notion of user resistance,
+where a resistant user rejects such requests while a non-resistant
+accepts them. (For simplicity, we suppose a user is either resistant
+or non-resistant, but our results can be extended to the setup where
+nodes have various degrees of resistance.) The notion of resistance
+permits us to design a more dynamic graph generation framework
+where, unlike prior static models [15, 42], the outcome graph is a
+function of the attack strategy and resistance of users rather than
+a simplified pre-assumption such as homophily. We then devise
+effective and efficient mechanisms to leverage resistance informa-
+tion for finding potential attack edges and benigns, which serve as
+helpful preprocessing steps for sybil detection algorithms.
+Attack Models. It is commonly assumed, cf. [ 27], that an at-
+tacker connects its created sybil accounts together in a fashion
+that it mimics benigns, for example, by copying the connections
+between a set of benigns with the same size.
+The vital question is how the connections between sybils and
+the rest of the network are formed. Prior models [38] implant these
+connections following a presumed structural property such as ho-
+mophily. However, in reality, these connections are a function of
+two variables: (i) the attacker’s strategy to send connection requests
+and (ii) whether a request that has been sent is accepted by the
+corresponding benign, which is determined by their resistance.
+Following this natural observation, we introduce a novel generic
+modeling framework and three potential attack strategies. This
+creates a powerful test bed for sybil detection mechanisms.
+Potential Attack Edges. As mentioned, most sybil detection
+algorithms function well when the homophily property holds. Still,
+as observed in [ 15], this is often not the case, especially when
+the attacker has a powerful strategy and users are non-resistant.
+Thus, it would be beneficial to determine potential attack edges
+(sybil-to-benign connections). Then, they can be removed or re-
+ceive less weights to enhance the homophily and consequently the
+performance of sybil detection algorithms.
+Incoming edges for non-resistant benigns are potential attack
+edges. The issue is that, in reality, we don’t know which nodes
+are resistant/non-resistant. However, we might have an estimate
+of whether a node is resistant (e.g., based on their number of con-
+nections, interaction behaviors, and so on). Furthermore, we can
+determine whether a user is resistant by sending a sequence of
+requests from a dummy sybil account. However, we don’t want to
+bombard the whole network with such dummy sybil requests. Thus,
+we suppose we have a fixed budget𝑘 of the number of users whose
+resistance can be revealed. We formulate this as an optimization
+problem and provide an optimal linear time algorithm.
+Discovering Benigns. If we know that a node𝑣 is benign and
+resistant, we can conclude that a node𝑢 with an edge to𝑣 is also
+benign. Now, if𝑢 is known to be resistant, we can conclude that
+a node𝑤, which has an edge to𝑢, is benign too, and so on. How
+many new benigns can be discovered if we are allowed to reveal the
+resistance of𝑘 nodes? We prove that this problem is computation-
+ally “hard”. However, we propose a greedy-based and traversing
+algorithm, which turns out to be very performant based on exper-
+iments on real-world graph data. In addition to potential attack
+edge discovery from above, expanding the benign set can serve as
+an important preprocessing step for sybil detection algorithms.
+Enhancing Detection Algorithms by Preprocessing. Based
+on the contributions mentioned above, we investigate the state-of-
+the-art detection methods, including SybilSCAR [38], SybilWalk [20],
+and SybilMetric [ 2], with and without preprocessing steps con-
+ducted by our resistance-based mechanisms. We first examine the
+performance of these methods on several real-world social networks
+incorporated into our synthetic framework under three different
+attack strategies. We then gauge the performance when our poten-
+tial attack edge and benigns discovery mechanisms are applied as a
+preprocessing step. They prove to be very impactful in enhancing
+the accuracy performance.
+Outline. In the rest of this section, we provide some basic defi-
+nitions and an overview of some prior work. Our data generation
+framework, accompanied by attack models, is provided in Section 2.
+The maximizing benigns and potential attack edges discovery mech-
+anisms using resistance information are given in Section 3.1 and 3.2.
+Finally, the experimental results of our proposed mechanisms are
+discussed in Section 4.
+1.1 Preliminaries
+Graph Definition. A social network is represented by a directed
+graph𝐺 =(𝑉,𝐸) with node set𝑉 and edge set𝐸⊆𝑉×𝑉 . We have
+|𝑉| =𝑛 and|𝐸| =𝑚. Nodes correspond to users; edges represent
+connections, such as following (directed) or friendship (bidirec-
+tional).
+We define Γin(𝑣) :={𝑢 :(𝑢,𝑣)∈ 𝐸} and Γout(𝑣) :={𝑢 :(𝑣,𝑢)∈
+𝐸} to be respectively the set of incoming and outgoing neighbors
+of a node𝑣. Then, we define𝑑in(𝑣) :=|Γin(𝑣)| ,𝑑out(𝑣) :=|Γout(𝑣)|
+and𝑑(𝑣) :=𝑑in(𝑣)+𝑑out(𝑣). Let Δin = max{𝑑in(𝑣)| 𝑣∈𝑉} denote
+the maximum incoming degree and Δout = max{𝑑out(𝑣)| 𝑣∈𝑉}.
+We show an edge from𝑢 to𝑣 by𝑒𝑢𝑣 , and if the edge is undirected,
+we show that by ¯𝑒𝑢𝑣 . In addition, for two subsets 𝑉1,𝑉2⊆ 𝑉 we
+define𝜕(𝑉1,𝑉2) :={𝑒𝑣𝑢∈𝐸 :𝑣∈𝑉1∧𝑢∈𝑉2}. A path in a graph
+𝐺 =(𝑉,𝐸) is a sequence of nodes𝑣1,𝑣 2,...,𝑣 𝑘 where each adjacent
+pair is connected by an edge, i.e.,(𝑣𝑖,𝑣𝑖+1)∈ 𝐸 for 1≤𝑖≤𝑘− 1.
+Benign and Sybil Classification Problem. In this paper, we
+aim to provide preprocessing algorithms which help mechanisms
+solve the following problem.
+Benign and Sybil Classification (BSC) Problem
+Input: Given a graph𝐺 =(𝑉,𝐸) where nodes are labeled asBenign,
+Sybil, or Unknown, partitioned into subsets𝐵,𝑆, and𝑈 respectively
+(𝐵∪𝑆∪𝑈 =𝑉 and(𝐵∩𝑆)∪( 𝐵∩𝑈)∪( 𝑆∩𝑈) =∅).
+Goal: Maximize the number of correctly labeled nodes in𝑈 .
+User Resistance. In the real world, each user can choose to
+accept or reject sybil requests. Some users are more cautious and
+reject such requests, while others might accept them. For simplicity,
+we assume each user, which is represented as a node in a graph,
+either accepts all sybil requests or rejects all of them. To model
+this, we define a binary value𝑟 :𝑣→{ 0, 1} to represent a user’s
+resistance to sybil requests, where 1 means resistant (rejecting)
+and 0 means non-resistant (accepting). Since, in reality, the value
+of𝑟(𝑣) is not known to us, we suppose we know a probability
+function𝑝𝑟(𝑣) whose value is more likely to be closer to 1 if𝑣
+is resistant and 0 otherwise. Such estimates can be achieved in
 
- 
- 
- 
- Search arXiv 
- 
- 
- 
- 
- 
- Press Enter to search · Advanced search 
- 
- 
- 
- 
- 
- 
- 
- 
---> 
+practice by studying certain user features, such as the number of
+incoming/outgoing connections, the number of known sybil/benign
+neighbors, and content posted. In our paper, we suppose such a
+probability distribution is given to us as input.
+1.2 Related Work
+Some mechanisms aim to detect sybils at the early stages. This could
+be as early as registration time using techniques like captchas or
+analyzing data such as registration time and IP addresses, cf. [25, 44].
+The sybils that pass through these filters might be caught based on
+their first activities, such as friendship requests, cf. [9].
+While such early detection mechanisms are useful in identifying
+a considerable fraction of sybils, more sophisticated attacks can
+deceive them by mimicking benign users. Thus, there has been
+a growing interest in leveraging network structure information
+to detect more sophisticated attacks, cf. [ 20, 41]. This is because,
+unlike information such as username or IP, sybil users have very
+limited power to control their network structural properties. Below,
+we give an overview of various existing methods.
+Graph Metrics. One natural approach is finding graph metrics
+that separate sybils and benigns. Asghari et al. [ 2] analyzed the
+relationship between being sybil or benign based on metrics such as
+degree, betweenness, eigenvector centrality, clustering coefficient,
+and average shortest path length. Yoon [ 41] defined the graph
+accessibility metric for nodes to identify sybils. Jethava and Rao [19]
+proposed a hybrid approach, combining user behavior analysis with
+graph-based techniques. They used metrics such as the Jaccard
+index and betweenness centrality.
+Random Walk. Random walk-based detection mechanisms
+have particularly become popular, cf. [7, 45]. They usually rely on
+the premise that a random walk starting from a sybil user is more
+likely to encounter sybil users. SybilGuard [ 43] was one of the
+first methods to leverage random walks for sybil detection. Sybil-
+Limit [42] improved on this by enhancing scalability and providing
+a tighter bound on the number of accepted sybils. SybilInfer [11] ad-
+ditionally used Bayesian inference and Monte Carlo simulations to
+provide a more robust mechanism. SybilRank [10] proposed using
+a ranking algorithm that prioritizes nodes based on the degree-
+normalized probability of a short random walk from a non-sybil
+landing on them. SybilWalk [ 20] improved random walk-based
+models by incorporating known benigns and sybils simultaneously.
+This model defines two extra nodes as label nodes and then connects
+known nodes to their respective label node.
+Belief Propagation. Another popular approach, cf. [30], is to
+assign some initial probability of being sybil to each node (where
+known sybils get higher and known benigns get lower probabilities)
+and then use some updating mechanism, called belief propagation,
+to improve these probabilities. The idea is that a node’s probability
+(belief) is updated as a function of the probabilities of its neighbors.
+SybilBelief [15] is a semi-supervised learning algorithm that uses
+belief propagation to detect sybils. SybilSCAR [38] unified random
+walk and belief propagation methods, applying local rules itera-
+tively to identify sybils. GANG [37] improved previous models by
+using directed graphs. SybilFuse [14] employed collective classifica-
+tion by training local classifiers to calculate trust scores first, then
+propagating these scores using weighted random walk and belief
+propagation to improve detection accuracy.
+Machine Learning. Machine Learning (ML) methods for sybil
+detection usually involve feature extraction, model training, and
+classification. Some basic ML methods include SVM, Logistic Regres-
+sion, and Random Forest, cf.[22, 23, 34]. Furthermore, deep learning
+methods can process raw data and capture complex structures,
+making them ideal for sybil detection. Goyal et al. [16] used graph
+convolutional network (GCN) to learn structural features, while
+Borkar et al. [6] employed recurrent networks for text content pro-
+cessing, followed by clustering for sybil detection. Recent advances
+leverage graph neural networks (GNNs) and attention mechanisms.
+Yang and Zheng [40] used attention-based GNNs, Khan et al.[21]
+developed a GNN-based framework to analyze user profiles and
+connections, and Liu et al.[26] integrated diverse attributes using
+heterogeneous GNNs.
+2 ATTACK MODELS
+To effectively evaluate detection algorithms, it is essential to pro-
+vide high-quality datasets. Many existing datasets suffer from a lack
+of proper labeling, as they are often labeled manually and are quite
+limited in size. To tackle this issue, some synthesized datasets have
+been provided [15, 27] but they still fall short in various aspects.
+For example, [15] uses a synthesized model to generate the sybil
+area, which is less favorable than using real-world data. Further-
+more, the existing models [27] make special assumptions on the
+strategy employed by the attacker and the structure of the edges
+between sybil and benign parts, for example, uniform random edges.
+They then leverage these structural properties to devise algorithms
+that are tailored for this setting. However, the proposed algorithms
+should ideally be agnostic of the attack strategy deployed by the
+attacker since the attacker can adopt various attack strategies. More-
+over, the availability of diverse datasets generated by various attack
+strategies enhances the reliability of evaluation outcomes. This
+encourages us to synthesize datasets with different characteristics.
+We will see that the notion of user resistance, defined in this paper,
+forms an excellent foundation for synthesizing realistic datasets.
+To synthesize a labeled network, one needs to define the nodes
+and their labels and the edge set, especially attack edges, formed
+from sybils to benigns. An existing dataset of online social net-
+works is usually used as the benign set, treating all individuals
+as benign [38]. For the sybil set, a common approach is that the
+attacker may replicate a subgraph from the real graph to secure an
+initial real-world structure. If attackers avoid using this strategy,
+their presence becomes readily detectable through the analysis of
+simple graph features.
+Following the above description, the sybil set𝑆 will be created
+based on the chosen subset𝐵′⊂𝐵, where𝐵 is the benign set. Then,
+the edges between nodes in𝑆 are formed to copy the corresponding
+structure in𝐵′. Each node𝑣∈ 𝐵′ has a corresponding copy in 𝑆
+and vice versa; these nodes are referred to as dual of each other.
+Following a specific strategy, the attacker sends requests to the
+benigns. If a benign has resistance 1, the request is rejected; oth-
+erwise, it is accepted. Recall that we show the resistance of each
+node𝑣 with𝑟(𝑣), which is set to 0 (non-resistant) or 1 (resistant).
+For example, if the resistance of all nodes is set to 1, all the sent
 
- 
- 
- Computer Science > Social and Information Networks 
- 
+requests are rejected, and no edge is formed from𝑆 to𝐵. However,
+in reality, not all nodes are resistant.
+Let’s note that while our algorithms start from known benign
+nodes and do not consider sybil resistance, sybils can indeed have
+resistance in real-world scenarios. Attackers might program sybils
+to reject specific requests to mimic realistic behavior or avoid de-
+tection methods that use test requests. Additionally, sybils might
+reject requests from nodes suspected to be other sybils, especially
+without collaboration among attackers, to avoid higher homophily
+and a higher risk of being detected.
+As stated, our proposed framework is not limited to a particular
+attack strategy and facilitates the study of various strategies. Below,
+we provide three natural approaches which may be used by the
+attacker. Before that, we explain some concepts which are shared
+among them.
+Assume the number of Attack Edges from node𝑠𝑖∈𝑆 to𝐵 is
+𝐴𝐸(𝑖). As discussed above, we suppose that the attacker “copies”
+the subgraph among a subset of benigns𝐵′⊂𝐵 as𝑆. To mimic a
+benign behavior further, one natural strategy is to ensure that each
+node in𝑆 has as many edges to𝐵\𝐵′ as its dual. More precisely,
+one aims to have𝐴𝐸(𝑖) =|𝜕({𝑑𝑢𝑎𝑙(𝑠𝑖)},𝐵\𝐵′)| .
+Furthermore, it is plausible to consider adding edges from the
+benign region (𝐵) to the sybil region (𝑆). Given the low likelihood
+that real users spontaneously connect to sybils, we posit that only
+nodes that have already accepted an edge from a sybil user might
+reciprocally connect back to it. Formally, consider each edge(𝑢,𝑣)∈
+𝐸 where𝑢∈ 𝑆 and𝑣∈ 𝐵. We add the reverse edge(𝑣,𝑢) with a
+certain probability, say 1/2, for each such edge.
+Below, we describe our proposed attack strategies. Please refer
+to Appendix A for a detailed pseudocode.
+Random Attack Strategy. In this strategy, the attacker sim-
+ply sends random requests to benigns. The number of requests
+from each node 𝑖 ∈ 𝑆 is𝑐·𝐴𝐸(𝑖). For an appropriate choice of
+constant𝑐, as a function of the average resistance in 𝐵, the ex-
+pected number of attack edges from 𝑖 will be our desired value
+𝐴𝐸(𝑖) =|𝜕({𝑑𝑢𝑎𝑙(𝑠𝑖)},𝐵\𝐵′)| (the same applied to the strategies
+below).
+Preferential Attachment Attack Strategy.The attacker might
+prefer to target nodes with the least resistance, especially those
+that have accepted more attack requests in the past. This also aligns
+with the power-law behavior observed in real-world social networks.
+Thus, we leverage the preferential attachment model of network
+growth. We use a modified version of the preferential attachment
+model based on the Barabási-Albert (BA) graph [3], named Modified
+BA. This takes into account both the original degree of each node
+and the number of accepted attack requests. This modification has
+been applied to take into account that the attacker is more likely
+to send requests to nodes that have already proven vulnerable (by
+accepting previous sybil requests).
+BFS Attack Strategy. To enhance the difficulty of detecting
+sybil behavior, another natural approach is that each sybil attempts
+connections with the neighbors of its dual in the benign region. The
+acceptance of these connection requests, however, depends on the
+targeted node’s resistance. To achieve the desired number of attack
+edges for each sybil node𝑠𝑖 (that is, the aforementioned value of
+𝐴𝐸(𝑖)), we process nodes using a BFS algorithm. For each node𝑠𝑖,
+the BFS starts from𝑑𝑢𝑎𝑙(𝑠𝑖). If the number of nodes that BFS can
+reach is not enough, a preferential attachment attack strategy is
+utilized to complete the process.
+3 PREPROCESSING ALGORITHMS
+In this part of the paper, we will study the problems of Maximizing
+Benigns (in Section 3.1) and Discovering Potential Attack Edges (in
+Section 3.2) leveraging the resistance probability information. We
+propose algorithms for solving these problems. As will be discussed
+in Section 4, the outcome of these algorithms serves as a very
+valuable preprocessing step for detection algorithms.
+3.1 Maximizing Benigns
+Maximizing Benigns (MB) Problem
+Input: Given𝐺 =(𝑉,𝐸), sets of benigns and sybils𝐵 and𝑆 such
+that 𝐵∩𝑆 =∅, budget 𝑘, and resistant probability distribution
+𝑝𝑟 :𝑉→[ 0, 1].
+Goal: Maximize the number of newly discovered benigns by re-
+vealing the resistance of𝑘 nodes.
+An algorithm is permitted to reveal the resistance of nodes in
+a node set𝐴 of size𝑘 as a reveal set. Each selected node𝑢 will be
+revealed to be resistant (𝑟(𝑢) = 1) or not, with probability 𝑝𝑟(𝑢),
+independently. (In real life, we send a set of friend requests from
+some dummy sybils to a node𝑢 and determine whether it is resistant,
+but our budget has a bound to avoid bombarding all users with
+such requests.) Then, the goal is to maximize the number of newly
+discovered benigns.
+Observation 3.1. A node𝑢 in𝑉\(𝐵∪𝑆) can be newly discovered
+benign if and only if it has a path to a node in 𝐵 and each node 𝑣 on
+that path (except, potentially,𝑢 itself) has revealed to have 𝑟(𝑣) = 1.
+Definition 3.1. 𝑓(𝐴) is the expected number of discovered be-
+nigns upon revealing the nodes in the reveal set 𝐴.
+3.1.1 Hardness Results. We prove that our problem is computa-
+tionally hard by a reduction from the Maximum Coverage Problem.
+Definition 3.2 (Maximum Coverage (MC) Problem). Given
+set𝑊 ={𝑤1,𝑤 2,··· ,𝑤ℎ}, collection of subsets 𝑄 ={𝑞1,𝑞 2,··· ,𝑞𝑙},
+∀𝑞𝑖∈𝑄 :𝑞𝑖⊆𝑊 , and budget 𝑘, what is the maximum number of
+elements which can be covered by a set 𝐴⊂𝑄 of size𝑘? We say a set
+𝑞𝑖 covers an element𝑤𝑗 if𝑤𝑗∈𝑞𝑖 .
+Theorem 3.1 ([13]). There is no(1− 1
+𝑒)-approximation polynomial
+time algorithm for the MC problem unlessNP⊆ DTIME(𝑛𝑂(log log𝑛)).
+Assume𝐼 =⟨𝑊,𝑄,𝑘 ⟩ is an instance of MC. We define a transfor-
+mation to convert𝐼 into𝐼′ =⟨𝐺,𝐵,𝑆,𝑘,𝑝 𝑟(·)⟩ , which is an instance
+of MB. Without loss of generality, we assume that each 𝑤𝑖∈𝑊
+appears in at least one of the subsets𝑞𝑗∈𝑄 (otherwise, they could
+be simply ignored because they cannot be covered at all). Now, we
+present the transformer in the following.
+Transformer. To define the transformer to convert𝐼 to𝐼′, we
+first need to construct the MC problem in graph space as𝐺 =(𝑉,𝐸).
+We define𝑉 = 𝑉𝑄∪𝑉𝑊 , where 𝑉𝑄 = {𝑣𝑞𝑖 : 1 ≤ 𝑖 ≤ 𝑙} and
+𝑉𝑊 ={𝑣𝑤𝑖 : 1≤ 𝑖≤ ℎ}. Note that𝑉𝑄∩𝑉𝑊 =∅. We also define
+𝐸 ={(𝑣𝑤𝑖,𝑣𝑞 𝑗) :𝑤𝑖∈𝑞𝑗 }. In addition,𝑘 is the same,𝑆 =∅,𝐵 =𝑉𝑄,
+and𝑝𝑟(𝑣) = 1 for all nodes (which means we know all nodes are
+resistant). An example is provided in Appendix B.
 
- 
- arXiv:2501.16624 (cs)
- 
- 
- 
- 
- 
- [Submitted on 28 Jan 2025] 
- Title: More Efficient Sybil Detection Mechanisms Leveraging Resistance of Users to Attack Requests 
- Authors: Ali Safarpoor Dehkordi , Ahad N. Zehmakan View a PDF of the paper titled More Efficient Sybil Detection Mechanisms Leveraging Resistance of Users to Attack Requests, by Ali Safarpoor Dehkordi and 1 other authors 
- View PDF 
- HTML (experimental) 
+Connection Between Optimal Solutions. For any arbitrary
+instance of the MC problem, let𝑂𝑃𝑇MC denote the optimal solution,
+and similarly𝑂𝑃𝑇MB for the MB problem. We claim that
+𝑂𝑃𝑇MC =𝑂𝑃𝑇MB (1)
+First, let𝐴 be an optimal solution for the MB problem. Note that
+𝐴∩𝑉𝑊 =∅ because revealing a node in 𝑉𝑊 does not result in
+discovering any new benign. Consider that set𝐴𝑞, which includes a
+set𝑞𝑖 if and only if𝑣𝑞𝑖∈𝐴. If a node𝑣𝑤𝑗 is newly discovered benign
+by revealing𝐴, then there is a node𝑣𝑞𝑖 such that(𝑣𝑤𝑗,𝑣𝑞𝑖)∈ 𝐸 and
+𝑣𝑞𝑖 ∈ 𝐴. This implies that 𝑤𝑗 ∈ 𝑞𝑖 and𝑞𝑖∈ 𝐴𝑞. Therefore,𝑤𝑗 is
+covered by𝐴𝑞. This implies that𝑂𝑃𝑇MC≥𝑂𝑃𝑇MB.
+It remains to prove that𝑂𝑃𝑇MC≤𝑂𝑃𝑇MB. Let𝐴𝑞⊂𝑄 generate
+an optimal solution for the MC problem. Define 𝐴 to include a
+node𝑣𝑞𝑖 if and only if𝑞𝑖∈𝐴𝑞. Consider an element𝑤𝑗 , which is
+covered by𝐴𝑞, and let𝑞𝑖 be a set which covers it. Then,𝑣𝑞𝑖∈𝐴 and
+(𝑣𝑤𝑗,𝑣𝑞𝑖)∈ 𝐸. Thus,𝑤𝑗 will be a newly discovered benign since
+𝑤𝑗 ∈𝑉\𝐵, and it has an edge to a node with resistance 1. This
+implies that𝑂𝑃𝑇MC≤𝑂𝑃𝑇MB.
+Inapproximability. Assume there exists a polynomial-time
+(1− 1
+𝑒)-approximation algorithm𝐴𝑙𝑔MB, that solves the MB problem.
+For an instance of the MC problem, we can use the previously
+mentioned transformer to construct an instance of our problem in
+polynomial time. Then, we apply𝐴𝑙𝑔MB to solve the constructed
+instance, yielding a solution𝑆𝑜𝑙MB. Using the same argument as
+previously described for the relationship between optimal solutions,
+we can show that 𝑆𝑜𝑙MC≥ 𝑆𝑜𝑙MB. Thus,𝑆𝑜𝑙MC≥ 𝑆𝑜𝑙MB≥( 1−
+1
+𝑒)𝑂𝑃𝑇MB. With the help of Equation (1) we can conclude𝑆𝑜𝑙MC≥
+(1− 1
+𝑒)𝑂𝑃𝑇MC
+Therefore, we get an(1− 1
+𝑒)-approximation algorithm for MC,
+which operates in polynomial time. However, according to Theo-
+rem 3.1, this is impossible unless NP⊆ DTIME(𝑛𝑂(log log𝑛)). Thus,
+we have the theorem below.
+Theorem 3.2. There is no(1− 1
+𝑒)-approximation polynomial time
+algorithm for the MB problem unless NP ⊆ DTIME(𝑛𝑂(log log𝑛)).
+3.1.2 Greedy Approach. For the MB problem, we can use the clas-
+sical greedy algorithm, which iteratively reveals the node that max-
+imizes the expected number of newly discovered benigns (an exact
+description is given in Appendix C). According to Nemhauser et
+al. [29], if𝑓(·) is non-negative, monotone and sub-modular, then
+this algorithm is(1− 1
+𝑒)-approximation (which matches the bound
+from Theorem 3.2).
+However, we prove that the objective function𝑓(·), in fact, is not
+submodular (please see Appendix D for a proof). Thus, we cannot
+conclude(1− 1
+𝑒)-approximation guarantee. On the positive side, the
+greedy algorithm has proven to be performant, cf. [4, 17], even if the
+submodularity property doesn’t hold. Thus, we study this further.
+However, it turns out that computing𝑓(·) is #P-hard, implying that
+the greedy algorithm is not polynomial time. To tackle this issue,
+we show that we can estimate𝑓(·) with an arbitrarily small error
+parameter using the Monte Carlo method.
+#P-hardness. We rely on a reduction from𝑎-𝑏 Connectedness for
+Induced Subgraphs Problem, which is known to be #P-hard [33].
+𝑎-𝑏 Connectedness for Induced Subgraphs (CIS):
+Input: Given a directed graph𝐺 =(𝑉,𝐸) and𝑎,𝑏∈𝑉 .
+Goal: What is the number of induced subgraphs of 𝐺 such that
+there is a path from𝑎 to𝑏.
+Theorem 3.3. Computing𝑓(·) is #P-hard.
+Proof. Suppose𝐺 =(𝑉,𝐸) and𝑎,𝑏 ∈ 𝑉 are given as the in-
+put of CIS problem. We consider two instances of our problem to
+compute 𝑓(·). First consider graph 𝐺 =(𝑉,𝐸),𝐵 ={𝑏},𝑆 =∅,
+𝑟(𝑣) = 1
+2 𝑣∈𝑉\{𝑎,𝑏}
+𝑟(𝑣) = 1 𝑣∈{𝑎,𝑏} , and reveal set𝐴 =𝑉 . The second case
+is identical to the first case, except we add a node𝑎′ and add an edge
+from𝑎′ to𝑎. Let’s call this graph𝐺′ =(𝑉′,𝐸′), where𝑉′ =𝑉∪{𝑎′}.
+Furthermore, again𝐵 ={𝑏},𝑆 =∅, the values of𝑟(𝑣) are the same
+for all nodes, and 𝑟(𝑎′) is any arbitrary value (its choice doesn’t
+impact our argument), and𝐴 ={𝑉}. See Figure 1 for a visualization.
+Figure 1: The construction used in the proof of #P-hardness.
+Let𝑓−𝑎′(𝐴) and𝑓+𝑎′(𝐴) denote the value of𝑓(𝐴), the expected
+number of discovered benigns, in the first and second case, respec-
+tively. Firstly, we observe that𝑎′ is discovered to be benign if and
+only if 𝑎 is discovered to be benign. This implies that 𝑓+𝑎′(𝐴)−
+𝑓−𝑎′(𝐴) is equal to the probability of the node𝑎 being discovered
+to be benign. Secondly, note that each of the nodes in𝑉\{𝑎,𝑏} is
+revealed to be resistant or not with probability 1/2, independently.
+Thus, based on Observation 3.1, the probability that𝑎 is revealed
+to be benign is the same as having a path from 𝑎 to𝑏 once we
+remove each node in𝑉\{𝑎,𝑏} with probability 1/2. Combining the
+aforementioned two points, we can conclude that𝑓+𝑎′(𝐴)−𝑓−𝑎′(𝐴)
+is equal to the fraction of all 2𝑛−2 possible induced subgraphs ob-
+tained from removing nodes in𝑉\{𝑎,𝑏} in graph𝐺, where there
+is a path from𝑎 to𝑏.
+So far we concluded that the solution to CIS problem is equal
+to(𝑓+𝑎′(𝐴)− 𝑓−𝑎′(𝐴))× 2𝑛−2. Since the provided transformer is
+polynomial time and CIS is #P-hard, we conclude that the problem
+of computing𝑓(·) is #P-hard as well. □
+Monte Carlo Greedy Algorithm. Algorithm 1 modifies the classi-
+cal greedy approach by using the Monte Carlo method to estimate
+𝑓(·) since, as we proved, its computation is #P-hard. The function
+EST(·) runs the revealing process𝑅 times and computes the number
+of discovered benigns each time. Then, the average values found
+are returned as an estimation of the original expectation.
+As part of the function EST(·), to compute the number of dis-
+covered benigns based on𝑟(·) and the reveal set𝐴, we apply a BFS
+starting from known benigns in𝐴. During the BFS, only nodes with
+resistance 1 (starting from𝐴) are added to the queue, marking their
+neighbors as discovered. This ensures every discovered node has
+a path of nodes with resistance 1 to an initial benign, meeting the
+criterion in Observation 3.1. The pseudocode of this algorithm is
+provided in Appendix E.
 
- 
- Abstract: We investigate the problem of sybil (fake account) detection in social networks from a graph algorithms perspective, where graph structural information is used to classify users as sybil and benign. We introduce the novel notion of user resistance to attack requests (friendship requests from sybil accounts). Building on this notion, we propose a synthetic graph data generation framework that supports various attack strategies. We then study the optimization problem where we are allowed to reveal the resistance of a subset of users with the aim to maximize the number of users which are discovered to be benign and the number of potential attack edges (connections from a sybil to a benign user). Furthermore, we devise efficient algorithms for this problem and investigate their theoretical guarantees. Finally, through a large set of experiments, we demonstrate that our proposed algorithms improve detection performance notably when applied as a preprocessing step for different sybil detection algorithms. The code and data used in this work are publicly available on GitHub this https URL 
- 
+Algorithm 1 Monte Carlo Greedy Algorithm
+Input𝐺 =(𝑉,𝐸),𝐵,𝑆, budget𝑘,𝑝𝑟(·),𝜖,𝛼
+Output𝑟𝑒𝑣𝑒𝑎𝑙 _𝑠𝑒𝑡 𝐴
+1: Initialize𝐴←∅
+2: for𝑖 = 1 to𝑘 do
+3: 𝑣← arg max𝑤∈𝑉\𝐴 Est(𝐴∪{𝑤},𝑝𝑟(·),𝐵,𝑆,𝜖,𝛼 )
+4: 𝐴←𝐴∪{𝑣}
+5: return𝐴
+6: function Est(𝐴,𝑝𝑟(·),𝐵,𝑆,𝜖,𝛼 )
+7: Initialize𝑐𝑜𝑢𝑛𝑡← 0
+8: 𝑅←
+
+𝑘2Δ2
+in ln( 1
+1−𝛼)
+2𝜖2
+
+9: for𝑅 iterations do
+10: Assign resistance𝑟(𝑣) for each𝑣∈𝐴 based on𝑝𝑟(𝑣)
+11: 𝑛𝑒𝑤_𝑏𝑒𝑛𝑖𝑔𝑛← number of discovered benigns based
+on𝐵,𝑆, and assigned resistances.
+12: 𝑐𝑜𝑢𝑛𝑡←𝑐𝑜𝑢𝑛𝑡+𝑛𝑒𝑤_𝑏𝑒𝑛𝑖𝑔𝑛
+13: return𝑐𝑜𝑢𝑛𝑡/𝑅
+Furthermore, using Hoeffding’s inequality [18], one can achieve
+arbitrary error margin𝜖 and gain confidence𝛼 by setting the num-
+ber of iterations 𝑅 ≥ 𝑘2Δ2
+in ln( 1
+1−𝛼)
+2𝜖2 . The time complexity of the
+algorithm is𝑂(𝑘·𝑅·(𝑛2+𝑛𝑚)). One can check that, for constant𝜖
+and𝛼, the run time is polynomial. Please refer to Appendix F and G
+for more details on these two points.
+3.1.3 Proposed Traversing Algorithm. We propose an algorithm
+that iteratively selects the node expected to reveal the maximum
+number of newly discovered benigns. More precisely, we keep a set
+of nodes𝑁 such that if a node in𝑁 is revealed to be resistant, then
+we can conclude all its incoming neighbors are benign. Based on
+Observation 3.1, these nodes already have a path to a node in𝐵, and
+all nodes on the path are revealed to be benign. Thus, initially,𝑁 is
+simply𝐵, but it is updated as the algorithm reveals more resistant
+nodes. However, among all the incoming neighbors of a node 𝑣,
+we are only interested in the ones that will be “newly” discovered
+benign. Thus, we define ˆΓ(𝑣), which excludes unrelated nodes such
+as the already discovered ones (that is,𝐵∪𝑆) or already discovered
+benigns. We continuously update ˆΓ(𝑣) as more nodes are revealed
+and added to𝐴. More precisely, for each node𝑣, if𝑟(𝑣) is revealed to
+be 1, then we must consider every in-neighbor𝑢 of𝑣, and for each
+out-neighbor𝑤 of𝑢, we then remove𝑢 from the set of in-neighbors
+of𝑤. This is because𝑢 has already been discovered to be benign.
+The pseudocode of this algorithm is provided in Algorithm 2.
+The For loop runs in 𝑂(𝑛+𝑚). The While loop is computed
+𝑘 times, and the lines 7-9 can clearly be executed in 𝑂(𝑛). The
+complexity of theIf statement part is𝑂(Δin·Δout). This is achieved
+by using the appropriate data structure (please refer to Appendix H
+for more details). Thus, the time complexity of this algorithm is
+𝑂((𝑛+𝑚)+ 𝑘·(𝑛+ Δin· Δout)), which can be bounded by𝑂(𝑘𝑛2).
+Algorithm 2 Traversing Algorithm
+Input𝐺 =(𝑉,𝐸),𝐵,𝑆, budget𝑘,𝑝𝑟(·)
+Output𝑟𝑒𝑣𝑒𝑎𝑙 _𝑠𝑒𝑡 𝐴
+1: 𝐴←∅
+2: 𝑁←𝐵
+3: for𝑣∈𝑉 do
+4: ˆΓin(𝑣)← Γin(𝑣)\( 𝐵∪𝑆)
+5: 𝛾in(𝑣) =| ˆΓin(𝑣)|
+6: while|𝐴| <𝑘 do
+7: pick𝑣 with highest𝑝𝑟(𝑣)· 𝛾in(𝑣) between nodes in𝑁
+8: 𝐴←𝐴∪{𝑣}
+9: 𝑁←𝑁\{𝑣}
+10: if𝑟(𝑣) = 1 then
+11: 𝑁←𝑁∪ ˆΓin(𝑣)
+12: for𝑢∈ ˆΓin(𝑣) do
+13: for𝑤∈ Γout(𝑢) do
+14: ˆΓin(𝑤)← ˆΓin(𝑤)\{ 𝑢}
+15: 𝛾in(𝑤)← 𝛾in(𝑤)− 1
+16: return𝐴
+3.2 Discovering Potential Attack Edges
+Definition 3.3. An edge𝑒 =(𝑢,𝑣) is a Potential Attack Edge
+(PAE) if𝑢∈𝑉\(𝐵∪𝑆),𝑣∈𝐵, and𝑟(𝑣) = 0. In other words, it is an
+incoming edge to a benign 𝑣 with𝑟(𝑣) = 0.
+Discovering Potential Attack Edges Problem
+Input: Given𝐺 =(𝑉,𝐸), sets of benigns and sybils𝐵 and𝑆 such
+that𝐵,𝑆 ⊆ 𝑉 ,𝐵∩𝑆 =∅, budget 𝑘, and probability of resistant
+𝑝𝑟 :𝑉→[ 0, 1].
+Goal: Maximize expected number of discovered potential attack
+edges by revealing𝑟(𝑣) of𝑘 nodes from𝐵.
+For each node 𝑣, we know𝑑in(𝑣) and𝑝𝑟(𝑣), and(1−𝑝𝑟(𝑣))·
+|Γin(𝑣)\( 𝐵∩𝑆)| is the expected number of edges which will be dis-
+covered by revealing the node𝑣. Since there is no overlap between
+edges discovered by each revealed node, choosing 𝑘 nodes with
+the highest value of(1−𝑝𝑟(𝑣))·| Γin(𝑣)\( 𝐵∩𝑆)| is the optimal
+solution. This is outlined in Algorithm 3. For choosing the top 𝑘
+nodes based on the computed values, we can use the median of
+medians algorithm [5], which runs inO(𝑛). Thus, the overall time
+complexity is linear.
+Algorithm 3 Proposed Algorithm: Select Top𝑘 Nodes
+Input Input𝐺 =(𝑉,𝐸),𝐵,𝑆, budget𝑘,𝑝𝑟(·)
+Output List of𝑘 nodes
+1: 𝑛𝑜𝑑𝑒 _𝑣𝑎𝑙𝑢𝑒𝑠←∅
+2: for each node𝑣 in𝐵 do
+3: value←( 1−𝑝𝑟(𝑣))·| Γin(𝑣)\( 𝐵∩𝑆)|
+4: 𝑛𝑜𝑑𝑒 _𝑣𝑎𝑙𝑢𝑒𝑠←𝑛𝑜𝑑𝑒 _𝑣𝑎𝑙𝑢𝑒𝑠∪{( 𝑣, value)}
+5: 𝑡𝑜𝑝 _𝑘_𝑛𝑜𝑑𝑒𝑠← top𝑘 nodes of𝑛𝑜𝑑𝑒 _𝑣𝑎𝑙𝑢𝑒𝑠 based on𝑣𝑎𝑙𝑢𝑒
+using median of medians algorithm
+6: return top_k_nodes
+As we will discuss, we can reduce the weight of discovered PAEs
+as a preprocessing step to assist sybil detection algorithms.
 
- 
- 
- 
- Comments: 
- This is the full version of the paper accepted in The 24th International Conference on Autonomous Agents and Multiagent Systems (AAMAS 2025) with appendices 
- 
- 
- Subjects: 
- 
- Social and Information Networks (cs.SI) 
- 
- Cite as: 
- arXiv:2501.16624 [cs.SI] 
- 
- 
-   
- (or 
- arXiv:2501.16624v1 [cs.SI] for this version)
- 
- 
- 
-   
- https://doi.org/10.48550/arXiv.2501.16624 
- 
- 
- Focus to learn more 
- 
- 
- 
- arXiv-issued DOI via DataCite 
- 
- 
- 
- 
- 
- 
- 
- Submission history From: Ali Safarpoor Dehkordi [ view email ] [v1] 
- Tue, 28 Jan 2025 01:56:55 UTC (6,535 KB) 
- 
- 
- 
- 
- 
- Full-text links: 
- Access Paper: 
- 
- 
-View a PDF of the paper titled More Efficient Sybil Detection Mechanisms Leveraging Resistance of Users to Attack Requests, by Ali Safarpoor Dehkordi and 1 other authors View PDF HTML (experimental) TeX Source
- 
- 
- 
- view license 
- 
- 
- 
- Current browse context: 
- cs.SI 
+4 EXPERIMENTS
+After establishing our experiments setting in Sections 4.1 and 4.2, we
+test our proposed algorithms for maximizing benigns problem and
+potential attack edges problem in Section 4.3. Then, in Section 4.4,
+we study the impact of applying our algorithms as a preprocessing
+step for various sybil/benign classification methods.
+4.1 Experimental Setup
+We use real-world graph data as the benign set. Then, our at-
+tack strategies are used to generate sybils and their connections
+to sybil/benigns. For the graph, the data used include Facebook,
+LastFM, and Twitter from SNAP [24]. In addition, we use, Pokec
+network 2 (we use only the subgraph induced by benigns). Some sta-
+tistics of these networks are presented in Appendix I. For undirected
+networks, we assume the edges in both directions exist.
+After generating sybils and attack edges in each dataset, as ex-
+plained in the next section, we randomly selected 2% of benigns
+and an equal number of sybils for the training set. The remaining
+sybils were included in the test set, along with an equal number of
+benigns. This means the size of known benigns for Facebook, Pokec,
+LastFM, and Twitter datasets are 80, 200, 150, and 200, respectively.
+4.2 Attack Strategies
+To choose the parameters in our attack models, we rely on some
+real-world statistics. Facebook reports indicate that the proportion
+of sybils is around 16% [28]. A 2013 study also found that 10% of
+Twitter users were fake [36]. Thus, we choose the size of the sybil
+set to be around 10% of the network in our attack strategies.
+Furthermore, Vishwanath [35] conducted a study involving the
+creation of fake Facebook profiles and sending friend requests to
+students in a large university. It was observed that only 30% of
+students declined friend requests from fake Facebook profiles, 52%
+were undecided after two weeks, and 18% accepted immediately.
+Based on these results, we chose 25% of nodes to be non-resistant.
+To compute the probability of resistance𝑝𝑟(𝑣) for a node𝑣 based
+on resistance 𝑟(𝑣), we generate a random number 𝑥 between 0
+and 1 and then we use 𝑝𝑟(𝑣) =(1−𝑟(𝑣))𝑥3+𝑟(𝑣)( 1−𝑥3). We
+choose this simple formula to introduce randomness while giving
+higher probabilities when𝑟(𝑣) = 1 and lower probabilities when
+𝑟(𝑣) = 0. For example, for𝑟(𝑣) = 1, the probability of𝑝𝑟(𝑣)≥ 0.5
+is 0.79, and the average probability value is 0.75. In addition, in
+all attack strategies, we set𝑐 = 4 (please refer to Section 2 for the
+parameters of the attack models) since we aim for a non-resistance
+ratio of 25%. This way, the number of accepted attacks for a sybil𝑠𝑖
+in expectation will be 25
+100·𝑐·𝐴𝐸(𝑖) =𝐴𝐸(𝑖), which is our desired
+value. Some statistics on the outcome of the attack strategies are
+provided in the Appendix J.
+4.3 Preprocessing
+In this section, we evaluate our proposed algorithms for maximizing
+benigns and potential attack edges problems.
+2https://github.com/binghuiwang/sybildetection/blob/master/Directed_Pokec.rar (ac-
+cessed July 20, 2024)
+4.3.1 Maximizing Benigns. We compare our proposed algorithms,
+Monte Carlo Greedy (Algorithm 1) and Traversing (Algorithm 2),
+against the following baseline methods.
+1. Random. Randomly select𝑘 nodes from benign set𝐵 to reveal.
+2. Highest-Resistance. Pick𝑘 nodes with highest𝑝𝑟(·) from𝐵.
+3. Highest-Resistance-and-Degree. Pick𝑘 nodes𝑣 with high-
+est𝑝𝑟(𝑣).|Γin(𝑣)\( 𝐵∪𝑆)| from𝐵.
+Between our two proposed algorithms, Traversing reveals the
+resistance of each selected node and uses that outcome information
+when selecting the next nodes, while the Monte Carlo Greedy does
+not. To make this a fairer comparison, we also consider a Monte
+Carlo Greedy variant, which reveals each selected node’s resistance.
+This is called Resistance Aware Monte Carlo Greedy (please refer
+to Appendix K for an exact description of this algorithm).
+Figure 2 illustrates the performance of different algorithms on
+the Facebook dataset. (The high variance in the results of the Monte
+Carlo Greedy algorithms in this experiment is attributed to the fact
+that the run was performed only once.) We observe that our pro-
+posed algorithms, Traversing and two variants of Monte Carlo,
+significantly outperform other algorithms. Among our proposed al-
+gorithms, the Traversing algorithm performs better than the Monte
+Carlo Greedy algorithms. Furthermore, based on our experiments,
+the Traversing algorithm is substantially faster than the two Monte
+Carlo Greedy algorithms. For example, for the Facebook dataset and
+Preferential Attachment attack strategy, with a budget of𝑘 = 30,
+the Traversing algorithm completes in 119 milliseconds, while the
+Monte Carlo Greedy algorithm takes 52 minutes. Thus, the Travers-
+ing algorithm is not only more accurate, but also significantly faster.
+For other datasets, similar results are provided in the Appendix L.
+4.3.2 Potential Attack Edges. We now evaluate the performance
+of our Proposed Algorithm 3 for the potential attack edges (PAE)
+problem against the Random algorithm, which makes 𝑘 random
+choices. Figure 3 (top row) illustrates the number of PAEs found by
+each algorithm for a range of budgets. Our algorithm outperforms
+the Random algorithm. This is unsurprising since our algorithm is
+optimal, as we proved in Section 3.2.
+One natural question is what fraction of PAEs are, in fact, attack
+edges (edges from sybil to benign). We report this information in
+Figure 3 (second row). As one can observe, for our algorithm, around
+20% of found PAEs are attack edges for various budget choices. To
+get a better understanding of how good this performance is, we
+consider the Full-Knowledge algorithm. We suppose this algorithm
+knows all the values of resistance (note that this information is
+not available to our algorithm) and aims to greedily pick nodes
+which maximize the ratio of attack edges over PAEs. While for
+small budgets, the gap is large, as the budget grows, the ratio of
+attack edges over PAEs for our algorithm almost matches the Full-
+Knowledge algorithm, which is impressive considering that our
+algorithm doesn’t know the exact values of resistance𝑟(·). For other
+datasets, similar results are provided in the Appendix M.
+4.4 Classification Algorithms
+Our algorithms for discovering benigns and potential attack edges
+can act as a preprocessing step for various sybil detection algo-
+rithms. We analyze the performance of three state-of-the-art detec-
+tion algorithms, with and without such preprocessing step.
 
- 
- 
- < prev 
- 
-   |   
- next > 
- 
- 
- new 
- | 
- recent 
- | 2025-01 
- 
- Change to browse by:
- 
- cs 
- 
- 
+Figure 2: The number of discovered benigns by each algorithm when the budget ranges from 1 to𝑘 in the maximizing benigns
+problem on the Facebook dataset and for different attack strategies.
+We consider the SybilWalk [20] and SybilSCAR [38] algorithms.
+We also analyze a node classifier algorithm based on logistic re-
+gression that we call SybilMetric [ 2]. We first executed each of
+these algorithms without any preprocessing. We then applied the
+Traversing algorithm to maximize the number of benigns (our best
+algorithm for maximizing benigns based on our experiments in
+the previous section) before running the detection strategies. In
+the final setup, we also used our potential attack edges discover-
+ing algorithm on both the initial known benigns and the newly
+identified benigns from the first preprocessing step. Since detection
+algorithms usually rely on homophily property, removing (or reduc-
+ing the weight of) attack edges could benefit them. Therefore, in
+the last setup, before running the detection algorithms, the weights
+for the discovered PAEs were adjusted to reduce their importance.
+Furthermore, in all experiments, for both preprocessing phases,
+the budget is set to 1% of benigns. We used the same setup as the
+prior work for the studied detection algorithms.
+Our comparison results for the Facebook dataset are shown in
+Table 1. To measure the performance of the detection algorithms,
+we use AUC (Area Under the Curve), which is commonly used by
+the prior work since it is less affected by biases compared to accu-
+racy. Based on these results, the performance of all three algorithms
+is improved after adding maximizing benigns outputs. Using discov-
+ered PAEs as a preprocessing step also enhances the AUC in some
+cases, but not always. This flags that one may need to incorporate
+the information regarding the PAEs directly into these algorithms
+instead of just reducing weights as we did to get a stronger boost in
+the performance. (This would be an interesting potential avenue for
+future research.) Thus, overall, our preprocessing steps, especially
+discovering benigns, can significantly boost the performance of
+detection strategies. For other datasets, similar results are provided
+in the Appendix N.
+It is also worth emphasizing that our preprocessing steps are
+not computationally demanding. More precisely, in most cases,
+the computational overhead added by the preprocessing step is
+negligible in comparison to the time required by the detection
+algorithm itself.
+Figure 3: The number of discovered PAEs for different bud-
+gets (first row) and the percentage of attack edges relative to
+the number of discovered PAEs (second row) on the Facebook
+dataset. Each column represents a different attack strategy.
+5 CONCLUSION
+In this paper, we introduced novel attack strategies for synthesizing
+more realistic and generic datasets by introducing the concept of
+user resistance. We then considered two optimization problems
+where we leveraged resistance information to discover benigns
+and potential attack edges. We introduced several algorithms and
+theoretically analyzed their runtime and solution accuracy. We
+then showed the outcomes of these algorithms contain valuable
+information that can be used as a preprocessing step for detection
+algorithms. We conducted a large set of experiments that confirmed
+the positive impact of our preprocessing algorithms.
+Future research could explore dynamic attack strategies to en-
+hance the adaptability of sybil detection algorithms. Developing
+bias-robust algorithms is also essential, as current methods are
+vulnerable to dataset biases, especially when preprocessing reveals
 
- 
- 
- References & Citations 
- 
- NASA ADS Google Scholar 
- Semantic Scholar 
- 
- 
- 
+new benigns and skews the dataset. In addition, developing algo-
+rithms for maximizing benigns problem with theoretical guarantees
+could be a potential avenue for future work.
+Table 1: Performance of SybilSCAR, SybilWalk, and SybilMet-
+ric with and without preprocessing on the Facebook dataset.
+Init represents the setup without preprocessing. MB incor-
+porates discovered benigns by the Traversing algorithm.
+MB+PAE incorporates both discovered benigns and PAEs.
+Attack
+Strategy Step SybilSCAR
+AUC
+SybilWalk
+AUC
+SybilMetric
+AUC
+Random
+Init 0.924 0.966 1.00
+MB 0.988 0.998 1.00
+MB+PAE 0.988 0.998 0.99
+BA
+Init 0.876 0.929 1.00
+MB 0.954 0.972 1.00
+MB+PAE 0.944 0.972 1.00
+BFS
+Init 0.986 0.985 0.97
+MB 0.995 0.996 0.99
+MB+PAE 0.991 0.997 1.00
+REFERENCES
+[1] Kayode Sakariyah Adewole, Nor Badrul Anuar, Amirrudin Kamsin, Kasturi Dewi
+Varathan, and Syed Abdul Razak. 2017. Malicious accounts: Dark of the social
+networks. Journal of Network and Computer Applications 79 (2017), 41–67.
+[2] Sara Asghari, Mostafa Haghir Chehreghani, and Morteza Haghir Chehreghani.
+2022. On using node indices and their correlations for fake account detection. In
+2022 IEEE International Conference on Big Data (Big Data) . IEEE, 5656–5661.
+[3] Albert-László Barabási and Réka Albert. 1999. Emergence of scaling in random
+networks. science 286, 5439 (1999), 509–512.
+[4] Andrew An Bian, Joachim M. Buhmann, Andreas Krause, and Sebastian Tschi-
+atschek. 2017. Guarantees for Greedy Maximization of Non-submodular Func-
+tions with Applications. In Proceedings of the 34th International Conference on
+Machine Learning (Proceedings of Machine Learning Research, Vol. 70) , Doina
+Precup and Yee Whye Teh (Eds.). PMLR, 498–507.
+[5] Manuel Blum, Robert W Floyd, Vaughan R Pratt, Ronald L Rivest, and Robert E
+Tarjan. 1973. Time bounds for selection. J. Comput. System Sci. 7, 4 (1973),
+448–461. https://doi.org/10.1016/S0022-0000(73)80033-9
+[6] Bharat S Borkar, Dipak R Patil, Ashok V Markad, and Manish Sharma. 2022.
+Real or fake identity deception of social media accounts using recurrent neural
+network. In 2022 International Conference on Fourth Industrial Revolution Based
+Technology and Practices (ICFIRTP). IEEE, 80–84.
+[7] Yazan Boshmaf, Dionysios Logothetis, Georgos Siganos, Jorge Lería, Jose Lorenzo,
+Matei Ripeanu, Konstantin Beznosov, and Hassan Halawa. 2016. Íntegro: Lever-
+aging victim prediction for robust fake account detection in large scale OSNs.
+Computers & Security 61 (2016), 142–168.
+[8] Adam Breuer, Ran Eilat, and Udi Weinsberg. 2020. Friend or Faux: Graph-Based
+Early Detection of Fake Accounts on Social Networks. In Proceedings of The Web
+Conference 2020. Association for Computing Machinery, 1287–1297.
+[9] Adam Breuer, Nazanin Khosravani, Michael Tingley, and Bradford Cottel. 2023.
+Preemptive Detection of Fake Accounts on Social Networks via Multi-Class
+Preferential Attachment Classifiers. In Proceedings of the 29th ACM SIGKDD
+Conference on Knowledge Discovery and Data Mining (Long Beach, CA, USA)
+(KDD ’23). Association for Computing Machinery, New York, NY, USA, 105–116.
+[10] Qiang Cao, Michael Sirivianos, Xiaowei Yang, and Tiago Pregueiro. 2012. Aiding
+the detection of fake accounts in large scale social online services. In 9th USENIX
+symposium on networked systems design and implementation (NSDI 12) . USENIX
+Association, 197–210.
+[11] George Danezis and Prateek Mittal. 2009. Sybilinfer: Detecting sybil nodes using
+social networks.. In Ndss, Vol. 9. San Diego, CA, 1–15.
+[12] Buket Erşahin, Özlem Aktaş, Deniz Kılınç, and Ceyhun Akyol. 2017. Twitter
+fake account detection. In 2017 international conference on computer science and
+engineering (UBMK). IEEE, 388–392.
+[13] Uriel Feige. 1998. A threshold of ln n for approximating set cover. Journal of
+ACM 45, 4 (1998), 634–652.
+[14] Peng Gao, Binghui Wang, Neil Zhenqiang Gong, Sanjeev R Kulkarni, Kurt
+Thomas, and Prateek Mittal. 2018. Sybilfuse: Combining local attributes with
+global structure to perform robust sybil detection. In 2018 IEEE conference on
+communications and network security (CNS) . IEEE, 1–9.
+[15] Neil Zhenqiang Gong, Mario Frank, and Prateek Mittal. 2014. Sybilbelief: A
+semi-supervised learning approach for structure-based sybil detection. IEEE
+transactions on information forensics and security 9, 6 (2014), 976–987.
+[16] Bharti Goyal, Nasib Singh Gill, Preeti Gulia, Om Prakash, Ishaani Priyadarshini,
+Rohit Sharma, Ahmed J Obaid, and Kusum Yadav. 2023. Detection of fake accounts
+on social media using multimodal data with deep learning. IEEE Transactions on
+Computational Social Systems (2023).
+[17] Jianxiong Guo, Yi Li, and Weili Wu. 2019. Targeted protection maximization
+in social networks. IEEE Transactions on Network Science and Engineering 7, 3
+(2019), 1645–1655.
+[18] Wassily Hoeffding. 1994. Probability inequalities for sums of bounded random
+variables. The collected works of Wassily Hoeffding (1994), 409–426.
+[19] Gordhan Jethava and Udai Pratap Rao. 2022. User behavior-based and graph-
+based hybrid approach for detection of sybil attack in online social networks.
+Computers and Electrical Engineering 99 (2022), 107753.
+[20] Jinyuan Jia, Binghui Wang, and Neil Zhenqiang Gong. 2017. Random walk based
+fake account detection in online social networks. In 2017 47th annual IEEE/IFIP
+international conference on dependable systems and networks (DSN) . IEEE, 273–
+284.
+[21] Zafran Khan, Zeeshan Khan, Byung-Geun Lee, Hong Kook Kim, and Moongu
+Jeon. 2024. Graph neural networks based framework to analyze social media
+platforms for malicious user detection.Applied Soft Computing 155 (2024), 111416.
+[22] Priyanka Kondeti, Lakshmi Pranathi Yerramreddy, Anita Pradhan, and Gandharba
+Swain. 2021. Fake account detection using machine learning. InEvolutionary Com-
+puting and Mobile Sustainable Networks: Proceedings of ICECMSN 2020 . Springer,
+791–802.
+[23] Ngoc C Le, Manh-Tuan Dao, Hoang-Linh Nguyen, Tuyet-Nhi Nguyen, and Hue
+Vu. 2020. An application of random walk on fake account detection problem:
+A hybrid approach. In 2020 RIVF International Conference on Computing and
+Communication Technologies (RIVF). IEEE, 1–6.
+[24] Jure Leskovec and Andrej Krevl. 2014. SNAP Datasets: Stanford Large Network
+Dataset Collection. Retrieved July 20, 2024 from http://snap.stanford.edu/data
+[25] Xiao Liang, Zheng Yang, Binghui Wang, Shaofeng Hu, Zijie Yang, Dong Yuan,
+Neil Zhenqiang Gong, Qi Li, and Fang He. 2021. Unveiling fake accounts at
+the time of registration: An unsupervised approach. In Proceedings of the 27th
+ACM SIGKDD conference on knowledge discovery & data mining . Association for
+Computing Machinery, 3240–3250.
+[26] Ziqi Liu, Chaochao Chen, Xinxing Yang, Jun Zhou, Xiaolong Li, and Le Song.
+2018. Heterogeneous graph neural networks for malicious account detection. In
+Proceedings of the 27th ACM international conference on information and knowledge
+management. Association for Computing Machinery, 2077–2085.
+[27] Haoyu Lu, Daofu Gong, Zhenyu Li, Feng Liu, and Fenlin Liu. 2023. Sybilhp:
+Sybil detection in directed social networks with adaptive homophily prediction.
+Applied Sciences 13, 9 (2023), 5341.
+[28] Martin Moore. 2023. Fake accounts on social media, epistemic uncertainty and
+the need for an independent auditing of accounts. Internet Policy Review 12, 1
+(2023).
+[29] George L. Nemhauser, Laurence A. Wolsey, and Marshall L. Fisher. 1978. An analy-
+sis of approximations for maximizing submodular set functions—I. Mathematical
+Programming 14 (1978), 265–294.
+[30] Judea Pearl. 1988. Probabilistic Reasoning in Intelligent Systems: Networks of
+Plausible Inference. Morgan Kaufmann Publishers Inc., San Francisco, CA, USA.
+[31] Devakunchari Ramalingam and Valliyammai Chinnaiah. 2018. Fake profile
+detection techniques in large-scale online social networks: A comprehensive
+review. Computers & Electrical Engineering 65 (2018), 165–177.
+[32] Santosh Kumar Uppada, K Manasa, B Vidhathri, R Harini, and B Sivaselvan.
+2022. Novel approaches to fake news and fake account detection in OSNs: user
+social engagement and visual content centric model. Social Network Analysis and
+Mining 12, 1 (2022), 52.
+[33] Leslie G Valiant. 1979. The complexity of enumeration and reliability problems.
+siam Journal on Computing 8, 3 (1979), 410–421.
+[34] Estée Van Der Walt and Jan Eloff. 2018. Using machine learning to detect fake
+identities: bots vs humans. IEEE access 6 (2018), 6540–6549.
+[35] Arun Vishwanath. 2018. Why Do So Many People Fall for Fake Profiles Online?
+Retrieved April 18, 2024 from https://theconversation.com/why-do-so-many-
+people-fall-for-fake-profiles-online-102754
+[36] Keith Wagstaff. 2013. 1 in 10 Twitter Accounts Fake, Say Researchers. Re-
+trieved April 18, 2024 from https://www.nbcnews.com/technology/1-10-twitter-
+accounts-fake-say-researchers-2d11655362
+[37] Binghui Wang, Neil Zhenqiang Gong, and Hao Fu. 2017. GANG: Detecting
+fraudulent users in online social networks via guilt-by-association on directed
+graphs. In 2017 IEEE International Conference on Data Mining (ICDM) . IEEE,
+465–474.
+[38] Binghui Wang, Le Zhang, and Neil Zhenqiang Gong. 2017. SybilSCAR: Sybil
+detection in online social networks via local rule based propagation. In IEEE
+INFOCOM 2017-IEEE Conference on Computer Communications . IEEE, 1–9.
 
- 
- export BibTeX citation 
- Loading... 
- 
+[39] Fan Xu, Nan Wang, Hao Wu, Xuezhi Wen, Xibin Zhao, and Hai Wan. 2024.
+Revisiting graph-based fraud detection in sight of heterophily and spectrum. In
+Proceedings of the AAAI Conference on Artificial Intelligence , Vol. 38. 9214–9222.
+[40] Peipei Yang and Zhuoyuan Zheng. 2020. Fake account detection with attention-
+based graph convolution networks. In 2020 IEEE 3rd International Conference on
+Automation, Electronics and Electrical Engineering (AUTEEE) . IEEE, 106–110.
+[41] Minji Yoon. 2021. Graph fraud detection based on accessibility score distributions.
+In Machine Learning and Knowledge Discovery in Databases. Research Track:
+European Conference, ECML PKDD 2021, Bilbao, Spain, September 13–17, 2021,
+Proceedings, Part II 21 . Springer, 483–498.
+[42] Haifeng Yu, Phillip B Gibbons, Michael Kaminsky, and Feng Xiao. 2008. Sybil-
+limit: A near-optimal social network defense against sybil attacks. In 2008 IEEE
+Symposium on Security and Privacy . IEEE, 3–17.
+[43] Haifeng Yu, Michael Kaminsky, Phillip B Gibbons, and Abraham Flaxman. 2006.
+Sybilguard: defending against sybil attacks via social networks. In Proceedings of
+the 2006 conference on Applications, technologies, architectures, and protocols for
+computer communications. Association for Computing Machinery, 267–278.
+[44] Dong Yuan, Yuanli Miao, Neil Zhenqiang Gong, Zheng Yang, Qi Li, Dawn Song,
+Qian Wang, and Xiao Liang. 2019. Detecting fake accounts in online social
+networks at the time of registrations. In Proceedings of the 2019 ACM SIGSAC
+conference on computer and communications security . Association for Computing
+Machinery, 1423–1438.
+[45] Xiaoying Zhang, Hong Xie, Pei Yi, and John CS Lui. 2022. Enhancing Sybil detec-
+tion via social-activity networks: A random walk approach. IEEE Transactions on
+Dependable and Secure Computing 20, 2 (2022), 1213–1227.
+A PSEUDOCODE OF ATTACK STRATEGIES
+The pseudocode for the Random, Preferential Attachment, and
+BFS attack strategies are provided in Algorithms A.1, A.2, and A.3,
+respectively.
+Attack Strategy A.1 Random
+Input𝐺 =(𝑉,𝐸),𝑆,𝐵,𝐴𝐸 (·),𝑟(·),𝑐
+Output Generated graph𝐺′
+1: for each node𝑠𝑖 in set𝑆 do
+2: 𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠←∅
+3: for𝑖← 1 to𝑐·𝐴𝐸(𝑖) do
+4: choose a node𝑢 from(𝐵\𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠) randomly
+5: 𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠←𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠∪{𝑢}
+6: if 𝑟(𝑢) = 0 then
+7: 𝐸←𝐸∪{( 𝑠𝑖,𝑢)}
+8: with probability 1
+2 :𝐸←𝐸∪{(𝑢,𝑠𝑖)}
+9: return𝐺′ =(𝑉,𝐸)
+Attack Strategy A.2 Preferential Attachment (PreAt)
+Input𝐺 =(𝑉,𝐸),𝑆,𝐵,𝐴𝐸 (·),𝑟(·),𝑐
+Output Generated graph𝐺′
+1: function modified_BA(𝐺 =(𝑉,𝐸),𝐵,𝑆 )
+2: for each node𝑢 in𝐵 do
+3: 𝑃1(𝑢)← BA probability of in-degree𝑢 from𝐵
+4: 𝑃2(𝑢)← BA probability of in-degree𝑢 from𝑆
+5: 𝑃(𝑢)← 𝑃1(𝑢)+𝑃2(𝑢)
+2
+6: return𝑃
+7: for each node𝑠𝑖 in set𝑆 do
+8: 𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠←∅
+9: 𝑃← modified_BA
+10: for𝑖← 1 to𝑐·𝐴𝐸(𝑖) do
+11: 𝑢← a random node from(𝐵\𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠)
+following the probability vector𝑃
+12: 𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠←𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠∪{𝑢}
+13: if 𝑟(𝑢) = 0 then
+14: 𝐸←𝐸∪{( 𝑠𝑖,𝑢)}
+15: with probability 1
+2 :𝐸←𝐸∪{(𝑢,𝑠𝑖)}
+16: return𝐺′ =(𝑉,𝐸)
+Attack Strategy A.3 BFS
+Input𝐺 =(𝑉,𝐸),𝑆,𝐵,𝑑𝑢𝑎𝑙 (·),𝑟(·),𝑐
+Output Generated graph𝐺′
+1: for each node𝑠𝑖 in set𝑆 do
+2: 𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠←∅
+3: 𝐵𝐹𝑆 _𝑠𝑡𝑟𝑒𝑎𝑚𝑒𝑟 ← BFS starts from node𝑑𝑢𝑎𝑙(𝑠𝑖)
+4: 𝑃← modified_BA(𝐺 =(𝑉,𝐸),𝐵,𝑆) from Algorithm A.2
+5: for𝑖← 1 to𝑐·𝐴𝐸(𝑖) do
+6: if any node is available in𝐵𝐹𝑆 _𝑠𝑡𝑟𝑒𝑎𝑚𝑒𝑟 :
+7: 𝑢← next node from𝐵𝐹𝑆 _𝑠𝑡𝑟𝑒𝑎𝑚𝑒𝑟
+8: else:
+9: 𝑢← a random node from(𝐵\𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠)
+following the probability vector𝑃
+10: 𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠←𝑐ℎ𝑜𝑠𝑒𝑛 _𝑛𝑜𝑑𝑒𝑠∪{𝑢}
+11: if 𝑟(𝑢) = 0 then
+12: 𝐸←𝐸∪{( 𝑠𝑖,𝑢)}
+13: with probability 1
+2 :𝐸←𝐸∪{(𝑢,𝑠𝑖)}
+14: return𝐺′ =(𝑉,𝐸)
+B EXAMPLE FOR TRANSFORMER
+See Figure B.1 for an example of the transformer used in the proof
+of hardness for the maximizing benigns problem.
+The transformer converts 𝐼 =⟨𝑊,𝑄,𝑘 ⟩, which is an instance
+of MC, into 𝐼′ = ⟨𝐺,𝐵,𝑆,𝑘,𝑝 𝑟(·)⟩ , which is an instance of MB.
+In this example 𝑉𝑊 ={𝑤1,𝑤 2,𝑤 3,𝑤 4,𝑤 5},𝑉𝑄 ={𝑞1,𝑞 2,𝑞 3,𝑞 4},
+and𝑞1 ={𝑤1,𝑤 3},𝑞2 ={𝑤5},𝑞3 ={𝑤2,𝑤 5},𝑞4 ={𝑤3,𝑤 4}. In
+transformation, we have𝐵 =𝑉𝑄 and𝑆 =∅. We keep the value of𝑘
+and set𝑝𝑟(𝑣) = 1 for all nodes based on transformer rules.
+Figure B.1: The graph outcome of transformer where 𝑆 =∅
+and𝑉𝑄 =𝐵.
 
- 
- 
- 
- BibTeX formatted citation 
- × 
- 
- 
- loading... 
- 
- 
- Data provided by: 
- 
- 
- 
- 
- Bookmark 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- Bibliographic Tools 
- 
- Bibliographic and Citation Tools 
- 
- 
- 
- 
- 
- 
- Bibliographic Explorer Toggle 
- 
- 
- 
- Bibliographic Explorer ( What is the Explorer? ) 
- 
- 
- 
- 
- 
- 
- 
- Connected Papers Toggle 
- 
- 
- 
- Connected Papers ( What is Connected Papers? ) 
- 
- 
- 
- 
- 
- 
- Litmaps Toggle 
- 
- 
- 
- Litmaps ( What is Litmaps? ) 
- 
- 
- 
- 
- 
- 
- 
- scite.ai Toggle 
- 
- 
- 
- scite Smart Citations ( What are Smart Citations? ) 
- 
- 
- 
- 
- 
- 
- 
- 
+C SIMPLE GREEDY ALGORITHM
+Algorithm C.1 provides the description of the simple greedy al-
+gorithm for the maximizing benigns problem. In this algorithm,
+we write𝑓(𝐴∪{𝑢}) for simplicity, but, to be precise, it should be
+expressed as 𝑓(𝐴∪{𝑢},𝐵,𝑆,𝑝 𝑟(·)) , but the other parameters are
+clear from the context.
+Algorithm C.1 Simple Greedy Algorithm
+Input𝐺 =(𝑉,𝐸),𝐵,𝑆, budget𝑘,𝑝𝑟(·)
+Output𝑟𝑒𝑣𝑒𝑎𝑙 _𝑠𝑒𝑡 𝐴
+1: 𝐴←∅
+2: for𝑘 iterations do
+3: 𝑢← arg max𝑢∈𝑉\𝐴𝑓(𝐴∪{𝑢})
+4: 𝐴←𝐴∪{𝑢}
+5: return𝐴
+D PROOF FOR NON-SUBMODULARITY
+To prove that the function 𝑓(·) is not submodular, it suffices to
+provide an example such that𝑣∈𝑉,𝐴 1⊆𝐴2 and
+𝑓(𝐴2∪{𝑣})− 𝑓(𝐴2) > 𝑓(𝐴1∪{𝑣})− 𝑓(𝐴1)
+Consider the graph𝐺 given in Figure D.1, let’s define𝑝𝑟(𝑢𝑖) = 1
+2
+for all nodes𝑢𝑖,𝑆 =∅ and𝐵 ={𝑢1}. We define:𝐴1 ={𝑢1},𝐴2 =
+{𝑢1,𝑢 2} and𝑣 =𝑢3.
+Let us compute each of the four entities one by one. We have
+𝑓(𝐴1) = 1
+2 because there is a 1/2 probability that the node 𝑢1 is
+revealed to be resistant, which results in discovering that the node
+𝑢2 is benign. In addition, 𝑓(𝐴1∪{𝑣}) = 𝑓(𝐴1∪{𝑢3}) = 1
+2 because
+revealing node𝑢3 cannot result in the discovery of any new benign.
+This is true because of Observation 3.1. Thus,𝑓(𝐴1∪{𝑣})−𝑓(𝐴1) =
+0.
+Furthermore, 𝑓(𝐴2) = 3
+4 because there is a 1/2 probability of
+discovering𝑢2 to be benign by revealing𝑢1 to be resistant, and then
+a 1/2×1/2 = 1/4 probability of discovering𝑢3 if both𝑢1 and𝑢2 turn
+out to be resistant. We also have𝑓(𝐴2∪{𝑣}) = 3
+4+ 𝑛−3
+8 , because
+we have the same 3
+4 as before, and with a probability of 1
+8 ,𝑛−3 new
+benigns will be discovered. Thus, we have𝑓(𝐴2∪{𝑣})− 𝑓(𝐴2) =
+𝑛−3
+8 . Since 𝑛−3
+8 > 0, for any𝑛≥ 4, we can conclude the proof.
+Figure D.1: An example to show 𝑓(·) is not submodular.
+E BFS-BASED DISCOVERY ALGORITHM
+Below, we provide the Algorithm E.1 for the BFS-based algorithm,
+which is used in line 11 of Algorithm 1.
+Algorithm E.1 BFS-based Discovery Algorithm
+Input𝐺 =(𝑉,𝐸), reveal set𝐴,𝐵,𝑆,𝑟 (·)
+Output size of discovered set
+1: discovered←∅
+2: visited←∅
+3: for𝑣∈𝐴∩𝐵 do
+4: bfs_queue← empty queue
+5: if𝑟(𝑣) = 1 then
+6: bfs_queue.add(𝑣)
+7: while bfs_queue is not empty do
+8: 𝑤← bfs_queue.pop()
+9: 𝑣𝑖𝑠𝑖𝑡𝑒𝑑 ←𝑣𝑖𝑠𝑖𝑡𝑒𝑑 ∪{𝑤}
+10: discovered← discovered∪( Γin(𝑤)\( 𝐵∩𝑆))
+11: for𝑢∈( Γin(𝑤)∩ 𝐴)\ 𝑣𝑖𝑠𝑖𝑡𝑒𝑑 do
+12: if𝑟(𝑢) = 1 then
+13: bfs_queue.add(𝑢)
+14: return|𝑑𝑖𝑠𝑐𝑜𝑣𝑒𝑟𝑒𝑑|
+F BOUND ON 𝑅 IN MONTE CARLO GREEDY
+ALGORITHM
+Theorem F.1 (Hoeffding’s ineqality [18]). Consider indepen-
+dent random variables𝑋1,𝑋 2,...,𝑋 𝑅 such that𝑋𝑖∈[ 𝑎,𝑏], ¯𝑋 is the
+mean of𝑅 random variables and 𝜇 is the expected value of ¯𝑋 . Then,
+P( ¯𝑋−𝜇≥𝜖)≤ exp(−2𝑅𝜖2
+(𝑏−𝑎)2), where𝜖 is the error margin.
+To gain confidence𝛼 using the above lemma, one requires𝑅≥
+(𝑏−𝑎)2 ln( 1
+1−𝛼)
+2𝜖2 . According to the inequality, we have
+P( ¯𝑋−𝜇 <𝜖)≥ 1− exp( −2𝑅𝜖2
+(𝑏−𝑎)2).
+By setting P( ¯𝑋−𝜇 <𝜖)≥ 𝛼 we will have
+1− exp( −2𝑅𝜖2
+(𝑏−𝑎)2)≥ 𝛼,
+Which means
+ln(1−𝛼)≥ −2𝑅𝜖2
+(𝑏−𝑎)2,
+which yields
+𝑅≥
+(𝑏−𝑎)2 ln( 1
+1−𝛼)
+2𝜖2 .
+Suppose that there are 𝑅 Monte Carlo experiments, and the 𝑖-
+th experiment estimates the number of discovered newly benigns
+based on each 𝐴 as𝑋𝑖. The above calculated bound on 𝑅 in this
+problem will be𝑅≥ 𝑘2Δ2
+in ln( 1
+1−𝛼)
+2𝜖2 if we set,𝑎 = 0 and𝑏≤| 𝐴|· Δin≤
+𝑘Δin.
 
- 
- Code, Data, Media 
- 
- Code, Data and Media Associated with this Article 
- 
- 
- 
- 
- 
- 
- alphaXiv Toggle 
- 
- 
- 
- alphaXiv ( What is alphaXiv? ) 
- 
- 
+G RUN TIME OF MONTE CARLO GREEDY
+ALGORITHM
+The complexity of the Monte Carlo Greedy algorithm (described
+in Algorithm 1) is determined by the 𝑘 iterations to each time
+identify the best node among at most𝑛 candidates. For each node,
+the computational cost is defined by theEST function. This function
+involves assigning𝑟(𝑣) for each𝑣∈𝐴 based on𝑝𝑟(𝑣), which incurs
+a cost of𝑂(|𝐴|), which is in𝑂(𝑛). Subsequently, it computes the
+number of discovered benigns using the algorithm described in
+Appendix E, which has a complexity of𝑂(𝑛+𝑚). This algorithm
+runs a BFS with different roots, but as we have a common list of
+visited nodes in the algorithm, the complexity is still 𝑂(𝑛+𝑚).
+Therefore, the overall complexity is given by𝑂(𝑘(𝑛+𝑛·𝑅(𝑛+𝑚))) ,
+which simplifies to𝑂(𝑘·𝑅·(𝑛2+𝑛𝑚)).
+H EXAMPLE FOR TRA VERSING ALGORITHM
+Here, we present an example for Algorithm 2, visualized in Fig-
+ures H.1 and H.2, to illustrate its execution and the associated data
+structure.
+We have𝐵 ={𝑎,𝑏},𝑆 =∅ and𝑁 ={𝑎,𝑏}. Initially, ˆΓin(𝑎) =
+{𝑑,𝑓}, ˆΓin(𝑒) ={𝑐,𝑓}, ˆΓin(𝑐) ={𝑑},𝛾in(𝑒) = 2, and 𝛾in(𝑐) = 1.
+In addition, Γout(𝑑) ={𝑐,𝑎}, and Γout(𝑓) ={𝑎,𝑏,𝑒}. Suppose Al-
+gorithm 2 selects 𝑎 and𝑟(𝑎) = 1. Then, in line 9, we will have
+𝑁 ={𝑎,𝑏}\{ 𝑎} ={𝑏}. From𝑎’s in-neighbors table, we walk to its
+in-neighbors𝑑 and𝑓 . From each of them, by purple links, move to
+their out-neighbors. For example, from the node𝑓 on the left side,
+with the help of a purple link, we move to𝑓 cell in the right table,
+and then, for its connected nodes, include𝑒 and𝑏 (𝑎 is traversed
+before, and we do not care about that), we will use orange and
+blue links. For example, with the orange link, we go to 𝑓 , which
+is connected to𝑒 in the right table. We will remove that node and
+the connection there. Then, we can go to the related counter and
+decrease it once. Then we have to move backward and do the same
+for cell𝑑 in the left table, and from its neighbor𝑐, with a pink link,
+go to node𝑑 on the right side and do the same. In the output of this
+step, we have: ˆΓin(𝑒) ={𝑐}, ˆΓin(𝑐) ={},𝛾in(𝑒) = 1, and𝛾in(𝑐) = 0.
+Please note that we avoid drawing all links in the figure, as it would
+make it really unreadable.
+I REAL-WORLD DATASETS STATISTICS
+REPORTS
+Table I.1 contains some statistics about the real-world datasets we
+used.
+Table I.1: Some statistics on real-world networks studied.
+Network Facebook Twitter LastFM Pokec
+|Nodes| 4,039 10,000 7,624 10,000
+|Undirected Edges| 88,234 0 27,806 0
+|Directed Edges| 0 350,600 0 94,066
+Avg𝑑in 43.69 35.06 7.29 9.4
+Avg𝑑out 43.69 35.06 7.29 9.4
+Is directed? - ✓ - ✓
+J DATASETS ADDITIONAL STATISTICS
+REPORTS AFTER ATTACKS
+For our studied datasets, the statistics after Random, PreAt (Prefer-
+ential Attachment), and BFS attacks are summarized in Table J.1.
+The number of attack edges and the number of edges that are re-
+verse of attacks are shown by|Attacks| and|Rev. Attacks|.
+K RESISTANCE A W ARE MONTE CARLO
+GREEDY ALGORITHM
+Algorithm K.1 describes the Resistance Aware Monte Carlo Greedy
+algorithm. This is the variant of the Monte Carlo Greedy algorithm,
+which reveals the resistance of each node once it is selected and
+leverages that information for the next choices.
+Algorithm K.1 Resistance Aware Monte Carlo Greedy Algorithm
+Input𝐺 =(𝑉,𝐸),𝐵,𝑆, budget𝑘,𝑝𝑟(·),𝜖,𝛼
+Output𝑟𝑒𝑣𝑒𝑎𝑙 _𝑠𝑒𝑡 𝐴
+1: Initialize𝐴←∅
+2: Initialize𝐴′←∅
+3: for𝑖 = 1 to𝑘 do
+4: 𝑣← arg max𝑤∈𝑉\𝐴 Est(𝐴′∪{𝑤},𝑝𝑟(·),𝐵,𝑆,𝜖,𝛼 )
+5: 𝐴←𝐴∪{𝑣}
+6: if𝑟(𝑣) = 1 then
+7: 𝐴′←𝐴′∪{𝑣}
+8: return𝐴
+9: function Est(𝐴,𝑝𝑟(·),𝐵,𝑆,𝜖,𝛼 )
+10: Initialize𝑐𝑜𝑢𝑛𝑡← 0
+11: 𝑅←
+
+𝑘2Δ2
+in ln( 1
+1−𝛼)
+2𝜖2
+
+12: for𝑅 iterations do
+13: Assign resistance𝑟(𝑣) for each𝑣∈𝐴 based on𝑝𝑟(𝑣)
+14: 𝑛𝑒𝑤_𝑏𝑒𝑛𝑖𝑔𝑛← number of discovered benigns based
+on𝐵,𝑆, and assigned resistances.
+15: 𝑐𝑜𝑢𝑛𝑡←𝑐𝑜𝑢𝑛𝑡+𝑛𝑒𝑤_𝑏𝑒𝑛𝑖𝑔𝑛
+16: return𝑐𝑜𝑢𝑛𝑡/𝑅
+L ADDITIONAL EXPERIMENTS FOR
+MAXIMIZING BENIGNS
+For the experiments of the maximizing benigns problem, the results
+on Twitter, LastFM, and Pokec datasets are provided in Figures L.1,
+L.2, and L.3.
+M ADDITIONAL EXPERIMENT FOR PAE
+For the experiments of discovering potential attack edges problem,
+the results on Twitter, LastFM, and Pokec datasets are provided in
+Figure M.1.
+N ADDITIONAL EXPERIMENTS FOR
+CLASSIFICATION ALGORITHMS
+For other node classification experiments on Twitter, LastFM and
+Pokec dataset, Table N.1 is provided.
 
- 
- 
- 
- 
- 
- Links to Code Toggle 
- 
- 
- 
- CatalyzeX Code Finder for Papers ( What is CatalyzeX? ) 
- 
- 
+Figure H.1: Data structure schema used to update neighborhoods in Algorithm 2. First, starting
+from𝑎 with purple lines, we can reach 𝑑 and𝑓 on the right side table, and then based on three
+lines shown by blue, orange, and pink lines, we can apply the updates.
+Figure H.2: Example graph
+for describing the data struc-
+ture used in Algorithm 2.
+Nodes𝑎 and𝑏 form the be-
+nign set.
+Table J.1: Statistics for Facebook, Twitter, LastFM, and Pokec datasets after Random, PreAt (Preferential Attachment), and BFS
+attacks.𝑠→𝑠 and𝑏→𝑏 indicate sybil-to-sybil and benign-to-benign edges. The next four rows represent the average number
+of incoming/outgoing edges for sybils and benigns. 𝑟(·) and𝑝𝑟(·) represent resistance and probability of resistance.
+Statistic Facebook+ Twitter+ LastFM+ Pokec+
+Random PreAt BFS Random PreAt BFS Random PreAt BFS Random PreAt BFS
+|𝐸𝑑𝑔𝑒𝑠| 203459 222080 202870 361687 393084 351979 66259 67546 65402 128875 142686 125539
+|𝐴𝑡𝑡𝑎𝑐𝑘𝑠| 13003 25396 12521 25073 45968 18619 3063 3919 2530 16870 26090 14683
+|𝑅𝑒𝑣.𝐴𝑡𝑡𝑎𝑐𝑘𝑠 | 6450 12678 6343 12585 23087 9331 1552 1983 1228 8494 13085 7345
+|𝑠→𝑠| 7538 7538 7538 16484 16484 16484 6032 6032 6032 9446 9446 9446
+|𝑏→𝑏| 176468 176468 176468 307545 307545 307545 55612 55612 55612 94065 94065 94065
+Avg𝑑in Sybils 34.71 50.16 34.44 29.069 39.571 25.815 9.953 10.518 9.528 17.94 22.531 16.791
+Avg𝑑out Sybils 50.97 81.72 49.77 41.557 62.452 35.103 11.936 13.059 11.236 26.316 35.536 24.129
+Avg𝑑in Benigns 46.91 49.98 46.79 33.262 35.351 32.616 7.696 7.808 7.626 11.094 12.016 10.875
+Avg𝑑out Benigns 45.29 46.83 45.26 32.013 33.063 31.688 7.498 7.554 7.455 10.256 10.715 10.141
+Avg𝑟(·) 0.7658 0.7658 0.7658 0.7519 0.7519 0.7519 0.7542 0.7542 0.7542 0.7464 0.7464 0.7464
+Avg𝑝𝑟(·) 0.6225 0.6309 0.6431 0.6216 0.6248 0.6222 0.6278 0.6310 0.6287 0.6214 0.6194 0.6268
 
- 
- 
- 
- 
- 
- DagsHub Toggle 
- 
- 
- 
- DagsHub ( What is DagsHub? ) 
- 
- 
- 
- 
- 
- 
- 
- 
- GotitPub Toggle 
- 
- 
- 
- Gotit.pub ( What is GotitPub? ) 
- 
- 
+Figure L.1: The number of discovered benigns by each algorithm when the budget ranges from 1 to𝑘 in the maximizing benigns
+problem on the Twitter dataset and for different attack strategies.
+Figure L.2: The number of discovered benigns by each algorithm when the budget ranges from 1 to𝑘 in the maximizing benigns
+problem on the LastFM dataset and for different attack strategies.
+Figure L.3: The number of discovered benigns by each algorithm when the budget ranges from 1 to𝑘 in the maximizing benigns
+problem on the Pokec dataset and for different attack strategies.
 
- 
- 
- 
- 
- 
- Huggingface Toggle 
- 
- 
- 
- Hugging Face ( What is Huggingface? ) 
- 
- 
+(a) Twitter dataset
+ (b) LastFM dataset
+(c) Pokec dataset
+Figure M.1: The number of discovered PAEs for different budgets (first row) and the percentage of attack edges relative to the
+number of discovered PAEs (second row) on Twitter (a), LastFM (b), and Pokec (c) datasets. Each column represents a different
+attack strategy.
 
- 
- 
- 
- 
- 
- ScienceCast Toggle 
- 
- 
- 
- ScienceCast ( What is ScienceCast? ) 
- 
- 
- 
-
- 
- 
- 
- 
- 
- 
- 
-
- 
- Demos 
- 
- Demos 
- 
- 
- 
- 
- 
- 
- Replicate Toggle 
- 
- 
- 
- Replicate ( What is Replicate? ) 
- 
- 
- 
- 
- 
- 
- 
- Spaces Toggle 
- 
- 
- 
- Hugging Face Spaces ( What is Spaces? ) 
- 
- 
- 
- 
- 
- 
- 
- Spaces Toggle 
- 
- 
- 
- TXYZ.AI ( What is TXYZ.AI? ) 
- 
- 
- 
- 
- 
- 
- 
- 
- Related Papers 
- 
- Recommenders and Search Tools 
- 
- 
- 
- 
- 
- 
- Link to Influence Flower 
- 
- 
- 
- Influence Flower ( What are Influence Flowers? ) 
- 
- 
- 
- 
- 
- 
- 
- Core recommender toggle 
- 
- 
- 
- CORE Recommender ( What is CORE? ) 
- 
- 
- 
- 
- 
- Author 
- Venue 
- Institution 
- Topic 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
-
- 
- 
- About arXivLabs
- 
- 
- 
- 
- arXivLabs: experimental projects with community collaborators 
- arXivLabs is a framework that allows collaborators to develop and share new arXiv features directly on our website. 
- Both individuals and organizations that work with arXivLabs have embraced and accepted our values of openness, community, excellence, and user data privacy. arXiv is committed to these values and only works with partners that adhere to them. 
- Have an idea for a project that will add value for arXiv's community? Learn more about arXivLabs . 
- 
- 
- 
- 
- 
- 
-
- 
- 
- 
- 
- Which authors of this paper are endorsers? |
- Disable MathJax ( What is MathJax? )
+Table N.1: Performance of SybilSCAR, SybilWalk, and SybilMetric with and without preprocessing on the Twitter, LastFM,
+and Pokec datasets. Init represents the setup without preprocessing. MB incorporates discovered benigns by the Traversing
+algorithm. MB+PAE incorporates both discovered benigns and PAEs.
+Dataset Attack
+Strategy Step SybilSCAR
+AUC
+SybilWalk
+AUC
+SybilMetric
+AUC
+Twitter
+Random
+Init 0.901 0.918 0.82
+MB 0.935 0.972 0.95
+MB+PAE 0.936 0.973 0.92
+BA
+Init 0.891 0.889 0.83
+MB 0.934 0.961 0.96
+MB+PAE 0.936 0.966 0.96
+BFS
+Init 0.909 0.931 0.75
+MB 0.942 0.977 0.94
+MB+PAE 0.946 0.981 0.95
+LastFM
+Random
+Init 0.951 0.952 0.90
+MB 0.958 0.966 0.95
+MB+PAE 0.960 0.966 0.94
+BA
+Init 0.932 0.944 0.91
+MB 0.937 0.957 0.94
+MB+PAE 0.947 0.959 0.90
+BFS
+Init 0.948 0.971 0.88
+MB 0.953 0.980 0.95
+MB+PAE 0.961 0.981 0.92
+Pokec
+Random
+Init 0.895 0.924 0.90
+MB 0.916 0.946 0.94
+MB+PAE 0.913 0.948 0.89
+BA
+Init 0.852 0.916 0.90
+MB 0.893 0.936 0.94
+MB+PAE 0.901 0.940 0.93
+BFS
+Init 0.903 0.953 0.86
+MB 0.936 0.968 0.92
+MB+PAE 0.937 0.968 0.90
