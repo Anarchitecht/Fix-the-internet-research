@@ -1,32 +1,71 @@
 # Decentralized research
 
-Research corpus and integrated design for peer-to-peer search, storage, identity, privacy, and
-moderation. Independent of any implementation repository.
+A verified evidence corpus and a Pareto-optimal component selection for a decentralized web
+architecture. `BRIEF.md` is the governing document; where this README and the brief disagree, the
+brief holds.
 
-## What is here
+## What is being designed
 
-`research/00-corpus-p2p-search-storage-identity.md` — the source corpus, in three passes. Each
-section surveys the published mechanisms for one component, quotes measurements from primary
-sources where the paper was read in full, and states one selection with the assumption that
-selection requires and the condition under which it fails. The third pass supersedes two earlier
-selections (BeeKEM replaces DCGKA; disjoint-path lookups operate at d=8, not d=3).
+A decentralized internet whose identity, indexing, and storage components cannot be captured by any
+company, and whose client reproduces the functional patterns of the most-visited websites. Privacy
+mechanisms are user-selectable tiers, each stating the adversary it defeats and the measured latency
+and bandwidth it adds.
 
-## Reading order
+The target is Pareto optimality across the whole system. A component that is optimal alone and
+destroys a precondition the component beside it requires is worse than two components that compose.
+Finding those destroyed preconditions is a deliverable, not a remark.
 
-The corpus states its own dependency order in "Design sequence and thresholds": storage and naming
-first, because those components have the most primary-source measurement behind them.
+## The rule that governs every entry
 
-Three constraints in the corpus govern how every other section is read:
+Three categories, never merged:
 
-- Under a 4,096-byte padded onion cell, a round trip is the scarce resource and a byte is not.
-  Space-efficiency results that shrink a structure without removing a cell change nothing.
-- A search channel that returns only match or no-match destroys the feedback signal square-root
-  replication requires, because a forwarding peer never learns which object matched.
-- Twelve problems in the corpus have no published solution. They are listed in the open-problems
-  table and must not be described as solved.
+| Category | Definition | Where it goes |
+|---|---|---|
+| Measured fact | A number an experiment produced, with its conditions stated | `evidence.md`, cited to the paper |
+| Structural consequence | A property that follows by reasoning from a measured fact or a proof | `architecture.md`, with the derivation shown |
+| Value judgment | A decision that a cost is or is not worth paying | Excluded, or attributed to whoever made it |
 
-## Provenance of numbers
+A number, a parameter, or a mechanism description enters `evidence.md` only from the full text of the
+primary source. An abstract establishes that a paper exists and what it claims to cover. An abstract
+establishes no measurement.
 
-Every figure in the corpus carries its source. Where a paper could not be retrieved, the corpus
-says so and strikes the claims that rested on it. A number without a stated derivation, a
-measurement, or a `NOT DERIVED` label does not belong in this repository.
+## Deliverables
+
+| File | Contents |
+|---|---|
+| `evidence.md` | Every retrieved paper in the brief's §6 schema. The artifact of record. |
+| `retrieval-log.md` | Every paper attempted, the escalation steps tried, the outcome. Failures carry their exact DOI. |
+| `architecture.md` | The synthesis: one selection per component, each justified against every rejected candidate. |
+| `conflicts.md` | Measurement disagreements between sources, destroyed preconditions between selected components, and any claim in `architecture.md` no `evidence.md` entry supports. |
+| `open-problems.md` | Problems with no published solution, each stating what was tried and where it falls short. |
+
+## Why `sources/prior-pass-corpus.md` is quarantined
+
+That document is a prior research pass. It is retained as a source of citations and of measured facts
+that can be re-verified against primary sources. It is not a source of constraints, conclusions,
+terminology, or architecture, for two reasons the brief states in §2.
+
+It carried figures from abstracts and secondary summaries. One example it corrects itself: a
+distributed search system's recall was stated as 1.2 million documents across 750 peers with 45 to
+130 peers contacted; the paper says 50 overlapping collections, and plots recall against 1 to 20
+queried peers.
+
+It also absorbed one implementation project's refusals as though those refusals were properties of
+the mechanisms. Five mechanism families appear there as rejected: gossiped inventory filters,
+network-wide popularity aggregation, published per-identity behavior scores, content-derived
+similarity signatures, and epidemic push. Each of the five works. That project decided the costs were
+not worth paying for its own deployment. The cost, the exposure, and the failure condition are facts
+and are extracted. The refusal belongs to whoever wrote it and is not carried.
+
+The same applies to that project's parameters. Its transport frame is 4,096 bytes, from which it
+concluded that space-efficiency results produce no benefit. The general form transfers — under a
+fixed padded transport frame of size F, a size reduction that stays within one frame reduces
+transmitted size by nothing — and F is a design variable, recorded as that project's setting rather
+than as a constant.
+
+## Design posture
+
+The possibility space is open. A mechanism is excluded when a measurement or a proof excludes it,
+not because a prior document declined it and not because a deployed system chose otherwise. Where an
+existing architecture is suboptimal and a different decomposition of the problem removes the
+limitation, the different decomposition is the one to state.
