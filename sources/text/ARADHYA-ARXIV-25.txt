@@ -1,0 +1,1913 @@
+Towards Learning-Augmented Peer-to-Peer Networks:
+Self-Stabilizing Graph Linearization with Untrusted Advice
+Vijeth Aradhya* Christian Scheideler†
+Abstract
+Distributed peer-to-peer systems are widely popular due to their decentralized nature,
+which ensures that no peer is critical for the functionality of the system. However, fully decen-
+tralized solutions are usually much harder to design, and tend to have a much higher overhead
+compared to centralized approaches, where the peers are connected to a powerful server. On
+the other hand, centralized approaches have a single point of failure. Thus, is there some way
+to combine their advantages without inheriting their disadvantages? To that end, we consider
+a supervised peer-to-peer approach where the peers can ask a potentially unreliable supervisor
+for advice. This is in line with the increasingly popular algorithmic paradigm called algorithms
+with predictions or learning-augmented algorithms, but we are the first to consider it in the context
+of peer-to-peer networks.
+Specifically, we designself-stabilizing algorithms for the fundamental problem of distributed
+graph linearization, where peers are supposed to recover the “sorted line” network from any
+initial network after a transient fault. With the help of the supervisor, peers can recover the
+sorted line network inO(log n) time, if the advice is correct; otherwise, the algorithm retains its
+original recovery time (i.e., without any supervisor). A crucial challenge that we overcome is to
+correctly compose multiple self-stabilizing algorithms, that is, one that processes and exploits
+the advice, and another that does not rely on the advice at all. Our key technical contributions
+combine ideas from the fields of overlay networks and proof-labeling schemes. Finally, we give
+a matching lower bound of Ω(log n) for the recovery time of any algorithm if the advice can
+be corrupted, where n is the network size.
+Keywords: distributed algorithms, overlay networks, self-stabilization, proof-labeling schemes
+*National University of Singapore, Singapore.
+†Paderborn University, Germany.
+1
+arXiv:2504.02448v1  [cs.DC]  3 Apr 2025
+
+Contents
+1 Introduction 3
+1.1 Our Contributions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+1.2 Related Work . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+1.3 Network Model & Problem Definition . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+2 Preliminaries 8
+2.1 Dual-State Approach . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+2.2 Universal Overlay Primitives . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+2.3 Local Certification of Spanning Tree . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+3 Sybil Resistant, Compact and Robust Advice 9
+3.1 Network Snapshot and Properties of Advice . . . . . . . . . . . . . . . . . . . . . . . 9
+3.2 Building a Global Structure from any Snapshot . . . . . . . . . . . . . . . . . . . . . . 9
+3.3 Locally Verifying the Advised sorted Path . . . . . . . . . . . . . . . . . . . . . . . . . 10
+3.4 Tree-to-Path Algorithm . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+4 Flyovers: Fast Stabilization via Routing 12
+4.1 Variables, High-Level Design, and Initialization . . . . . . . . . . . . . . . . . . . . . 13
+4.2 Construction and Verification of Flyover . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+4.3 Verification of Connectivity Certificate . . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+5 Analysis Sketch 17
+A Pseudocodes 26
+A.1 Flyover Pseudocode . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+A.2 Tree-to-Path Pseudocode . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29
+A.2.1 Sequential Tree-to-Path . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29
+A.2.2 Distributed Tree-to-Path . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29
+A.3 Helper Functions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32
+B Tree-to-Path Analysis 34
+C Self-Stabilization Analysis 35
+C.1 Basic Definitions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 35
+C.2 Flyover-Related Definitions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36
+C.3 Helpful Observations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 37
+C.4 Connectivity Preservation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 39
+C.5 Flyover Construction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 40
+C.6 Fast Information Dissemination . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 41
+C.7 Concurrent Advices . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 41
+C.8 Fast Detection of Bad Advice . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 42
+C.9 Putting Everything Together . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 46
+C.10 Lower Bound for Convergence Time . . . . . . . . . . . . . . . . . . . . . . . . . . . . 48
+D Helpful Figures and Tables 50
+2
+
+1 Introduction
+Traditionally, online algorithms augmented with advice is an area of research where one attempts
+to measure how much knowledge of the future is necessary to achieve a given competitive ratio
+[15, 27]. However, the advice might not always be helpful since it is usually hard to predict the fu-
+ture sufficiently well. Ideally, we would like that bad advice does not result in a competitive ratio
+that is worse than what is achieved without any advice. Motivated by recent advances in machine
+learning, a new line of research has thus looked at algorithms with predictions [65]. In this frame-
+work [64], the algorithm takes advantage of an extra piece of information, called “prediction” (also
+called “advice” or “hint”), to achieve (near) optimal performance if the prediction is good, while
+also not performing (much) worse than an algorithm without prediction, if the prediction is bad.
+While competitive analysis in the sequential online setting has been predominant for modeling
+temporal uncertainty (i.e., the input is arriving piece by piece, and decisions need to be made on the
+fly), problems in distributed networks typically arise fromspatial uncertainty where the input itself
+is divided among several compute nodes, and all nodes collectively perform global computation
+[4, 42, 69, 75]. To surmount the uncertainty, many researchers have investigated trade-offs between
+the size of advice and the network’s performance for many problems (e.g., [26, 32–34, 37, 51]),
+seeking to minimize the information needed to efficiently solve them. Recently, however, there
+has been a growing trend towards designing distributed algorithms that can not only exploit the
+advice for better performance, but are alsorobust (i.e., retain their native performance without any
+advice) when the advice is unreliable [1, 14, 38, 41].
+We initiate the study of algorithms with untrusted advice for peer-to-peer systems, where the
+peers continuously execute local algorithms to maintain a desirable network with certain con-
+nectivity properties. As these systems are highly dynamic (for e.g., due to churn, link failures,
+memory corruption, etc), such algorithms should quickly recover the network after any failure. To
+that end, we consider the self-stabilization framework [21] that requires the system to converge to
+a desirable state after any transient fault which can arbitrarily corrupt the system state. Following
+the pioneering work of Dijkstra [21], self-stabilization has been promising for modeling recovery
+in distributed systems (e.g., [8, 13, 16, 17, 24, 43, 60]); for books, see [22, 76].
+Specifically, we consider a network model where there is a supervisor that can be contacted
+by the peers if they need advice. Supervised networks have been considered in the past (e.g.,
+[2, 29, 35, 53]), but there only the case has been studied that the advice is reliable. In that scenario,
+the peers can trust all the connections suggested by the supervisor, which would make the self-
+stabilization problem for overlay networks very easy: simply suggest the set of peers some peer
+should ideally be connected to. But if the advice can be corrupted, for example, an advice to
+connect to non-existing peers, then a malicious supervisor could easily start so-called Sybil attacks
+[25], i.e., attacks integrating many potentially malicious peers into the peer-to-peer (P2P) system,
+that were previously not part of it.
+To prevent such attacks, the advice of the supervisor must be limited to peers that a peer is
+already connected to. Indeed, this scenario has been recently considered in [72], but that work
+only considered how quickly a well-behaved supervisor can compute a near-optimal schedule for
+transforming any initial overlay network into the desired overlay network, given that it can only
+suggest network transformations by pointing to connections that the peers currently have. Bad
+advice can be hard for peers to identify since they are only aware of their local neighborhood. It is
+crucial that the advice does not throw the stabilization process backwards so that the peers never
+3
+
+Figure 1: Illustration for Graph Linearization. In peer-to-peer networks, there is a directed edge
+(u, v) if a node u has the id of a node v (i.e., node u can send messages to node v). Since the id of a
+node can also be sent in a message, the network can change over time. Here, the nodes recover the
+sorted path: (v1, v2, . . . ,v5).
+converge to the desired network. Further, a crucial challenge is that self-stabilizing algorithms
+must converge from any initial state, including arbitrarily bad advice from the supervisor.
+Despite the obstacles, we develop a generic self-stabilizing mechanism for solving the funda-
+mental problem of distributed graph linearization (topological sorting) [36, 45, 66, 67, 73], where
+each peer connects to its adjacent peer(s) in the topological sorted order to form the so-called
+sorted line network, no matter what kind of advice is given. This is achieved by a modular de-
+sign of separately executing lightweight self-stabilizing algorithms thatprocess the advice, and any
+self-stabilizing algorithm that converges to the sorted line network without any advice.
+Our advice messages are of small size (per peer), and enable the peers to quickly build a hyper-
+cubic structure that facilitates efficient information exchange. Using that structure, a peer is able
+to connect to any other peer in the network. Crucially, the advice is also verifiable in the sense that
+if the advice is bad, the peers can quickly detect it and stop making any additional connections
+due to that advice. Indeed, an added advantage of being able to detect bad advice in the self-
+stabilization setting is that the peers can quickly return to a state where they are again ready to
+receive (correct) advice from the supervisor.
+Organization. First, we describe our contributions, related work, and model. In Section 2, we
+state a few preliminaries. In Section 3, we describe all the different aspects of the advice. In Section
+4, we provide the key details of the self-stabilizing processes. Finally, we give the analysis sketch
+in Section 5. All the algorithms and their full analysis are provided in the Appendix.
+1.1 Our Contributions
+We take the first steps towards efficiently and robustly augmenting advice for efficient recovery
+of P2P networks. Specifically, we provide self-stabilizing algorithms for graph linearization, which
+has been a foundation (i.e., an intermediate step) for many self-stabilizing networks (see, a recent
+survey of [30]). Our solution achieves an optimal self-stabilization time if the supervisor is honest;
+otherwise, it retains the self-stabilization time of any solution without supervision.
+To that end, we develop a novel and generic approach in which the supervisor needs to send
+only one O(log n)-bit sized advice message to any peer, where n denotes the network size. Sur-
+prisingly, despite this small advice, peers can quickly build a hypercubic structure that can be used
+to securely create new connections among peers. Specifically, every peer connects to its neighbor(s)
+in the sorted line network in O(log n) rounds, if the advice messages are correct; otherwise, each
+peer rejects its advice in O(log n) rounds, and stops making any additional edge manipulations
+due to that advice. This is done in part by an interesting connection to the field of proof-labeling
+schemes [52], and the following key technical ingredient (which may be of independent interest)
+4
+
+for overlay networks.
+Theorem 1.1 (Informal, Tree-to-Path). There is a distributed algorithm for forming a path overlay from
+a (labelled) tree overlay in O(1) rounds, whilst adding O(1) edges per peer.
+For robustness against a (potentially) malicious supervisor, the peers (simultaneously) run
+a “base algorithm A0,” which when run independently (i.e., without any supervisor) is known
+to self-stabilize in R (A0) rounds. When a peer receives an advice message, it executes a set of
+algorithms (cf. Section 4), designed to expedite the base algorithm, so that the network can quickly
+self-stabilize. Combined with our design of advice, we get the following upper bounds (based on
+the supervisor) for converging to the sorted line network.
+Theorem 1.2 (Upper Bound). The network self-stabilizes in O(log n) rounds if the supervisor is honest;
+otherwise, the network self-stabilizes in O(R(A0) + log n) rounds.
+Finally, we prove that this logarithmic convergence time barrier is unavoidable for any algo-
+rithm if the advice can be arbitrarily corrupted. In particular, since a malicious supervisor could
+potentially inject adversarial ids into the system [25], a peer must not make connections to any ar-
+bitrary peer id given in the advice. Thus, this constraint, that new edges can only be added to any
+peer’s current neighborhood, leads to the following lower bound (for converging to any network).
+Theorem 1.3 (Lower Bound). There exists some initial configuration such that the convergence time for
+any pair of supervisor and overlay algorithms is Ω(log n) rounds.
+1.2 Related Work
+Peer-to-peer (P2P) systems have been in the spotlight for several decades (see, e.g., [59, 62, 70,
+71, 74]), due to their multifaceted architectures that give rise to different algorithmic challenges
+in many distributed systems, including but not limited to load-balancing (e.g., [28, 48]), overlay
+networks (e.g., [61, 68]), agreement (e.g., [6, 7]), publish/subscribe systems (e.g., [12, 18, 19]), Sybil
+defense (e.g., [20, 40]), etc.
+In many P2P systems, a cornerstone problem is building and maintaining a desirable overlay
+network. Since these systems need to be highly resilient to failures, researchers have extensively
+worked on self-stabilizing algorithms for several networks; for e.g., variants of Skip and Chord
+graphs [9, 44, 49], hypertrees and radix trees [5, 23], small-world graph [50], metric graph [39], etc;
+for a comprehensive survey, see [30].
+Graph linearization is the main building block for many of the above self-stabilizing networks.
+Specifically, a linearization algorithm (e.g. [67]) forms anordering of peers (e.g. based on their ids),
+whose structure is then exploited to build other components of the desired network. To the best
+of our knowledge, the state-of-the-art algorithm [44] that can recover the sorted line network runs
+in O(log2 n) rounds. Notably, the Transitive Closure Framework (TCF) [10] is a generic approach
+for the peers to recover any (locally-checkable) network in O(log n) rounds, but it is not scalable
+as it requires the peers to first form a clique network (i.e., each peer’s degree necessarily increases
+to Ω(n)), and then converge to the desired network.
+Recently, the algorithmic framework of using predictions [65] has gained immense popularity
+in several fields of algorithms (e.g., [11, 47, 55, 56, 58, 63]) including distributed and networked
+algorithms, for e.g., contention resolution [38], TCP acknowledgment [41], buffer management [1]
+and graph algorithms [14]. These algorithms are given an extra string of bits called “prediction”
+5
+
+to solve the problem. Typically, the prediction would give information about some “structure” of
+the given input. However, the main challenge is to design robust algorithms (incl. the prediction)
+that can retain their original performance regardless of what the prediction is, whilst performing
+much better if the prediction is helpful.
+1.3 Network Model & Problem Definition
+Entities. The system has two entities: nodes and a supervisor.
+Nodes are computing entities that aim to distributively form a target topology, denoted by G∗,
+through their connections, where we say that two nodes are “connected” if they can communicate
+(i.e., send/receive messages) with each other. We colloquially use the word “network” (formally
+defined soon) to capture the set of nodes and their connections. The number of nodes is denoted
+by n. Furthermore, the nodes do not have any global knowledge (e.g., network size, shared clock,
+etc). The nodes always execute the algorithms prescribed to them.
+A supervisor is a single computing entity, designed to help the nodes form the target topology
+G∗ through communication with the nodes to learn the (current) network, compute over it, and
+propose connections between nodes. If the supervisor follows its algorithm, we say that the super-
+visor is honest; otherwise, it is said to bemalicious. There is no restriction on the messages sent by a
+malicious supervisor, which may even include suggestions for connecting to non-existing nodes.
+Node ids. Each node has a unique identifier (id). Each node’s memory consists of two types of
+variables: address and non-address variables. The address variables are exclusively used to store
+the ids of other nodes (referred to asneighbors), whereas the non-address variables cannot be used
+to store node ids.
+Communication Rounds. The system proceeds in synchronous rounds, i.e., a message sent by
+a node in any round is received by its recipient at the beginning of the next round. In every
+round, each node runs the given algorithms, given its variables’ assignments (and messages in the
+channel), resulting in changes to its memory and new messages being sent.
+Comm. among Nodes. Each node u can send a message to another node v if the node u has
+node v’s id in its memory. If a message is sent to any node u, then it is added to node u’s channel
+u.Ch. Once a message is added to any node’s channel, the node is able to read the contents of
+the message, after which the message is removed from the channel. In general, a node is not
+informed about the (id of the) sender of a message, unless the sender explicitly adds its own id to
+the message.
+States and Configurations. Consider the standard state model for self-stabilization [21]. The
+variables and channel of a node are stored in itsregister (aka, mutable memory) and each node has
+read/write access to its register. Each node also has a non-mutable memory that contains its id
+and the code of our algorithms. The set of values assigned to the variables and channel of a node
+is called the state of a node. Moreover, the tuple of states of all nodes is called the configuration,
+and the (simultaneous) execution of the code by all the nodes, over consecutive rounds, forms a
+sequence of configurations.
+As we consider a distributed message-passing system where the communication links can
+themselves change over time, each node needs to explicitly communicate some information about
+its own state to (some of) node ids stored in its register, for the network to reach the target topology
+(see, [30, 44]), unlike in the standard model [21], where every node reads its own register and the
+registers of all its neighbors, executes the algorithms and updates its register, in any given step.
+6
+
+Communication Graph and Network. Let GC = ( V,EC = EC∪ IC) be the communication graph
+over the set of nodes V in configuration C, where there exists an explicit edge (u, v)∈ EC if a node
+v’s id is stored in any address variable of nodeu’s memory, or animplicit edge (u, v)∈ IC if a node
+v’s id is in node u’s channel. The network is simply the communication graph restricted to explicit
+edges.
+Comm. between Supervisor and Nodes. The supervisor is aware of the node membership
+in the system, i.e., ids of all the nodes. It can send a request to any node to learn the (current)
+communication graph. Moreover, the supervisor can send advice messages to help nodes quickly
+converge to the desired target topology. As is typical, we assume that the supervisor cannot forge
+messages sent by nodes.
+Functions, Rules and Actions. Each node runs a sequence ofalgorithms, and each algorithm con-
+sists of a sequence of functions. A function has the form,⟨Label⟩:⟨Guard⟩→⟨ Rule 1; Rule 2; . . .⟩,
+where label is the function name, guard is a Boolean predicate over the node’s variables, and rules
+define the actions by the node, where an action (typically) refers to either updating a local variable
+or sending a new message. Each rule is itself of the form⟨Guard⟩→⟨ Action 1; Action 2; . . .⟩.
+Pseudocodes. Each line in a function is typically dedicated to a single rule, but if there are
+multiple rules in a line, then the last set of actions in that line belongs to the last rule. Moreover,
+a function may call another function in any of its rules. (In the standard state model [21], the
+algorithms are directly defined by a set of rules; we extend it for better readability.)
+Local Computation. In each round, each node checks the guard of every function in the specified
+order; if the guard is satisfied, the node executes the rules in the function. Similarly, a node checks
+the guard of a rule; if it is satisfied, the node proceeds to execute the actions in it. Whereas, if no
+guard is specified, the function or rule is always executed.
+Problem Definition
+Given any (weakly) connected communication graph, the nodes must form (and stay in) the target
+topology. For graph linearization, the target topology is the network where each node is connected
+to its neighbor(s) in the sorted order, based on their ids. As the nodes also need to process the
+advice given by the supervisor, we allow them to store a small number of extra edges, which help
+in quickly linearizing the network.
+Initial, Target and Legal Configurations. LetC andT ⊆Cbe the set ofall possible configurations
+and the set of target configurations, respectively. Let I be the set of initial configurations where
+∀C∈C , GC is weakly connected ⇐⇒ C∈I . (We need only weak connectivity for the initial
+configuration, so the non-address variables can be arbitrarily corrupted.)
+The “sorted path” network [67] is the target topology, G∗ = ( V, E∗), where∀u, v∈ V, (u =
+succ(v)∨ v = succ(u)) ⇐⇒ (u, v)∈ E∗, where succ(u) = min ({v| v.id > u.id}). Thus,T is the
+set of configurations where the network is G∗.
+Let NC(u) = {v| (u, v)∈ EC} denote the set of all edges stored by a node u in any con-
+figuration C. Let L be the set of legal configurations such that for each node u,∀C′∈L ,∃C∈
+T , NC(u)⊆ NC′ (u) and∀C′∈L ,∀C∈T ,|NC′ (u)| = O(|NC(u)| + log n). In other words, we
+allow every node to store at most logarithmic number of extra edges (i.e., besides the edges in the
+sorted path) in a legal configuration.
+Self-Stabilization. We say that an algorithm is self-stabilizing if the network, starting from any
+initial configuration, reaches a legal configuration (convergence), and stays in one (closure).
+7
+
+Figure 2: The universal communication primitives, used by our algorithms, incl. base algorithm.
+2 Preliminaries
+2.1 Dual-State Approach
+We rely on adual-state algorithm design, where the nodes always run a “base algorithm”A0 (in the
+background), and an algorithmA is executed for processing the advice given by the supervisor.
+Moreover, the base algorithm is known to self-stabilize in R(A0) rounds, without any interaction
+with the supervisor. The objective of algorithmA is to use the advice for introducing the neighbors
+in G∗ to each other in O(log n) rounds, whilst adding as few additional edges as possible.
+We distinguish the memory (including channel) used for the algorithms A andA0 as M(A)
+and M(A0), respectively. Since these algorithms are run in tandem, to ensure connectivity for the
+base algorithm, we define a “Flush” operation, denoted by Flush (·), that moves a given set of
+node ids to any (arbitrary) address variable(s) of M (A0); this definition is as general as possible
+so that our approach works for any base algorithm.
+2.2 Universal Overlay Primitives
+Let us recall the four universal communication primitives (for edge manipulations) in the design
+of distributed self-stabilizing overlay algorithms (see, e.g., [30, 72]); see Figure 2.
+While preserving connectivity, they are used to transform any weakly connected graph to any
+other weakly connected graph.
+2.3 Local Certification of Spanning Tree
+Our algorithm for the supervised setting exploits a classic result in distributed computing: local
+certification of spanning tree [3]. In general, in local certification, there exist a prover and a dis-
+tributed verifier (fixed network of nodes). The prover assigns a smallcertificate to each node. Every
+node inspects its certificate and the certificates of its neighbors to verify a given network property
+(e.g., spanning tree). If that property is specified correctly at each node, there exists a certificate
+assignment so that each node “accepts” its certificate; otherwise, regardless of what certificates are
+assigned by the prover, at least one node “rejects” its certificate. If the verification algorithm has
+access to the node id, that type of certification is called proof-labeling scheme [52]. For more details,
+we refer to a recent survey [31].
+Specifically, for each node, a certificate for a spanning tree, with any node chosen as the root,
+consists of the information: id of the root, id of the parent (in that tree), and distance of the node
+from the root. To locally verify the encoded spanning tree, each node carries out two checks: (1)
+every neighboring node has the same root id, and (2) its distance is one more than the distance of
+its parent (called “distance-check”); and the root node checks that its distance is 0.
+8
+
+3 Sybil Resistant, Compact and Robust Advice
+Here, we provide the key intuition and details of the advice.
+3.1 Network Snapshot and Properties of Advice
+First, if the supervisor does not know anything about thecurrent communication graph, there is no
+hope of giving useful advice because the supervisor should be restricted to a node’s neighborhood
+whenever an edge is proposed. However, as P2P systems are dynamic, the communication graph
+could have changed. Thus, there should be some mechanism where the nodes can send their
+neighborhoods when requested by the supervisor. Once the neighborhood is sent, a node can
+maintain it for O(1) rounds, while continuing to run the base algorithm. (The details on this
+interaction with the supervisor are given in Section A.2.2.) For simplicity, we assume that the
+supervisor has access to a snapshot of the network, on which the advice can be computed, and that
+the snapshot is maintained by the nodes.
+Given any network snapshot, the supervisor can compute a (close to) minimum sequence of
+the universal primitives (cf. Section 2.2), so that the network forms the target topology (see [72]
+for details). However, since the nodes do not have any global information (e.g., round number,
+etc), they would need to fully trust the supervisor for proposing appropriate edges to eventually
+form the target topology. This can be problematic for the convergence time as well as the number
+of edges stored by the nodes over time. Thus, there should be some mechanism by which a node
+can quickly verify whether the proposed edges are indeed helpful, whilst also limiting the number
+of additional edges stored due to the supervisor.
+Desirable Properties. Based on these insights, we propose that the advice message at any given
+node has the following properties to achieve both efficiency and robustness.
+1. Sybil-Resistant. For each node u, and for any node id v present in node u’s advice message
+but not present in node u’s memory or channel, node u neither assigns v to any variable (i.e.
+store in its memory), nor sends v to any other node (i.e., circulate it in the network).
+2. Compact. Size of the advice is small, i.e., a message of size at most O(log n) bits is given to
+each node.
+3. Robust. If any node received an incorrect advice, every node rejects its advice (if that node
+had received advice), and restores the dedicated memory for handling advice (i.e., memory
+M(A)), in O(log n) rounds; whereas, if every node received correct advice, the nodes will be
+in a legal configuration in O(log n) rounds.
+3.2 Building a Global Structure from any Snapshot
+Given the properties of advice, we describe two immediate challenges towards designing the ad-
+vice. First, we should be able to connect every pair of nodes that are adjacent in the sorted-path
+topology but may be situated far away from each other in any given snapshot, in O(log n) rounds.
+Second, if any node received an incorrect advice, the other nodes should be informed about it in
+O(log n) rounds by a scalable mechanism so that they can also quickly reject their advice.
+One can observe that the above challenges arise from a lack of a global structure in the network.
+Thus, our first attempt is to build a lightweight structure, specifically a hypercube, from the advice
+9
+
+Figure 3: Five nodes hierarchically introduce their neighbors to each other to form exponentially
+spaced-out shortcuts. If v4 needs to send a message m to the node with virtual id 4 (i.e., v5), m is
+first forwarded to the “closest” shortcut (wrt. virtual ids), i.e., v2; this is repeatedly done until m
+eventually reaches v5.
+given to the nodes. Building a hypercubic overlay can be used to “kill two birds with one stone”:
+first, a node can rely on a local routing algorithm, where a message from a source is forwarded
+to the next node and so on until it reaches the destination, to initiate a new connection (e.g., for
+forming the sorted path); second, if a node detects any fault with the advice, it can quickly inform
+the other nodes in the hypercube, after which the nodes can leave the hypercubic structure.
+Now, we enlist the steps for building a hypercubic structure.
+1. Snapshot to Tree. Supervisor chooses a rooted spanning tree in the snapshot. As part of the
+advice, each node is given the id of its parent and the distance to the root.
+2. Tree to Path. Each node performs a local transformation (see Section 3.4, for the Tree-to-Path
+algorithm), so that all the nodes are part of a single path. As part of the advice, nodes are
+given unique “virtual ids,” going from 1 to n, from one end of that path to the other.
+3. Path to Hypercube. By a pointer-doubling approach [46] (over that path), each node hierarchi-
+cally introduces its neighbors to each other. Thus, in O(log n) rounds, every node connects
+to “shortcuts,” at distances of 1, 2, 4, . . . from it, forming what we call a “flyover” which is a
+hypercubic structure1; for e.g., see Figure 3.
+4. Routing. Once the nodes form a flyover, every node can route messages to any other node
+[57] (c.f. Figure 3), using the virtual ids and shortcuts, in O(log n) rounds.
+At this point, an astute reader may note that multiple flyovers could form in different parts of
+the network, whereas some nodes may not even have received any advice. Suchconcurrency issues
+are exactly what makes this problem of handling a malicious supervisor difficult. In Section 4.2,
+we outline how this flyover is carefully constructed and verified, and how small information (i.e.,
+a unique identifier for flyover) is exchanged between the nodes (within and outside the flyover),
+to quickly detect faulty advice.
+3.3 Locally Verifying the Advised sorted Path
+After we have a desriable global structure (i.e., all the nodes forming a flyover over a sequentially
+numbered path), one natural approach is that for each node, as part of its advice, send the virtual
+id (i.e., position on that numbered path) of its neighbor(s) in the target topology. Each node can
+then quickly route itsown id over the hypercubic structure to the node with that virtual id to create
+a new connection, thereby forming the “advised” target topology. But as the nodes have a local
+view, they cannot easily verify if the actual target topology was indeed formed.
+1Note that a hypercube is technically defined for a network size that is a power of 2. In general, flyover belongs to a
+family of hypercubic networks, and that path and collection of shortcut edges contain the hypercube edges.
+10
+
+For example, let the sorted path be(u1, u2, . . . ,un), where u1 is the node with the smallest node
+id. If the advice for node ui consists of the virtual ids of nodes ui−1 and ui+1, the node ui can send
+its own node id to them via “hypercubic routing” (by virtual ids and shortcuts; e.g., see Figure 3)
+[57], and make a connection to them. Once these edges are added, each node can locally verify that
+it has at most 2 edges, and if it has 2 edges, it is the “middle” node id (in sorted order). But a bad
+supervisor can give advice so that the paths (u1, . . . ,un/2) and (un/2, . . . ,un) are formed, without
+any node detecting any fault with the advice. In other words, the “advised” sorted path (i.e.,
+connections suggested by the supervisor via virtual ids) do not form asingle connected component.
+Being able to (distributively) detect if any two components of the overlay are connected, is a non-
+trivial task with the best-known technique (i.e., linear-probing), requiring O(n) rounds [30].
+Algorithm 1 Supervisor Algorithm
+Require: Snapshot (connected and undirected graph) GS = (V, ES ).
+1: Let Adv(u) denote the advice message sent to a node u. Moreover, if Adv(u).x = y, then
+“x = y” appears in the advice message for the node u; Let dist T(u, v) denote the distance
+between any nodes u and v in a tree T;
+2: / / Relevant graphs (definitions)
+3: Let TS be a labelled rooted spanning tree in GS with any node r as root, and l(·): V→{ 0, 1}
+as the labeling where l(r) = 0∧ (∀v∈ V, l(v) = l(r) + distTS (v, r) mod 2);
+4: Let PS be (undirected version of) the path returned by Tree-to-Path algorithm (see, Section 3.4)
+over input TS;
+5: Let G∗ = ( V, E∗) be the (undirected) sorted path where ∀u, v ∈ V, u = succ(v)∨ v =
+succ(u) ⇐⇒ (u, v)∈ E∗;
+6: Let T∗ be the rooted spanning tree, called the sorted-path tree, in the sorted path G∗ with node
+r as the root;
+7: for each node u∈ V do
+8: / / Virtual id (i.e., position on the path; cf. Section 3.2)
+9: Adv(u).vID := distPS (u, r) + 1;
+10: / / To verify the “advised” sorted path (cf. Section 3.3)
+11: u̸= r→ Adv(u).c-par := distPS (u′, r) + 1, where u′ is the parent of u in T∗; / / Virtual id of
+u’s parent in T∗
+12: Adv(u).c-dist := distT∗ (u, r);
+13: / / For the Tree-to-Path Algorithm (cf. Section 3.4)
+14: u̸= r→ Adv(u).par := node id of u’s parent in TS;
+15: Adv(u).dist := distTS (u, r);
+16: end for
+To fix suchconnectivity-related issues in the advised sorted path, we make use oflocal certification
+of a spanning tree (cf. Section 2.3). Specifically, the sorted path G∗ is encoded as a rooted spanning
+tree called “sorted-path tree T∗,” where the root is the node whose virtual id is 1. As part of
+advice, each node is given the virtual id of its parent, and the distance to the root, in the tree T∗.
+See Algorithm 1, and Figure 4 for a pictorial example. In local certification, the verification of the
+certificates is carried out over a fixed network, but in our case, the nodes in T∗ may not even be
+connected. Thus, each node uses the hypercubic structure for routing and connecting to its parent
+in T∗. Moreover, that structure is also used to quickly disseminate the node id of the root in T∗
+11
+
+Figure 4: An example of the advice and its outcome (cf. Algorithm 1), where the sorted path G∗
+is (v1, . . . ,v5). Here, the (red) dashed edges form the output of the Tree-to-Path Algorithm, and
+the (blue) dotted edges depict the encoded tree T∗. Note that those dotted edges are formed via
+routing over the flyover (hypercubic structure).
+to all the nodes. In Section 4.3, we explain how the formation and verification of the tree T∗ is
+accomplished via routing over the hypercubic structure.
+3.4 Tree-to-Path Algorithm
+Let T = ( l(·), r, V, E) be a labelled rooted undirected tree, where V is the set of vertices, r∈ V
+is the root, l(·): V→{ 0, 1} is a label function on vertices where l(v) = ( l(r) + dist(r, v)) mod 2,
+and E is the set of edges. Let CT(v) ={u| dist(u, v) = 1∧ dist(v, r) < dist(u, r)} be the children of
+v∈ V in the tree T, and there is a total order (for e.g., based on ids) on CT(v) ={u1, . . . ,uq} such
+that u1 <··· < uq for any q≥ 1. Let Beg (P) and End(P) of a directed path P of size at least 2,
+denote the vertex with no incoming edge and the vertex with no outgoing edge, respectively.
+We briefly describe theTree-to-Pathalgorithm that takes a labelled rooted tree as input, and out-
+puts a directed path. See Figure 5 for the pictorial description. Specifically, the algorithm takes in
+a tree T = ( l(·), r, V, E) as input, and outputs a directed path P where Beg(P) = r and End(P) =
+min(CT(r)) if l(r) = 0, whereas it outputs a directed path P where Beg(P) = max(CT(r)) and
+End(P) = r if l(r) = 1. We incorporate this alternation based on labels for maintaining the in-
+variant that Beg (P) and End(P) are at a distance of 1. Such a simple, fast and local algorithm is
+amenable to be made self-stabilizing. In Section A.2.2, we give the self-stabilizing version of the
+algorithm that converts any (connected) overlay to a path overlay, using the given advice, inO(1)
+rounds.
+4 Flyovers: Fast Stabilization via Routing
+We rely on the dual-state approach (cf. Section 2.1), where a node executes a set of algorithms (for
+handling the advice) for helping the base algorithm to quickly form the sorted path.
+In this section, we give the intuition and pseudocodes for three self-stabilizing processes, that
+are concurrently executed to help the nodes form the sorted path inO(log n) rounds, if the advice
+is correct; otherwise, every node ignores the advice in O(log n) rounds, whilst still executing the
+base algorithm. Before delving into the details, we outline the design of our solution, and also
+describe the roles of all the variables for it.
+12
+
+Figure 5: Cases in Tree-to-Path Algorithm for any node vi where i is its order (e.g., via total order
+on ids) in set C(P(vi)), i.e., LeftSib(vi) ={vj| j < i} and RightSib(vi) ={vj| j > i}. L(v), P(v)
+and C(v) are label, parent and children of a node v (resp.). Dashed arrow depicts an edge in the
+final path.
+4.1 Variables, High-Level Design, and Initialization
+We refer to the hypercubic structure that a node belongs to as a flyover, as the nodes “bypass” the
+current network to find “short paths” to other nodes. Recall that a flyover is built on some path
+(over all the nodes) formed due to the advice (cf. Section 3.4).
+Variables. First, we explain all the variables of any node u that make up a flyover.
+1. u.L and u.R denote the sets of left and rightshortcuts (resp.); recall, shortcuts are node ids that
+are at distance 1, 2, 4, . . . on the path. u.S = u.L∪ u.R is the set of all shortcuts. Moreover,
+we refer to u.Sl(i) and u.Sr(i) as the “i-level” left and right shortcut (resp.).
+2. u.vID is used for storing the virtual id; recall, the virtual id is provided in the advice, which
+is used to determine its position on the path. (This is not to be confused with the unique id of
+a node, see Section 1.3; when we just refer to “id,” we mean the unique id of the node.) By
+design, the node with no left shortcut has virtual id 1.
+3. u.flyID is used for storing a “unique identifier” for the flyover, called theflyover id. By design,
+the node id of the node with no left shortcut, determines the flyover id.
+13
+
+4. u.exit is a binary variable indicating if the node should exit the flyover. If any node exits the
+flyover, it runs only the base algorithm (until it receives a new advice).
+We also use three variables for storing and verifying what we refer to as connectivity certificate,
+based on the local certification of spanning tree; these variables are used for certifying the sorted-
+path tree T∗. (Algorithm 1 has the definition of T∗.)
+1. u.c-par is used for storing the virtual id of the parent of node u in the sorted-path tree T∗.
+2. u.c-dist is used for storing the distance from the root to node u in the sorted-path tree T∗.
+3. u.c-ids is used for storing the node ids of node u’s neighbors in the sorted-path topology G∗.
+Our Design. A node u updates the variables u.vID, u.c-par and u.c-dist (if it’s not part of a flyover)
+when it receives the advice. (See Algorithm 1 for how those values are determined.) The Tree-to-
+Path algorithm is then executed, and based on its position, the first left and right shortcuts, i.e.,
+u.Sl(1) and u.Sr(1), are updated to its left and right neighbors on the path (resp.). Subsequently,
+the nodes build the flyover over the path via pointer-doubling, where the (i + 1)-level shortcuts
+are formed from the i-level shortcuts; see Figure 3. By design, the node id of the “leftmost” node
+(in the path), say, node v with v.L = ∅∧ v.R̸= ∅, is the flyover id, and is propagated to the rest of
+the nodes in flyover, i.e., for any node u, u.flyID is initially assigned its own node id (as a default
+value), but is eventually assigned the flyover id. Moreover, nodev is the only node with v.vID = 1
+and v.c-dist = 0, as it is the root in the sorted-path tree T∗. See Figure 4 for an illustration.
+To verify the connectivity certificate, i.e., execute distance-checks (cf. Section 3.3), each node
+u̸= v must send the distanceu.c-dist to the node with virtual idu.c-par, say node w, on the flyover.
+However, since node u may not have a direct connection to node w, it sends u.c-dist to the closest
+left or right shortcut (depending on the virtual ids, i.e., u.vID and u.c-par), and so on, until this
+message eventually reaches node w whose virtual id is u.c-par. This is a standard method for
+routing a message between any pair of nodes in a hypercubic structure [57], on which we further
+provide details below. Finally, once the node w receives this message, it adds node id u to w.c-ids
+if the distances match, i.e., w.c-dist = u.c-dist− 1 (to form the sorted path). Moreover, every node
+u checks that it is sorted with respect to node ids in u.c-ids (to verify the sorted path).
+Init Function. Our design results in a few simple tests that are executed in every round; see
+Algorithm 2. Here, the NextStop (x) function returns the i-level left or right shortcut, whose
+virtual id, u.vID± 2i, is closest to x; if it is not possible to do so (e.g.,u.vID < x and a right shortcut
+does not exist), then the function returns “ ∅”. see Algorithm 3 for its description. Observe that
+if any of the tests fail, u.exit is updated to 1. In that case, node u rejects the flyover, i.e., it sends
+⟨RejFlyover⟩ message to all the node ids,flushes those ids (see Section 2.1 for the “flush” operation),
+and sets all the variables to the default values.
+4.2 Construction and Verification of Flyover
+Here, we explain the first two self-stabilizing processes concerned with the flyover structure. As
+the flyover is symmetrically built over some path, for readability, we provide the explanations with
+respect to right shortcuts (if they exist), which similarly apply for left shortcuts. Recall that if a
+node v is a i-level (right) shortcut of node u, then node v should be of distance 2 i to (the right of)
+node u on the path.
+14
+
+Algorithm 2 Init
+1: BasicChecks
+2: (∃⟨RejFlyover⟩∈ u.Ch)→ u.exit := 1;
+3: / / Flyover structure
+4: u.S = ∅∧ (u.c-ids̸= ∅∨ u.flyID̸= u.id)→ u.exit := 1;
+5: (u.L̸= ∅∧ u.vID≤ 1)→ u.exit := 1;
+6: (u.L = ∅∧ u.R̸= ∅)∧ (u.vID̸= 1∨ u.flyID̸= u.id)→ u.exit := 1;
+7: / / Connectivity certificate
+8: (u.vID = 1∧ u.c-dist̸= 0)→ u.exit := 1;
+9: (u.vID > 1∧ u.c-dist≤ 0)→ u.exit := 1;
+10: (u.S̸= ∅∧ u.vID > 1)∧ (NextStop (u.c-par) = ∅)→ u.exit := 1;
+11: / / Sorted-path topology
+12: |u.c-ids| > 2→ u.exit := 1;
+13: |u.c-ids| = 2∧ (u.id > max(u.c-ids))→ u.exit := 1;
+14: |u.c-ids| = 2∧ (u.id < min(u.c-ids))→ u.exit := 1;
+15:
+16: RejectFlyover : u.exit = 1→
+17: / / Inform and flush the node ids part of nodeu’s flyover
+18: SendRejFly ((u.S∪{ u.flyID}∪ u.c-ids)\ u.id);
+19: / / Set the variables to their default values
+20: u.L := ∅; u.R := ∅; u.vID := 0; u.flyID := u.id;
+21: u.exit := 0; u.c-par := 0; u.c-dist :=−1; u.c-ids := ∅;
+Our algorithms consist of a precise set of conditions for both, sending a particular message,
+and for specific actions to be taken (for e.g., update the set of shortcuts, or set the exit variable to
+1) after receiving a message. Moreover, if any node u is not part of any flyover (i.e., u.S = ∅), and
+receives a message regarding a flyover, then node u sends⟨RejFlyover⟩ message to the node ids
+part of that message, and flushes them.
+Algorithm 4 provides the sequence of rules that govern the construction of the flyover.
+A node u sends its own node id to its first right shortcut, u.Sr(1), using the⟨TestLine-R⟩ mes-
+sage, to verify whether that information is correct. Consequently, the node that receives the mes-
+sage, sends⟨RejFlyover⟩ message to node u, and flushes it, if node u is not its left neighbor.
+A node u sends its i-level left shortcut u.Sl(i), including its own id, to its i-level right shortcut
+u.Sr(i), using⟨FlyConst-R⟩ message, so that u.Sr(i) can add or verify its (i + 1)-level left shortcut.
+This set of rules facilitates a pointer-doubling style, bottom-up flyover construction over the path
+(regardless of any shortcuts that may already exist). Consequently, the node that receives the
+message, say node w, sets w.Sl(i + 1) = u.Sl(i) only if|w.L| = i and w.Sl(i) = u; otherwise, it
+sends⟨RejFlyover⟩ to nodes u and u.Sl(i), and flushes them.
+Algorithm 5 gives the sequence of rules for the verification of virtual id and flyover id.
+A node u sends the value 2 (i−1) + u.vID to node u.Sr(i), using⟨TestvID⟩ message, to verify
+the distance of its i-level right shortcut (over the path that the flyover is constructed on). Conse-
+quently, the node that receives the message, say node w, sets w.exit = 1 if its virtual id does not
+match the value.
+A node u sends its u.flyID (flyover id), using ⟨TestFlyID⟩ message, to all node ids, except
+15
+
+Algorithm 3 Helper Functions (Executed Only When Called)
+1: NextStop (val)
+2: (val < 1∨ val = u.vID)→ Return “∅”;
+3: (u.S = ∅∨ u.vID < 1)→ Return “∅”;
+4: (val > u.vID∧ u.R = ∅)→ Return “∅”;
+5: (val < u.vID∧ u.L = ∅)→ Return “∅”;
+6: if (val > u.vID) then
+7: Return u.Sr(argmini∈|u.R|(|u.vID + 2(i−1)− vID|));
+8: else
+9: Return u.Sl(argmini∈|u.L|(|u.vID− 2(i−1)− vID|));
+10: end if
+11:
+12: SendRejFly (nodes)
+13: SEND(⟨RejFlyover⟩) to ids in nodes; Flush (nodes);
+u.flyID, in memory (incl. M u(A0), memory of base algorithm), if either node u is the leftmost
+node, or u.flyID has been updated (i.e., u.flyID̸= u.id). Furthermore, a node u, when it is ready
+to receive advice from the supervisor (i.e., u.S = ∅∧ u.vID = 0), sends “⊥” to all the node ids
+using⟨TestFlyID⟩ message. Crucially, this exchange of information (i.e., flyover id) acts as a simple
+mechanism for handling a supervisor that concurrently sends bad advice to nodes in different
+parts of the network, in that it helps the nodes quickly detect if there is a flyover constructed over
+any subset of nodes. Consequently, the node that receives the message, say node w, sets w.flyID
+to u.flyID, only if it is not the leftmost node, and w.flyID has not been updated yet (i.e., w.flyID
+is assigned to w.id). Finally, if w.flyID does not match u.flyID, node w sets w.exit = 1, and sends
+⟨RejFlyover⟩ message to node u.flyID, and flushes it.
+4.3 Verification of Connectivity Certificate
+Here, we explain the self-stabilizing process for verifying and forming the sorted-path topology.
+Algorithm 6 provides the sequence of rules for routing and verifying connectivity certificates.
+First, each nodeu begins this process after its flyover idu.flyID has been updated (i.e.,u.flyID̸=
+u.id). Recall that each node u sends u.flyID, via⟨TestFlyID⟩ message, to all node ids in memory, to
+ensure that a single flyover exists. Thus, the node id of the root in tree T∗ (i.e., node with virtual id
+1; see Algorithm 1) gets stored and verified by each node.
+A node u needs to send u.c-dist (i.e., distance to the root in T∗), to the node with virtual id
+u.c-par, say node v. For doing so, the nodeu routes both u.c-dist and u.id, using⟨TestCert⟩ message,
+via an appropriate left or right shortcut (based on the virtual ids), and so on, until the message
+reaches node v. Recall, NextStop (x) returns the i-level left or right shortcut, whose virtual id,
+u.vID± 2i, is closest to x. In a hypercubic structure, a message can be routed this way in O(log n)
+rounds, as the distance to the intended destination is halved each time.
+Consequently, the node that receives the message, say node w ̸= v, assigns w.exit = 1,
+and sends ⟨RejFlyover⟩ message to node u, if the message cannot be further forwarded (i.e.,
+NextStop (u.c-par) function returns “ ∅”). Finally, when the node v receives it, if the virtual ids
+and distances match (i.e., v.vID = u.c-par and v.c-dist = u.c-dist− 1), node v adds the node id u to
+16
+
+Algorithm 4 Flyover Construction
+1: TestFlyoverConstruction
+2: u.R̸= ∅→ SEND(⟨TestLine-R,u.id⟩) to u.Sr(1);
+3: u.L̸= ∅→ SEND(⟨TestLine-L,u.id⟩) to u.Sl(1);
+4: if (u.R̸= ∅∧ u.L̸= ∅) then
+5: for each i in{1, . . . , min(|u.R|,|u.L|)} do
+6: SEND(⟨FlyConst-R, u.Sl(i), i, u.id⟩) to u.Sr(i);
+7: SEND(⟨FlyConst-L, u.Sr(i), i, u.id⟩) to u.Sl(i);
+8: end for
+9: end if
+10:
+11: / / Here, we omit code for a “. . . -L” msg due to similarity in handling a “. . . -R” msg
+12: R_TestFlyoverConstruction
+13: for each received message⟨TestLine-R,sen⟩ do
+14: (u.L̸= ∅∧ u.Sl(1)̸= sen∨ u.L = ∅)→ u.exit := 1;
+15: u.S = ∅∨ u.exit = 1→ SendRejFly ({sen});
+16: end for
+17: for each received message⟨FlyConst-R, w, i, sen⟩ do
+18: u.L = ∅∨ (|u.L|≥ i∧ u.Sl(i)̸= sen)→ u.exit := 1;
+19: |u.L|≥ (i + 1)∧ u.Sl(i + 1)̸= w→ u.exit := 1;
+20: (u.exit = 0)∧ (1 <|u.L| < i)→ Flush ({sen, w});
+21: (u.exit = 0)∧ (|u.L| = i∧ u.Sl(i) = sen)→ u.Sl(|u.L| + 1) := w; / / Update shortcut!
+22: u.S = ∅∨ u.exit = 1→ SendRejFly ({sen, w});
+23: end for
+v.c-ids, and sends its own node id to node u, so that node u stores it in u.c-ids; otherwise, the node
+v sets v.exit = 1, and sends⟨RejFlyover⟩ to node u, and flushes it.
+5 Analysis Sketch
+In this section, we describe the analysis sketch for all the critical aspects of our algorithms. The
+pseudocodes are given in Section A, and the full analyses are given in Section B and C.
+Firstly, we show that the edges added by the Tree-to-Path algorithm (c.f. Figure 5; see Al-
+gorithm 10 for the pseudocode.) form a single (directed) path over the nodes. We use a proof
+by induction over the height of a labbelled rooted tree. We consider two base cases for the trees
+of height equal to 1, with the label of the root equal to either 0 or 1, where the height of a tree
+T = ( l(·), r, V, E) is equal to max v∈V(distT(r, v)). For the inductive case, we consider any tree
+T = ( l(·), r, V, E) of height greater than 1, and then show that the algorithm outputs a directed
+path P where Beg(P) = r and End(P) is min(CT(r)) if l(r) = 0; whereas it outputs a directed path
+P where Beg(P) is max(CT(r)) and End(P) = r if l(r) = 1.
+Theorem 5.1. The Tree-to-Path Algorithm takes a labelled rooted tree T = ( l(·), r, V, E) where l(r) = 0
+as input, and outputs a directed path P = (V, E′) where Beg(P) = r and End(P) = min(CT(r)).
+Next, we show that the construction of shortcuts over that path happens in O(log n) rounds,
+17
+
+Algorithm 5 Flyover Metadata
+1: TestFlyoverMetadata
+2: / / Propagate the flyover id if it is updated
+3: prop-flyID := (u.vID = 1)∨ (u.vID > 1∧ u.flyID̸= u.id);
+4: prop-flyID→ SEND(⟨TestFlyID,u.flyID⟩) to all ids, except u.flyID, in memory;
+5: / / Ready to receive advice; inform other nodes about it
+6: (u.S = ∅∧ u.vID = 0)→ SEND(⟨TestFlyID,⊥⟩) to all ids in memory;
+7: / / Check that shortcuts are exponentially spaced-out
+8: |u.R|≥ 1→ SEND(⟨TestvID,(u.vID + 2(i−1))⟩) to u.Sr(i) for all i∈ [|u.R|];
+9: |u.L|≥ 1→ SEND(⟨TestvID,(u.vID− 2(i−1))⟩) to u.Sl(i) for all i∈ [|u.L|];
+10:
+11: R_TestFlyoverMetadata
+12: for each received message⟨TestvID,vID⟩ do
+13: (u.S = ∅)∨ (u.S̸= ∅∧ u.vID̸= vID)→ u.exit = 1;
+14: end for
+15: for each received message⟨TestFlyID,flyID⟩ do
+16: if (u.L̸= ∅∧ u.exit = 0) then
+17: u.flyID = u.id∧ flyID̸=⊥→ u.flyID := flyID; / / Update flyID!
+18: end if
+19: (u.S̸= ∅∧ u.flyID̸= flyID)→ u.exit = 1;
+20: (u.S = ∅∧ flyID̸=⊥)→ u.exit = 1;
+21: u.exit = 1→ SendRejFly ({flyID});
+22: end for
+implying that information (e.g., ⟨RejFlyover⟩ messages) can be quickly disseminated in any fly-
+over. Thus, if the flyover is not correctly built, i.e., virtual ids are not consecutive, or shortcuts are
+not exponentially spaced-out, or flyover id is not properly assigned, then due to Algorithms 2, 4
+and 5, some node detects and propagates the fault in the flyover, cueing other nodes to also exit
+the flyover.
+However, if a flyover is “internally correct,” and is formed over a subset of nodes, then some
+key information needs to be exchanged between the nodes inside and outside the flyover. To that
+end, we rely on Algorithm 5 where every node sends its flyover id to all node ids in the memory.
+As all our algorithms rely on the universal primitives (cf. Section 2.2) that preserve (weak) con-
+nectivity, there must exist an (incoming/outgoing) edge to that flyover in any round. By carefully
+carrying out a case-by-case analysis of how that edge can show up in a node’s memory, we prove
+the following lemma.
+Lemma 5.2. Consider any set of nodes B ={v1, . . . ,v|B|} in any round r, where|B| < n and (v1.L =
+∅∧ v|B|.R = ∅) and (∀i∈ [|B|− 1], vi.Sr(1) = vi+1∧ vi+1.Sl(1) = vi). By round r + O(log n), at
+least one node u∈ B assigns u.exit = 1.
+Moreover, we prove that if all the nodes indeed form a single flyover, but if the connections
+suggested by the supervisor (via virtual ids) do not formG∗ (see Section 3.3 for a discussion), then
+due to Algorithms 2 and 6 (i.e., routing the connectivity certificates), at least one node quickly
+detects the bad advice.
+18
+
+Algorithm 6 Connectivity Certificate
+1: TestConnCert : (u.vID > 1∧ u.flyID̸= u.id)→
+2: SEND(msg) to NextStop (u.c-par) where msg is⟨TestCert,u.id, u.c-par, u.c-dist⟩; / / Route
+3:
+4: R_TestConnCert
+5: prop-flyID := (u.vID = 1)∨ (u.vID > 1∧ u.flyID̸= u.id);
+6: for each received message⟨TestCert,w, vID, dist⟩ do
+7: / / Distances don’t match / Unable to route
+8: (u.vID = vID)∧ (dist− 1̸= u.c-dist)→ u.exit :=1;
+9: (u.vID̸= vID)∧ (NextStop (vID) = ∅)→ u.exit :=1;
+10: if (u.S = ∅∨ u.exit = 1) then
+11: SendRejFly ({w});
+12: else
+13: if u.vID = vID then
+14: u.c-ids := u.c-ids∪{ w}; / / Accept id!
+15: SEND(⟨IntroCert, u.id⟩) to w; / / Bidirected edge
+16: else
+17: ¬prop-flyID→ Flush ({w});
+18: prop-flyID→ SEND(⟨TestCert,w, vID, dist⟩) to NextStop (vID); / / Route, if flyID is
+updated
+19: end if
+20: end if
+21: end for
+22: for each received message⟨IntroCert, w⟩ do
+23: u.c-ids := u.c-ids∪{ w}; / / Bidirected edge
+24: end for
+Claim 5.3. Let V ={v1, . . . ,vn} and (v1.L = ∅∧ vn.R = ∅) and (∀i∈ [n− 1], vi.Sr(1) = vi+1∧
+vi+1.Sl(1) = vi) and (∀i∈ [n], vi.vID = i∧ vi.flyID = v1). Let G ′ = ( V, E′) such that (u, v)∈
+E′ ⇐⇒ (u.vID = v.c-par∧ v.c-dist = u.c-dist + 1)∨ (v.vID = u.c-par∧ v.c-dist = u.c-dist− 1). If
+∀i∈ [n]\{ 1},∃ui∈ V, vi.c-par = ui.vID where (ui.c-dist = vi.c-dist− 1), then G′ is same as G∗.
+Proof Sketch. Due to Algorithm 2, the following invariants are satisfied for each node u∈ V.
+1. (Tree Distance) (u.L = ∅ =⇒ u.c-dist = 0) and (u.L̸= ∅ =⇒ u.c-dist > 0).
+2. (Degree Constraint; Locally Sorted) E′′(u) ̸= ∅ =⇒ (|E′′(u)| = 1)∨ (|E′′(u)| = 2∧
+min(|E′′(u)|) < u.id < max(|E′′(u)|)), where E′′(u) ={v| (u, v)∈ E′}.
+The above invariants ensure that there can be only one nodeu with u.c-dist = 0, and that node isv1.
+Moreover, the degree of any node inG′ is at most 2; if a node’s degree is 2, then its own id is neither
+greater nor less than both the node ids of its neighbors. Given the premise of the lemma, for any
+node u∈ V\{ v1}, there is a node p(u) such that u.c-par = p(u).vID and p(u).c-dist = u.c-dist− 1.
+We use proof by contradiction to show thatG′ is indeed G∗. First, there cannot be a cycle in G′,
+as the distance checks (i.e., from a nodeu to its parent p(u)) cannot be satisfied at all the nodes (cf.
+Section 2.3). Moreover, G′ cannot be a spanning forest because all the nodes, via flyover id, can
+19
+
+verify that there is only one “root node,” which is node v1 with its distance v1.c-dist = 0. Thus,
+G′ forms a spanning tree. Combining the second invariant mentioned earlier, i.e., each node has
+degree at most 2, the tree must be a path. Finally, that path has to be the sorted pathG∗ due to the
+second invariant because every node checks that its locally sorted with its neighbors in G′.
+Finally, we give a lower bound on the convergence time given that the nodes are restricted
+to make edge manipulations in their current neighborhood. The key observation is that if the
+distance between any two nodes u and v is D in round r, the distance between them is at least
+D/2t in round r + t, even if all nodes introduce all the node ids in their memory to each other in
+every round. Thus, if the nodes u and v should be adjacent in the target topology, it takesΩ(log n)
+rounds for node u to obtain the node id v (or vice versa) in the worst-case.
+Theorem 5.4. For any Sybil-resistant network, there exists an initial configuration such that the conver-
+gence time for any pair of supervisor and overlay algorithms is Ω(log n) rounds.
+References
+[1] Vamsi Addanki, Maciej Pacut, and Stefan Schmid. Credence: Augmenting datacenter switch
+buffer sharing with ML predictions. In Proc. NSDI, pages 613–634, 2024. 3, 5
+[2] Yehuda Afek, Gal Giladi, and Boaz Patt-Shamir. Distributed computing with the cloud. Dis-
+tributed Comput., 37(1):1–18, 2024. doi:10.1007/S00446-024-00460-W . 3
+[3] Yehuda Afek, Shay Kutten, and Moti Yung. Memory-efficient self stabilizing protocols for
+general networks. In Proc. WDAG, pages 15–28, 1990. doi:10.1007/3-540-54099-7\_2 . 8,
+38
+[4] Amirreza Akbari, Navid Eslami, Henrik Lievonen, Darya Melnyk, Joona Särkijärvi, and
+Jukka Suomela. Locality in online, dynamic, sequential, and distributed graph algorithms.
+In Proc. ICALP, pages 10:1–10:20, 2023. doi:10.4230/LIPICS.ICALP.2023.10. 3
+[5] James Aspnes and Yinghua Wu. O(logn)-time overlay network construction from graphs
+with out-degree 1. In Proc. OPODIS, pages 286–300, 2007. doi:10.1007/978-3-540-77096-
+1\_21. 5
+[6] John Augustine, Gopal Pandurangan, and Peter Robinson. Fast byzantine agreement in dy-
+namic networks. In Proc. PODC, pages 74–83, 2013. doi:10.1145/2484239.2484275. 5
+[7] John Augustine, Gopal Pandurangan, Peter Robinson, and Eli Upfal. Distributed agreement
+in dynamic peer-to-peer networks. J. Comput. Syst. Sci., 81(7):1088–1109, 2015. doi:10.1016/
+J.JCSS.2014.10.005. 5
+[8] Baruch Awerbuch, Shay Kutten, Yishay Mansour, Boaz Patt-Shamir, and George Varghese.
+Time optimal self-stabilizing synchronization. In Proc. STOC, pages 652–661, 1993. doi:
+10.1145/167088.167256. 3
+[9] Andrew Berns. Network scaffolding for efficient stabilization of the chord overlay network.
+In Proc. SP AA, pages 417–419, 2021. doi:10.1145/3409964.3461827. 5
+20
+
+[10] Andrew Berns, Sukumar Ghosh, and Sriram V . Pemmaraju. Building self-stabilizing overlay
+networks with the transitive closure framework. Theor. Comput. Sci. , 512:2–14, 2013. doi:
+10.1016/J.TCS.2013.02.021. 5
+[11] Aditya Bhaskara, Ashok Cutkosky, Ravi Kumar, and Manish Purohit. Online linear optimiza-
+tion with many hints. In Proc. NeurIPS, 2020. 5
+[12] Silvia Bianchi, Pascal Felber, and Maria Gradinariu. Content-based publish/subscribe using
+distributed r-trees. In Proc. Euro-Par, pages 537–548, 2007. doi:10.1007/978-3-540-74466-
+5\_57. 5
+[13] Lélia Blin and Sébastien Tixeuil. Compact deterministic self-stabilizing leader election on a
+ring: the exponential advantage of being talkative. Distributed Comput., 31(2):139–166, 2018.
+doi:10.1007/S00446-017-0294-2 . 3
+[14] Joan Boyar, Faith Ellen, and Kim S. Larsen. Distributed graph algorithms with predictions.
+CoRR, abs/2501.05267, 2025. arXiv:2501.05267, doi:10.48550/ARXIV.2501.05267. 3, 5
+[15] Joan Boyar, Lene M. Favrholdt, Christian Kudahl, Kim S. Larsen, and Jesper W. Mikkelsen.
+Online algorithms with advice: A survey. ACM Comput. Surv., 50(2):19:1–19:34, 2017. doi:
+10.1145/3056461. 3
+[16] Janna Burman, Ho-Lin Chen, Hsueh-Ping Chen, David Doty, Thomas Nowak, Eric E. Sever-
+son, and Chuan Xu. Time-optimal self-stabilizing leader election in population protocols. In
+Proc. PODC, pages 33–44, 2021. doi:10.1145/3465084.3467898. 3
+[17] Janna Burman and Shay Kutten. Time optimal asynchronous self-stabilizing spanning tree.
+In Proc. DISC, pages 92–107, 2007. doi:10.1007/978-3-540-75142-7\_10 . 3
+[18] Raphaël Chand and Pascal Felber. Semantic peer-to-peer overlays for publish/subscribe net-
+works. In Proc. Euro-Par, pages 1194–1204, 2005. doi:10.1007/11549468\_130. 5
+[19] Gregory V . Chockler, Roie Melamed, Yoav Tock, and Roman Vitenberg. Constructing scalable
+overlays for pub-sub with many topics. In Proc. PODC, pages 109–118, 2007. doi:10.1145/
+1281100.1281118. 5
+[20] Varsha Dani, Thomas P . Hayes, Seth Pettie, and Jared Saia. Fraud detection for random walks.
+In Proc. ITCS, pages 36:1–36:22, 2024. doi:10.4230/LIPICS.ITCS.2024.36. 5
+[21] Edsger W. Dijkstra. Self-stabilizing systems in spite of distributed control. Commun. ACM,
+17(11):643–644, 1974. doi:10.1145/361179.361202. 3, 6, 7
+[22] Shlomi Dolev. Self-Stabilization. MIT Press, 2000. 3
+[23] Shlomi Dolev and Ronen I. Kat. Hypertree for self-stabilizing peer-to-peer systems. Dis-
+tributed Comput., 20(5):375–388, 2008. doi:10.1007/S00446-007-0038-9 . 5
+[24] Shlomi Dolev and Jennifer L. Welch. Self-stabilizing clock synchronization in the presence of
+byzantine faults. J. ACM, 51(5):780–799, 2004. doi:10.1145/1017460.1017463. 3
+21
+
+[25] John R. Douceur. The sybil attack. In First International Workshop on Peer-to-Peer Systems,
+IPTPS, Revised Papers, 2002. doi:10.1007/3-540-45748-8\_24 . 3, 5
+[26] Faith Ellen, Barun Gorain, Avery Miller, and Andrzej Pelc. Constant-length labeling schemes
+for deterministic radio broadcast. ACM Trans. Parallel Comput. , 8(3):14:1–14:17, 2021. doi:
+10.1145/3470633. 3
+[27] Yuval Emek, Pierre Fraigniaud, Amos Korman, and Adi Rosén. Online computation with
+advice. In Proc. ICALP, pages 427–438, 2009. 3
+[28] Pascal Felber, Peter G. Kropf, Eryk Schiller, and Sabina Serbu. Survey on load balancing
+in peer-to-peer distributed hash tables. IEEE Commun. Surv. Tutorials , 16(1):473–492, 2014.
+doi:10.1109/SURV.2013.060313.00157. 5
+[29] Michael Feldmann, Christina Kolb, Christian Scheideler, and Thim Strothmann. Self-
+stabilizing supervised publish-subscribe systems. In Proc. IPDPS, pages 1050–1059, 2018.
+doi:10.1109/IPDPS.2018.00114. 3
+[30] Michael Feldmann, Christian Scheideler, and Stefan Schmid. Survey on algorithms for self-
+stabilizing overlay networks. ACM Comput. Surv. , 53(4):74:1–74:24, 2021. doi:10.1145/
+3397190. 4, 5, 6, 8, 11
+[31] Laurent Feuilloley. Introduction to local certification. Discret. Math. Theor. Comput. Sci., 23(3),
+2021. doi:10.46298/DMTCS.6280. 8, 38
+[32] Pierre Fraigniaud, Cyril Gavoille, David Ilcinkas, and Andrzej Pelc. Distributed computing
+with advice: information sensitivity of graph coloring. Distributed Comput., 21(6):395–403,
+2009. doi:10.1007/S00446-008-0076-Y . 3
+[33] Pierre Fraigniaud, David Ilcinkas, and Andrzej Pelc. Communication algorithms with advice.
+J. Comput. Syst. Sci., 76(3-4):222–232, 2010. doi:10.1016/J.JCSS.2009.07.002.
+[34] Pierre Fraigniaud, Amos Korman, and Emmanuelle Lebhar. Local MST computation with
+short advice. Theory Comput. Syst., 47(4):920–933, 2010. doi:10.1007/S00224-010-9280-9 . 3
+[35] Roy Friedman, Gabriel Kliot, and Alex Kogan. Hybrid distributed consensus. In Proc.
+OPODIS, pages 145–159, 2013. doi:10.1007/978-3-319-03850-6\_11 . 3
+[36] Dominik Gall, Riko Jacob, Andréa W. Richa, Christian Scheideler, Stefan Schmid, and Hanjo
+Täubig. A note on the parallel runtime of self-stabilizing graph linearization. Theory Comput.
+Syst., 55(1):110–135, 2014. doi:10.1007/S00224-013-9504-X . 4
+[37] Cyril Gavoille, David Peleg, Stéphane Pérennes, and Ran Raz. Distance labeling in graphs. J.
+Algorithms, 53(1):85–112, 2004. doi:10.1016/J.JALGOR.2004.05.002. 3
+[38] Seth Gilbert, Calvin Newport, Nitin H. Vaidya, and Alex Weaver. Contention resolution with
+predictions. In Proc. PODC, pages 127–137, 2021. doi:10.1145/3465084.3467911. 3, 5
+[39] Robert Gmyr, Jonas Lefèvre, and Christian Scheideler. Self-stabilizing metric graphs. Theory
+Comput. Syst., 63(2):177–199, 2019. doi:10.1007/S00224-017-9823-4 . 5
+22
+
+[40] Diksha Gupta, Jared Saia, and Maxwell Young. Bankrupting sybil despite churn. J. Comput.
+Syst. Sci., 135:89–124, 2023. doi:10.1016/J.JCSS.2023.02.004. 5
+[41] Sungjin Im, Benjamin Moseley, Chenyang Xu, and Ruilong Zhang. Online dynamic ac-
+knowledgement with learned predictions. In Proc. INFOCOM , pages 1–10, 2023. doi:
+10.1109/INFOCOM53939.2023.10228882. 3, 5
+[42] Sandy Irani and Yuval Rabani. On the value of coordination in distributed decision making.
+SIAM J. Comput., 25(3):498–519, 1996. doi:10.1137/S0097539794261428. 3
+[43] Riko Jacob, Andréa W. Richa, Christian Scheideler, Stefan Schmid, and Hanjo Täubig. Skip+:
+A self-stabilizing skip graph. J. ACM, 61(6):36:1–36:26, 2014. doi:10.1145/2629695. 3
+[44] Riko Jacob, Andréa W. Richa, Christian Scheideler, Stefan Schmid, and Hanjo Täubig. Skip+:
+A self-stabilizing skip graph. J. ACM, 61(6):36:1–36:26, 2014. doi:10.1145/2629695. 5, 6, 26
+[45] Riko Jacob, Stephan Ritscher, Christian Scheideler, and Stefan Schmid. Towards higher-
+dimensional topological self-stabilization: A distributed algorithm for delaunay graphs.
+Theor. Comput. Sci., 457:137–148, 2012. doi:10.1016/J.TCS.2012.07.029. 4
+[46] Joseph F. JáJá. An Introduction to Parallel Algorithms. Addison-Wesley, 1992. 10, 41
+[47] Tanqiu Jiang, Yi Li, Honghao Lin, Yisong Ruan, and David P . Woodruff. Learning-augmented
+data stream algorithms. In Proc. ICLR, 2020. 5
+[48] David R. Karger and Matthias Ruhl. Simple efficient load-balancing algorithms for peer-to-
+peer systems. Theory Comput. Syst., 39(6):787–804, 2006. doi:10.1007/S00224-006-1246-6 .
+5
+[49] Sebastian Kniesburges, Andreas Koutsopoulos, and Christian Scheideler. Re-chord: a self-
+stabilizing chord overlay network. In Proc. SP AA, pages 235–244, 2011. doi:10.1145/
+1989493.1989527. 5
+[50] Sebastian Kniesburges, Andreas Koutsopoulos, and Christian Scheideler. A self-stabilization
+process for small-world networks. In Proc. IPDPS, pages 1261–1271, 2012. doi:10.1109/
+IPDPS.2012.115. 5
+[51] Amos Korman, Shay Kutten, and David Peleg. Proof labeling schemes. Distributed Comput.,
+22(4):215–233, 2010. doi:10.1007/S00446-010-0095-3 . 3
+[52] Amos Korman, Shay Kutten, and David Peleg. Proof labeling schemes. Distributed Comput.,
+22(4):215–233, 2010. doi:10.1007/S00446-010-0095-3 . 4, 8, 38
+[53] Kishore Kothapalli and Christian Scheideler. Supervised peer-to-peer systems. In Proc. IS-
+P AN, pages 188–193, 2005. doi:10.1109/ISPAN.2005.81. 3
+[54] Andreas Koutsopoulos, Christian Scheideler, and Thim Strothmann. Towards a universal
+approach for the finite departure problem in overlay networks. Inf. Comput., 255:408–424,
+2017. doi:10.1016/J.IC.2016.12.006. 36
+23
+
+[55] Tim Kraska, Alex Beutel, Ed H. Chi, Jeffrey Dean, and Neoklis Polyzotis. The case for learned
+index structures. In Proc. SIGMOD, pages 489–504, 2018. doi:10.1145/3183713.3196909. 5
+[56] Silvio Lattanzi, Thomas Lavastida, Benjamin Moseley, and Sergei Vassilvitskii. Online
+scheduling via learned weights. In Proc. SODA, pages 1859–1877, 2020. doi:10.1137/1.
+9781611975994.114. 5
+[57] Frank Thomson Leighton. Introduction to parallel algorithms and architectures: Arrays· trees·
+hypercubes. M. Kaufmann Publishers, 1992. 10, 11, 14
+[58] Thodoris Lykouris and Sergei Vassilvitskii. Competitive caching with machine learned ad-
+vice. J. ACM, 68(4):24:1–24:25, 2021. doi:10.1145/3447579. 5
+[59] Dahlia Malkhi, Moni Naor, and David Ratajczak. Viceroy: a scalable and dynamic emulation
+of the butterfly. In Proc. PODC, pages 183–192, 2002. doi:10.1145/571825.571857. 5
+[60] Fredrik Manne, Morten Mjelde, Laurence Pilard, and Sébastien Tixeuil. A new self-stabilizing
+maximal matching algorithm. Theor. Comput. Sci., 410(14):1336–1345, 2009. doi:10.1016/J.
+TCS.2008.12.022. 3
+[61] Yifan Mao, Soubhik Deb, Shaileshh Bojja Venkatakrishnan, Sreeram Kannan, and Kannan
+Srinivasan. Perigee: Efficient peer-to-peer network design for blockchains. In Proc. PODC,
+pages 428–437, 2020. doi:10.1145/3382734.3405704. 5
+[62] Petar Maymounkov and David Mazières. Kademlia: A peer-to-peer information system
+based on the XOR metric. In Proc. IPTPS, pages 53–65, 2002. doi:10.1007/3-540-45748-
+8\_5. 5
+[63] Michael Mitzenmacher. A model for learned bloom filters and optimizing by sandwiching.
+In Proc. NeurIPS, 2018. 5
+[64] Michael Mitzenmacher and Sergei Vassilvitskii. Algorithms with predictions. In Beyond the
+Worst-Case Analysis of Algorithms , pages 646–662. Cambridge University Press, 2020. doi:
+10.1017/9781108637435.037. 3
+[65] Michael Mitzenmacher and Sergei Vassilvitskii. Algorithms with predictions.Commun. ACM,
+65(7):33–35, 2022. doi:10.1145/3528087. 3, 5
+[66] Rizal Mohd Nor, Mikhail Nesterenko, and Sébastien Tixeuil. Linearizing peer-to-peer sys-
+tems with oracles. In Proc. SSS, pages 221–236, 2013. doi:10.1007/978-3-319-03089-0\_16 .
+4
+[67] Melih Onus, Andréa W. Richa, and Christian Scheideler. Linearization: Locally self-
+stabilizing sorting in graphs. In Proc. ALENEX, 2007. doi:10.1137/1.9781611972870.10.
+4, 5, 7, 26
+[68] Gopal Pandurangan, Prabhakar Raghavan, and Eli Upfal. Building low-diameter P2P net-
+works. In Proc. FOCS, pages 492–499, 2001. doi:10.1109/SFCS.2001.959925. 5
+[69] Christos H. Papadimitriou and Mihalis Yannakakis. Linear programming without the matrix.
+In Proc. STOC, pages 121–129, 1993. doi:10.1145/167088.167127. 3
+24
+
+[70] Sylvia Ratnasamy, Paul Francis, Mark Handley, Richard M. Karp, and Scott Shenker. A
+scalable content-addressable network. In Proc. SIGCOMM , pages 161–172, 2001. doi:
+10.1145/383059.383072. 5
+[71] Antony I. T. Rowstron and Peter Druschel. Pastry: Scalable, decentralized object location,
+and routing for large-scale peer-to-peer systems. In Proc. Middleware, pages 329–350, 2001.
+doi:10.1007/3-540-45518-3\_18 . 5
+[72] Christian Scheideler and Alexander Setzer. On the complexity of local graph transformations.
+In Proc. ICALP, pages 150:1–150:14, 2019. doi:10.4230/LIPICS.ICALP.2019.150. 3, 8, 9
+[73] Christian Scheideler, Alexander Setzer, and Thim Strothmann. Towards establishing mono-
+tonic searchability in self-stabilizing data structures. InProc. OPODIS, pages 24:1–24:17, 2015.
+doi:10.4230/LIPICS.OPODIS.2015.24. 4
+[74] Ion Stoica, Robert Tappan Morris, David R. Karger, M. Frans Kaashoek, and Hari Balakr-
+ishnan. Chord: A scalable peer-to-peer lookup service for internet applications. In Proc.
+SIGCOMM, pages 149–160, 2001. doi:10.1145/383059.383071. 5
+[75] Jukka Suomela. Survey of local algorithms. ACM Comput. Surv., 45(2):24:1–24:40, 2013. doi:
+10.1145/2431211.2431223. 3
+[76] Sébastien Tixeuil. Self-stabilizing algorithms. In Algorithms and Theory of Computation Hand-
+book, pages 26:1–26:45. Chapman & Hall/CRC, 2010. 3
+25
+
+A Pseudocodes
+In every round, each node executes the flyover algorithms (cf. Section A.1), distributed Tree-to-
+Path algorithms (cf. Section A.2.2), and then the base algorithm (in that order). In Section D, we
+outline the list of all variables used by our algorithms.
+Transferring the “advised” neighbors to base algorithm. For any node u, the variable u.c-id is
+used to store its neighbors on the “advised” topology (i.e., connections made by routing over the
+hypercubic structure due to the advice). Thus, in every round, the ids stored in that variable (if it is
+nonempty) are added to the address variable(s) of the base algorithm, used to store the neighbors
+of the target topology, before the algorithm is executed. If the supervisor is honest, this helps the
+nodes obtain the explicit edges required for the base algorithm to stabilize. However, if the advice
+is corrupted in any way, then by design, all nodes reject their advice (i.e. execute RejectFlyover
+function) in O(log n) rounds, and for any node u, u.c-id becomes empty.
+Choice of base algorithm. In general, any base algorithm that self-stabilizes to the sorted line
+using the overlay primitives (cf. Section 2.2) can be chosen. We only require that the algorithm use
+the Delegate-after-Reversal or DR primitive (cf. Definition C.7), in place of the Delegate primitive,
+to facilitate information exchange in both directions. (Note that this mechanism is already part
+of many existing algorithms, including [44, 67].) The DR primitive first delegates an edge in the
+reverse direction, and then it is immediately set to the intended direction. This primitive can
+either be implemented in a single round with a “preprocessing” phase (where the edge-reversal
+happens; see, e.g., Skip+ algorithm [44] where nodes create bidirected links in such a phase), or
+simply in two rounds in our model.
+As examples, if the base algorithm is the classic Linearization algorithm [67], the network self-
+stabilizes in O(n) rounds if the supervisor is malicious; if the base algorithm is the Skip+ algorithm
+[44] (that converges to a topology where the sorted-path is part of it, and the degree of each node
+is O(log n)), the network self-stabilizes in O(log2 n) rounds if the supervisor is malicious. Both of
+those algorithms can be directly used in our setting.
+A.1 Flyover Pseudocode
+26
+
+Algorithm 7 Init
+1: BasicChecks
+2: (∃⟨RejFlyover⟩∈ u.Ch)→ u.exit := 1;
+3: (u.S = ∅)∧ (u.c-ids̸= ∅∨ u.flyID̸= u.id)→ u.exit := 1;
+4: (u.L = ∅∧ u.R̸= ∅)∧ (u.vID̸= 1∨ u.flyID̸= u.id)→ u.exit := 1;
+5: (u.L̸= ∅)∧ (u.vID≤ 1)→ u.exit := 1;
+6: (u.vID = 1∧ u.c-dist̸= 0)∨ (u.vID > 1∧ u.c-dist = 0)→ u.exit := 1;
+7: (u.S̸= ∅∧ u.vID > 1)∧ (NextStop (u.c-par) = ∅)→ u.exit := 1;
+8: |u.c-ids| > 2→ u.exit := 1;
+9: (|u.c-ids| = 2)∧ (u.id > max(u.c-ids)∨ u.id < min(u.c-ids))→ u.exit := 1;
+10:
+11: RejectFlyover : u.exit = 1→
+12: flyids := (u.S∪{ u.flyID}∪ u.c-ids)\ u.id;
+13: SEND(⟨RejFlyover⟩) to ids in flyids; Flush (flyids);
+14: u.L := ∅; u.R := ∅; u.vID := 0; u.flyID := u.id;
+15: u.exit := 0; u.c-par := 0; u.c-dist :=−1; u.c-ids := ∅;
+Algorithm 8 Test Flyover and Connectivity Certificate
+1: TestFlyoverConstruction
+2: u.R̸= ∅→ SEND(⟨TestLine-R,u.id⟩) to u.Sr(1);
+3: u.L̸= ∅→ SEND(⟨TestLine-L,u.id⟩) to u.Sl(1);
+4: if (u.R̸= ∅∧ u.L̸= ∅) then
+5: ∀i∈ [min(|u.R|,|u.L|)], SEND(⟨FlyConst-R, u.Sl(i), i, u.id⟩) to u.Sr(i);
+6: ∀i∈ [min(|u.R|,|u.L|)], SEND(⟨FlyConst-L, u.Sr(i), i, u.id⟩) to u.Sl(i);
+7: end if
+8:
+9: TestConnCertificate : (u.vID > 1∧ u.flyID̸= u.id)→
+10: SEND(⟨TestCert,u.id, u.c-par, u.c-dist⟩) to NextStop (u.c-par);
+11:
+12: TestFlyoverMetadata
+13: prop-flyID := (u.vID = 1)∨ (u.vID > 1∧ u.flyID̸= u.id);
+14: |u.R|≥ 1→ SEND(⟨TestvID,(u.vID + 2(i−1))⟩) to u.Sr(i) for all i∈ [|u.R|];
+15: |u.L|≥ 1→ SEND(⟨TestvID,(u.vID− 2(i−1))⟩) to u.Sl(i) for all i∈ [|u.L|];
+16: (u.S = ∅∧ u.vID = 0)→ SEND(⟨TestFlyID,⊥⟩) to all ids in memory;
+17: prop-flyID→ SEND(⟨TestFlyID,u.flyID⟩) to all ids, except u.flyID, in memory;
+27
+
+Algorithm 9 Response Functions (Flyover Related)
+1: R_TestFlyoverConstruction
+2: / / Here, we omit code for a “. . . -L” msg due to similarity in handling a “. . . -R” msg
+3: for each received message⟨msg, sen⟩ where msg∈{ TestLine-R, TestLine-L} do
+4: (msg = TestLine-R)∧ ((u.L̸= ∅∧ u.Sl(1)̸= sen)∨ u.L = ∅)→ u.exit := 1;
+5: u.S = ∅∨ u.exit = 1→ SEND(⟨RejFlyover⟩) to sen; Flush ({sen});
+6: end for
+7: for each received message⟨msg, w, i, sen⟩ where msg∈{ FlyConst-R, FlyConst-L} do
+8: if msg = FlyConst-R then
+9: (|u.L|≥ i∧ u.Sl(i)̸= sen)∨ u.L = ∅→ u.exit := 1;
+10: |u.L|≥ (i + 1)∧ u.Sl(i + 1)̸= w→ u.exit := 1;
+11: u.exit = 0∧ (1 <|u.L| < i)→ Flush ({sen, w});
+12: u.exit = 0∧ (|u.L| = i∧ u.Sl(i) = sen)→ u.Sl(|u.L| + 1) := w;
+13: end if
+14: u.S = ∅∨ u.exit = 1→ SEND(⟨RejFlyover⟩) to{sen, w}; Flush ({sen, w});
+15: end for
+16:
+17: R_TestConnCertificate
+18: for each received message⟨TestCert,w, vID, dist⟩ do
+19: prop-flyID := (u.vID = 1)∨ (u.vID > 1∧ u.flyID̸= u.id);
+20: (u.vID = vID)∧ (dist− 1̸= u.c-dist)→ u.exit :=1;
+21: (u.vID̸= vID)∧ (NextStop (vID) = ∅)→ u.exit :=1;
+22: if (u.S = ∅∨ u.exit = 1) then
+23: SEND(⟨RejFlyover⟩) to w; Flush ({w});
+24: else
+25: u.vID̸= vID∧¬ prop-flyID→ Flush ({w});
+26: u.vID̸= vID∧ prop-flyID→ SEND(⟨TestCert,w, vID, dist⟩) to NextStop (vID);
+27: u.vID = vID→ u.c-ids := u.c-ids∪{ w}; SEND(⟨IntroCert, u.id⟩ to w;
+28: end if
+29: end for
+30: for each received message⟨IntroCert, w⟩ do
+31: u.c-ids := u.c-ids∪{ w};
+32: end for
+33:
+34: R_TestFlyoverMetadata
+35: for each received message⟨TestvID,vID⟩ do
+36: (u.S = ∅)∨ (u.S̸= ∅∧ u.vID̸= vID)→ u.exit = 1;
+37: end for
+38: for each received message⟨TestFlyID,flyID⟩ do
+39: if (u.L = ∅∧ u.R̸= ∅)∧ (u.exit = 0) then
+40: (u.flyID = u.id∧ flyID̸=⊥)→ u.flyID := flyID;
+41: end if
+42: (u.S̸= ∅∧ u.flyID̸= flyID)∨ (u.S = ∅∧ flyID̸=⊥)→ u.exit = 1;
+43: u.exit = 1→ SEND(⟨RejFlyover⟩) to flyID; Flush ({flyID});
+44: end for
+28
+
+A.2 Tree-to-Path Pseudocode
+In this subsection, we first provide the pseudocode of the (centralized) Tree-to-Path algorithm
+described in Section 3.4. Then, we give the pseudocode for the distributed implementation of the
+same algorithm, which also includes the interaction with the supervisor.
+A.2.1 Sequential Tree-to-Path
+A.2.2 Distributed Tree-to-Path
+Here, we describe the self-stabilizing algorithms for receiving and processing the advice message.
+We explicitly address the interaction between the supervisor and the nodes, and also show that it
+can be combined with the rest of the algorithms.
+From the (honest) supervisor’s perceptive, if there is any node that is not part of any flyover,
+and has its exit variable set to 1, that node would request for advice. Once the supervisor receives
+the first request, it waits for O(log n) rounds until all the nodes are not part of any flyover, and
+have their exit variables set to 1. (Note that by design, if the advice or flyover is not correct, every
+node executes RejectFlyover function of Algorithm 2 in O(log n) rounds; see Section C.8 in the
+analysis.) At this point, the supervisor learns the “network snapshot,” by requesting each node to
+send its neighborhood, that is, the ids stored in its memory or channel.
+From the perspective of any node u, to avoid being unnecessarily contacted by the supervisor,
+it should not be part of any flyover (that is, u.S̸= ∅), nor should its u.exit variable be set to 1,
+while processing an advice message (i.e., during the interaction with the supervisor). After being
+requested for the neighborhood by the supervisor, every node can store and maintain its current
+neighborhood for O(1) rounds to process the advice given by the supervisor. This is achieved by
+setting and tracking a “timer” variable that indicates that the advice is being processed.
+We explain the additional variables of a node u that are used in the following algorithms.
+1. u.t is used as a timer variable which is set to 5 when the supervisor requests for its current
+neighborhood; u.t is decremented by 1 in every round, until it becomes 0 again.
+2. u.dist is used for storing the distance from the root, in a rooted spanning tree of the current
+snapshot, given by the supervisor; see Algorithm 1 for the details. This distance is primarily
+used by nodes for calculating the label in the Tree-to-Path algorithm (cf. Section 3.4), and is
+also used for quickly checking that any subset of “parent” ids (in the advice) do not form a
+cycle, using the distance-checks in local certification (cf. Section 3).
+29
+
+Algorithm 10 Tree-to-Path
+Require: Let the input to the algorithm be a (labelled) rooted treeT = (l(·), r, V, E) where l(r) = 0
+and|V|≥ 2. For any v∈ V, let C(v) ={u| dist(u, v) = 1∧ dist(v, r) < dist(u, r)}.
+Ensure: Output of the algorithm is a directed path graph P where Beg(P) = r.
+1: for v∈ V and C(v)̸= ∅ do
+2: Assign a total ordering on C(v) ={u1, . . . ,uq} such that u1 <··· < uq for q≥ 1;
+3: end for
+4: Let E′← ∅;
+5: for v∈ V and v̸= r and l(v) = 1 do
+6: Let pv∈ V such that v∈ C(pv); / / Parent ofv
+7: Let RSib ={w| w > v∧ w∈ C(pv)}; / / Right siblings (via the total ordering)
+8: if RSib = ∅ and C(v) = ∅ then
+9: Add (directed) edge (pv, v) to E′;
+10: else if RSib = ∅ and C(v)̸= ∅ then
+11: Add (directed) edge (pv, max(C(v))) to E′;
+12: else if RSib̸= ∅ and C(v) = ∅ then
+13: Add (directed) edge (min(RSib), v) to E′;
+14: else
+15: Add (directed) edge (min(RSib), max(C(v))) to E′;
+16: end if
+17: end for
+18: for v∈ V and v̸= r and l(v) = 0 do
+19: Let pv∈ V such that v∈ C(pv); / / Parent ofv
+20: Let LSib ={w| w < v∧ w∈ C(u)}; / / Left siblings (via the total ordering)
+21: if LSib = ∅ and C(v) = ∅ then
+22: Add (directed) edge (u, pv) to E′;
+23: else if LSib = ∅ and C(v)̸= ∅ then
+24: Add (directed) edge (min(C(v)), pv) to E′;
+25: else if LSib̸= ∅ and C(v) = ∅ then
+26: Add (directed) edge (v, max(LSib)) to E′;
+27: else
+28: Add (directed) edge (min(C(v)), max(LSib)) to E′;
+29: end if
+30: end for
+31: Output P = (V, E′);
+30
+
+Algorithm 11 Init2
+1: BasicChecks2
+2: u.t > 5→ u.t := 5; u.t < 0→ u.t := 0;
+3: u.t > 0→ u.t := u.t− 1; / / Decrementu.r (until 0)
+4: u.t≤ 1∧ (u.S = ∅∨ u.exit = 1)→ u.vID := 0; / / ResetvID if flyover is not formed
+5:
+6: SnapshotReq : u.S = ∅∧ u.exit = 0∧ u.t = 0→
+7: if there exists a message⟨RequestSnapshot⟩ then
+8: u.t := 5; snap := Set of all ids in Mu(A0); / / Set up timer and neighborhood
+9: SEND(⟨Intro, u.id⟩) to all nodes in snap;∀v∈ snap, SEND(⟨Intro, v⟩) to thyself;
+10: SEND(⟨Neighborhood, snap⟩) to supervisor;
+11: end if
+Algorithm 12 Local Advice Verification
+1: GetAdvice
+2: busy :=¬(u.S = ∅∧ u.exit = 0∧ u.t > 1);
+3: snap := ∅; (∀⟨Intro, v⟩∈ u.Ch)→ snap := snap∪{ v};
+4: if (⟨Advice,···⟩∈ u.Ch)∧ (¬busy)∧ (u.t = 4) then
+5: if⟨Advice,···⟩ is well-formed (e.g., Adv(u).par∈ snap, etc) then
+6: Update relevant variables (e.g., u.vID, u.c-dist, u.dist);
+7: SEND(⟨TestAdvice,u.dist, u.id⟩) to Adv(u).par;
+8: end if
+9: end if
+10: Flush (snap);
+11:
+12: CertifyTree
+13: ignore_msg :=¬(u.S = ∅∧ u.exit = 0∧ u.t > 1); children := ∅;
+14: for each received message⟨TestAdvice,dist, v⟩ do
+15: children := v∪ children; (u.dist̸= dist− 1)→ ignore_msg := 1;
+16: end for
+17: (¬ignore_msg∧ children̸= ∅)→ SetupLocalTransform (children);
+18: Flush (children);
+31
+
+Algorithm 13 Distributed Tree-to-Path
+1: LocalTransform
+2: ignore_msg :=¬(u.S = ∅∧ u.exit = 0∧ u.t > 1);
+3: children := ∅; parent :=⊥; r-sib :=⊥; l-sib :=⊥;
+4: for each received message⟨Verified,msg, v⟩ where msg∈{ parent, sib+, sib-, child} do
+5: (msg = parent∧ parent̸=⊥)→ ignore_msg := 1;
+6: (msg = sib-∧ l-sib̸=⊥)→ ignore_msg := 1;
+7: (msg = sib+∧ r-sib̸=⊥)→ ignore_msg := 1;
+8: (msg = parent∧¬ ignore_msg)→ parent := v;
+9: (msg = sib-∧¬ ignore_msg)→ l-sib := v;
+10: (msg = sib+∧¬ ignore_msg)→ r-sib := v;
+11: (msg = child∨ ignore_msg = 1)→ children := v∪ children;
+12: end for
+13: (parent =⊥∧ u.dist̸= 0)∨ (parent̸=⊥∧ u.dist < 1)→ ignore_msg := 1;
+14: (ignore_msg = 0∧ parent̸=⊥)→ ExecuteTransform (parent, r-sib, l-sib, children);
+15: Flush ({parent, r-sib, l-sib}∪ children);
+16:
+17: JoinPath
+18: ignore_msg :=¬(u.S = ∅∧ u.exit = 0∧ u.t > 1); flyL :=⊥; flyR :=⊥;
+19: for each received message⟨msg, v⟩ where msg∈{ Path+, Path-} do
+20: (msg = Path-∧ (u.vID = 1∨ flyL̸=⊥))→ ignore_msg := 1;
+21: (msg = Path+∧ flyR̸=⊥)→ ignore_msg := 1;
+22: (msg = Path-∧¬ ignore_msg)→ flyL := v;
+23: (msg = Path+∧¬ ignore_msg)→ flyR := v;
+24: ignore_msg = 1→ Flush ({v});
+25: end for
+26: / / First left and right shortcuts in the flyover
+27: ignore_msg = 0→ u.Sl(1) := flyL; u.Sr(1) := flyR;
+28: Flush ({flyL, flyR});
+A.3 Helper Functions
+32
+
+Algorithm 14 Helper Functions (Flyover Related)
+1: NextStop (val)
+2: (val < 1∨ val = u.vID)∨ (u.S = ∅∨ u.vID < 1)→ Return “∅”;
+3: (val > u.vID∧ (u.R = ∅))∨ (val < u.vID∧ (u.L = ∅))→ Return “∅”;
+4: if (val > u.vID) then
+5: Return u.Sr(argmini∈|u.R|(|u.vID + 2(i−1)− vID|));
+6: else
+7: Return u.Sl(argmini∈|u.L|(|u.vID− 2(i−1)− vID|));
+8: end if
+Algorithm 15 Helper Functions (Advice Related)
+1: SetupLocalTransform (children)
+2: Consider a total order on children ={u1, . . . ,uq} such that u1 <··· < uq for q > 1;
+3: SEND(⟨Verified, parent,u.id⟩) to all ids in children;
+4: SEND(⟨Verified, sib+,uj⟩) to uj−1 for q≥ j > 1;
+5: SEND(⟨Verified, sib-,uj⟩) to uj+1 for q > j≥ 1;
+6: SEND(⟨Verified, child,w⟩) to self, for each w∈ children;
+7:
+8: ExecuteTransform (parent, right_sib, left_sib, children)
+9: Let the total ordering on children ={u1, . . . ,uq} such that u1 <··· < uq for q > 1;
+10: / / Path+ messages (i.e., right shortcut) follow the orientation as in Algorithm 10.
+11: for (u.dist̸= 0)∧ ((u.dist mod 2) = 1) do
+12: if right_sib =⊥∧ children = ∅ then
+13: SEND(⟨Path+, u.id⟩) to parent; SEND(⟨Path-, parent⟩) to self;
+14: else if right_sib =⊥∧ children̸= ∅ then
+15: SEND(⟨Path+, max(children)⟩) to parent; SEND(⟨Path-, parent⟩) to max(children);
+16: else if right_sib̸=⊥∧ children = ∅ then
+17: SEND(⟨Path+, u.id⟩) to right_sib; SEND(⟨Path-, right_sib⟩) to self;
+18: else
+19: SEND(⟨Path+, max(children)⟩) to right_sib; SEND(⟨Path-, right_sib⟩) to max(children);
+20: end if
+21: end for
+22: for (u.dist̸= 0)∧ ((u.dist mod 2) = 0) do
+23: if left_sib =⊥∧ children = ∅ then
+24: SEND(⟨Path-, u.id⟩) to parent; SEND(⟨Path+, parent⟩) to self;
+25: else if left_sib =⊥∧ children̸= ∅ then
+26: SEND(⟨Path-, min(children)⟩) to parent; SEND(⟨Path+, parent⟩) to min(children);
+27: else if left_sib̸=⊥∧ children = ∅ then
+28: SEND(⟨Path-, u.id⟩) to left_sib; SEND(⟨Path+, left_sib⟩) to self;
+29: else
+30: SEND(⟨Path-, min(children)⟩) to left_sib; SEND(⟨Path+, left_sib⟩) to min(children);
+31: end if
+32: end for
+33
+
+B Tree-to-Path Analysis
+Theorem B.1. Algorithm 10 takes a (labelled) rooted tree T = (l(·), r, V, E) where l(r) = 0 as input, and
+outputs a directed path graph P = (V, E′), where Beg(P) = r and End(P) = min(CT(r)).
+Proof. The height of a rooted tree T, denoted by H(T), is equal to max v∈V(dist(r, v)). For each
+node v, let C(v) ={u| dist(u, v) = 1∧ dist(v, r) < dist(u, r)}. For each node v∈ V where C(v)̸=
+∅, there is a total ordering (e.g., based on ids) on C(v) ={u1, . . . ,uk} such that u1 <··· < uk.
+We inductively prove the following statements over the height of a tree, with the base cases as
+the set of trees of height 1 (and the label of root can either be 0 or 1).
+1. Algorithm 10 takes in any rooted tree Tb = ( l(·), p, V, E) where l(p) = 0, and outputs a
+(directed) path graph P = (V, E′) where Beg(P) = p and End(P) is min(C(p)) for|V|≥ 2.
+2. Algorithm 10 takes in any rooted tree Tb = ( l(·), p, V, E) where l(p) = 1, and outputs a
+(directed) path graph P = (V, E′) where Beg(P) is max(C(p)) and End(P) = p for|V|≥ 2.
+Consider the base case of any rooted tree Tb = ( l(·), p, V, E) where l(p) = 0 and|V|≥ 2 and
+H(Tb) = 1. Let C(p) ={p1, . . . ,pq} such that p1 <··· < pq for any q≥ 1. Algorithm 10 adds the
+following edges, resulting in a path P, where Beg(P) = p and End(P) is min(C(p)).
+1. The (directed) edge (p, pq) is added.
+2. For 1 ≤ r < q, the (directed) edge (pr+1, pr) is added.
+Similarly, consider the base case of any rooted tree Tb = ( l(·), p, V, E) where l(p) = 1 and
+|V|≥ 2 and H(Tb) = 1. Let C(p) ={p1, . . . ,pq} such that p1 <··· < pq for any q≥ 1. Algorithm
+10 adds the following edges, resulting in a path P, where Beg(P) = max(C(p)) and End(P) is p.
+1. The (directed) edge (p1, p) is added.
+2. For 1 ≤ r < q, the (directed) edge (pr+1, pr) is added.
+We introduce some notation for the inductive cases, whereT = (l(·), p, V, E) is any rooted tree
+of H(T) = h + 1 for any h≥ 1. For any node p, let C′(p) = {u| u∈ C(p)∧ C(u)̸= ∅}. Let
+Tw = (l(·), w, Vd(w), Ed(w)) be the subtree rooted atw and l(w) = l(p) + dist(p, w) mod 2, where
+Vd(w) = {u| dist(u, w) < dist(u, p)} and Ed(w) = {(u, v)| (u, v)∈ E∧{ u, v}∈ Vd(w)}. By
+induction, Algorithm 10 outputs a path, denoted byA(Tv), for each subtreeTv rooted at v∈ C′(p).
+Consider any rooted tree T where l(p) = 0. Algorithm 10 adds the following (directed) edges,
+resulting in a (directed) path P = (V, E′) where Beg(P) = p and End(P) is min(C(p)).
+1. Either (p, Beg(A(Tpq )) or (p, pq) is added based on whether pq∈ C′(p) or pq /∈ C′(p). By
+induction, Beg(A(Tpq )) is max(C(pq)) and End(A(Tpq )) is pq, if pq∈ C′(p), as l(pq) = 1.
+2. Similarly, if there exists an r such that, 1≤ r < q, we consider these exhaustive set of cases.
+(a) If pr, pr+1∈ C′(p), then the edge (End(A(Tpr+1), Beg(A(Tpr )) is added. By induction,
+Beg(A(Tpr )) is max(C(pr)) and End(A(Tpr+1)) is pr+1, if pr, pr+1∈ C′(p), as l(pr) = 1
+and l(pr+1) = 1.
+(b) If pr+1∈ C′(p) and pr /∈ C′(p), then the edge(End(A(Tpr+1), pr) is added. By induction,
+End(A(Tpr+1)) is pr+1, if pr+1∈ C′(p), as l(pr+1) = 1.
+34
+
+(c) If pr+1 /∈ C′(p) and pr∈ C′(p), then edge (pr+1, Beg(A(Tpr )) is added. By induction,
+Beg(A(Tpr )) is max(C(pr)), if pr∈ C′(p), as l(pr) = 1.
+(d) If pr, pr+1 /∈ C′(p), then edge (pr+1, pr) is added. (Same as base case where l(p) = 0.)
+Similarly, consider any rooted tree T where l(p) = 1. Algorithm 10 adds the following (directed)
+edges, resulting in a (directed) path P = (V, E′) where Beg(P) = max(C(p)) and End(P) is p.
+1. Either (End(A(Tp1), p) or (p1, p) is added based on whether p1∈ C′(p) or p1 /∈ C′(p). By
+induction, End(A(Tp1)) is min(C(p1)) and Beg(A(Tp1)) is p1, if p1∈ C′(p), as l(p1) = 0.
+2. Similarly, if there exists an r such that, 1≤ r < q, we consider these exhaustive set of cases.
+(a) If pr, pr+1∈ C′(p), then the edge (End(A(Tpr+1), Beg(A(Tpr )) is added. By induction,
+Beg(A(Tpr )) is pr and End(A(Tpr+1)) is min(C(pr+1)), if pr, pr+1∈ C′(p), as l(pr) = 0
+and l(pr+1) = 0.
+(b) If pr+1∈ C′(p) and pr /∈ C′(p), then the edge(End(A(Tpr+1), pr) is added. By induction,
+End(A(Tpr+1)) is min(C(pr+1)), if pr+1∈ C′(p), as l(pr+1) = 0.
+(c) If pr+1 /∈ C′(p) and pr∈ C′(p), then edge (pr+1, Beg(A(Tpr )) is added. By induction,
+Beg(A(Tpr )) is pr, if pr∈ C′(p), as l(pr) = 0.
+(d) If pr, pr+1 /∈ C′(p), then edge (pr+1, pr) is added. (Same as base case where l(p) = 1.)
+C Self-Stabilization Analysis
+C.1 Basic Definitions
+Definition C.1. We use Mu(A0) to represent the (internal) memory (including the channel buffer) that a
+node u uses for executing algorithmA0 respectively. Moreovoer, we use R(A0) for the (best-known) upper
+bound for the (self-stabilization) convergence of the algorithmA0 (when it is independently executed).
+Definition C.2. We use the term flyover-related variables to refer to the set of variables in Section A.1.
+Similarly, we use the term advice-related variables to refer to the set of variables in Section A.2.2.
+Definition C.3. We say that a node u executes a flush operation on a set of node ids, if it stores them in
+any set of address variables in Mu(A0) (i.e., memory allocated to algorithmA0).
+Definition C.4. Let Adv(u) be an advice message at node u. Moreover, when we refer to Adv (u).x = y,
+then x = y has appeared in the advice. Adv(u) is said to be well-formed if the following conditions hold.
+1. Adv (u).par∈{⊥ , id}, where id is present in its memory.
+2. If Adv (u).par =⊥, then Adv(u).dist = 0, Adv(u).vID = 1, Adv(u).c-dist = 0; else Adv(u).dist >
+0, Adv(u).vID > 1 and Adv(u).c-dist > 0.
+3. Adv (u).vID∈ N and Adv(u).c-par∈ N.
+Definition C.5. We say that a node u is in dual-state if u.S̸= ∅. Furthermore, if node u updates a
+previously non-empty u.S to ∅, then we say that node u has exited from the dual-state.
+35
+
+Definition C.6. A node u is said to process an advice message if u enters Line 6 in Algorithm 12. An
+advice message, for any node u, is said to be effective if node u enters dual-state before u .t≤ 1. We say
+that a node u is attentive, or ready to receive advice, if u.S = ∅∧ u.exit = 0∧ u.t = 0.
+Definition C.7. (Delegate-after-Reversal; DR Primitive) A node u is said to use DR primitive for
+algorithmA0 in round r, if the following conditions hold during the execution of algorithmA0.
+1. If node u is required to delegate an edge (u, w) to node v, i.e., send the id of node w to node v, for
+e.g., via some message⟨msg, w⟩, then (1) node u first sends⟨Rev, v, msg,w⟩ to node w, and (2) once
+node w receives⟨Rev, v⟩, node w sends its own id to node v (for e.g., by message⟨msg, w⟩).
+2. If node u is required to send some message ⟨msg, w1, . . . ,w2, . . . ,wt⟩ for some t≥ 1 to node v, then
+(1) node u first sends ⟨Rev, v, msg,w1, . . . ,w2, . . . ,wt⟩ to node w 1, and for all 1 < j≤ t, node u
+sends⟨Rev, v⟩ to node wj, and (2) once node w1 receives⟨Rev, v, msg,w1, . . . ,w2, . . . ,wt⟩, node w1
+sends⟨msg, w1, . . . ,w2, . . . ,wt⟩ to node v, and for all 1 < j≤ t, once node w j receives⟨Rev, v⟩,
+node wj sends its own id to node v.
+The message complexity of DR primitive is O(1) factor to that of “Delegate” primitive (see, e.g., [54]).
+Definition C.8. The network is robust against a supervisor, or s-robust, if these two conditions hold.
+1. (Sybil Resistance) For each node u, and for any node id v present in node u’s advice message butnot
+present in node u’s memory or channel, node u neither assigns v to any of its variables (i.e. store in
+its memory) nor sends v to any other id present in its memory or channel (i.e., send it to other nodes).
+2. (Robustness) If all nodes do not form a single, correctly configured flyover, then all nodes exit the
+dual-state (thereby rejecting any “supervisor-induced” overlay) in O(log n) rounds.
+C.2 Flyover-Related Definitions
+Definition C.9. We say that a set of nodes B⊆ V is a backbone, where|B|≥ 2, if the following conditions
+hold. For ease of exposition, wlog, we denote the set B as{v1, v2, . . .}.
+1. (Wings) (v1.L = ∅∨ v1.Sl(1) /∈ B) and (v|B|.R = ∅∨ v|B|.Sr(1) /∈ B).
+2. (Spine)∀i∈ [|B|− 1], vi.Sr(1) = vi+1∧ vi+1.Sl(1) = vi.
+If for all u∈ V\ B, u∪ B is not a backbone, then B is said to be amaximal backbone. A maximal backbone
+is said to be winged maximal backbone if v1.L̸= ∅∨ v|B|.R̸= ∅.
+Definition C.10. We say that a set of nodes B ⊆ V is an ouroboros if any of the following conditions
+hold. For ease of exposition, wlog, we denote the set B as{v1, v2, . . .}.
+1. (Perfect Ring) (v1.Sl(1) = v|B|∧ v|B|.Sr(1) = v1) and∀i, vi.Sr(1) = vi+1∧ vi+1.Sl(1) = vi.
+2. (Stylish Ring) (v1.Sl(1)∈ B∨ v|B|.Sr(1)∈ B) and∀i, vi.Sr(1) = vi+1∧ vi+1.Sl(1) = vi.
+If for all u∈ V\ B, u∪ B is not an ouroboros, then B is said to be a maximal ouroboros.
+Definition C.11. An node u in a dual-state, is said to be lost, if it is not in any backbone or ouroboros.
+36
+
+Definition C.12. We say that a backbone B⊆ V is a flyover if the following conditions hold. Let v 1∈ B
+such that (v1.L = ∅∨ v1.Sl(1)∈ V\ B). For all i∈ [|B|− 1], let vi+1∈ B such that vi.Sr(1) = vi+1.
+1. (Virtual IDs)∀i∈ [|B|− 1], vi+1.vID = vi.vID + 1.
+2. (Hypercube)∀i∈ [|B|− 1],∀j∈ [⌊log2(|B|− i)⌋ + 1] , (vi.Sr(j) = vi+2j−1∧ vi+2j−1.Sl(j) = vi).
+Definition C.13. Consider a maximal backbone B ={v1, v2, . . .}⊆ V where (v1.L = ∅∨ v1.Sl(1)∈
+V\ B) and∀i∈ [|B|− 1], vi.Sr(1) = vi+1. Let G ∗
+B = ( B, E∗
+B) such that (u, v)∈ E∗
+B ⇐⇒ (u =
+succB(v)∨ v = succB(u)), where succ B(u) = min({w.id| (w∈ B)∧ (w.id > u.id)}). Let T∗
+B be the
+rooted spanning tree in the graph G∗
+B with node v1 as the root. Then, B is said to be correctly configured
+if the following conditions hold.
+1.∀i∈ [|B|], vi.vID = i and vi.flyID = v1.id.
+2.∀i∈ [|B|− 1], vi.c-par = pi.vID where pi denotes the parent of vi in T∗
+B.
+3.∀i∈ [|B|], E∗
+B(vi)⊆ vi.c-ids where E∗(vi) denotes the edge-set of vi in G∗
+B.
+4.∀i∈ [|B|], vi.c-dist = distT∗
+B (vi, v1) where distT∗
+B (u, v) is the distance between v1 and vi in T∗
+B.
+Definition C.14. A node u, with u.S̸= ∅, in round r, is said to be in aprecarious dual-state if any of the
+following conditions are satisfied.
+1. u is a lost node.
+2. u belongs to a maximal ouroboros.
+3. u belongs to either a maximal backbone of size less than n, or maximal backbone of size equal to n but
+some node sets its exit variable to 1 in any round r′∈{ r, r + 1, . . .r + 3⌈log n⌉}.
+Definition C.15. The network is said to be stable in any round r if for each node u∈ V, u.S̸= ∅ but u is
+not in a precarious dual-state.
+C.3 Helpful Observations
+Remark C.16. For any node u, the following invariants are ensured (via BasicChecks function).
+1. u.S = ∅ =⇒ u.flyID = u.id∧ u.c-ids = ∅.
+2. u.L = ∅∧ u.R̸= ∅ =⇒ u.vID = 1∧ u.flyID = u.id∧ u.c-dist = 0.
+3. u.L̸= ∅ =⇒ u.c-dist > 0∧ u.vID > 1.
+4. (u.S̸= ∅∧ u.vID > 1) =⇒ u.c-par can be “reached,” i.e., via left or right neighbors.
+5. u.c-ids̸= ∅ =⇒ (|u.c-ids| = 1)∨ (|u.c-ids| = 2∧ min(u.c-ids) < u.id < max(u.c-ids)).
+Remark C.17. Due to FlushFlyover function, whenever any node u exits from dual-state, all ids
+part of node u’s flyover variables (including u.flyID) receive⟨RejFlyover⟩ message. For any node
+u, if some node id v̸= u is stored in the set{u.flyID}∪ u.S∪ u.c-ids, it can only be removed from
+that set in the FlushFlyover function.
+37
+
+Remark C.18. If a node u executes SnapshotReq function (or, node u is attentive) in round r > 1,
+then u.S = ∅∧ u.exit = 0∧ u.t = 0 in that round. Since u.S = ∅∧ u.exit = 0 condition is satisfied,
+and u.S and u.exit can be set to ∅ and 0 (resp.) only in FlushFlyover function, node u sends⊥
+to all ids in its memory (and channel) in round r due to TestFlyoverMetadata function. This is
+because either, FlushFlyover function was executed in round r (in which case, u.vID is set to 0),
+or, both u.S and u.exit were already equal to ∅ and 0 (resp.) at the beginning of round r, in which
+case, u.vID was set to 0 in BasicChecks2 function (in Algorithm 11) in round r− 1.
+Claim C.19. Let B ={v1, . . . ,v|B|} be a maximal backbone where (v1.L = ∅∧ v|B|.R = ∅) and (∀i∈
+[|B|− 1], vi.Sr(1) = vi+1) and (∀i∈ [|B|], vi.vID = i∧ vi.flyID = v1). Consider the following graphs.
+• Let G∗
+B = ( B, E∗
+B) such that (u, v)∈ E∗
+B ⇐⇒ (u = succB(v)∨ v = succB(u)), where succB(u) =
+min({w.id| (w∈ B)∧ (w.id > u.id)}).
+• Let G′
+B = ( B, E′
+B) such that (u, v)∈ E′
+B ⇐⇒ (u.vID = v.c-par∧ v.c-dist = u.c-dist + 1)∨
+(v.vID = u.c-par∧ v.c-dist = u.c-dist− 1).
+If for all i∈ [|B|]\{ 1},∃ui∈ B, vi.c-par = ui.vID where (ui.c-dist = vi.c-dist− 1), then G′
+B is G∗
+B.
+Proof. Due to Remark C.16, the following invariants are (locally) maintained. For each nodeu∈ B,
+1. (Tree Distance) (u.L = ∅ =⇒ u.c-dist = 0) and (u.L̸= ∅ =⇒ u.c-dist > 0).
+2. (Degree Constraint; Locally Sorted) E′(u) ̸= ∅ =⇒ (|E′(u)| = 1)∨ (|E′(u)| = 2∧
+min(|E′(u)|) < u.id < max(|E′(u)|)), where E′(u) ={v| (u, v)∈ E′
+B}.
+These invariants ensure there is only one node u with u.c-dist = 0, and that node is v1. Moreover,
+the degree of any node in G′ is at most 2; if a node’s degree is 2, then its own id is neither greater
+nor less than both the node ids of its neighbors. Given the premise of the lemma, for any node
+u∈ V\{ v1}, there is a node p(u) such that u.c-par = p(u).vID and p(u).c-dist = u.c-dist− 1.
+First, we show that G′
+B forms a spanning tree (with degree at most 2, i.e., a path) using a key
+idea behind the classic O(log n)-bits proof-labelling scheme of a spanning tree (see, e.g., [3, 31, 52]).
+In that scheme, each node is given a “certificate” consisting of the root node id, a parent node id
+(among its neighbors) and the distance from the root (in a rooted spanning tree), where the “root”
+is the (only) node with its distance equal to 0 (and has no parent). Then, each node examines the
+certificates of its neighbors in the graph, and checks the distance (i.e., from its parent) and the
+root ids (i.e., whether they are same). If any certificate is incorrectly assigned, then there exists
+(at least) one node that “rejects” its certificate. Otherwise, if each certificate is correctly assigned
+(with respect to some rooted spanning tree), then each node “accepts” its certificate.
+We use proof by contradiction to show that G′ is indeed G∗. First, there cannot be a cycle in
+G′, as the distance checks (i.e., from a nodeu to its parent p(u)) cannot be satisfied at all nodes (cf.
+Section 2.3). Moreover, G′ cannot be a spanning forest because all the nodes, via flyover id, can
+verify that there is only one “root node,” i.e., node v1 with distance v1.c-dist = 0. Thus, G′ forms
+a spanning tree. Combining the second invariant mentioned earlier, i.e., each node has degree at
+most 2, the tree must be a path. Finally, that path has to be the sorted-path G∗ due to the second
+invariant because every node checks that its locally sorted with its neighbors in G′.
+Claim C.20. Let p∈ B, q /∈ B and p∈ Mq(A0) in any round r, where B is a backbone. If node q uses the
+DR primitive (as in Definition C.7) in round r, then at least one of the following statements is true:
+38
+
+• either edge (q, p) exists in round r + 1,
+• or edge (p′, q′) where p′∈ B and q′ /∈ B exists, by round r + 2.
+Proof. Let us first consider the “normal” execution of algorithmA0 (i.e, without DR primitive) in
+round r. As it preserves weak connectivity, there can be two (exhaustive) cases in round r + 1.
+1. (q, p) still exists.
+2. Some path P = (q, v0, . . . ,vt) exists, where v0∈ Mq(A0), vt = p and∀i∈ [t], vi /∈ Mq(A0).
+In the path P, color a node blue if it is present in B; otherwise, color it red. Consider the edges
+(regardless of their directions): (q, v0), . . . ,(vt−1, vt). There is at least one pair of adjacent nodes
+colored differently. If node q runs algorithmA0 with the DR primitive in round r, due to reversal
+of edges, in either round r + 1 or r + 2, there exists an edge (p′, q′) where p′∈ B and q′ /∈ B.
+C.4 Connectivity Preservation
+Lemma C.21. If the initial communication graph is weakly connected, then the communication graph in
+any round r≥ 1 is also weakly connected.
+Proof. Consider a node id v in some node u (whether in its channel or address variables, i.e., v is
+present in a message sent tou, or v is assigned to some variable inu). If v is present inu, then u and
+v are (weakly) connected. On the other hand, if v is “delegated,” i.e., u sends the id of v to another
+node w, then we need to show that u and v are (weakly) connected via some path (u, v1, . . . ,vt)
+where vt = v for some t≥ 1. Thus, we focus on all the possible cases in our algorithms where
+a node id could be delegated, and a node id is present in a received message, to show that the
+network remains weakly connected in the next round.
+• First, by design, every node runs an algorithmA0 (in parallel, for converging to target topol-
+ogy) that preserves connectivity (i.e., following the universal overlay primitives for edge
+manipulations). Moreover, if nodes use the DR primitive (instead of “Delegate” primitive)
+while running algorithm A0, connectivity is still preserved (as the direction of delegated
+edge is only opposite to the intended direction, but is subsequently reversed; see Definition
+C.7) after edge manipulations by algorithmA0 in any round.
+• In the TestFlyoverConstruction , TestFlyoverMetadata and TestConnCertificate functions,
+if node u sends v to some other node, then v also remains in node u.
+• We analyze the response functions that process the received messages.
+In R_TestFlyoverConstruction function, node u processes two types of messages. For any
+message⟨msg, sen⟩, sen is stored in, either u.S or Mu(A0). For any message⟨msg, w, i, sen⟩, w
+and sen are stored in either u.S or Mu(A0).
+In R_TestFlyoverMetadata function, for any message⟨TestFlyID,flyID⟩, there are two cases:
+flyID is stored in either u.flyID or Mu(A0).
+In R_TestConnCertificate function, for any message⟨TestCert,w, vID, dist⟩, there are three
+cases: (1) w is sent to node u′∈ u.S, in which case, there is a path (u, u′, w), or (2) u stores w
+in u.c-ids, or (3) u stores w in Mu(A0); for any message⟨IntroCert, w⟩, u stores w in u.c-ids.
+39
+
+• We turn our attention to distributed tree-to-path algorithms (cf. Section A.2.2). InGetAdvice
+function, for any message⟨Intro, v⟩, node u stores v in Mu(A0). In CertifyTree function, for
+any message⟨TestAdvice,dist, v⟩, node u stores v in Mu(A0). Similarly, in LocalTransform
+function, for any message ⟨Verified,msg, v⟩, node u stores v in Mu(A0). In JoinPath func-
+tion, for any message⟨msg, v⟩, there are two cases: node u stores v either in u.S or Mu(A0).
+C.5 Flyover Construction
+Lemma C.22. Consider any backbone B ={v1, . . . ,v|B|}, where|B|≥ 3 and (v1.L = ∅∨ v1.Sl(1) /∈ B)
+and∀i∈ [|B|− 1], vi.Sr(1) = vi+1, in any round r. For any i∈ [k] and k =⌊log2(|B|− 1)⌋, if all nodes
+in B have their exit variable set to 0 in all rounds r, r + 1, . . . ,r + i′ where i′≥ i, then in any round r+ i′,
+the following statements hold true.
+1. (Virtual IDs)∀j∈ [|B|− 1], vj+1.vID = vj.vID + 1.
+2. (Endpoints)|v1.R|≥ (i + 1) and|v|B|.L|≥ (i + 1).
+3. (Hypercube Edges)∀j∈ [i], v1.Sr(j) = v1+2j and∀j∈ [i], v|B|.Sl(j) = v|B|−2j.
+Proof. If the first statement is true in roundr, then it remains true until some node exits dual-state;
+otherwise, some node sets its exit variable to 1 due to TestFlyoverMetadata function. Recall
+that vID is assigned when a node receives an advice (see Algorithm 12). Moreover, for any nodeu,
+once u.vID is assigned, then it can only be updated in FlushFlyover function (which is executed
+only after u.exit = 1). As no node in B sets its exit variable to 1 until round r + i′ for any i′≥ i and
+i∈ [k], the statement holds true in round r + i′ for any i′≥ 1.
+For latter statements, we use induction over the size of a backbone. Let any backbone of size s
+be Bs ={u1, . . . ,us}, where (u1.L = ∅∨ u1.Sl(1) /∈ Bs) and∀i∈ [s− 1], ui.Sr(1) = ui+1. For the
+base case, consider s = 3 where Bs ={u1, u2, u3}. In round r, node u2 sends⟨FlyConst-R, u1, 1,u2⟩
+and⟨FlyConst-L, u3, 1,u2⟩ messages to node u3 and u1 respectively. Since the nodes do not set
+their exit variables to 1 in both rounds r and r + 1, node u1 assigns u3 to u1.Sr(2) and node u3
+assigns u1 to u3.Sl(2) in round r + 1 (if they have not already done so), which also implies that
+|u1.R|≥ 2 and|u3.L|≥ 2 in round r + 1. Recall that for any node u, for any j≥ 1, once u.Sl(j)
+or u.Sr(j) is assigned, then it can only removed (or updated) in FlushFlyover function (which is
+executed only after u.exit = 1). As no node in B sets its exit variable to 1 until round r + i′ for any
+i′≥ i and i∈ [k] where k = 1 (for s = 3), these statements hold true in round r + i′ for any i′≥ 1.
+For inductive case, we assume that the statements are true for any backbone of size(s− 1)≥ 3,
+and then show that they hold true for any backbone Bs ={u1, . . . ,us}. To that end, we split the
+proof into two cases, for any p > 1 and p∈ N, either s̸= 2p + 1 or s = 2p + 1.
+In the first case, where s ̸= 2p + 1, k = ⌊log2(s− 1)⌋ = ⌊log2(s− 2)⌋. Consider the two
+backbones B1
+s ={u1, u2, . . . ,us−1} and B2
+s ={u2, u3, . . . ,us}. For any i∈ [k], if all nodes in Bs
+have their exit variable set to 0 in all rounds r, . . . ,r + i′ where i′≥ i, then in any round r + i′, the
+statements hold true, independently, for B1
+s and B2
+s . Thus, they also hold true for backbone Bs.
+In the second case, where s = 2p + 1, k =⌊log2(s− 1)⌋ =⌊log2(s− 2)⌋ + 1. Consider the
+two backbones B1
+s ={u1, u2, . . . ,us′} and B2
+s ={us′, us′+1, . . . ,us} where s = 2s′− 1. For any
+i∈ [k− 1], if all nodes in Bs have their exit variable set to 0 in rounds r, . . . ,r + i′ where i′≥ i,
+40
+
+then in any round r + i′, the statements hold true, independently, for B1
+s and B2
+s , which implies, in
+round r + k− 1, u1.Sr(k) = us′ and us′.Sl(k) = u1 and us.Sl(k) = us′ and us′.Sr(k) = us. In round
+r + k− 1, node us′ sends⟨FlyConst-R, u1, k, us′⟩ and⟨FlyConst-L, us, k, us′⟩ messages to nodeus and
+u1 respectively. Since the nodes do not set their exit variables to 1 in rounds r + k− 1 and r + k,
+node u1 assigns us to u1.Sr(k + 1) and node us assigns u1 to us.Sl(k + 1) in round r + k (if they have
+not already done so), which implies that|u1.R|≥ k + 1 and|u3.L|≥ k + 1 in round r + k. Recall
+that for any node u, for any j≥ 1, once u.Sl(j) or u.Sr(j) is assigned, then it can only removed
+(or updated) in FlushFlyover function (which is executed only after u.exit = 1). As no node in Bs
+sets its exit variable to 1 until round r + i′ for any i′≥ i and i∈ [k] where k =⌊log2(s− 1)⌋, these
+statements hold true in round r + i′ for any i′≥ 1.
+Corollary C.23. Consider any backbone B in any round r. If all nodes in B have their exit variable set to
+0 in all rounds r, r + 1, . . . ,r + i where i≥⌊ log2(|B|− 1)⌋, then in any round r + i, B is a flyover.
+C.6 Fast Information Dissemination
+Lemma C.24. Consider any backbone B in any round r. If there exists a node u ∈ B such that u.exit = 1
+at round r, then by round r + 2⌊log|B|⌋, all nodes in B would’ve exited from the dual-state (at least once).
+Proof. Let dB(p, q) denote the distance between any two nodes {p, q}⊆ B over the backbone B
+in round r. We recursively define it in the following way. (Note that this distance remains same,
+throughout the execution, as it is defined for backbone B at round r.)
+dB(p, q) =
+
+
+
+0 if p = q,
+(dB(p.Sl(1), q)) + 1 if (q.L = ∅∨ q.Sl(1) /∈ B),
+dB(p, q.Sl(1)) + 1 if (p.L = ∅∨ p.Sl(1) /∈ B),
+|dB(p, r)− (dB(q, r)| otherwise, where r∈ B∧ (r.L = ∅∨ r.Sl(1) /∈ B).
+Let DB(v) = minw∈B∧w.exit=1 dB(w, v) denote the minimum distance, over all nodes in B that
+have their exit variable set to 1, to the node v∈ B.
+If at round r′∈{ r, . . . ,r + 2⌊log|B|⌋− 1}, if either (v.L̸= ∅∧ v.Sl(1)∈ B∧ v.Sl(1).exit = 1) or
+(v.R̸= ∅∧ v.Sr(1)∈ B∧ v.Sr(1).exit = 1), i.e., DB(v) < 2, then nodev exits the dual-state in round
+r′ + 1. This is due to Remark C.17, every node, in FlushFlyover function, sends⟨RejFlyover⟩ to
+all ids in its flyover-related address variables. Moreover, if DB(v)≥ 2 in round r, then we show
+that it decreases exponentially over time (due to flyover construction, i.e., pointer doubling [46]).
+Consider a backbone Bk ={v1,k, v2,k, . . .} in round r + k, where (v1,k.L = ∅∨ v1,k.Sl(1) /∈ Bk)
+and∀i∈ [|Bk|− 1], vi,k.Sr(1) = vi+1,k, and B0 = B. In round r + k, consider a node w that satisfies
+dB(w, v) = DB(v)≥ 2, and the backbone Bk ={v1,k, . . . ,v|Bk|,k}, part of the original backbone
+B, such that either (v1,k = w∧ v|Bk|,k = v) or (v1,k = v∧ v|Bk|,k = w) is true. For any k≥ 1, by
+Lemma C.22, we know that∀j∈ [k], v1,k.Sr(j) = v1+2j,k and∀j∈ [k], v|Bk|,k.Sl(j) = v|Bk|−2j,k. Thus,
+by round r + 2⌊log|B|⌋− 1, either node v exited the dual-state, or DB(v) < 2.
+C.7 Concurrent Advices
+Claim C.25. Consider any set of nodes Q ⊂ V that process advice messages in round r. For any node
+v∈ Q, if the advice is effective, then for any node u /∈ Q, then u /∈ v.S after v enters dual-state.
+41
+
+Proof. Once any node receives an advice, if the node id present in it, is also part of its memory (i.e.,
+in snap variable), then the node proceeds to check that the distance (i.e., indist variable) matches
+with its “parent” node id (as in the advice). See Algorithm 12 for more details. This back-and-forth
+verification of advice between a node and its parent in a synchronous system, before executing the
+tree-to-path transformation (i.e., Algorithm 13), ensures that they must have processed the advice
+in the same round. If any node u /∈ Q is not part of this back-and-forth communication, then it is
+not part of SetupLocalTransform function in Algorithm 12, which in turn, implies that it is also
+not part of LocalTransform and JoinPath functions in Algorithm 13. Thus,∀v∈ Q, u /∈ v.S.
+Lemma C.26. Let D be the set of nodes in dual-state in any round r > 5. Let D′ be the set of nodes that
+transition to dual-state in round r + 1. For any pair of nodes u∈ D and v∈ D′, u /∈ v.S in round r + 1.
+Proof. Consider the following (exhaustive) cases for any node u∈ D in round r.
+1. Node u was always in dual-state from round 1.
+2. Node u processed an advice message in a round r′≤ r− 3, as the distributed tree-to-path
+algorithms (cf. Section A.2.2) takes 3 rounds, until node u enters dual-state.
+Each node in D′, as it enters dual-state in roundr + 1, processed an advice message at roundr− 2.
+Let Q be the set of nodes that processed advice messages in roundr− 2. Clearly, u /∈ Q (as u.t̸= 0
+or u.S̸= ∅ in that round). Thus, by Claim C.25, any pair of nodes u∈ D and v∈ D′, u /∈ v.S.
+C.8 Fast Detection of Bad Advice
+Lemma C.27. Let B ={v1, . . . ,v|B|} be a maximal backbone in round r > 5, where either (v1.Sl(1) /∈ B)
+or (v|B|.Sr(1) /∈ B) is satisfied. Let L be the set of lost nodes in round r. There is at least node in B that sets
+its exit variable to 1 by round r + 2. Moreover, every node in L sets its exit variable to 1 by round r + 2.
+Proof. We provide the proof for the backbone B, but the same argument applies to the lost nodes
+in L. Wlog, let node v1.L̸= ∅; similar argument also applies to v|B| if v|B|.R̸= ∅.
+Node v1 sends⟨TestLine-L⟩ to v1.Sl(1) in round r. But v1.Sl(1), in round r + 1, by Lemma C.26,
+as it holds that (v1.Sl(1)).Sr(1)̸= v1, sends⟨RejFlyover⟩ to v1 (regardless whether v1.Sl(1) in a
+dual-state or not). Node v1 its exit variable set to 1 by round r + 2.
+Lemma C.28. Each node in a maximal ouroboros O in round r> 5, exits dual-state in O(log|O|) rounds.
+Proof. By Lemma C.26, the size of any maximal ouroboros (or maximal backbone) doesn’t increase
+over time (i.e., for any round r′ > r, if some node u /∈ O, then u /∈ O in round r′). Let us consider
+the two cases of maximal ouroboros (as in Definition C.10) in round r.
+1. If O is a perfect ring, then at least one pair of consecutive nodes in O set their exit variables
+to 1 by round r + 1, as by design, every node u in its dual-state, u sends u.vID + 1 to u.Sr(1)
+and u.vID− 1 to u.Sl(1) in every round. Let L ⊆ O be the set of nodes that are lost in
+round r + 2; they exit from dual-state by round r + 4 by Lemma C.27. The set of nodes
+O′⊆ (O\ L), that are in dual-state but not lost in round r + 2, forms a partition of maximal
+winged backbones as every node u∈ O in round r, has u.L̸= ∅∧ u.R̸= ∅. By Lemma C.27,
+combined with Lemma C.24, by round r + O(log|O|), all nodes in O′ exit the dual-state.
+42
+
+2. If O is a stylish ring, then there is at least one node u∈ O such that,
+{u.Sl(1), u.Sr(1)}⊆ O∧ ((v = u.Sl(1)∧ v.Sr(1)̸= u)∨ (v = u.Sr(1)∧ v.Sl(1)̸= u)).
+Node u sends⟨TestLine-R⟩ and⟨TestLine-L⟩ messages in round r. In round r + 1, (at least)
+one of the recipients, sets the exit variable to 1, and sends back ⟨RejFlyover⟩ to node u.
+By round r + 2, node u exits the dual-state. Let L ⊆ O be the set of nodes that are lost
+in round r + 2; they exit from dual-state by round r + 4 by Lemma C.27. The set of nodes
+O′ ⊆ O\ (M∪ L) that are in dual-state but not lost in round r + 2, form a partition of
+maximal winged backbones, as every node v∈ O′ in round r, has v.L̸= ∅∧ v.R̸= ∅. By
+Lemma C.27 and Lemma C.24, by round r + O(log|O|), all nodes in O′ exit the dual-state.
+Lemma C.29. Consider any maximal backbone B⊆ V in any round r > 5, where B is not winged. If all
+nodes in B have their exit variable set to 0 in all rounds r, r + 1, . . . ,T, then the following statements hold.
+1. If T ≥ r + 2⌈log|B|⌉, then in any round r′∈{ r + 2⌈log|B|⌉, . . . ,T}, B is a flyover, and for all
+u∈ B, u.flyID = v.id where v.L = ∅.
+2. If T ≥ r + 3⌈log|B|⌉, and for all u∈ B, u.S⊆ B, then in any round r′∈{ r + 3⌈log|B|⌉, . . . ,T},
+backbone B is correctly configured.
+Proof. First, by Lemma C.26, the size of any maximal backbone doesn’t increase over time (i.e., for
+any round r′≥ r, if some node v /∈ B in round r, then v /∈ B in round r′). Since B is not a winged
+maximal backbone, i.e., there exist v1 and v|B| nodes in B such that (v1.L = ∅) and (v|B|.R = ∅).
+Due to our algorithm design, we recall the possible changes of flyover-related variables for
+any node u whose u.S̸= ∅ and u.exit = 0.
+1. The variables vID, c-par, c-dist are initially updated after receiving an advice message from
+the supervisor (see GetAdvice function). But they can only be updated again once the node
+executes FlushFlyover function (i.e., after u.exit = 1).
+2. If u.L = ∅∧ u.R̸= ∅, then u.flyID = u.id; otherwise, the variable flyID can be assigned
+some other id in R_TestFlyoverMetadata function. Importantly, once u.flyID̸= u.id, it can
+only be updated again once the node executes FlushFlyover function (i.e., after u.exit = 1).
+3. The variables L, R and c-ids can be updated over time in that the existing ids in the variables
+cannot be removed but new ids can be added. Thus, this means that u.Sl(1) and u.Sr(1) can
+be updated again once the node executes FlushFlyover function (i.e., after u.exit = 1).
+As all nodes have their exit variable set to 0, let us go over the required variable changes of a
+correctly configured flyover (as in Definitions C.12 and C.13). Wlog, let B ={v1, v2, . . . ,v|B|}. If
+the following events do not happen, then∃v∈ B, v.exit = 1 by round r + 3⌊log|B|⌋.
+1. (Virtual IDs) As v1.L = ∅, v1.vID must be equal to 1. For all i∈ [|B|], in round r + 1, due to
+the TestFlyoverMetadata function, vi must be equal to i.
+2. (Hypercube Edges) By Lemma C.22 (and Corollary C.23), by round r +⌊log|B|⌋, backbone
+B is a flyover (as per Definition C.12) due to the TestFlyoverConstruction function.
+43
+
+3. (Flyover ID) By round r + 2⌊log|B|⌋, for all i∈ [|B|], vi.flyID must be equal to v1 due to the
+TestFlyoverMetadata function (as B must be a flyover by round r +⌊log|B|⌋).
+4. (Connectivity Certificate) At round r + 2⌊log|B|⌋, the prop-flyID variable is set to 1 for any
+node u∈ B, as the clause (u.vID = 1)∨ (u.vID > 1∧ u.flyID = v1) is satisfied. For all i∈
+[|B|]\{ 1}, node vi routes the vi.c-dist− 1 value (over the flyover) to the node with the virtual
+ID vi.c-par using the NextStop function. The message must be routed to some node within
+the flyover, and that node verifies the message with its c-dist variable. Combined with the
+tests in the BasicChecks function, this results in adding the appropriate neighboring ids in
+the sorted-path graph over backbone B (as per Definition C.13) by the next⌈log|B|⌉ rounds.
+Corollary C.30. Let all nodes form a single backbone in round r. If all nodes have their exit variable set
+to 0 in all rounds r , r + 1, . . . ,r + 3⌈log n⌉, then the (sub)network over ∀u∈ V, Mu(A0), includes the
+sorted-path topology in round r + 3⌈log n⌉.
+Lemma C.31. Consider a maximal backbone B ={v1, . . . ,v|B|} in any round r > 5, where|B| < n and
+(v1.L = ∅∨ v1.Sl(1) /∈ B) and∀i∈ [|B|− 1], vi.Sr(1) = vi+1. By round r + O(log n), at least one node
+in B will set its exit variable to 1.
+Proof. First, by Lemma C.26, the size of any maximal backbone doesn’t increase over time (i.e., for
+any round r′ > r, if some node u /∈ B, then u /∈ B in round r′).
+If B is a maximal winged backbone in roundr, then by Lemma C.27, at least one node inB sets
+its exit variable set to 1 by round r + 2. Thus, for the rest of the proof, we consider the scenario
+where B is not a winged maximal backbone, i.e., (v1.L = ∅) and (v|B|.R = ∅).
+Furthermore, for the rest of the proof, we consider the scenario where, no node inB sets its exit
+variable to 1 by round r + 2⌈log n⌉. (Otherwise, that would only support the lemma statement.)
+By Lemma C.29, in any round r′≥ r + 2⌈log n⌉, B is a flyover, and∀u∈ B, u.flyID = v1.
+Recall that the communication graph is weakly connected in any round (due to Lemma C.21).
+We split the proof into multiple cases (and subcases), analyzing how the backbone B gets affected
+from the existence of a directed edge (p, q) in round r′, where (p∈ B∧ q /∈ B) or (p /∈ B∧ q∈ B).
+Case 1. Node id p is stored in q’s flyover-related variables, i.e., p∈ q.S∪{ q.flyID}∪ q.c-ids. In
+all the following subcases, some node in B will set its exit variable to 1 by round r′ + O(log n).
+1. If q.S = ∅, then q sends⟨RejFlyover⟩ to all ids in q.S∪{ q.flyID}∪ q.c-ids (see, Remark C.17.).
+2. If q.S̸= ∅, and any one of the following scenarios holds:q is a lost node, or q is in a maximal
+ouroboros or maximal winged backbone. By Lemma C.27 and Lemma C.28,q exits the dual-
+state by round r′ + O(log n), and sends⟨RejFlyover⟩ to all ids in q.S∪{ q.flyID}∪ q.c-ids.
+3. If q.S̸= ∅, and q is in a maximal backbone Bq, where Bq is not winged. Let q′ be the node in
+Bq where q′.L = ∅. Clearly, Bq∩ B = ∅ (as both are maximal), so p.flyID /∈ Bq and q′ /∈ B. If
+some node inBq exits dual-state by roundr′ + 2⌈log n⌉, then by Lemma C.24,q exits the dual-
+state by round r′ + 4⌈log n⌉ and sends⟨RejFlyover⟩ to all ids in q.S∪{ q.flyID}∪ q.c-ids. On
+the other hand, if no node in Bq sets its exit variable to 1 until round r′ + 2⌈log n⌉, then by
+Lemma C.29, the prop-flyID variable is set to 1 inq, after which q′ = q.flyID is sent to p, due
+to TestFlyoverMetadata function, causing p to set its exit variable to 1, as p.flyID̸= q.flyID.
+44
+
+Case 2. Node id q is stored in (memory or channel of)p. As all nodes inB have their prop-flyID
+variable set to 1, nodeq receives⟨TestFlyID, p.flyID⟩ in round r′ + 1. Based on q’s memory in round
+r′ + 1, we consider the following subcases.
+1. If (q.S̸= ∅∧ q.flyID̸= p.flyID)∨ (q.S = ∅), then due to R_TestFlyoverMetadata function,
+q sends⟨RejFlyover⟩ to p.flyID in round r′ + 1, causing node p.flyID to set its exit to 1.
+2. If (q.S̸= ∅∧ q.flyID = p.flyID), then we resort to Case 1 (where p is p.flyID).
+Case 3. Node id p is in Mq(A0). If node q uses the DR primitive (see, Definition C.7), i.e., sends
+node id p to another node, within algorithmA0, by round r′ + O(log n), then by Claim C.20, there
+would exist an edge (p′, q′), where p′∈ B and q′∈ B, in the next two rounds. In that scenario, we
+can resort to Case 2. Thus, we analyze the following subcases, where p is always in Mq(A0).
+1. If q.S = ∅, then in O(1) rounds, q.t = 0 as it is decremented by 1 in every round (and it can
+be at most 5). (See, BasicChecks2 function in Section A.2.2.) When q.t≤ 1, q.vID is set to 0,
+causing node q to send⟨TestFlyID,⊥⟩ to all ids in TestFlyoverMetadata function (before q
+processes a new advice message; see Remark C.18). Then, p would set its exit variable to 1.
+2. If q.exit is set to 1 in the nextO(log n) rounds, then q.S and q.vID are set to ∅ and 0 (resp.). In
+that round, node q sends⟨TestFlyID,⊥⟩ to all ids in TestFlyoverMetadata function (before
+q processes a new advice message; see Remark C.18), causing p to set its exit variable to 1.
+3. If q.S̸= ∅∧ q.exit = 0 for the next O(log n) rounds, then by Lemma C.27 and C.28, q must
+belong to a maximal backbone Bq, where Bq is not winged. Let q′ be the node in Bq where
+q′.L = ∅. Clearly, Bq∩ B = ∅ (as both are maximal), so p.flyID /∈ Bq and q′ /∈ B. By Lemma
+C.29, the prop-flyID variable is set to 1 in q, after which q′ = q.flyID /∈ B is sent to p, due to
+TestFlyoverMetadata function, causing p to set its exit variable to 1, as p.flyID̸= q.flyID.
+Case 4. Node id p is present in a flyover-related message ofq. In each of the following subcases,
+we can resort to either Case 1 or Case 3.
+1. In R_TestFlyoverConstruction function, node q processes two types of messages. For any
+message⟨msg, sen⟩, sen is stored in, either q.S or Mq(A0). For any message⟨msg, w, i, sen⟩, w
+and sen are stored in either q.S or Mq(A0).
+In R_TestFlyoverMetadata function, for any message⟨TestFlyID,flyID⟩, flyID is stored in
+either q.flyID or Mq(A0).
+2. In R_TestConnCertificate function, for any message⟨IntroCert, w⟩, u stores q in u.c-ids. For
+any message⟨TestCert,w, vID, dist⟩, there are three scenarios: (1) w is sent to some node
+q′∈ q.S, or (2) q stores w in q.c-ids, or (3) q stores w in Mq(A0). In the first scenario, as the
+prop-flyID variable is set to 1, node q would have sent q.flyID to p. If q.flyID̸= p.flyID, then
+p would set its exit variable to 1. Otherwise, if q.flyID̸= p.flyID, we resort to Case 1, where
+p′ = p.flyID∈ B is stored in node q’s flyover-related variable.
+Case 5. Finally, node id p is present in a advice-related message of q (see, algorithms in Section
+A.2.2). In each of those algorithms, whenever a node q processes any message, it simply flushes
+the node ids present in the message to Mq(A0) at the end. Thus, we resort to Case 3.
+45
+
+C.9 Putting Everything Together
+Claim C.32. If a node is in a precarious dual-state in round r, it exits dual-state by round r + O(log n).
+Proof. For the first three cases of the precarious dual-state property (see Definition C.14), if all
+nodes do not form a single backbone, then by Lemma C.27, Lemma C.28 and Lemma C.31, com-
+bined with fast information dissemination (i.e., Lemma C.24), every node exits the dual-state in
+O(log n) rounds. However, if the network forms a single backbone, and if some node is sets its
+exit variable to 1 by roundr + 3⌈log n⌉, then again, combined with Lemma C.24, every node exits
+the dual-state by round r + O(log n).
+Theorem C.33. The network is s-robust.
+Proof. By design (see, GetAdvice function in Algorithm 12, and Definition C.4 for “well-formed”
+advice), for any node u, (1) there can be only one node id present in any advice message, and (2)
+that id must already be present in the snap variable when the advice is received at nodeu. Thus, the
+supervisor cannot add arbitrary connections to any node, ensuring the Sybil resistance property.
+If any node is in a precarious dual-state (see Definition C.14), then by Claim C.32, it exits the
+dual-state in O(log n) rounds. On the other hand, if no node is in a precarious dual-state, and
+the network forms a single backbone, and no node sets its exit variable to 1 for Θ(log n) rounds,
+then by Lemma C.29, the backbone is a correctly configured flyover (i.e., the supervisor provided
+correct advice messages), i.e., by Corollary C.30, the network is in an almost-legal configuration.
+Moreover, this observation implies that even if the supervisor is malicious (e.g., providing “bad”
+advice messages), the network quickly rejects the “supervised-induced” subnetwork (from any
+arbitrary configuration). Thus, the network also achieves the robustness property, which would
+allow an honest supervisor to quickly (i.e., in O(log n) rounds) contact all nodes, provide correct
+advice messages to repair the network.
+Claim C.34. Consider a node id v in any flyover-related or advice-related message of a node u in round r.
+By round r + 1, one of the following events happen, where w = u.flyID in round r.
+1. v ∈ u.S∪{ u.flyID}∪ u.c-ids.
+2. v ∈ Mu(A0).
+3. v .flyID = w.
+4. w ∈ Mv(A0).
+Proof. Similar to the proof of Lemma C.21, we provide a case-by-case analysis depending on the
+message that the node id v is part of.
+1. If u.S = ∅, in functions,R_TestFlyoverConstruction , R_TestFlyoverMetadata and R_TestConnCertificate ,
+node id v straightaway gets added to Mu(A0) in round r.
+2. If v belongs to any function in the distributed tree-to-path algorithms (cf. Section A.2.2),
+again, node id v straightaway gets added to Mu(A0) in round r.
+46
+
+3. In R_TestFlyoverConstruction function, node u processes two types of messages. For any
+message⟨msg, sen⟩, sen is stored in, either u.S or Mu(A0). For any message⟨msg, w, i, sen⟩, w
+and sen are stored in either u.S or Mu(A0).
+In R_TestFlyoverMetadata function, for any message⟨TestFlyID,flyID⟩, there are two cases:
+flyID is stored in either u.flyID or Mu(A0).
+4. In R_TestConnCertificate function, for any message⟨TestCert,v, vID, dist⟩, there are three
+cases: (1) v is sent to node u′∈ u.S, or (2) u stores v in u.c-ids, or (3) u stores v in Mu(A0);
+in the first case, before v is sent to an id u′∈ u.S, u must’ve sent⟨TestFlyID,u.flyID⟩ to v in
+round r (as the prop-flyID variable is set to 1). In round r + 1, node v stores u.flyID in either
+v.flyID, or Mv(A0). And, for any message⟨IntroCert, v⟩, u stores v in u.c-ids.
+Theorem C.35. If supervisor is honest, then the network reaches an almost-legal configuration in O(log n)
+rounds; otherwise, it reaches an almost-legal configuration in 2R(A0) + O(log n) rounds.
+Proof. We denote the subnetwork formed by edges in∀u∈ V, Mu(A0) as N(A0). Recall that the
+communication graph is always weakly connected (in any round) due to Lemma C.21.
+First, we introduce some notation for showing that N(A0) would be (weakly) connected. Let
+the (directed) edge (u, v) in the communication graph in any round r≥ 1; we define the color of
+an edge (u, v) in the following way.
+1. If (v /∈ Mu(A0))∧ (v /∈ u.S∪{ u.flyID}∪ u.c-ids), but node id v is present in a flyover-related
+or advice-related message in u, then the color of (u, v) is red.
+2. If (v /∈ Mu(A0))∧ (v∈ u.S∪{ u.flyID}∪ u.c-ids), then the color of (u, v) is blue.
+3. If v∈ Mu(A0), then the color of the edge(u, v) is green. Similarly, we say that a path between
+any pair of nodes (ignoring edge directions) is a green path if all edges in it are green.
+We proceed to show that N(A0) forms a single (weakly) connected component, i.e., there exists
+a green path between any pair of nodes, in O(log n) rounds, regardless of the initial configuration
+and any node’s interactions with the supervisor. If N (A0) is weakly connected, then it always
+remains a single (weakly) connected component in any subsequent round, as Algorithm A0 is a
+self-stabilizing overlay algorithm (i.e., it preserves connectivity from any initial configuration),
+and importantly, nodes do not delete connections from the memory (incl. channel) dedicated to
+AlgorithmA0 while interacting with the supervisor (cf. Theorem C.33).
+Towards that end, consider any pair of nodesu and v that do not have any green path between
+them in any round r≥ 1. As the communication graph is weakly connected, there exists some
+(undirected, i.e., ignoring edge directions) path P = ( u, v1, . . . ,vt), where vt = v for t≥ 1, in that
+round. Consider any edge e = ( p, q) belonging to P; the following invariants hold in round r + 1.
+1. If e is red, then e turns either blue or green, due to Claim C.34.
+2. If e is blue, then e either remains blue or turns green, due to Remark C.17.
+3. If e is green, then due to the guarantee that AlgorithmA0 preserves connectivity, there exists
+some green path Pe = ( p, q1, . . . ,qt′ ), where qt′ = q for t′≥ 1.
+47
+
+We proceed to show that any blue edge turns green in O(log n) rounds. Consider any blue
+edge e = ( p, q), where the node id q belongs to a flyover-related address variable of node p. In the
+following (exhaustive) cases, nodes p and q end up with a green path between them.
+1. If p.S = ∅, then all flyover-related address variables ofp are straightaway flushed to Mp(A0).
+2. If p is in a precarious dual-state, then by Claim C.32, p exits dual-state in O(log n) rounds.
+3. If the network forms a single backbone, and if all nodes have their exit variables set to 0 in
+all rounds r, r + 1, . . . ,r + 3⌈log n⌉. By Corollary C.30, N(A0) becomes (weakly) connected.
+If N(A0) is (weakly) connected (regardless of any supervisor interaction), the network reaches
+an almost-legal configuration in 2R(A0) rounds. This is because each node u executes Algorithm
+A0 (in the background), and it is guaranteed that Algorithm A0, when executed independently,
+converges to the target topology G∗ in R(A0) rounds. There is an extra factor of 2, in our upper
+bound, because “Delegation” (of a node id by any node via a message), that takes a single round, is
+implemented in two rounds as “Delegate-after-Reversal” (see Definition C.7). Thus, if supervisor
+is not honest, the network reaches an almost-legal configuration in 2R(A0) + O(log n) rounds.
+If the supervisor is honest, we can leverage the (correct) advice for showing fast stabilization.
+First, we show that within O(log n) rounds, there exists at least one attentive node, in which case,
+the supervisor is contacted for help. Once the supervisor is contacted by a node, the supervisor
+waits for O(log n) rounds until all nodes become attentive. Then, the supervisor sends the correct
+advice messages, leading to all nodes forming a correctly-configured flyover in O(log n) rounds.
+Finally, each node finds its predecessor and successor (in the sorted-path topologyG∗) in the c-id
+variable, due to Corollary C.30, as no node sets its exit variable to 1.
+Towards that end, we prove the following arguments.
+1. If N (A0) does not include G∗ in O(log n) rounds, then there exists at least one attentive node
+in O(log n) rounds. (If G∗ is already included, then we are done.)
+2. If there is one attentive node, then all nodes become attentive in O(log n) rounds.
+Consider the following (exhaustive) cases in any round r > 5.
+1. By Claim C.32, any node in a precarious dual-state exits dual-state in O(log n) rounds.
+2. If the network forms a single backbone, and if all nodes have their exit variables set to 0 in
+all rounds r, r + 1, . . . ,r + 3⌈log n⌉. By Corollary C.30, N(A0) becomes (weakly) connected.
+For any node u, u.t decreases by one in every round (andu.t can be at most 5). (See BasicChecks2
+function in Section A.2.2). By Claim C.34, if there is any node idv in any flyover-related or advice-
+related message of any node u (where u.S = ∅), then it is flushed to M u(A0). Once node u exits
+dual-state, it becomes attentive (i.e., u.S =∧u.exit = 0∧ u.t = 0) in O(1) rounds. Thus, either all
+nodes become attentive in O(log n) rounds, or N(A0) includes the target topology G∗.
+C.10 Lower Bound for Convergence Time
+Theorem C.36. For an s-robust network, there exists some initial configuration such that the convergence
+time for any pair of supervisor and overlay algorithms is Ω(log n) rounds.
+48
+
+Proof. Consider an initial configuration where two nodesu and v are at a distanceD = Ω(n) in the
+communication graph. However, these nodes are meant to be adjacent in target topology G∗. If
+there is a pair of supervisor and self-stabilizing overlay algorithm for which this network reaches
+an almost-legal configuration in o(log D) rounds, then we can show a contradiction that the nodes
+u and v were at a distance d < D in the initial state.
+Recall that the nodes of an s-robust network do not arbitrarily create connections of any node
+id present in the advice message. In particular, a node can only add (directed) edges between any
+two ids present in its memory or channel. Thus, even if the supervisor is aware of memory states
+(incl. channels) of all nodes, and is allowed to interact with any subsets of nodes simultaneously,
+it is still limited in its power to create new connections.
+Let t be the minimum number of rounds (from that initial configuration at round 1) taken for
+node u to acquire the id of node v (or vice versa) in its channel. Let S = ( a1, a2, . . . ,at = u) be the
+sequence of nodes from round 1 to t holding the id of v (until it reached u). For ease of exposition,
+let us consider the class of distributed overlay algorithms that only add new (directed) edges, i.e,
+do not remove existing edges. If we arrive at a contradiction for this class of algorithms, then it
+also applies to all other algorithms.
+To that end, observe that for this class of algorithms, the ids in S must initially belong to some
+path P (regardless of directions) from v to u. The key observation is that for i∈ [t− 1], between ai
+and ai+1 in the path P, there can be at most 2i−1− 1 nodes (and 2i−1 edges), i.e., node ai+1 cannot be
+too far from nodeai in the initial communication graph. This is because even if all nodes introduce
+all ids stored in their respective memories (incl. channels) to each other via messages in all rounds,
+each node can only learn all ids in its 2j-hop neighborhood in j rounds. Thus, the total number of
+edges (i.e., distance between v and u) in this path P is at most 2t.
+Therefore, we arrive at a contradiction that if there exists a pair of supervisor and self-stabilizing
+overlay algorithm for which the network reached an almost-legal configuration in t = o(log D)
+rounds, then u and v must have been at a distance of at most 2t < D in the initial configuration.
+49
+
+D Helpful Figures and Tables
+Figure 6: Intuition for the Tree-to-Path algorithm.
+Variable Store node ids?
+u.L ✓
+u.R ✓
+u.vID ✗
+u.flyID ✓
+u.c-par ✗
+u.c-dist ✗
+u.c-ids ✓
+u.exit ✗
+Table 1: Flyover variables of a node u.
+Variable Store node ids?
+u.t ✗
+u.dist ✗
+Table 2: Advice variable of a node u.
+50

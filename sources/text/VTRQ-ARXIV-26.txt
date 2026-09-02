@@ -1,0 +1,1747 @@
+Noname manuscript No.
+(will be inserted by the editor)
+VTRQ: Enabling Verifiable Trajectory Range Queries in
+Hybrid-Storage Blockchains
+Zhongming Yao · Junchang Xin · Yumeng Song · Yusen Mao · Kristian
+Torp · Yuemin Ding · Divesh Srivastava · Yushuai Li · Christian S.
+Jensen·Tianyi Li
+Received: date / Accepted: date
+Abstract Due to their increasingly large volumes, out-
+sourcing of trajectory storage and querying to third-
+party service providers has become attractive. How-
+ever, in such outsourced environments, service providers
+may return incorrect, e.g., incomplete, tampered, or in-
+valid query results, making verifiability of query results
+Zhongming Yao
+Aalborg University, Denmark
+Northeastern University, China
+E-mail: zyao@cs.aau.dk
+Junchang Xin
+Northeastern University, China
+E-mail: xinjunchang@mail.neu.edu.cn
+Yumeng Song
+Aalborg University, Denmark
+E-mail: yumengs@cs.aau.dk
+Yusen Mao
+Northeastern University, China
+E-mail: maoyusen@stumail.neu.edu.cn
+Kristian Torp
+Aalborg University, Denmark
+E-mail: torp@cs.aau.dk
+Yuemin Ding
+University of Navarra, Spain
+E-mail: yueminding@tecnun.es
+Divesh Srivastava
+AT&T Chief Data Office, USA
+E-mail: divesh@research.att.com
+Yushuai Li
+Aalborg University, Denmark
+E-mail: yusli@cs.aau.dk
+Christian S. Jensen
+Aalborg University, Denmark
+E-mail: csj@cs.aau.dk
+Tianyi Li
+Aalborg University, Denmark
+E-mail: tianyi@cs.aau.dk
+an important consideration. Existing hybrid-storage
+blockchains offer limited support for trajectory data,
+lacking authenticated data structures (ADS) that en-
+able efficient verification. For example, ADSs designed
+for queries on one-dimensional data are unsuitable for
+queries on multidimensional trajectory data, while ADSs
+tailored for discrete data may yield incomplete results
+when applied to continuous trajectory data. We pro-
+pose the first framework forverifiabletrajectoryrange
+queries in hybrid-storage blockchains, called VTRQ. It
+features two efficient ADSs: (i) a spatial ADS for road
+networks that leverages hierarchical organization to ag-
+gregate trajectory, edge, and node hashes, thus reducing
+redundant computations and improving spatial verifi-
+cation efficiency; and (ii) a temporal ADS based on
+interval trees, which indexes only the start and end
+times of trajectories, thereby enabling pruning and effi-
+cient temporal verification. By separating spatial and
+temporal indexing, the method reduces the need for data
+comparison, enhancing both query and verification effi-
+ciency. To aggregate spatial and temporal query results,
+VTRQ provides a spatio-temporal edge aggregation mech-
+anism that combines temporal verification of spatial
+nodes, spatial intersection computation, and temporal
+intersection analysis to achieve spatio-temporal filtering.
+Experiments on two real-world datasets show that VTRQ
+is capable of up to 6×faster query performance and up
+to an order-of-magnitude improvement in verification
+efficiency, compared to the state-of-the-art method.
+KeywordsTrajectory · Verifiable Queries· Range
+Queries·Blockchain
+arXiv:2608.21314v1  [cs.DB]  21 Aug 2026
+
+2 Zhongming Yao et al.
+1 Introduction
+With the growing use of trajectory data in areas such
+as traffic management [ 1,2], logistics optimization [ 3],
+and personalized services [ 4], efficient management and
+analysis of such data have become increasingly impor-
+tant. Trajectory datasets can be very large. For example,
+Didi Chuxing’s ride-hailing platform [ 5] generates some
+15 billion trajectory points per day across all locations,
+and in Chengdu alone, it generates some 3.6 million
+trajectory points per day. We use a Chengdu dataset to
+evaluate the proposed framework empirically. Due to the
+very large data volume, storing and querying the data
+requires substantial resources, and it is generally attrac-
+tive for data owners to be able to outsource these tasks
+to cloud service providers. In practice, such outsourcing
+is already widespread. For example, Didi Chuxing out-
+sources the handling of its trajectory data to Alibaba
+Cloud [6], Geotab stores daily fleet trajectories in Google
+Cloud’s BigQuery [7], and the BMW Group manages its
+vehicle telemetry and trajectory data on Amazon Web
+Services (AWS) [8]. However, service providers may not
+return correct query results for reasons such as miscon-
+figuration, cyber attacks, program vulnerabilities, and
+resource constraints [ 9,10,11,12,13,14,15,16]. For ex-
+ample, 19+ million California voter registration records
+stored in a misconfigured AWS database were deleted by
+cybercriminals [17]. Therefore, the ability to verify effi-
+ciently the completeness and soundness of query results
+obtained from external service providers is important.
+In an outsourcing environment, a blockchain can
+serve as a decentralized trust anchor for verifying query
+results. Specifically, efficient verification of a query result
+requires both verification information corresponding to
+the query results and a reference fingerprint that the
+service provider cannot forge. By computing a digest
+from the query result and the accompanying verifica-
+tion information and then comparing it with the refer-
+ence fingerprint, the query result can be validated [ 18,
+19,20]. However, if the reference fingerprint is stored
+and maintained by the service provider, the verification
+loses its independence: the service provider may fab-
+ricate the query results, verification information, and
+matching fingerprint in a mutually consistent manner,
+reducing verification to self-assertion. Requiring the data
+owner to remain online to distribute or sign fingerprints
+for every query is also impractical, as it incurs exces-
+sive operational and computational overheads in large-
+scale deployments [ 19,18]. Being an append-only and
+tamper-evident distributed ledger, a blockchain provides
+a publicly verifiable and immutable platform for stor-
+ing reference fingerprints, thereby enabling trustworthy
+validation of query results.
+Proposals [ 12,13,14,15,16] exist that leverage
+blockchain technology to support third-party service
+provisioning. They use the security, transparency, and
+immutability of blockchains to provide verification mech-
+anisms for query results. The core idea is that a data
+owner sends raw data and an authenticated data struc-
+ture (ADS) to a service provider, while uploading a
+digest of the ADS to a blockchain. When computing a
+query, the service provider must return both the query
+result and a verification object (VO) using the ADS.
+The client compares the hash value of the ADS root,
+computed from the query result and the VO, and then
+verifies it with the digest stored on the blockchain.
+A trajectory captures continuous movement as a se-
+quence of timestamped GPS points with longitude and
+latitude [ 21,22,23,24,25]. Therefore, verifying spatio-
+temporal query results—such as those of range queries,
+which are common and practical—must consider not
+only spatial and temporal constraints but also the con-
+tinuity of the underlying movement. However, existing
+blockchain-based data outsourcing proposals [ 12,13,14,
+15,16], employ ADSs designed for point-based queries
+(e.g., supporting point or range conditions), and query
+results are returned as discrete points. They fail to
+consider the continuity of the underlying movement.
+For example, consider the spatio-temporal range query
+q = (([4, 7], [3, 6]), [4, 5]) in Fig. 1. Here, the spatial com-
+ponent ([4, 7], [3, 6]) defines a rectangle, with [4, 7] and
+[3, 6] specifying longitude and latitude ranges. The tem-
+poral component, [4, 5], is a time interval. Point-based
+processing—when trajectory continuity is not taken into
+account—can fail to identify valid results. For example,
+assuming linear movement between consecutive points
+in a trajectory, then trajectory Tr4 traverses the query
+region, but none of its sample points intersect the spa-
+tial query region. Similarly, trajectory Tr1 satisfies the
+temporal constraint, although none of its points do. This
+highlights a key limitation of traditional point-based
+methods: due to the lack of continuity-aware reason-
+ing, they can miss trajectories that actually satisfy the
+spatio-temporal constraints. We focus on designing a
+framework tailored for trajectory range queries that in-
+corporates ADSs along with verification mechanisms to
+enable verifiable trajectory range queries in blockchain-
+based data outsourcing architectures. This involves two
+key challenges.
+Challenge I: How to design an ADS to support ver-
+ifiable trajectory range queries?Unlike traditional in-
+dexes, ADSs require extra information for result ver-
+ification. It involves embedding cryptographic hashes
+into the index. For trajectory data with massive num-
+bers of points, this causes high storage and computation
+overheads. In existing designs [13,14,26,27,28,29,30,31,
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 3
+Fig. 1: Example of a trajectory range query.
+32], these problems are amplified on trajectory data,
+since many trajectory points generate excessive verifi-
+cation data. This reduces construction and verification
+efficiency, and under memory constraints, it may even
+render ADSs impractical to construct or use. Further-
+more, mainstream spatio-temporal indexes, such as those
+based on minimum bounding rectangles (MBRs) [ 33,
+34] and grid partitioning [ 35,36], rely on hierarchical
+partitioning, with each leaf node being responsible for
+a region and storing all trajectories intersecting this
+region. When hashes are embedded into such indexes to
+construct ADSs, the hash digest of a leaf node typically
+commits to the entire set of trajectories stored in that
+node. As a result, once a query or update accesses a
+leaf node, all trajectories contained in that node must
+participate in hash recomputation, even if only a small
+number of trajectories actually satisfy the query, leading
+to reduced efficiency.
+Challenge II: How to support efficient verifiable tra-
+jectory range queries based on a given ADS?Beyond
+the structural issues in ADS design, verifiable query
+efficiency remains a key challenge. Query processing and
+verification must guarantee result completeness without
+relying simply on point-by-point checks, which are pro-
+hibitive at scale. This inefficiency stems from the fact
+that, in order to handle spatio-temporal information,
+spatio-temporal indexes [ 33,34,35,36] store the com-
+plete spatial and temporal details of trajectories. Thus,
+after spatial filtering, every point and edge of a candi-
+date trajectory must be checked for temporal validity.
+For example, given the query q = (([4, 7], [3, 6]), [4, 5])
+in Fig. 1, trajectories Tr1, Tr2, and Tr4 satisfy the spa-
+tial constraint. Existing methods must check all edges
+of these trajectories—including those of Tr4, which
+does not overlap with the query’s temporal interval.
+Such repeated checks lead to redundant computations,
+severely reducing query and verification efficiency in
+large datasets. Moreover, embedding hashes into the
+indexes exacerbates the problem, since query processing
+and verification involve processing large authentication
+data, increasing computational overheads.
+We introduce a novel framework for verifiable
+trajectory range queries, called VTRQ. We design two
+ADSs: a road-oriented spatial ADS (S-ADS) and an
+interval-tree-based temporal ADS (T-ADS). To address
+Challenge I, we first compute a hash value for each tra-
+jectory and use it as a unique identifier for the trajectory.
+In S-ADS, these hash values are further organized into
+three hierarchical levels: trajectory level, edge level, and
+tree node level. Trajectory hashes are aggregated at the
+edge level, and edge hashes are further reused and aggre-
+gated at the node level. This design avoids redundant
+hash computations and repeated concatenations involv-
+ing non-result trajectories, thereby improving both the
+construction of S-ADS and verification efficiency. In T-
+ADS, node hashes are computed by directly aggregating
+trajectory hashes and metadata used for verification
+and query acceleration, enabling optimized verification
+performance.
+To address Challenge II, we decouple the spatial
+and temporal attributes of trajectories and use S-ADS
+and T-ADS independently. Further decoupling spatial
+attributes (e.g., longitude and latitude) is not beneficial,
+as they form inherently coupled two-dimensional spa-
+
+4 Zhongming Yao et al.
+tial constraints in trajectory queries; separating them
+would not improve pruning power but would introduce
+additional overheads for result merging and verification.
+S-ADS stores only spatial information used for querying
+trajectories, while T-ADS stores only the start and end
+times of trajectories. This separation reduces the amount
+of data processed, thereby accelerating both query pro-
+cessing and result verification. S-ADS constructs MBRs
+on boundary edges to enable spatial pre-filtering, while
+T-ADS stores the maximum timestamp in each subtree
+to support temporal pruning. These optimizations fur-
+ther accelerate query processing and result verification.
+To ensure accurate result aggregation after the decou-
+pling, we propose a Spatio-Temporal Edge Aggregation
+(STEA) mechanism to achieve fine-grained alignment
+between spatial and temporal attributes in verifiable
+trajectory range queries. This mechanism first intersects
+results obtained from S-ADS and T-ADS to form can-
+didate results. Then, fine-grained filtering is applied,
+combining temporal verification of spatial nodes, spa-
+tial intersection computation, and temporal intersection
+analysis to accurately identify matching trajectory edges.
+The STEA mechanism can handle cases such as the one
+in Fig. 1, where the sub-trajectory p1,2p1,3 of trajectory
+Tr1 satisfies the spatial and temporal ranges of query
+q. While the portion p′p1,3 is in the spatial range, its
+temporal interval begins after 5 and does not overlap
+with the query interval [4, 5], so Tr1 is not in the result
+of the query q. The main contributions of the paper are
+summarized as follows:
+– We present VTRQ, a framework for verifiable trajectory
+range queries in hybrid-storage blockchains. To the
+best of our knowledge, this is the first work that uses
+ADSs to enable verifiable trajectory range queries.
+–VTRQ implements two ADSs—a road-aware spatial
+ADS and an interval tree-based temporal ADS—to
+capture essential semantics and support efficient veri-
+fiable trajectory range queries.
+–VTRQ introduces a spatio-temporal edge aggregation
+method to combine intermediate results from the
+ADSs and extract correct trajectory edges.
+– The experimental study on three real-world datasets
+demonstrates that VTRQ is capable of up to 6×higher
+query efficiency and up to an order of magnitude
+higher verification efficiency compared to the state-
+of-the-art method.
+We review related work in Section 2 and cover prelim-
+inaries in Section 3. Section 4 introduces the proposed
+ADSs, while Section 5 presents the accompanying query
+processing and verification methods. Section 6 presents
+the security analysis. Section 7 covers the experimental
+study, and Section 8 offers conclusions.
+2 Related work
+2.1 Embedded ADS-based methods
+Some studies [26,27,28,29,30,37,38,39,40,41,42] build
+and maintain an ADS in the blockchain’s block. In
+these methods, an ADS is embedded directly into the
+blockchain. Users can verify the completeness and sound-
+ness of the data by using ADS digests embedded in
+block headers. Initially, Bitcoin [ 37] used a Merkle tree
+as its ADS, primarily to organize and verify transactions
+within each block, ensuring data integrity and security.
+Building on this concept, Ethereum [38] employs a more
+sophisticated structure known as the Merkle Patricia
+Trie, which not only verifies transactions but also stores
+the entire account state, enabling more efficient state
+management and faster data access. Xu et al. [ 26] pro-
+pose an accumulator-based ADS to support verifiable
+Boolean range queries. Similarly, Wang et al. [ 39] intro-
+duce a sliding window accumulator ADS to optimize
+verifiable range queries. Ruan et al. [ 27] introduce Lin-
+eageChain, which employs a Merkle graph as an ADS to
+capture provenance and features a skip list index opti-
+mized for verifiable provenance queries. Singh et al. [ 40]
+extend this line of work by proposing two ADSs: a two-
+tier deterministic append-only skip list and a partitioned
+B+tree. Zhu et al. [ 28] utilize the Merkle B-tree as an
+ADS to ensure the soundness and completeness of query
+results accessed through the index. Pei et al. [ 29] pro-
+pose a Merkle semantic trie-based ADS to verify queries.
+Jia et al. [30] propose the Merkle Extendible Hash Table,
+an authenticated secondary index for verifying queries
+on non-primary key attributes.
+Despite their security guarantees, the embedded
+ADS-based methods have several notable drawbacks.
+First, storing raw data directly on-chain increases the
+storage burden of a blockchain markedly, resulting in
+poor scalability and high maintenance costs. Second,
+an ADS must be constructed for every block, which
+introduces additional computational overhead during
+data ingestion. Most importantly, these methods are
+unsuitable for outsourced storage scenarios—which is
+our focus—where the data is already stored on external
+storage nodes.
+2.2 External ADS-based methods
+To enable verifiable queries when data is stored on ex-
+ternal high-performance servers, some studies [ 12,13,14,
+15,16,31,32,43,44,45] also store the ADS at the exter-
+nal service provider instead of on the blockchain. By
+recording the cryptographic digest of the ADS on the
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 5
+Fig. 2: Example trajectories in a road network.
+blockchain, users can verify the completeness and sound-
+ness of query results provided by an external service
+provider. Wu et al. [12] investigate authenticated queries
+over graph data in a blockchain-assisted cloud setting,
+proposing the PAGB authenticated data structure to
+support privacy-preserving and verifiable graph queries.
+Zhang et al. [ 13] propose the GEM2-tree to minimize
+gas consumption, where gas refers to the unit of compu-
+tational cost in blockchain systems, without impacting
+query performance. Further, Zhang et al. [ 14] introduce
+the Chameleon inverted index to achieve constant main-
+tenance costs for keyword queries. Li et al. [ 15] propose
+the Merkle Path DAG for graph data to efficiently handle
+keyword queries. Li et al. [ 16] design the MELTree and
+store the root digests on-chain, along with a verification
+object construction algorithm to verify the completeness
+and soundness of query results. Cui et al. [ 31] propose a
+virtual keyword forest that enables secure and reliably
+verifiable query processing in hybrid-storage blockchains.
+Sun et al. [32] propose E3FS for dynamically updatable
+datasets, which supports multi-keyword fuzzy search, an
+important search functionality. Zhou et al. [ 43] propose
+VeriDKG, a verifiable SPARQL query engine for decen-
+tralized knowledge graphs that employs the RGB-Trie,
+a blockchain-maintained authenticated data structure,
+to provide correctness proofs for query results.
+The external ADS-based methods offload raw data
+to off-chain storage service providers, while storing only
+the digest of the corresponding ADS on-chain to ensure
+data completeness and soundness. This design reduces
+the on-chain storage overhead and improves system scal-
+ability, making it particularly attractive for outsourcing
+environments with large-scale data. While prior studies
+have explored verifiable queries in outsourced settings,
+they fall short of providing efficient support for correct
+trajectory range querying and query verification. To
+the best of our knowledge, we are the first to propose
+efficient and verifiable trajectory range querying.
+3 Preliminaries
+3.1 Trajectory range queries
+A raw trajectory is a series of raw GPS points p =
+((x,y ),t ), where x is a longitude, y is a latitude, and
+t is a timestamp [ 2,46,47]. Fig. 2 shows example raw
+trajectory⟨p 1,1,...,p 1,5⟩.
+Definition 1 Aroad networkis modeled as an undi-
+rected graph G = (V,E ). Here, V ={v1,v 2,...,v p} is
+a set of vertices representing road intersections. Each
+vi = (x,y ) has a longitude x and a latitude y. Next, E
+is a set of edges, each of which is represented by two
+vertices from V . Edges model road segments in-between
+two intersections.
+Fig. 2 shows a road network with 15 intersections
+and 21 segments. For example, vertex v1 has two edges
+connecting it to verticesv 2 andv 3.
+Map-matched trajectories can be obtained from raw
+trajectories through map-matching [ 48,49]. In practice,
+a raw trajectory often does not start or end at a vertex
+but rather at some point on an edge. When this occurs,
+the start and end points of a trajectory are moved to
+the nearest vertices, and their relative positions (i.e.,
+distances from the original points to the snapped ver-
+tices along the edge) are recorded as offsets [ 21,22,50].
+Each point in the map-matched trajectory has a times-
+tamp. When the matched vertex directly corresponds to
+a raw GPS sample, the original timestamp is preserved.
+Otherwise, the timestamp is estimated by linear inter-
+polation based on the point’s relative position along the
+edge. For simplicity, we assume that all trajectories are
+aligned in the following context. Accordingly, we index
+map-matched trajectories and refer to them simply as
+trajectoriesfrom now on. Following the literature [ 51],
+we define a trajectory as follows.
+Definition 2 Atrajectory Tr =⟨(v0,t 0), (v1,t 1),...,
+(vm,t m)⟩ is obtained by map-matching a raw trajectory
+
+6 Zhongming Yao et al.
+onto a road network G = (V,E ), such that vk∈V and
+(vk−1,v k)∈E , and 0 < k≤m . Specifically, each pair
+(vi,t i) indicates that the moving object is located at
+vertexv i∈Vat timet i.
+Example 1 In Fig. 2, 10 dashed lines with different col-
+ors represent trajectories {Tr1,...,Tr 10}. Specifically,
+Tr2, Tr3, and Tr5 consist of four, four, and three vertices,
+respectively.
+Trajectory range queries are fundamental opera-
+tions in trajectory data management, as they underpin
+more advanced spatio-temporal analytical tasks. Such
+queries retrieve all trajectories—or some segments of
+trajectories—that lie within a specified spatio-temporal
+range [52,53,54].
+Definition 3 Given a spatial range S specified by a
+longitude interval [xmin,x max] and a latitude interval
+[ymin,y max], and a temporal range T specified by a
+time interval [tstart,t end], atrajectory range query
+q = (S,T ) returns all trajectories Tr that contain at
+least one point that satisfies both S andT . Note that
+this point may not be a sampled point. It can be any
+point along a trajectory’s edge.
+Example 2 Continuing Example 1, consider the range
+query q = (S = ([116.1, 116.3], [39.4, 39.6]),T = [8, 9]).
+In Fig. 2, the trajectories that intersect S (the red rect-
+angle) are Tr2 (orange dashed line), Tr3 (green dashed
+line), and Tr5 (cyan dashed line). Based on the map-
+matching details of these trajectories, since the temporal
+ranges for Tr2 and Tr3 are [1, 4] and [3, 6] respectively,
+only Tr5 satisfies the temporal range [8, 9]. Therefore,
+the result ofqisTr 5.
+3.2 Verifiable query methods
+A cryptographic hash function [ 55,56] takes input of
+any size and outputs a fixed-sized byte string.
+Definition 4 Acryptographic hash function, de-
+noted as h(·), transforms input data d into a hashed
+value h(d). The function satisfies three properties: (i)
+preimage resistance—given h(·) and h(d), it is com-
+putationally infeasible to find d; (ii)second preimage
+resistance—given h(·) and h(d), it is computationally
+infeasible to findd andd′ such thath(d) =h(d′); and (iii)
+collision resistance—given h(·), it is computationally
+infeasible to find a pair (d,d ′) such thath(d) =h(d ′).
+An authenticated data structure (ADS) is a data
+structure that allows efficient and secure verification
+of the integrity of data. A widely used example of an
+Fig. 3: TheVTRQframework.
+ADS is the Merkle tree [57], which is a binary tree-based
+ADS that stores cryptographic hash values to efficiently
+verify data integrity.
+Definition 5 AMerkle treeis a binary tree-based
+ADS built over a datasetD ={d1,...,d n} that satisfies
+the following properties:
+– Leaf nodes store a hash value hi = hash(di) for 1≤
+i≤n.
+– Non-leaf nodes store a hash value h =
+hash(hleft|hright), where hleft and hright are the
+hash values of the left and right child nodes,
+respectively, and|denotes concatenation.
+– The hash value at the root node, called theMerkle
+root, uniquely represents the entire dataset.
+4VTRQframework
+4.1 System model and threat model
+Hybrid-storage blockchain system model.As
+shown in Fig. 3, the system involves four types of partici-
+pants. (i)Data owners (DO)generate and maintain raw
+trajectory data. Given their limited computational and
+storage capabilities, data owners outsource their data to
+storage nodes. (ii)Service providers (SP)store the raw
+data off-chain and provide query processing services. (iii)
+Clientssubmit queries to service providers to retrieve
+information from storage nodes. (iv)Blockchain peers
+(BP)maintain the on-chain authenticated digests of the
+outsourced data using a blockchain.
+DOs first outsource the trajectory data to SP while
+they construct ADSs and upload them to the SP. The
+digests of these ADSs (i.e., their root hashes, which serve
+as fingerprints) are stored on the BPs to enable verifica-
+tion. When a client issues a spatio-temporal query, it is
+decomposed into spatial and temporal components and
+processed separately using two specialized ADSs: S-ADS
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 7
+and T-ADS. Both candidate trajectory sets returned
+are intersected and further filtered at a fine granularity
+based on query constraints. Finally, the SP returns the
+query results along with VOs. The client uses these VOs
+to reconstruct the root digests and verifies them against
+the blockchain-stored digests to ensure completeness and
+soundness. The intersection and fine-grained filtering
+can also be locally reproduced by the client to validate
+the process.
+In VTRQ, the blockchain serves as a third-party trust
+anchor that stores and publishes the digests of two ADSs
+for query-result verification; it does not store raw data.
+VTRQ is blockchain-agnostic and does not rely on any
+specific platform or consensus protocol, as long as the
+blockchain provides append-only and tamper-evident
+storage and publication. Therefore, configuration choices
+such as the consensus mechanism, validator set, and
+tolerated number of malicious nodes are deployment-
+level concerns and do not affect the correctness of the
+proposed verification mechanism.
+Threat model.According to existing studies [ 12,13,
+14,15,16,43], in blockchain-based data outsourcing ar-
+chitectures, the clients, DOs, and BPs are generally
+considered trustworthy. However, the SP, as an external
+service resource, may return tampered or incomplete
+query results due to program failures, security vulnera-
+bilities, or commercial interests, which can compromise
+query correctness. Therefore, following the setting in [26,
+43], we treat the SP as an untrusted peer. The goal of
+verifiable query processing is to enable the SP to prove
+that its query results satisfy completeness and sound-
+ness.Completenessensures that no valid results are
+omitted in a trajectory range query, whilesoundness
+means that all returned results are authentic and meet
+the query conditions.
+4.2 Road-aware spatial ADS
+4.2.1 Construction
+Inspired by [51], we represent a trajectory as a sequence
+of edges with corresponding timestamps (see Defini-
+tion 2) and index trajectories based on these edges.
+Building on this representation, we develop a road-aware
+spatial ADS that can efficiently prune irrelevant trajec-
+tories and effectively support both range queries and
+the verification of query results.
+Definition 6 Given a road network G = (V,E ) and a
+set of trajectories STr ={Tr1,Tr 2,...,Tr n}, aroad-
+aware spatial ADS (S-ADS)Tsis recursively repre-
+sented as a triple tree:
+Ts=
+
+([x, x′],[y, y ′], Eh,Hs(Ts)) ifTsis a leaf node
+([x, x′],[y, y ′],(Ts 0,Ts l,Ts 1),Hs(Ts)) otherwise
+–[x,x ′] is a longitude range.
+–[y,y ′] is a latitude range.
+–E h is a set of edges. Each element in Eh is
+(vi,v j,H (Tr)i,j,h i,j), where vi,v j∈V , H(Tr)i,j is a
+set of hashes of trajectories passing through the edge
+vi→v j, and hi,j =h(h(Tra)∥h(Trb)∥h(Trc)∥... ) is
+an aggregate hash. h(Tra),h (Trb),h (Trc)∈H (Tr)i,j.
+–Ts 0, Tsl, and Ts1 are the left, middle, and right
+subtrees of Ts , respectively. Tsl is a leaf node, which
+stores the border edges between the two subgraphs
+obtained after partitioning the road network. Ts0 and
+Ts1 have the same structure asTs . At the lowest level,
+the left and right subtrees are composed of leaf nodes
+that store the edges corresponding to their spatial
+regions.
+–Hs(Ts) is the hash value of the node:
+Hs(Ts) =
+
+h([x, x′]∥[y, y′]∥Eh) ifTsis a leaf node
+h([x, x′]∥[y, y′]∥Hsnode) otherwise
+whereHs node =Hs(Ts 0)∥Hs(Tsl)∥Hs(Ts1).
+To build S-ADS, we recursively partition the road
+network using the method proposed in [51]. Edges shared
+between the two subgraphs are referred to as border
+edges. The weight of each edge is the number of trajec-
+tories traversing it, and the weight of a vertex is the
+sum of the weights of its incident edges. A binary search
+strategy is employed to select a splitting point that min-
+imizes the difference in trajectory weights between the
+resulting subgraphs. The graph is then divided into left
+and right subgraphs at this point. This process repeats
+recursively until the number of vertices in each leaf node
+falls below or equals a threshold θ, which controls the
+size of the leaf nodes. The partitioning scheme can be
+extended to support various constraints [58,59,60], such
+as minimizing cut edges or balancing subgraph sizes.
+Example 3 Continuing Fig. 2, Fig. 4(a) provides an ex-
+ample of S-ADS Ts. Given a threshold θ = 5, the parti-
+tioning of Ts is shown in Fig. 4(b). We first calculate the
+weight of each node and subgraph, i.e., the red values.
+Takev4 as an example: v4 is connected by four edges,
+i.e., v2→v 4, v3→v 4, v4→v 5, and v4→v 6. Accord-
+ing to the number of trajectories passing through each
+edge in Fig. 2, their respective weights are 1, 1, 1, and
+3. Therefore, the total weight of vertex v4 is 6. After
+calculating the weights of all vertices, we partition the
+road network. Since the longitudinal range from 115.5°E
+to 117.8°E is longer, we partition along the longitude
+direction. After splitting at v3→v 10, v8→v 11, and
+
+8 Zhongming Yao et al.
+(a) S-ADS.
+(b) Road network partition.
+Fig. 4: An example of S-ADS.
+v9→v 12, the graph can be divided into two subgraphs.
+However, the number of vertices in both subgraphs ex-
+ceeds the threshold θ. We continue to partition them
+following the same procedure. Finally, the resulting four
+subgraphs, consisting of the node sets{v1,v 2,v 3,v 4,v 5},
+{v6,v 7,v 8,v 9}, {v10,v 11,v 12}, and {v13,v 14,v 15}, all
+have at mostθvertices.
+Using this partitioning, a Ts can be constructed.
+There are two types of vertices in Ts: leaf vertices and
+internal vertices. For ease of description, we assign a
+unique identifier to each node in this example. Take
+node 10 as an example. It is both the root node and
+an internal node, and it has three child nodes. Among
+them, nodes 7 and 9 are internal nodes, while node 8
+is a leaf node. This leaf node stores the border edges:
+v3→v 10, v8→v 11, and v9→v 12. Node 7 also has
+three child nodes, all of which are leaf nodes. However,
+only node 2 records the border edges connecting its
+two subgraphs. Node 1 and node 3 store the edges
+within the subgraphs formed by {v1,v 2,v 3,v 4,v 5} and
+{v6,v 7,v 8,v 9}, respectively.
+To enhance the verifiability support of the S-ADS,
+our method introduces three key improvements: (i) it
+separates spatial and temporal attributes by remov-
+ing timestamps from the spatial index, allowing tem-
+poral and spatial data to be indexed and queried in-
+dependently, which improves overall efficiency; (ii) it
+constructs MBRs for each group of border edges, en-
+abling early filtering of non-matching MBRs during
+query processing and thus reducing unnecessary spatial
+computations; and (iii) it employs a three-level hierar-
+chical hashing scheme to improve reusability, where each
+trajectory is first hashed individually, then edge-level
+hashes are generated by aggregating the hashes of all
+trajectories passing through each edge, and finally, node-
+level hashes are computed by combining the hashes of
+associated edges with relevant metadata.
+4.2.2 Update
+Similar to [51], when updating the trajectory dataset, a
+batch of new raw trajectories is first map-matched to
+the road network. Their hash values are then computed,
+and each map-matched trajectory edge is indexed on
+the leaf node. The weights of each subgraph are up-
+dated accordingly, which may lead to an imbalance in
+the number of trajectories across ADS nodes. After
+updating the subgraph weights, unbalanced nodes are
+identified based on the partitioning optimization cri-
+teria. We then remove from this set any nodes whose
+ancestors are already included, retaining only the mini-
+mal set of affected nodes. For each remaining node, the
+partitioning is adjusted: if the left child’s weight exceeds
+that of the right child, the split boundary is shifted left;
+otherwise, it is shifted right, until balance is achieved.
+This process recurses until the leaf node size reaches the
+stopping threshold. Finally, for the updated nodes, edge
+hashes are computed by concatenating and hashing the
+trajectory hashes. The node hashes are computed by
+concatenating and hashing the edge hashes. The node
+hash values are propagated upward from the modified
+nodes to the root.
+4.2.3 Time complexity analysis
+Given a spatial range query, the system traverses from
+the root of the S-ADS tree to locate all nodes whose
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 9
+(a) Example
+ (b) T-ADS
+Fig. 5: An example of T-ADS.
+regions intersect with the query range. Let N denote
+the number of nodes in the ADS tree. Suppose the
+query overlaps with s leaf nodes, each containing up
+to k trajectory edges, then the candidate set size is
+O(s·k ). Therefore, the overall query time complexity is
+O(logN +s·k ), where logN accounts for tree traversal
+ands·kfor filtering and matching.
+4.3 Interval tree-based temporal ADS
+4.3.1 Construction
+The RP-Tree [51] stores the timestamps of all trajecto-
+ries at each vertex in the leaf nodes. As the number of
+trajectories increases, the number of timestamps grows
+significantly, resulting in very slow query performance.
+If the RP-tree is adapted as a verification tree for trajec-
+tory range queries, the verification process will become
+inefficient due to some timestamps being unnecessary.
+Therefore, in designing the S-ADS, we did not store any
+time information. Instead, we additionally designed an
+interval tree-based temporal ADS to record only the
+start and end times of each trajectory [61], which reduces
+the large number of timestamps in the structure. This
+design improves query efficiency and reduces storage
+overhead. The T-ADS adopts a red-black tree structure
+for balanced indexing and efficient updates, ensuring
+logarithmic query and insertion complexity [ 62]. More-
+over, it provides more flexible query capabilities, since
+we do not embed time information into the spatial index,
+nor do we embed spatial information into the temporal
+index. As a result, purely spatial queries and purely
+temporal queries can be supported independently.
+Definition 7 Given a set of trajectories STr =
+{Tr1,Tr 2,...,Tr n}, where each Ti has a sequence of
+road network nodes and their associated timestamps
+(vk,t k), aninterval tree-based temporal ADS (T-
+ADS)Ttis recursively represented as a binary tree:
+Tt= (h(Tr w),[t,t′],t max,(Tt 0,Tt 1),Ht(Tt)).
+–h (Trw) is the hash value of a trajectory Trw, which
+can uniquely identify the trajectory.
+– [t,t′] is a temporal range, where t is the start time of
+theTr w andt′ is the end time of theTr w.
+–t max is the maximum timestamp among all nodes in
+the treeTt.
+–Tt 0 and Tt1 are the left and right subtrees of Tt,
+respectively. Tt0 and Tt1 have the same structure as
+Tt.
+–Ht(Tt) is the hash value of the node:
+Ht(Tt) =
+
+h(Trw∥[t, t′]∥tmin∥tmax) ifTtis a leaf node
+h(Trw∥[t, t′]∥tmin∥tmax∥Htnode) otherwise
+whereHt node =Ht(Tt 0)∥Ht(Tt1).
+Example 4 Fig. 5(a) shows the time intervals of the
+10 trajectories from Fig. 2. The axes represent their
+timestamps. Fig. 5(b) is the Ts-tree corresponding to
+Fig. 5(a), constructed based on these time intervals. For
+convenience, we usei as the node label; it is the index of
+the trajectory Tri. Node 6 is an internal node and also
+a root node. It has two child nodes, 3 and 9. Interval
+[7, 10] represents the start time of trajectory Tr6. Next,
+15 is the maximum value of the subtree, and Ht6 is the
+hash value combining the information of Tr6 with the
+information of the subtree. Node 1 is a leaf node, and
+itsHt 1 only contains the information of trajectory 1.
+Given a query time interval [5, 6], we start from the
+root node, whose temporal range is [7 , 10]. Although
+this range does not intersect with the query interval,
+its subtree maximum value is 15, which exceeds the
+lower bound of the query (5), requiring us to continue
+searching its left subtree. Node 3 has a temporal range of
+[3, 6], overlapping with the query, and a maximum value
+of 9, which is also greater than 5; therefore, we proceed
+to its children. Among them, node 4 has a temporal
+range of [4, 6] that overlaps with the query and stores
+trajectory Tr 4, which is returned as a result. The left
+child of node 3 (node 1) has a temporal range of [0 , 2],
+which does not intersect with the query interval, and
+
+10 Zhongming Yao et al.
+its maximum value is 2, smaller than 5, so it can be
+safely pruned. Returning to the right child of the root
+node (node 9), its temporal range is [12 , 14], which does
+not intersect the query interval. Although its maximum
+value is 15, larger than 5, there is no overlap with [5 , 6],
+so no further traversal is necessary. Ultimately, only
+trajectoryTr 4 matches the query interval [5,6].
+4.3.2 Update
+In a T-ADS, the update process for inserting a new
+interval transaction consists of three main steps. First,
+the interval is inserted into the interval tree, which
+is built upon a red-black tree structure. To maintain
+balance, the red-black tree may perform rotations (left or
+right) to restructure the tree and recoloring operations
+to preserve red-black properties—such as preventing
+consecutive red nodes and ensuring consistent black-
+height across all paths. Second, the Max field of each
+affected node along the insertion path is updated upward
+to reflect the maximum end time among all intervals in
+its subtree. Finally, the hash values along the insertion
+path are recomputed from the bottom up, culminating
+in an updated RootHash at the top of the structure to
+preserve the completeness and soundness of the data.
+4.3.3 Time complexity analysis
+Inserting a new interval involves three steps: (i) insert-
+ing the interval into the red-black tree and performing
+necessary rebalancing, which takesO(logn ) time, where
+n denotes the current number of intervals in the tree;
+(ii) updating the Max fields along the insertion path,
+affecting at most logn nodes; (iii) recomputing the hash
+values of these affected nodes to preserve the integrity
+of the authenticated data structure, which also involves
+at most logn nodes. Since each step operates within the
+tree’s height, the overall time complexity of the insertion
+isO(logn ). Given a query time interval, we traverse the
+tree to locate all intervals that intersect with it. Each
+query path has a depth ofO(logn ). Letk be the number
+of matched intervals, then the time complexity of the
+query isO(logn+k).
+5 Query and verification
+5.1 Spatio-temporal edge aggregation
+After independently retrieving candidate sets from S-
+ADS and T-ADS, we can take the intersection of the two
+sets to obtain the query result. However, this approach
+overlooks cases where only part of an edge overlaps
+with a query interval. For example, in Fig. 1, consider
+again the query q = (([4, 7], [3, 6]), [4, 5]). Suppose a
+leaf node covers the region ([3 , 7], [3, 6]), and Tr1 is
+among the candidate trajectories. The index compares
+the time interval [2, 7] of p1,2p1,3—the sub-trajectory of
+Tr1 within the leaf node region—with the query interval
+[4, 5]. Since [2, 7] covers [4, 5], the system considers it
+a match. In reality, only the edge p′p1,3 actually lies
+within the spatial range, and its time interval begins
+after 5, which does not overlap with [4 , 5]. Thus, Tr1
+does not satisfy the query.
+Algorithm 1:Edge aggregation
+Input: Spatial result setRs, Temporal result setRt,
+spatial regionS, temporal intervalT
+Output:Spatio-temporal result setR
+1R ′←R s∩R t;
+2R←∅;
+3foreachTr n∈R ′ do
+4foreachedgee= (v i, vj)in Tr n do
+5T e←time interval ofe;
+6ifT e⊆Tande∈(E ri∪E rc)then
+7R←R∪{e};
+8else ifT e∩T̸=∅then
+9ife∈E ri then
+10R←R∪{e};
+11else ife∈E rc then
+12 Compute intersection points pin, pout;
+13Estimate timestampst in, tout;
+14if[t in, tout]∩T q̸=∅then
+15R←R∪{e};
+16returnR;
+To address this problem, we propose a spatio-
+temporal edge aggregation mechanism (STEA) to
+achieve fine-grained alignment between spatial and tem-
+poral attributes in verifiable trajectory range queries.
+We first perform independent queries on the S-ADS and
+T-ADS to obtain result sets Rs andRt, which satisfy
+the spatial and temporal constraints, respectively. The
+STEA process then proceeds in two main steps: (i) com-
+pute the intersectionR′ =Rs∩R t to derive an initial
+set of candidate trajectories; and (ii) for each trajectory
+inR′, examine all of its edges to verify whether any edge
+simultaneously satisfies both the spatial and temporal
+query conditions.
+To support this aggregation, we categorize the rela-
+tionship between an edge e = (vi,v j) and the spatial
+regionSinto three types:
+Definition 8 For an edge e = (vi,v j), if both vi and
+vj are located within the spatial query region S, e is
+said to beinside S. All such edges are denoted as Eri.
+Definition 9 For an edge e = (vi,v j), if vi is insideS
+and vj is outsideS, or vice versa, or both are outside
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 11
+but e∩S̸ =∅, then e is said tointersect S. All such
+edges are denoted asE rc.
+Definition 10 For an edge e = (vi,v j), if e /∈(Eri∪
+Erc) then e is consideredoutside S. These edges are
+denoted asE ro, and defined byE ro =E−E ri−E rc.
+Based on the above classification and the edge’s
+temporal overlap with the query time range, STEA
+filters candidate results through the following steps:
+– Full temporal inclusion with spatial overlap:If
+an edge’s time interval is completely within the query
+time range and it belongs to Eri∪E rc, the edge is
+retained.
+– Partial temporal overlap:If the time interval of
+the edge overlaps with the query’s time interval, then:
+–If it belongs toE ri, it is retained directly.
+– If it belongs to Erc, the spatial intersection points
+between the edge and the query region are com-
+puted. The corresponding timestamps are esti-
+mated using linear interpolation. If the interpolated
+time interval of spatial overlap intersects with the
+query time range, the edge is retained.
+Algorithm 1 describes the process of STEA. Given
+the spatial result setRs, temporal result setRt, spatial
+regionS, and temporal interval T , the algorithm first
+computes the initial candidate setR′ =Rs∩Rt (Lines 1-
+2). It then iterates through each trajectory in R′ and
+examines all of its edges to verify their spatio-temporal
+validity (Lines 3–15). For each edge, if its time interval
+is fully contained within T and it has spatial overlap
+(i.e., it belongs to Eri or Erc), it is directly retained
+(Lines 5-6). If the time interval partially overlaps withT ,
+then: (i) if the edge is spatially inside S (i.e., e∈E ri),
+it is also retained (Lines 8–9); (ii) if it intersects S (i.e.,
+e∈E rc), the algorithm computes the timestamps of
+the spatial intersection points. If the interpolated time
+interval overlaps with T , the edge is retained as a valid
+spatio-temporal segment (Lines 11–14).
+5.2 Verification of query results
+Once the query execution is completed, the system must
+verify the soundness and completeness of the result
+before it can be trusted. The verification process consists
+of two stages: (i) verifying the correctness of the query
+results obtained from the two ADSs; and (ii) verifying
+the correctness of the final result after aggregation.
+Verification of ADS query results.The system uses
+two ADSs, corresponding to the spatial and temporal
+indexes, to support verifiable range queries. Each inter-
+nal node stores a cryptographic hash summarizing its
+child nodes, while each leaf node contains a hash digest
+of its own content.
+During query execution, each ADS performs a depth-
+first traversal and returns not only the matched result
+set but also a VO, which includes: (i) the query path
+from the matched leaf nodes to the root; (ii) the authen-
+tication hashes of all sibling nodes along the path. When
+a query returns no results (i.e., the result set is empty),
+the ADS still provides a verification object to prove that
+the empty result is trustworthy. Specifically, the VO
+includes a Merkle verification path that demonstrates
+the query range falls outside or between the indexed
+intervals and does not match any leaf node. Using this
+information, the client can locally reconstruct the ADS
+root hash RootHash and compare it with the trusted
+root hash RootHash′ published on the blockchain. If
+RootHash = RootHash′, the query result is considered
+correct and complete with respect to the corresponding
+ADS. This verification is performed independently for
+both the S-ADS and T-ADS.
+Verification of aggregated results.After verifying
+the query results from the S-ADS and T-ADS, the client
+can re-execute the spatio-temporal aggregation process
+locally, as described in Section 5.1, to further ensure that
+the returned trajectory edges satisfy the combined query
+constraints. This re-execution incurs minimal overhead
+and does not impose a substantial burden on the client.
+6 Security analysis
+We provide the formal security definition of VTRQ in
+line with common security standards for verifiable
+queries [43,63,64].
+Definition 11 (Query verifiability). A trajectory range
+query is verifiable if the probability that any polynomial-
+time adversaryA succeeds in the following experiment
+is negligible:
+Given a trajectory range query q,A is picked as
+the service provider responsible for executing trajectory
+queries, andA executes q and produces a result set R
+with proof VO .A succeeds if: (i) An element exists in
+R that does not satisfy q (violating soundness); or (ii)
+there exists a result element that satisfies q but is not
+inR(violating completeness).
+Theorem 1 The trajectory range query is verifiable
+under Definition 11 if the following assumptions hold:
+(i) the hash function is a pseudo-random function, and
+(ii) the blockchain peers are trustworthy.
+Proof We prove the theorem by contradiction, address-
+ing two cases:
+
+12 Zhongming Yao et al.
+Case 1. An element of the result that satisfies q is
+missing fromR, violating the completeness.
+Case 2.R contains an element that does not satisfy
+q, violating the soundness.
+During the verifiable query process, the SP queries
+the S-ADS and T-ADS. From the S-ADS, the SP obtains
+an intermediate result Rs along with the verification
+object VOs. From the T-ADS, an intermediate result
+Rt and its proof VOt are obtained. The client combines
+each result with its corresponding proof to reconstruct
+the root digests of the ADSs, which are then compared
+against the digests stored on the blockchain to verify
+the completeness and soundness of the results. If any
+portion of the result is missing, this implies that the
+ADS allows the construction of an incomplete result
+that still produces the same root digest as the correct
+one, thereby violating completeness (Case 1). If the
+result is tampered with or forged, it suggests that two
+distinct query results can be derived from the ADS
+while producing the same root digest, thereby violating
+soundness (Case 2). If either Case 1 or Case 2 occurs,
+one of two contradictions arises:
+– The ADS digest root is generated by a cryptographic
+hash function. If two distinct values produce the same
+digest, this implies a hash collision, contradicting
+Assumption i.
+– The ADS digest root stored on the blockchain has
+been tampered with, indicating that a majority of
+peers maintaining the blockchain are malicious and
+have gained control over the system, contradicting
+Assumption ii.
+Thus, under the assumptions, A cannot violate veri-
+fiability.
+7 Experiments
+7.1 Experimental settings
+Implementation details.We implement a service
+provider and a client in Python 3.10.11, using JSON
+to store the spatial and temporal ADSs due to its
+lightweight nature, readability, and efficient parsing.
+The service provider runs on an Intel Core i9 CPU @
+2.67GHz with 16 GB of memory, while the client runs on
+an Intel Core i7 CPU @ 2.60GHz with 16 GB memory.
+VTRQ uses the blockchain only as a third-party trust
+anchor for storing and publishing the digests of two
+ADSs, and it does not depend on any specific blockchain
+platform or consensus protocol. We choose to imple-
+ment this layer using a Tendermint-based blockchain
+system [65]. The system is deployed on macOS 13.4 with
+LevelDB as the underlying storage engine.
+Datasets.We use three datasets: Chengdu, Xi’an, and
+Geolife. The first two stem from Didi [ 5] , while the
+third one is from Microsoft [66].
+– Xi’an. The Xi’an trajectory dataset was extracted
+from the online car-hailing in Xi’an between Octo-
+ber 1 and November 30, 2018. It comprises 45,851
+trajectories with approximately 79 million trajectory
+points and incorporates part of the Xi’an road net-
+work, which includes 8,651 edges and 3,946 vertices.
+– Chengdu. The Chengdu trajectory dataset was
+extracted from the online car-hailing in Chengdu
+from October 1, 2018 to November 30, 2018. It con-
+tains 284,608 trajectories with approximately 220 mil-
+lion trajectory points and incorporates part of the
+Chengdu road network, which includes 8,882 edges
+and 5,725 vertices.
+– Geolife. The Geolife trajectory dataset was collected
+by 178 users in the Microsoft Research Asia Geo-
+life project between April 2007 and October 2011. It
+comprises 17,621 trajectories with a total distance of
+1,251,654 kilometers and a total duration of 48,203
+hours. It also includes part of the corresponding
+Beijing road network, which contains approximately
+57,202 edges and 48,662 vertices.
+All datasets consist of (( x,y ),t ) points. We apply
+an existing map-matching method [ 67] to project data
+from the datasets onto the road networks.
+Baselines.We evaluateVTRQagainst three baselines.
+Merkle B-Tree (MBT) extends the existing
+ADS [ 29] to the trajectory scenario. Each trajectory
+point’s longitude, latitude, and timestamp are treated
+as separate keys, while the corresponding trajectory
+is stored as the attribute. Three independent Merkle
+B-Trees are constructed, one per dimension. During
+query processing, all three trees must be accessed and
+their results merged.
+Merkle R-Tree (MRT) extends the existing
+ADS [ 68] to the trajectory scenario. Each trajectory
+point’s longitude, latitude, and timestamp serve as keys,
+with the trajectory stored as the attribute. A Merkle
+R-Tree is then built, which retains the spatial-temporal
+pruning capability of the R-Tree while providing
+verifiability through the Merkle structure.
+Road Network Partition Merkle Tree (RPMT)
+adapts the state-of-the-art Road Network Partition
+Tree [ 51] to support verifiable queries. The tree is
+constructed following the RP-Tree rules, and each node
+is augmented with Merkle hash values, resulting in the
+Road Network Partition Merkle Tree.
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 13
+Table 1: Trajectory query time (s) for all methods.
+Dataset Xi’an Chengdu Geolife
+T em Spa 1km 2km 3km 1km 2km 3km 1km 2km 3km
+1 min
+MBT 0.488 0.935 1.321 0.506 0.856 1.261 0.245 0.300 0.528
+MPT 0.822 2.449 4.967 0.903 2.841 5.557 0.117 0.225 0.905
+RPMT 0.098 0.211 0.319 0.110 0.302 0.503 0.235 0.304 1.215
+VTRQ0.051 0.128 0.159 0.049 0.146 0.241 0.087 0.100 0.497
+5 min
+MBT 0.487 0.976 1.377 0.524 0.933 1.315 0.248 0.309 0.541
+MPT 1.291 2.512 5.166 0.911 2.854 5.658 0.119 0.240 0.935
+RPMT 0.108 0.218 0.357 0.117 0.319 0.523 0.243 0.331 1.333
+VTRQ0.062 0.130 0.160 0.066 0.152 0.244 0.093 0.108 0.507
+10 min
+MBT 0.516 1.005 1.387 0.532 0.971 1.421 0.251 0.316 0.559
+MPT 1.223 2.477 5.788 0.944 3.382 5.744 0.123 0.248 0.985
+RPMT 0.114 0.220 0.393 0.123 0.320 0.535 0.251 0.361 1.439
+VTRQ0.067 0.135 0.172 0.070 0.155 0.251 0.104 0.103 0.512
+Table 2: Number of results for all methods.
+Dataset Xi’an Chengdu Geolife
+MBT 54 31 3
+MRT 54 40 4
+RPMT 55 42 5
+VTRQ 55 42 5
+7.2 Query performance
+We first evaluate all methods on smaller subsets of
+the datasets because MBT and MRT are impractical
+on the full-scale datasets, particularly the Xi’an and
+Chengdu datasets. Specifically, we use three days of
+data from Xi’an, one day of data from Chengdu, and
+30% of the Geolife dataset. The spatial query range is
+selected from{1km, 2km, 3km}, and the temporal range
+is selected from {1min, 5min, 10min}. Table 1 reports
+the trajectory query time on the three datasets. VTRQ
+achieves the lowest query latency, outperforming the
+three baselines.
+This is because: (i) MBT constructs three indepen-
+dent Merkle B-Trees for longitude, latitude, and time,
+where each trajectory point is indexed separately. Dur-
+ing query execution, all trees must be accessed, and their
+results must be merged, causing many node accesses
+and high computational overhead. (ii) MRT organizes
+all trajectory points in a single Merkle R-Tree. Although
+it preserves the spatial-temporal pruning capabilities of
+the R-Tree, it also indexes individual trajectory points,
+causing excessive node accesses. (iii) RPMT stores both
+spatial and temporal information in each node. For every
+trajectory located on edges in the spatial query region,
+RPMT must check whether its timestamp range inter-
+sects with the temporal query interval, causing longer
+query times. In addition, since a trajectory may traverse
+the same edge multiple times at different times, RPMT
+stores duplicate trajectory IDs on the same edge to avoid
+omissions. (iv) VTRQ separates the spatial and temporal
+attributes and records the start and end timestamps for
+each trajectory, thereby avoiding complex timestamp
+management. In addition, by constructing MBRs for
+the border edges that connect subgraphs, VTRQ enables
+efficient pre-filtering and reduces the computational over-
+head associated with border-edge checking. In addition
+to being impractical for large datasets, MBT and MRT
+have a major limitation—result loss, as shown in Table 2.
+Since their indexes are point-level, trajectories that in-
+tersect a query range but have no sampled points in it,
+are not retrieved, leading to incomplete query results.
+We report the trajectory query performance of
+VTRQ and RPMT on the complete datasets in Ta-
+ble 3. The spatial query range is selected from
+{1km, 2km, 3km, 4km, 5km}. The temporal range is se-
+lected from {1min, 30min, 1h, 4h, 12h, 24h}. For all
+datasets, whether varying the spatial range with a fixed
+temporal size or varying the temporal range with a fixed
+spatial size, VTRQ consistently achieves lower query times
+than RPMT. The query efficiency of VTRQ can be up to
+six times higher than that of RPMT. The underlying rea-
+sons were explained for the small-scale evaluation. We
+make three additional observations: first, as the query
+time interval increases, the query time of the RPMT
+does not grow linearly. This is because, when the spatial
+query range is fixed, all trajectory information on the
+edges in this spatial range must still be verified against
+the temporal constraints, regardless of temporal range
+changes. Second, for VTRQ, the query time grows roughly
+linearly as the temporal query range expands, although
+the increase is modest. The reason is that while a wider
+temporal query range inevitably increases the workload
+of the temporal query process, the time consumed by
+
+14 Zhongming Yao et al.
+Table 3: Comprehensive evaluation of trajectory query time (s).
+Dataset Xi’an Chengdu Geolife
+T emporalSpatial 1km 2km 3km 4km 5km 1km 2km 3km 4km 5km 1km 2km 3km 4km 5km
+1min RPMT 0.584 2.043 3.340 4.942 7.095 6.080 14.98 21.82 29.19 38.83 0.406 1.195 2.423 2.894 3.304
+VTRQ0.190 0.507 0.950 1.339 1.847 1.048 3.617 5.335 7.435 10.64 0.098 0.247 0.547 0.743 0.979
+30min RPMT 0.614 1.943 3.305 5.247 6.942 5.860 14.81 21.24 28.99 40.31 0.403 1.089 2.274 3.359 3.560
+VTRQ0.197 0.525 0.914 1.327 1.901 1.058 3.599 5.202 7.581 10.87 0.101 0.223 0.553 0.755 0.979
+1h RPMT 0.606 2.175 3.785 4.950 7.151 6.150 15.31 21.02 29.32 40.10 0.381 1.028 2.262 2.994 3.356
+VTRQ0.208 0.531 1.031 1.338 1.934 1.068 3.513 5.328 7.427 10.33 0.101 0.238 0.581 0.755 1.011
+4h RPMT 0.632 1.954 3.652 5.067 7.247 5.977 15.01 21.08 29.76 39.41 0.427 1.071 2.332 3.200 3.379
+VTRQ0.265 0.597 1.007 1.432 1.959 1.112 3.520 5.298 7.608 10.81 0.104 0.239 0.548 0.768 0.970
+12h RPMT 0.667 2.201 3.702 5.230 7.227 5.992 15.00 21.39 30.02 40.59 0.507 1.101 2.518 3.040 3.431
+VTRQ0.385 0.710 1.140 1.553 2.132 1.333 3.889 5.405 7.780 11.13 0.107 0.271 0.571 0.851 0.970
+24h RPMT 0.751 2.425 3.884 5.412 7.545 6.158 15.68 21.48 30.00 42.26 0.390 1.057 2.307 3.163 3.366
+VTRQ0.517 0.884 1.302 1.736 2.267 1.858 4.319 6.087 8.237 11.84 0.124 0.296 0.588 0.793 0.952
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 6: Impact on query time of the temporal range.
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 7: Impact on query time of the spatial range.
+Table 4: STEA evaluation.
+Dataset Xi’an Chengdu Geolife
+Phase Cand. Agg. Cand. Agg. Cand. Agg.
+RPMT 992 991 1899 1897 54 54
+VTRQ 1002 991 1906 1897 55 54
+the spatial query process accounts for a larger propor-
+tion of the total query time, to be discussed in more
+detail shortly. Finally, across all spatio-temporal query
+conditions, VTRQ takes longer in terms of query time
+on the Chengdu dataset than on the Xi’an and Geo-
+life datasets. This is because the Chengdu dataset has
+more trajectories, leading to larger S-ADS and T-ADS
+structures, requiring more computation.
+Fig. 6 shows the composition of query time for VTRQ
+on the three datasets in a spatial range of 2 km as the
+temporal query interval varies. The query time is con-
+sumed by three activities: spatial query, temporal query,
+and result aggregation. The results show that spatial
+queries consume most of the query time on all three
+datasets. This is because the spatial query involves three
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 15
+Table 5: Verification time (s) for all methods.
+Dataset Xi’an Chengdu Geolife
+T em Spa 1km 2km 3km 1km 2km 3km 1km 2km 3km
+1 min
+MBT 1.043 2.144 2.676 1.072 2.500 3.997 0.492 0.726 1.257
+MRT 2.069 4.918 10.28 1.977 7.579 14.340.036 0.043 0.222
+RPMT 0.269 0.512 1.078 0.281 1.061 1.790 0.763 0.821 4.019
+VTRQ0.105 0.179 0.270 0.062 0.218 0.3580.144 0.164 0.698
+5 min
+MBT 1.106 2.149 2.782 1.090 2.663 4.113 0.530 0.767 1.262
+MRT 2.029 5.087 10.57 2.055 7.804 14.420.038 0.050 0.233
+RPMT 0.278 0.567 1.170 0.298 1.071 1.866 0.799 0.864 4.037
+VTRQ0.114 0.188 0.274 0.076 0.223 0.3610.150 0.180 0.712
+10 min
+MBT 1.107 2.313 2.858 1.117 2.840 4.290 0.562 0.775 1.294
+MRT 2.135 5.244 10.89 2.181 8.255 14.660.040 0.054 0.256
+RPMT 0.285 0.582 1.256 0.306 1.088 1.880 0.808 0.894 4.169
+VTRQ0.114 0.206 0.271 0.079 0.228 0.3830.160 0.187 0.738
+steps: (i) locating the matching subgraph; (ii) retriev-
+ing the edges in the subgraph that are in the spatial
+query range; and (iii) incorporating the qualified tra-
+jectories on these matched edges into the query result
+set. In contrast, the temporal query requires a simple
+pruning operation on the tree structure. Furthermore,
+as the temporal query range increases, the proportion
+of the spatial query time decreases steadily, while the
+proportions of temporal query time and result aggrega-
+tion time increase. This is because when the temporal
+range expands, the number of trajectories satisfying the
+temporal conditions in the T-ADS grows significantly.
+Next, as the temporal query range expands, the number
+of trajectories satisfying both the spatial and temporal
+queries also increases, which in turn further increases
+the cost of final result aggregation. Fig. 7 shows the com-
+position of query time for VTRQ within 24 hours while
+varying the spatial range. The proportion of the spatial
+query time increases gradually, whereas the proportion
+of the temporal query time decreases. The reason is that
+as the spatial query range expands, the number of cov-
+ered trajectories increases, resulting in more trajectories
+being selected as candidate trajectories.
+We evaluate the effectiveness of the STEA algorithm
+using a spatial range of 5 km and a temporal range of 1
+day. Table 4 presents the results after candidate selection.
+In VTRQ, the candidate set is obtained by intersecting
+the spatial and temporal conditions, while in RPMT, it
+comes directly from the query results. After aggregation,
+we observe that although RPMT produces a smaller
+candidate set, it still contains trajectories that do not
+satisfy the query conditions. Therefore, RPMT requires
+the same aggregation procedure as VTRQ. As discussed
+in Section 5.1, the reason is that while some trajectory
+edges satisfy the spatial and temporal constraints, the
+constraints are not satisfied simultaneously.
+7.3 Verification performance
+We evaluate the verification performance on smaller sub-
+sets of the datasets, using the same settings as when
+evaluating the query performance. Table 5 reports the
+verification time on the three subsets. On both the
+Chengdu and Xi’an subsets, VTRQ achieves lower veri-
+fication times than RPMT. This is because: (i) MBT
+and MRT construct indexes at the point level, resulting
+in excessive verification overhead due to hash compu-
+tations across numerous trajectory points. (ii) RPMT
+embeds temporal information in its spatial structure.
+During the verification phase, the hash aggregation pro-
+cess must traverse large volumes of temporal data. (iii)
+VTRQ verifies the spatial and temporal components of
+trajectories separately. The S-ADS does not store tempo-
+ral information, substantially reducing the verification
+data size, while the T-ADS retains only the start and
+end timestamps of each trajectory. We note that on
+the Geolife dataset, the verification time of VTRQ ex-
+ceeds that of RPMT. This is because Geolife contains
+fewer trajectories but a much larger road network. As
+shown in Table 4, the number of trajectories in the same
+query range is small, which reduces the benefit of VTRQ’s
+spatio-temporal separation strategy.
+We evaluate the verification performance of VTRQ
+and RPMT on the three complete datasets under the
+same settings as in the query performance evaluation,
+as shown in Table 6. For all datasets, VTRQ shows lower
+verification time than RPMT. In most cases, its veri-
+fication efficiency exceeds that of the baseline method
+by approximately an order of magnitude. The reasons
+for this have been analyzed in the small-scale exper-
+iments. In addition, we make two observations: first,
+when the spatial query range is fixed and the temporal
+query range is expanded, or vice versa, the verification
+
+16 Zhongming Yao et al.
+Table 6: Comprehensive evaluation of verification time (s).
+Dataset Xi’an Chengdu Geolife
+T emporalSpatial 1km 2km 3km 4km 5km 1km 2km 3km 4km 5km 1km 2km 3km 4km 5km
+1min RPMT 1.944 7.631 14.37 20.61 28.24 21.43 64.99 96.23 133.9 183.1 1.196 3.786 10.21 12.55 14.65
+VTRQ0.208 0.717 1.410 2.017 2.975 2.243 7.587 10.88 16.00 22.13 0.151 0.414 0.835 1.047 1.334
+30min RPMT 1.962 7.256 13.79 20.79 29.82 21.54 65.37 93.28 134.5 186.9 1.149 3.814 9.442 12.80 14.84
+VTRQ0.224 0.768 1.394 2.074 3.099 2.276 7.686 11.05 15.34 21.84 0.156 0.365 0.804 1.060 1.380
+1h RPMT 1.970 7.442 14.37 20.76 29.12 20.97 66.32 93.77 135.0 185.1 1.158 3.944 9.354 12.23 14.96
+VTRQ0.262 0.804 1.483 2.133 3.061 2.253 7.505 11.19 15.45 21.52 0.161 0.354 0.859 1.061 1.342
+4h RPMT 1.916 7.461 14.27 20.30 28.73 21.03 66.76 94.41 131.3 185.1 1.475 4.357 9.303 12.82 14.98
+VTRQ0.371 0.891 1.602 2.267 3.396 2.285 7.693 10.76 15.78 22.06 0.166 0.358 0.830 1.100 1.388
+12h RPMT 1.891 7.316 14.35 20.56 28.71 20.92 64.09 93.55 136.0 183.8 1.207 4.156 9.811 12.52 15.02
+VTRQ0.558 1.083 1.863 2.484 3.144 2.811 7.959 11.66 16.03 22.69 0.190 0.389 0.819 1.059 1.359
+24h RPMT 2.255 7.347 14.93 20.59 29.08 20.79 66.51 94.24 132.6 181.8 1.126 4.087 9.924 12.56 14.80
+VTRQ0.849 1.364 2.059 2.653 3.461 4.027 8.908 12.54 17.02 23.48 0.204 0.639 0.868 1.134 1.411
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 8: Impact on verification time of the temporal range.
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 9: Impact on verification time of the spatial range.
+time grows roughly linearly. However, this growth is
+more pronounced when the spatial range increases. This
+is because the verification of the T-ADS is relatively
+straightforward and does not involve nested structures,
+whereas S-ADS verification is more complex—a phe-
+nomenon that will be further analyzed in Fig. 8 and
+Fig. 9. Second, VTRQ’s verification times on Xi’an and
+Geolife are shorter than those on Chengdu because the
+Xi’an and Geolife datasets contain fewer trajectories.
+Fig. 8 shows a breakdown of the verification time for
+VTRQ on the three datasets within 2 km while varying
+the temporal range. The verification process includes
+three parts: S-ADS verification, T-ADS verification, and
+result aggregation. S-ADS verification dominates the
+verification time. As the temporal verification range in-
+creases, the proportion of T-ADS verification increases,
+while the S-ADS proportion decreases. Although the
+temporal range expands, its cost is lower than those
+of the S-ADS verification and result aggregation. This
+is due to the higher complexity of the spatial verifica-
+tion: it involves not only hashing trajectory data on
+individual edges but also aggregating all edges in the
+relevant subgraph. Finally, the root-level aggregation
+is completed by traversing and combining the query
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 17
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 10: Impact on VO size of the temporal range.
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 11: Impact on VO size of the spatial range.
+path in the spatial tree. Fig. 9 shows the breakdown
+of the verification time on the three datasets using a
+temporal range of 24 hours while varying the spatial
+range. S-ADS verification still dominates the verification
+time. As the spatial range increases, the proportion of
+the T-ADS verification time gradually decreases, while
+the proportion of the S-ADS verification time increases
+accordingly. This is because a larger spatial range results
+in the consideration of more spatial information, thereby
+increasing the verification overhead of S-ADS. Notably,
+on the Xi’an dataset, when the spatial range is set to
+1 kilometer, the proportion of the T-ADS verification
+is higher than that of S-ADS. This is because a smaller
+spatial range results in fewer trajectories falling in the
+query region, causing a low spatial verification overhead.
+In contrast, under the fixed 24-hour temporal range, the
+query result of T-ADS includes a relatively large set of
+trajectories, resulting in a higher cost.
+Figs. 10 and 11 report the VO sizes for VTRQ and
+RPMT. VTRQ’s VO consists of two parts: (i) the spatial
+VO, generated by querying S-ADS, and (ii) the temporal
+VO, generated by querying T-ADS. In all cases, VTRQ’s
+total VO is smaller than for RPMT. This is because
+VTRQ separates spatial and temporal verification, each of
+which uses a lightweight ADS structure. RPMT handles
+both jointly, causing higher overhead. In Fig. 10, VTRQ’s
+temporal VO size increases linearly as the temporal
+query range. This is because the spatial range is fixed.
+The spatial VO size stays constant, while the temporal
+VO grows linearly as the time range increases. Similarly,
+Fig. 11 shows a linear increase in the spatial VO size
+as the spatial query range increases. With the temporal
+range fixed, temporal VO is constant. The spatial VO
+grows linearly with the spatial range. Moreover, the
+trends in VO size under varying spatial and temporal
+query ranges align with the verification time results.
+This is because larger temporal or spatial ranges lead
+to larger VO sizes and longer verification times.
+7.4 ADS maintenance cost
+We evaluate the maintenance cost of S-ADS and T-ADS
+in VTRQ from four dimensions: construction time, storage
+cost, update time, and cost on blockchain.
+7.4.1 ADS construction time
+Table 7 shows ADS construction time at different dataset
+scales. Here, Scale represents the data size, controlled
+by the number of days of trajectory data (3, 7, 15, 31,
+and 61 days) for the Xi’an and Chengdu datasets, and
+the percentage of the dataset (20%, 40%, 60%, 80%,
+and 100%) for the Geolife dataset. For our method, we
+also report the time proportion spent on S-ADS and
+T-ADS construction. As shown in Table 7,VTRQ achieves
+approximately a 2×speedup over the baseline on the
+Chengdu dataset. This improvement comes from the
+
+18 Zhongming Yao et al.
+Table 7: Comprehensive evaluation of ADS construction time (s).
+Dataset Xi’an Chengdu Geolife
+Scale S-ADS T-ADS VTRQ RPMT S-ADS T-ADS VTRQ RPMT S-ADS T-ADS VTRQ RPMT
+1 31.701 2.9791 34.68046.336 118.56 8.1801 126.74185.49 380.55 23.659 404.21867.5591.4% 8.6% 93.5% 6.5% 94.1% 5.9%
+2 70.496 6.2989 76.795117.51 240.63 18.062 258.69539.19 834.59 26.661 861.251496.591.8% 8.2% 93.0% 7.0% 96.9% 3.1%
+3 152.66 14.856 167.52350.81 599.56 47.833 647.393734.1 1169.8 27.658 1197.461955.991.1% 8.9% 92.6% 7.4% 97.7% 2.3%
+4 203.54 20.730 224.27550.08 1361.1 127.72 1488.810022 1705.6 27.832 1733.452944.390.8% 9.2% 91.4% 8.6% 98.4% 1.6%
+5 304.76 32.880 337.641044.4 2446.6 292.57 2739.236350 2162.6 29.484 2192.133798.890.3% 9.7% 89.3% 10.7% 98.7% 1.3%
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 12: ADS storage cost.
+(a) Xi’an
+ (b) Chengdu
+ (c) Geolife
+Fig. 13: ADS update time.
+decoupling of the spatial and temporal attributes in the
+trajectory data, which reduces redundant timestamp
+insertions. The improvement is less pronounced on the
+Xi’an and Geolife datasets due to the smaller data vol-
+umes and lower optimization potentials. In addition,
+both RPMT and VTRQ exhibit longer construction times
+on the Geolife dataset, due to its larger road network.
+7.4.2 ADS storage cost
+Fig. 12 presents the storage cost of ADS construction on
+the three datasets. For the Xi’an and Chengdu datasets,
+data covering 3, 5, 7, 31, and 61 days are used, while
+for the Geolife dataset, 20%, 40%, 60%, 80%, and 100%
+of the total data are used. As shown in Fig. 12, VTRQ
+consistently requires less storage than the RPMT. This
+improvement stems from the lightweight indexing design,
+which separates spatial information from complex tem-
+poral data and eliminates redundant records of repeated
+trajectory segments.
+7.4.3 ADS update time
+Fig. 13 shows the ADS update time when 100, 500, 1,000,
+2,000, and 5,000 additional trajectories are inserted after
+construction. For the Chengdu dataset, ADSs are built
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 19
+Table 8: On-chain cost (s).
+Number 2 4 8 16 32
+512 bits 161.21 161.26 161.33 161.37 161.43
+256 bits 161.06 161.17 161.20 161.27 161.34
+with 30 days of data; for the Xi’an dataset, 15 days
+of data are used; and for the Geolife dataset, 40% of
+the total data is used for the initial construction. As
+shown in Fig. 13, our method outperforms the RPMT
+across all datasets. This is mainly due to several key
+optimizations: In RPMT, trajectory insertion involves
+spatial matching and temporal information handling.
+This process is complex and incurs high computational
+cost. In contrast, our S-ADS completely eliminates the
+dependency on temporal data, relying on the spatial in-
+formation of trajectories for matching, which simplifies
+the insertion process. For the T-ADS, we retain only the
+start and end timestamps of each trajectory, avoiding
+redundant timestamp insertions and reducing the data
+size. Moreover, we replace the original sequential times-
+tamp list with a balanced binary tree-based temporal
+ADS. This optimization improves insertion and query
+efficiency, thereby enhancing update performance.
+7.4.4 Cost on blockchain
+To evaluate the blockchain performance of our frame-
+work, we uploaded two ADS root hashes to Tendermint.
+Each root hash is 256 bits, for a total of 512 bits. We also
+evaluate an alternative configuration in which the two
+hashes are concatenated and re-hashed using SHA256,
+yielding one 256-bit combined root hash. During verifi-
+cation, the same operation can be applied to compute
+the combined root hash, ensuring identical verification
+correctness with negligible time overhead while reducing
+on-chain storage. As reported in Table 8, both configu-
+rations show nearly identical end-to-end delay. This is
+because the latency mainly comes from block genera-
+tion and confirmation. Given the extremely small data
+sizes involved, the impact of data volume on blockchain
+upload performance is negligible.
+8 Conclusion
+We proposed VTRQ, the first framework to support
+verifiable trajectory range queries in hybrid-storage
+blockchain systems. By designing two tailored ADSs—a
+S-ADS and a T-ADS— VTRQ enables efficient and trust-
+worthy query processing over outsourced trajectory data.
+Furthermore, a spatio-temporal edge aggregation mecha-
+nism was introduced to ensure that only trajectory edges
+satisfying both spatial and temporal constraints are re-
+tained. Experimental results demonstrate that VTRQ
+significantly outperforms the existing method, achieving
+up to 6×improvement in query efficiency and up to
+an order-of-magnitude enhancement in verification per-
+formance. In future research, it is of interest to extend
+VTRQ to support higher-dimensional trajectories such as
+3D trajectories for drone flights.
+References
+1. Jia Wu, Tingyi Dai, Peiyuan Guan, Su Liu, Fangfang Gou,
+Amir Taherkordi, Yushuai Li, and Tianyi Li. FedAPT:
+Joint adaptive parameter freezing and resource allocation
+for communication-efficient federated vehicular networks.
+IoT-J, 11(11):19520–19536, 2024.
+2. Tianyi Li, Lu Chen, Christian S. Jensen, Torben Bach
+Pedersen, Yunjun Gao, and Jilin Hu. Evolutionary clus-
+tering of moving objects. InICDE, pages 2399–2411,
+2022.
+3. Fanhui Kong, Jianqiang Li, Bin Jiang, Huihui Wang, and
+Houbing Song. Trajectory optimization for drone logis-
+tics delivery via attention-based pointer network.TITS,
+24(4):4519–4531, 2022.
+4. Shuo Shang, Ruogu Ding, Kai Zheng, Christian S. Jensen,
+Panos Kalnis, and Xiaofang Zhou. Personalized trajectory
+matching in spatial networks.VLDB Journal, 23:449–468,
+2014.
+5. DiDi Global. DiDi global official website.
+https://www.didiglobal.com/, 2026. Accessed Jan-
+uary 18, 2026.
+6. Alibaba Cloud. Alibaba cloud startup program case.
+https://startup.aliyun.com/info/1077761.html, 2026. Ac-
+cessed January 18, 2026.
+7. Google Cloud. Geotab customer case study.
+https://cloud.google.com/customers/geotab, 2026.
+Accessed January 18, 2026.
+8. Amazon Web Services. BMW group case study.
+https://aws.amazon.com/solutions/case-studies/bmw-
+group-case-study/, 2026. Accessed January 18, 2026.
+9. Yu Xia, Xiangyao Yu, Matthew Butrovich, Andrew Pavlo,
+and Srinivas Devadas. Litmus: Towards a practical
+database management system with verifiable acid prop-
+erties and transaction correctness. InSIGMOD, pages
+1478–1492, 2022.
+10. Wenchao Zhou, Yifan Cai, Yanqing Peng, Sheng Wang,
+Ke Ma, and Feifei Li. VeriDB: An SGX-based verifiable
+database. InSIGMOD, pages 2182–2194, 2021.
+11. Xixun Yu, Yidan Hu, Rui Zhang, Zheng Yan, and Yanchao
+Zhang. Secure outsourced top-k selection queries against
+untrusted cloud service providers. InIWQOS, pages 1–10,
+2021.
+12. Haotian Wu, Zecheng Li, Rui Song, and Bin Xiao.
+Enabling privacy-preserving and efficient authenticated
+graph queries on blockchain-assisted clouds.TKDE,
+35(9):9728–9742, 2023.
+13. Ce Zhang, Cheng Xu, Jianliang Xu, Yuzhe Tang, and
+Byron Choi. GEM 2-tree: A gas-efficient structure for
+authenticated range queries in blockchain. InICDE, pages
+842–853, 2019.
+14. Ce Zhang, Cheng Xu, Haixin Wang, Jianliang Xu, and
+Byron Choi. Authenticated keyword search in scalable
+hybrid-storage blockchains. InICDE, pages 996–1007,
+2021.
+
+20 Zhongming Yao et al.
+15. Siyu Li, Zhiwei Zhang, Jiang Xiao, Meihui Zhang,
+Ye Yuan, and Guoren Wang. Authenticated keyword
+search on large-scale graphs in hybrid-storage blockchains.
+InICDE, pages 1958–1971, 2024.
+16. Siyu Li, Zhiwei Zhang, Meihui Zhang, Ye Yuan, and
+Guoren Wang. Authenticated subgraph matching in
+hybrid-storage blockchains. InICDE, pages 1986–1998,
+2024.
+17. Dan Kobialka. AWS database leak exposed california voter
+data. https://www.msspalert.com/news/aws-database-
+leak-california-voter-data-exposed-held-for-ransom, 2017.
+Accessed January 18, 2026.
+18. Einar Mykletun, Maithili Narasimha, and Gene Tsudik.
+Authentication and integrity in outsourced databases.
+TOS, 2(2):107–138, 2006.
+19. HweeHwa Pang, Arpit Jain, Krithi Ramamritham, and
+Kian-Lee Tan. Verifying completeness of relational query
+results in data publishing. InSIGMOD, pages 407–418,
+2005.
+20. Feifei Li, Marios Hadjieleftheriou, George Kollios, and
+Leonid Reyzin. Authenticated index structures for aggre-
+gation queries.TISSEC, 13(4):1–35, 2010.
+21. Tianyi Li, Ruikai Huang, Lu Chen, Christian S. Jensen,
+and Torben Bach Pedersen. Compression of uncertain
+trajectories in road networks.PVLDB, 13(7):1050–1063,
+2020.
+22. Tianyi Li, Lu Chen, Christian S. Jensen, and Torben Bach
+Pedersen. TRACE: Real-time compression of streaming
+trajectories in road networks.PVLDB, 14(7):1175–1187,
+2021.
+23. Ali Hamdi, Khaled Shaban, Abdelkarim Erradi, Amr
+Mohamed, Shakila Khan Rumi, and Flora D Salim. Spa-
+tiotemporal data mining: a survey on challenges and open
+problems.AIR, 55(2):1441–1488, 2022.
+24. Xiaofeng Yu, Shunzhi Zhu, and Yongjun Ren. Continuous
+trajectory similarity search with result diversification.
+FGCS, 143:392–400, 2023.
+25. Danlei Hu, Lu Chen, Hanxi Fang, Ziquan Fang, Tianyi Li,
+and Yunjun Gao. Spatio-temporal trajectory similarity
+measures: A comprehensive survey and quantitative study.
+TKDE, 36(5):2191–2212, 2023.
+26. Cheng Xu, Ce Zhang, and Jianliang Xu. vChain: Enabling
+verifiable Boolean range queries over blockchain databases.
+InSIGMOD, pages 141–158, 2019.
+27. Pingcheng Ruan, Tien Tuan Anh Dinh, Qian Lin, Meihui
+Zhang, Gang Chen, and Beng Chin Ooi. LineageChain: a
+fine-grained, secure and efficient data provenance system
+for blockchains.VLDB Journal, 30:3–24, 2021.
+28. Yanchao Zhu, Zhao Zhang, Cheqing Jin, Aoying Zhou,
+and Ying Yan. SEBDB: semantics empowered blockchain
+database. InICDE, pages 1820–1831, 2019.
+29. Qingqi Pei, Enyuan Zhou, Yang Xiao, Deyu Zhang, and
+Dongxiao Zhao. An efficient query scheme for hybrid
+storage blockchains based on merkle semantic trie. In
+SRDS, pages 51–60, 2020.
+30. Jinping Jia, Yichen Gao, Yifei Zhen, Zhao Zhang, Kun
+Qian, and Cheqing Jin. MEST: An efficient authenticated
+secondary index in blockchain systems. InICDE, pages
+1636–1649, 2025.
+31. Ningning Cui, Dong Wang, Jianxin Li, Huaijie Zhu, Xi-
+aochun Yang, and Jianliang Xu. Towards dynamic boolean
+range query over hybrid-storage blockchains: A secure and
+reliably verifiable framework. InICDE, pages 1664–1676,
+2025.
+32. Pengcheng Sun, Lan Zhang, Jiandong Liu, Chen Tang, and
+Jialiang Wang. E3FS: Efficient, secure, and verifiable fuzzy
+search with data updates in hybrid-storage blockchains.
+InICDE, pages 3890–3903, 2025.
+33. Dieter Pfoser, Christian S. Jensen, and Yannis Theodor-
+idis. Novel approaches to the indexing of moving object
+trajectories. InPVLDB, pages 395–406, 2000.
+34. Yufei Tao and Dimitris Papadias. The MV3R-Rree: A
+spatio-temporal access method for timestamp and interval
+queries. InPVLDB, pages 431–440, 2001.
+35. V. Prasad Chakka, Adam C. Everspaugh, and Jignesh M.
+Patel. Indexing large trajectory data sets with SETI. In
+CIDR, volume 75, page 76, 2003.
+36. Xiaochun Yang, Bin Wang, Kai Yang, Chengfei Liu, and
+Baihua Zheng. A novel representation and compression for
+queries on trajectories in road networks.TKDE, 30(4):613–
+629, 2017.
+37. Satoshi Nakamoto. Bitcoin: A peer-to-peer electronic cash
+system. https://bitcoin.org/bitcoin.pdf, 2008.
+38. Gavin Wood. Ethereum: A secure decentralised gener-
+alised transaction ledger.Ethereum project yellow paper,
+151(2014):1–32, 2014.
+39. Haixin Wang, Cheng Xu, Ce Zhang, Jianliang Xu, Zhe
+Peng, and Jian Pei. vChain+: Optimizing verifiable
+blockchain Boolean range queries. InICDE, pages 1927–
+1940, 2022.
+40. Bikash Chandra Singh, Qingqing Ye, Haibo Hu, and Bin
+Xiao. Efficient and lightweight indexing approach for
+multi-dimensional historical data in blockchain.FGCS,
+139:210–223, 2023.
+41. Kun Hao, Junchang Xin, Zhiqiong Wang, Zhongming
+Yao, and Guoren Wang. Efficient and secure data shar-
+ing scheme on interoperable blockchain database.TBD,
+9(4):1171–1185, 2023.
+42. Zhongming Yao, Zhiqiong Wang, Liang Wen, Kun Hao,
+and Junming Xu. Efficient blockchain data trusty prove-
+nance based on the w3c prov model. InADMA, pages
+61–76, 2023.
+43. Enyuan Zhou, Song Guo, Zicong Hong, Christian S.
+Jensen, Yang Xiao, Dalin Zhang, Jinwen Liang, and
+Qingqi Pei. VeriDKG: a verifiable SPARQL query engine
+for decentralized knowledge graphs.PVLDB, 17(4):912–
+925, 2023.
+44. Kun Hao, Junchang Xin, Zhiqiong Wang, Zhongming
+Yao, and Guoren Wang. On efficient top-k transaction
+path query processing in blockchain database.DKE,
+141:102079, 2022.
+45. Zhongming Yao, Junchang Xin, Kun Hao, Zhiqiong Wang,
+and Wancheng Zhu. Learned-index-based semantic key-
+word query on blockchain.Mathematics, 11(9):2055, 2023.
+46. Yuanyuan Yao, Lu Chen, Ziquan Fang, Yunjun Gao, Chris-
+tian S Jensen, and Tianyi Li. Camel: Efficient compression
+of floating-point time series.SIGMOD, 2(6):1–26, 2024.
+47. Danlei Hu, Ziquan Fang, Hanxi Fang, Tianyi Li, Chun-
+hui Shen, Lu Chen, and Yunjun Gao. Estimator: An
+effective and scalable framework for transportation mode
+classification over trajectories.TITS, 25(11):15562–15573,
+2024.
+48. Yin Lou, Chengyang Zhang, Yu Zheng, Xing Xie, Wei
+Wang, and Yan Huang. Map-matching for low-sampling-
+rate GPS trajectories. InSIGSPATIAL, pages 352–361,
+2009.
+49. Xiaolei Ma, Houyue Zhong, Yi Li, Junyan Ma, Zhiy-
+ong Cui, and Yinhai Wang. Forecasting transportation
+network speed using deep capsule networks with nested
+LSTM models.TITS, 22(8):4813–4824, 2020.
+50. Henry Crosby, Theodore Damoulas, and Stephen A Jarvis.
+Embedding road networks and travel time into distance
+metrics for urban modelling.IJGIS, 33(3):512–536, 2019.
+
+VTRQ: Enabling Verifiable Trajectory Range Queries in Hybrid-Storage Blockchains 21
+51. Yong Wang, Kaiyu Li, Guoliang Li, and Nan Tang. Road-
+aware indexing for trajectory range queries.TKDE,
+35(8):8476–8489, 2022.
+52. Jianqiu Xu, Hua Lu, and Ralf Hartmut G¨ uting. Range
+queries on multi-attribute trajectories.TKDE, 30(6):1206–
+1211, 2017.
+53. Hongbo Yin, Hong Gao, Binghao Wang, Sirui Li, and
+Jianzhong Li. Efficient trajectory compression and range
+query processing.WWW, 25(3):1259–1285, 2022.
+54. Jianqiu Xu, Hua Lu, and Zhifeng Bao. A query optimizer
+for range queries over multi-attribute trajectories.TIST,
+14(1):1–28, 2023.
+55. Bart Preneel. Cryptographic hash functions.ETT,
+5(4):431–448, 1994.
+56. Rajeev Sobti and Ganesan Geetha. Cryptographic hash
+functions: a review.IJCSI, 9(2):461, 2012.
+57. Ralph C Merkle. A digital signature based on a conven-
+tional encryption function. InCRYPTO, pages 369–378,
+1987.
+58. Bruce Hendrickson and Robert W Leland. A multi-level
+algorithm for partitioning graphs.SC, 95(28):1–14, 1995.
+59. George Karypis and Vipin Kumar. Analysis of multilevel
+graph partitioning. InSC, pages 29–es, 1995.
+60. George Karypis and Vipin Kumar. Multilevel algorithms
+for multi-constraint graph partitioning. InSC, pages
+28–28, 1998.
+61. Yuanyuan Yao, Hailiang Jie, Lu Chen, Tianyi Li, Yunjun
+Gao, and Shiting Wen. Tsec: An efficient and effective
+framework for time series classification. InICDE, pages
+1394–1406. IEEE, 2024.
+62. Jan Finis, Robert Brunel, Alfons Kemper, Thomas Neu-
+mann, Norman May, and Franz Faerber. Indexing highly
+dynamic hierarchical data.PVLDB, 8(10):986–997, 2015.
+63. Wentao Xu, Zhongming Yao, Weihao Li, Zhenghang Song,
+Yumeng Song, Tianyi Li, and Yushuai Li. Tcrl: Temporal-
+coupled adversarial training for robust constrained rein-
+forcement learning in worst-case scenarios. InProceedings
+of the 25th International Conference on Autonomous
+Agents and Multiagent Systems, page 3489–3491, 2026.
+64. Zhongming Yao, Tianyi Li, Junchang Xin, Yushuai Li,
+Chenxu Wang, Zhiqiong Wang, Divesh Srivastava, and
+Christian S. Jensen. VGQ: Enabling verifiable graph
+queries on blockchain systems. InICDE, pages 3602–
+3614, 2025.
+65. Tendermint. Tendermint official website.
+https://tendermint.com/, 2026. Accessed January
+21, 2026.
+66. Yu Zheng, Hao Fu, Xing Xie, Wei-Ying
+Ma, and Quannan Li. Geolife GPS trajec-
+tory dataset. https://www.microsoft.com/en-
+us/research/publication/geolife-gps-trajectory-dataset-
+user-guide/, July 2011. Geolife GPS trajectories 1.1
+edition. Accessed January 21, 2026.
+67. Xiaowei Mao, Yan Lin, Shengnan Guo, Yubin Chen,
+Xingyu Xian, Haomin Wen, Qisen Xu, Youfang Lin,
+and Huaiyu Wan. DutyTTE: Deciphering uncertainty
+in origin-destination travel time estimation. InAAAI,
+volume 39, pages 12390–12398, 2025.
+68. Duncan Yung, Eric Lo, and Man Lung Yiu. Authentica-
+tion of moving range queries. InCIKM, pages 1372–1381,
+2012.
