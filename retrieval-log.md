@@ -442,3 +442,65 @@ page or an abstract stub rather than a paper, and no measurement may be recorded
 | `ZIEGLER-ISF-05` | Cai-Nicolas Ziegler, Georg Lausen. "Propagation Models for Trust and Distrust in Social Networks." Information Systems Frontiers, 2005. doi:10.1007/S10796-005-4807-3 | first candidate URL, then landing-page rewrite, then link extraction, then Semantic Scholar by DOI | **escalation pass** | 335 |
 | `ZOU-USENIX-25` | Wei Zou, Runpeng Geng, Binghui Wang, Jinyuan Jia. "PoisonedRAG: Knowledge Corruption Attacks to Retrieval-Augmented Generation of L." USENIX Security Symposium, 2025. | PDF link extracted from the landing page | full text | 93693 |
 | `ZUO-ICWSM-24` | Wenrui Zuo, Raul J. Mondragón, Aravindh Raman, Gareth Tyson. "Understanding and Improving Content Moderation in Web3 Platforms." Proceedings of the International AAAI Co, 2024. doi:10.1609/ICWSM.V18I1.31431 | open-access location from Semantic Scholar by DOI | full text | 60540 |
+
+## Escalation pass
+
+74 papers reached this pass after every automated route failed. 54 were recovered. The route that
+worked, per paper:
+
+| Route | Papers |
+|---|---|
+| The author's own page | 29 |
+| Conference proceedings site | 8 |
+| Institutional repository | 6 |
+| A PhD thesis containing the paper's content | 4 |
+| An extended version under a different title | 3 |
+| A mirror or alternate host | 2 |
+| The technical-report version | 1 |
+| arXiv, found by author rather than title | 1 |
+
+The author's own page resolved more papers than every other route combined, which is what the brief
+states and what the previous research pass skipped.
+
+## Papers no route reached
+
+Each is listed with its exact identifier so a person can fetch it directly. The cause is stated
+because it decides whether a different network would succeed.
+
+| Key | Identifier | Why it could not be retrieved here |
+|---|---|---|
+| `ALHUSSAIN-EUSPN-18` | 10.1016/j.procs.2018.10.137 | publisher bot wall |
+| `BARAGLIA-JCSS-13` | 10.1016/j.jcss.2012.05.011 | publisher bot wall |
+| `BORISOV-P2P-06` | 10.1109/P2P.2006.10 | unreachable from this container |
+| `DENG-SP-25` | 10.1109/SP61157.2025.00154 | paywalled, no open copy indexed |
+| `EPSTEIN-ANESTHANALG-13` | 10.1213/ane.0b013e318299a7f7 | publisher bot wall |
+| `GENNARO-EUROCRYPT-99` | 10.1007/3-540-48910-X_21 (EUROCRYPT'99 conference version); journal version 10.1007/s00145-006-0347-3 (J. Cryptology 20, | publisher bot wall |
+| `HONG-ML4CS-25` | 10.1007/978-981-96-4566-4_4 | unreachable from this container |
+| `HUGHES-DSO-05` | 10.1109/MDSO.2005.31 | publisher bot wall |
+| `KAKVI-SSR-23` | 10.1007/978-3-031-30731-7_6 | publisher bot wall |
+| `KRISHNAN-ICIS-02` | (none listed by publisher; use https://aisel.aisnet.org/icis2002/82 — PDF at https://aisel.aisnet.org/cgi/viewcontent.cg | publisher bot wall |
+| `KURDI-JKSUCIS-15` | 10.1016/j.jksuci.2014.10.002 | publisher bot wall |
+| `MELDER-PACMHCI-25` | (no doi) | publisher bot wall |
+| `NICHOLS-UIST-95` | 10.1145/215585.215706 | publisher bot wall |
+| `NICOLAESCU-ICWE-15` | 10.1007/978-3-319-19890-3_55 | publisher bot wall |
+| `PEDIN-ACMSE-23` | 10.1145/3564746.3587016 | publisher bot wall |
+| `RICHARDSON-P2P-13` | (no doi) | publisher bot wall |
+| `VARMA-COMSNETS-17` | 10.1109/COMSNETS.2017.7945420 | publisher bot wall |
+| `WILCOX-OHEARN-WEB-01` | (none -- personal web page; the confirmed-existing archived copy is at http://web.archive.org/web/20011020191610/http:// | unreachable from this container |
+| `XU-ACSAC-20` | 10.1145/3427228.3427245 | publisher bot wall |
+| `ZHOU-TPDS-07` | 10.1109/TPDS.2007.1021 | publisher bot wall |
+
+**Publisher bot wall** means the paper is open access on the publisher's own site, and that site
+refused every automated request. Elsevier's ScienceDirect returned an anti-bot challenge page to
+plain requests, to requests carrying a full browser user-agent string, to the tokenised direct-PDF
+URL, and to the linkinghub retrieve endpoint. This is not a paywall and a person with a browser can
+open these.
+
+**Unreachable from this container** means a working open copy was found and could not be fetched
+from here. Borisov's paper is served from two open URLs; one has a genuinely expired TLS certificate
+and the other times out at the egress proxy. Zooko's original page on the naming triangle exists as
+an archived snapshot, and web.archive.org is blocked by this container's egress policy, confirmed by
+the archive's own availability API returning a valid snapshot URL that then could not be fetched.
+
+**Paywalled, no open copy indexed** means the ladder was worked to its end and no open copy exists
+anywhere Unpaywall, OpenAlex, CORE, or Semantic Scholar indexes.
