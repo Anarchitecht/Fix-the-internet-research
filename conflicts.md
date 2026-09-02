@@ -357,3 +357,49 @@ A synthesis citing only the abstract would misstate each of these.
 
 The full working for each quantity family is in `registry/conflicts/`, one file per family, every
 claim cited by evidence key.
+
+---
+
+## Thirteen claims in the synthesis that its own citations do not support
+
+Every cited claim in the 19 selection documents was traced back to the evidence entry it cites: 408
+claims checked, 396 supported, 13 not. Two failure kinds, and the first is the more damaging because
+it leaves a true figure attached to a false scope.
+
+**Conditions dropped (7).** The entry states the figure. The selection restates it without the
+experimental conditions that made it meaningful, so it reads as a general property.
+
+**Not in the cited entry (6).** The figure is real somewhere; the paper cited does not contain it.
+
+This is the same failure this corpus documents in eleven published papers, reproduced by a synthesis
+built specifically to avoid it. A 3.2 percent rate on 408 claims is not exculpatory: two of the
+thirteen sit in the passage that decides which churn regime the storage design targets.
+
+| Selection | Cited | Verdict | The claim, and what the entry actually says |
+|---|---|---|---|
+| `transport` | `TANG-ARXIV-22` | conditions-dropped | **Claim:** WebRTC data channels: +15% CPU / +10% memory per additional simultaneous peer in a production peer-assisted-delivery deployment [TANG-ARXIV-22]<br>**Entry:** TANG-ARXIV-22 reports +15% CPU / +10% memory as the fixed overhead of PDN participation versus a no-peer baseline (two peers, one measurement), and separately states that CPU, memory, and download traffic 'show no significant change' as peer count varies from 0 to 3, attributed to WebRTC's own conne |
+| `storage-encoding` | `BLAKE-HOTOS-03` | not-in-entry | **Claim:** `BLAKE-HOTOS-03` derives a bandwidth bound from an original crawl of ~33,000 Gnutella hosts (April 2003, mean availability a=0.38, 1-day-timeout permanent-failure rate 30%/day)<br>**Entry:** BLAKE-HOTOS-03's entry reports no single availability figure a=0.38 and no permanent-failure-rate figure 30%/day for its own Gnutella crawl; its parameters (Nτ, aτ, Tτ) are reported only as swept curves. a=0.38 and f=0.30/day are DIMAKIS-TIT-10's figures for a different Gnutella trace (1,846 nodes,  |
+| `storage-encoding` | `CHUN-NSDI-06` | not-in-entry | **Claim:** `CHUN-NSDI-06` (Carbonite) measures a 632-host, one-year PlanetLab trace (a=0.97, mean disk lifetime 2.23 years, sustainability ratio θ≈6.85)<br>**Entry:** CHUN-NSDI-06's entry reports mean disk lifetime 2.23 years and θ≈6.85 for its 632-host PlanetLab trace, both genuine. It reports a=0.88 only, for a separate 5-year synthetic trace, never a=0.97 for the PlanetLab trace. a=0.97 is DIMAKIS-TIT-10's figure for its own separate 303-node PlanetLab trace. |
+| `storage-encoding` | `WEATHERSPOON-IPTPS-02` | conditions-dropped | **Claim:** Whole-copy replication row's cost figures (11x bandwidth/storage/seeks, 74 years vs 10^20 years MTTF, 28x repair bandwidth) presented in the same table format as deployment-measured rows<br>**Entry:** The entry states explicitly: 'All results are analytical, from the paper's closed-form cost model, not from a simulation or a deployed system.' |
+| `repair` | `BHAGWAN-NSDI-04` | conditions-dropped | **Claim:** against roughly 2x oracle overhead for a threshold policy that discards and re-replicates on every disconnection (`BHAGWAN-NSDI-04`'s eager repair, and the 'Cates' comparison point in `CHUN-NSDI-06`)<br>**Entry:** BHAGWAN-NSDI-04's own entry reports no oracle-relative overhead ratio for its eager-repair policy; it reports only that eager repair produces the highest per-host bandwidth of five policies tested in its own trace-driven simulation, a different metric. The 2x figure is CHUN-NSDI-06's own measurement |
+| `application-data` | `ATTIYA-PODC-16` | conditions-dropped | **Claim:** `ATTIYA-PODC-16` proves any protocol in the 'push-based' class — which the paper states explicitly includes deployed eventually-consistent write-propagating protocols generally, OT included — carries <br>**Entry:** The entry supports the push-based class containing 'deployed eventually-consistent write-propagating protocols generally.' It does not state operational transformation falls inside the formal, proved class; the entry instead records a separate related-work-level remark that OT protocols storing a fu |
+| `key-recovery` | `PEDERSEN-CRYPTO-91` | not-in-entry | **Claim:** Pedersen distribution cost 'Fewer than 2·q modular multiplications per bit of the secret for distribution' [PEDERSEN-CRYPTO-91]<br>**Entry:** The entry gives two separate figures the selection conflates: 'Commitment computation cost' is fewer than 2/q/ multiplications (about 2 per bit), but the 'Dealer's distribution cost' — the actual per-secret distribution operation the selection is describing — is fewer than 2/q/k multiplications, i.e |
+| `key-recovery` | `EVERSPAUGH-USENIXSEC-15` | conditions-dropped | **Claim:** Pythia's network-hardened derivation costs '15 ms mean end-to-end latency in a LAN setting... 82–96 ms in a WAN setting' [EVERSPAUGH-USENIXSEC-15]<br>**Entry:** The entry's WAN measurements for the full Pythia (PO) protocol are 403 ms cold-connection, 96 ms hot-connection, 84 ms no-proof; the LAN figure the selection cites (15 ms/14.9 ms) is itself explicitly the cold-connection value. The 82–96 ms WAN range the selection reports corresponds only to warm/ho |
+| `identity` | `AMBATI-SACMAT-26` | conditions-dropped | **Claim:** 'AMBATI-SACMAT-26 states... found zero of 12 real deployments achieving full self-sovereignty on any of five dimensions, including key control.'<br>**Entry:** The entry states '0 of 12' deployments achieve full support on ALL five surveyed self-sovereignty dimensions jointly; it does not report, and this evidence file does not show, a per-dimension breakdown establishing that no deployment achieved full support on any single given dimension (e.g. key cont |
+| `forgery-resistance` | `PERCIVAL-BSDCAN-09` | not-in-entry | **Claim:** scrypt at N=2^20 (3.8 s per evaluation) raises estimated one-year brute-force hardware cost for an 8-character password to roughly $19 billion, against $18,000 for PBKDF2 at the same wall-clock target<br>**Entry:** The entry reports two separate tables: at the 5.0s/3.8s file-encryption target, PBKDF2 costs $920,000 and scrypt costs $19 billion for an 8-char/95-symbol password. The $18,000 PBKDF2 figure comes from a different table entirely, the 100ms interactive-login target for the same password class. |
+| `indexing` | `RICHARDSON-SIGIR-14` | conditions-dropped | **Claim:** At z=2,000 nodes queried and 10% malicious peers, with no defense, a censorship attack moves a target document's rank from 5 to 582 and a promotion attack moves an unrelated document from rank 20,778 <br>**Entry:** The entry's own table gives the censorship-attack rank sequence as 5 -> 9 -> 582 -> 2166 as the malicious fraction f rises 0% -> 10% -> 20% -> 30%, and the promotion-attack sequence as 20,778 -> 84 -> 11 -> 9 across the same f values. Rank 582 occurs at f=20%, not f=10% (the f=10% rank is 9); the do |
+| `privacy-tiers` | `DINGLEDINE-USENIXSEC-04` | not-in-entry | **Claim:** 3-hop onion circuit relay population is 'roughly four orders of magnitude smaller than a present-day relay population'<br>**Entry:** The entry states only the 2004 network's own size, 32 relays; it carries no present-day relay count and no order-of-magnitude comparison. |
+| `group-encryption` | `YEN-EPRINT-26` | not-in-entry | **Claim:** WKHB has the highest measured CPU time of three systems compared, sender and recipient, at every tested group size 8 to 512<br>**Entry:** Fig. 4, per the entry, states only that BeeKEM has the lowest measured CPU time of the three systems (BeeKEM, OpenMLS, WKHB); it does not rank OpenMLS against WKHB. |
+
+### The two that matter most
+
+The storage-encoding selection resolves a disagreement between two papers about whether durable
+wide-area storage on unreliable participants is feasible, by establishing which churn regime applies.
+Two of the three availability figures in that passage were attributed to the wrong papers: `a=0.38`
+with a 30 percent daily failure rate, and `a=0.97`, both belong to `DIMAKIS-TIT-10` and describe
+different traces.
+
+The selection stands, because the regime argument rests on host lifetime rather than availability:
+89.5 days mean host lifetime for a volunteer pool against 2.23 years mean disk lifetime for
+PlanetLab, both verified against their own entries. The correction is recorded in the selection
+itself rather than silently patched.

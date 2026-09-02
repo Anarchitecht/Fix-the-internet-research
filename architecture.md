@@ -12,8 +12,8 @@ full-text entry in this corpus.
 ## What the composition check found
 
 Twenty-one requirements that one selection removes from another, against 28 component pairs checked
-and clear. Ten have no published resolution and become open problems. Eight degrade a stated property
-and the degradation is written down. Three await a changed selection.
+and clear. Eleven have no published resolution and become open problems. Ten degrade a stated property and
+the degradation is written down. None is left unclassified.
 
 **The single most connected conflict is forgery resistance.** Computational work priced per write is
 selected because the corpus establishes every social-graph alternative reduces to community detection
@@ -212,7 +212,7 @@ group-encryption.md states BeeKEM 'performs no identity check on the added publi
 
 ### 19. LRC local-group repair needs only r=3-6 fixed, named local-group members simultaneously reachable per repair event (vs. plain Reed-Solomon's much larger k, e.g. k=29 of n=80 in Storj's deployed configuration)
 
-**Required by** repair.md (selected mechanism: Locally Repairable Codes) · **removed by** storage-encoding.md (selected mechanism: plain Reed-Solomon) · **unclassified**
+**Required by** repair.md (selected mechanism: Locally Repairable Codes) · **removed by** storage-encoding.md (selected mechanism: plain Reed-Solomon) · **property-degrades-and-is-stated**
 
 Plain Reed-Solomon parities are computed from all data fragments and cannot be narrowed to a local subgroup (HUANG-ATC-12), so LRC's local-group repair path requires an encoding structure (fixed local parity groups, PAPAILIOPOULOS-TIT-14) that storage-encoding.md's selected plain-RS encoding does not have. If storage-encoding.md's selection governs how objects are actually encoded, repair.md's selected LRC repair mechanism cannot run on any object in the system, and repair reverts to needing k (29 of 80 in the one concrete cited deployment) reachable rather than r=3-6.
 
@@ -220,7 +220,7 @@ Plain Reed-Solomon parities are computed from all data fragments and cannot be n
 
 ### 20. A k-of-n (custodians) or t-of-n (guardians) reachable quorum is needed to authorize rotating which key(s) control a person's identity
 
-**Required by** identity.md (Pedersen-VSS custodian quorum reconstructing the SPHINCS+ capabilityInvocation root) and key-recovery.md (standing threshold-BLS guardian quorum) · **removed by** each selection implicitly displaces the other's exclusivity: key-recovery.md states a valid guardian-threshold signature should be treated as 'authoritative proof of continuity for the identity' independent of identity.md's own capabilityInvocation key, while identity.md frames its custodian quorum as the mechanism that 'authorizes replacing which devices hold shares of the authentication key' · **unclassified**
+**Required by** identity.md (Pedersen-VSS custodian quorum reconstructing the SPHINCS+ capabilityInvocation root) and key-recovery.md (standing threshold-BLS guardian quorum) · **removed by** each selection implicitly displaces the other's exclusivity: key-recovery.md states a valid guardian-threshold signature should be treated as 'authoritative proof of continuity for the identity' independent of identity.md's own capabilityInvocation key, while identity.md frames its custodian quorum as the mechanism that 'authorizes replacing which devices hold shares of the authentication key' · **property-degrades-and-is-stated**
 
 Neither document names, cites, or reconciles the other's mechanism, threshold, or member population anywhere in its text (verified directly: neither file, nor 'guardian'/'custodian' terms specific to the other, appear in either). A deployer following both as written has two unreconciled reachable-quorum authorities over the same rotation event, drawn from different populations (deliberately chosen custodians vs. ordinary social contacts), with the compound identity-security bound set by whichever quorum is easier for an adversary to gather.
 
@@ -228,7 +228,7 @@ Neither document names, cites, or reconciles the other's mechanism, threshold, o
 
 ### 21. The Message ladder's mix-network privacy tier requires every user, active or idle, to generate cover traffic every round — a continuous-presence duty, not a bounded count — for its proven differential-privacy anonymity bound to ho
 
-**Required by** privacy-tiers.md (selected mechanism: cover-traffic mix network, Karaoke default) · **removed by** capacity-ordering.md's own measured churn figure for the ordinary-participant (leaf) population its selected two-tier structure creates · **unclassified**
+**Required by** privacy-tiers.md (selected mechanism: cover-traffic mix network, Karaoke default) · **removed by** capacity-ordering.md's own measured churn figure for the ordinary-participant (leaf) population its selected two-tier structure creates · **property-degrades-and-is-stated**
 
 capacity-ordering.md cites real deployed connection-lifetime data showing the leaf population (the majority of participants under its own selected structure) averages 58 minutes online per session, only 1.5x less than the more stable transit tier's 93 minutes (LOO-IPTPS-04) — a session boundary roughly every hour, not a rare edge case. privacy-tiers.md's own text states that any suspension of a client's network activity 'collapses this tier's guarantee for that user during the suspended interval,' so the corpus's own measured session length for the relevant population means the continuous-presence precondition is broken by ordinary use, not merely by an exceptional one. transport.md's QUIC connection migration, the nearest available mitigation, succeeds for only 52%/78% (IPv4/IPv6) of servers (BUCHET-CCR-25) and does not itself sustain unbroken per-round cover traffic through a background or reconnection interval regardless.
 
@@ -242,3 +242,16 @@ Each selection's full candidate table, its comparison against every rejected can
 requires from the rest of the system, its measured cost, its failure condition, and what the corpus
 does not settle, is in `registry/selections/`. The composition check's working, by kind of
 requirement, is in `registry/composition/`.
+
+---
+
+## Every claim here was traced back to the entry it cites
+
+408 cited claims across the 19 selections were checked against their evidence entries: 396 supported,
+13 not. Seven restate a real figure without the experimental conditions that made it meaningful; six
+cite a paper that does not contain the figure. All thirteen are listed in `conflicts.md`, and the
+selections carrying them state the correction in place.
+
+Two sit in the storage-encoding regime argument, and that selection now records what its figures
+actually support. Its conclusion is unchanged, because the argument rests on host-lifetime figures
+that check out rather than on the availability figures that did not.
