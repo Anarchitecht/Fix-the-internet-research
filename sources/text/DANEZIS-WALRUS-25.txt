@@ -1,509 +1,1732 @@
-[2505.05370] Walrus: An Efficient Decentralized Storage Network 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
+W alrus: An Efficient Decentralized Storage Network
+George Danezis
+Mysten Labs & UCL
+London, UK
+george@mystenlabs.com
+Giacomo Giuliari
+Mysten Labs
+London, UK
+giacomo@mystenlabs.com
+Lefteris Kokoris Kogias
+Mysten Labs
+Athens, Greece
+lefteris@mystenlabs.com
+Markus Legner
+Mysten Labs
+Zurich, Switzerland
+markus@mystenlabs.com
+Jean-Pierre Smith
+Mysten Labs
+Zurich, Switzerland
+jean-pierre@mystenlabs.com
+Alberto Sonnino
+Mysten Labs & UCL
+London, UK
+alberto@mystenlabs.com
+Karl Wüst
+Mysten Labs
+Zurich, Switzerland
+karl@mystenlabs.com
+Abstract
+Decentralized storage faces a fundamental trade-off between repli-
+cation overhead, recovery efficiency, and security guarantees. Cur-
+rent approaches either rely on full replication, incurring substantial
+storage costs, or employ erasure-coding schemes that struggle with
+efficient recovery, especially under high churn. We presentW alrus,
+a decentralized blob storage system that addresses these limitations
+through multiple technical innovations.
+At the core ofW alrusisRed Stuff, a two-dimensional erasure-
+coding protocol that achieves high security with only a4.5× repli-
+cation factor, while providing self-healing of lost data. This means
+that recovery is done without centralized coordination and requires
+bandwidth proportional to the amount of lost data.
+However,Red Stuffon its own is not sufficient forW alrus, as it
+is designed with a static set of participants in mind. To further sup-
+port decentralization, we also introduce a multi-stage epoch-change
+protocol that efficiently handles storage node churn while main-
+taining uninterrupted availability during committee transitions.
+Our system incorporates authenticated data structures to defend
+against malicious clients and ensure data consistency throughout
+storage and retrieval.Walrushas been deployed in production
+since March 2025 and has secured 686 TB of data by July 2026. We
+conduct an experimental evaluation of the deployed system and
+demonstrate thatW alrusachieves practical performance at scale
+and outperforms the Arweave decentralized storage system.
+Keywords
+Decentralized storage; Byzantine fault tolerance; Blockchain; Era-
+sure coding
+1 Introduction
+Blockchains support decentralized computation through the State
+Machine Replication (SMR) paradigm [20]. However, they are prac-
+tically limited to distributed applications that require little data for
+This is the authors’ version of a paper published under a CC BY 4.0 license in the
+Proceedings of the 2026 ACM SIGSAC Conference on Computer and Communications
+Security (CCS ’26). The definitive version is available at https://doi.org/10.1145/3830454.
+3832580.
+operation. Since SMR requires all validators to replicate data fully,
+it results in a large replication factor ranging from100× to1000×,
+depending on the number of validators in each blockchain.
+While full data replication is needed for computing on state,
+it introduces substantial overhead when applications only need
+to store and retrieve binary large objects (blobs) without com-
+puting on them. 1 Dedicated decentralized storage networks [ 3]
+emerged to store blobs more efficiently. For example, early networks
+like IPFS [2] offer censorship resistance, reliability, and availability
+through replication [28].
+Protocols for decentralized storage generally fall into two main
+categories. The first category includes systems usingreplication,
+with Filecoin [17] and Arweave [27] serving as prominent examples.
+The main advantage of these systems is the complete availability
+of the blob on selected storage nodes, which allows for easy access
+and seamless migration if a storage node goes offline. This setup
+enables a permissionless environment since storage nodes do not
+need to rely on each other for file recovery.
+However, the reliability of these systems hinges on the robust-
+ness of the selected storage nodes. For instance, assuming a classic
+1/3static adversary model and an unbounded pool of candidate
+nodes, achieving “twelve nines” of durability—a probability be-
+low10−12 of losing access to a file—requires storing more than 25
+copies on the network.2 This results in a25× storage overhead. A
+further challenge arises from Sybil attacks [ 7], where malicious
+actors can pretend to store multiple copies of a file, undermining
+the system’s integrity.
+The second category of decentralized storage services [10] uses
+Reed-Solomon (RS) encoding[ 19]. RS encoding reduces replication
+requirements significantly. For example, in a setting similar to that
+of a blockchain, with𝑛 nodes, of which1/3may be malicious, and
+in an asynchronous network, RS encoding can achieve sufficient
+security with the equivalent of just3× storage overhead. This is
+possible since RS encoding splits a file into smaller pieces, which we
+1A recent example includes “inscriptions” on Bitcoin and other chains; see
+https://medium.com/@thevalleylife/crypto-terms-explained-exploring-bitcoin-
+inscriptions-51699dc218d2.
+2The chance that all 25 storage nodes are adversarial and delete the file is3 −25 =
+1.18×10 −12.
+1
+arXiv:2505.05370v4  [cs.DC]  10 Aug 2026
 
- 
- Skip to main content 
- 
- 
- 
- 
+George Danezis et al.
+callslivers, each representing a fraction of the original file. Any set
+of slivers greater in total size than the original file can be decoded
+back into the original file.
+However, an issue with erasure coding arises when a storage
+node fails and needs to be replaced by another. Unlike fully repli-
+cated systems, where data can simply be copied from one node
+to another, RS-encoded systems require that all existing storage
+nodes send their slivers to the substitute node. The substitute can
+then recover the lost sliver, but this process results in O(|blob|)
+data being transmitted across the network. Frequent recoveries can
+erode the storage savings achieved through reduced replication. As
+a result, these systems need low churn among storage nodes, which
+is incompatible with permissionless settings.
+In this work, we introduceW alrus, a new approach to decentral-
+ized blob storage. It follows an erasure-coding architecture in order
+to scale to hundreds of storage nodes, providing high resilience at a
+low storage overhead. At the heart ofW alruslies a new encoding
+protocol, calledRed Stuff, which uses a novel two-dimensional
+(2D) encoding algorithm that isself-healing. Specifically, it enables
+the recovery of lost slivers using bandwidth proportional to the
+amount of lost data (O(|blob|/𝑛) in our case). Moreover,Red Stuff
+incorporates authenticated data structures to defend against ma-
+licious clients, ensuring that the data remains consistent. Table 1
+comparesW alruswith the two existing approaches.
+One additional challenge forWalrus, and in general for any
+encoding-based decentralized storage system, is operating securely
+across epochs, each managed by a different committee of storage
+nodes. This is challenging because we want to ensure uninterrupted
+availability to both read and write blobs during the naturally occur-
+ring churn of a permissionless system. Yet, if we keep writing data
+to the nodes about to depart, the departing nodes must keep trans-
+ferring that data to the nodes replacing them. This creates a race
+for the resources of those nodes, which will either stop accepting
+writes or fail to ever transfer responsibility.W alrusdeals with this
+through its novel multi-stage epoch-change protocol that naturally
+fits the principles of decentralized storage systems.
+In summary, we make the following contributions:
+• We define the problem of Asynchronous Complete Data Storage
+and proposeRed Stuff, the first protocol to solve it efficiently
+even under Byzantine faults (section 3).
+• We presentW alrus, the first permissionless decentralized stor-
+age protocol designed for low replication cost and the ability to
+efficiently recover lost data due to faults or participant churn
+(section 4).
+• We provide a production-grade implementation ofW alrusand
+deploy both a public testnet and a mainnet. We then measure
+its performance on testnet and report passive observations from
+mainnet (section 7).
+2 Models and Definitions
+2.1 Network and Adversarial Assumptions
+W alrusruns in epochs, each with a static set of storage nodes. At
+the end of the epoch,𝑛= 3𝑓+ 1storage nodes are elected as part
+of the storage committee of the next epoch and each one controls
+a storageshardsuch that a malicious adversary can control up
+to 𝑓 of them.3 The corrupted nodes can deviate arbitrarily from
+the protocol. The remaining nodes are honest and adhere to the
+protocol. If a node controlled by the adversary at epoch 𝑒 is not
+a part of the storage node set at epoch 𝑒+ 1, then the adversary
+can adapt and compromise a different node at𝑒+ 1after the epoch
+change completes.
+We assume every pair of honest nodes has access to a reliable
+and authenticated channel. The network is asynchronous, so the
+adversary can arbitrarily delay or reorder messages between honest
+nodes, but must eventually deliver every message unless the epoch
+ends first. If the epoch ends, then the messages can be dropped.
+2.2 Erasure Codes
+As part ofW alrus, we propose a protocol for Asynchronous Com-
+plete Data Storage (ACDS) that uses a linear erasure-coding scheme.
+Although it is not necessary for the core parts of the protocol,
+we also assume, for some of our optimizations, that the encod-
+ing scheme issystematic, meaning that the source symbols of the
+encoding scheme also appear as part of its output symbols.
+Let Encode(𝐵,𝑡,𝑛) be the encoding algorithm. Its output is 𝑛
+symbols such that any𝑡 can be used to reconstruct𝐵. This happens
+by first splitting𝐵 into𝑡 symbols of sizeO(|𝐵|/𝑡) which are called
+sourcesymbols. These are then extended by generating 𝑛−𝑡 repair
+symbols for a total of 𝑛 output symbols. On the decoding side,
+anyone can callDecode(𝑇,𝑡,𝑛) where𝑇 is a set of at least𝑡 correctly
+encoded symbols, and it returns the blob𝐵.
+ACDS shares some similarities with Asynchronous Verifiable In-
+formation Dispersal (AVID) [5, 15], given that the main goal of both
+protocols is to distribute data. However, they also have significant
+differences; most notably, AVID protocols do not provide complete-
+ness, which is critical forWalrus. A more in-depth discussion is
+provided in section 8.
+2.3 Blockchain Substrate
+W alrususes an external blockchain as a black box for all control
+operations that happen onW alrus. A blockchain protocol can be
+abstracted as a computational black box that accepts a concurrent
+set of transactions, each with an input message Tx(𝑀) and outputs
+a total order of updates to be applied to the stateRes(seq,𝑈) . We as-
+sume that the blockchain does not deviate from this abstraction and
+does not censor Tx(𝑀) indefinitely. Any high-performance modern
+SMR protocol satisfies these requirements; in our implementation,
+we use Sui [4].
+3 Asynchronous Complete Data Storage (ACDS)
+We first define the problem of (Asynchronous) Complete Data Stor-
+age in a distributed system and describe our solution for an asyn-
+chronous network, which we callRed Stuff. We then show its
+correctness and complexity.
+3For the protocol description, we identify each storage node with a single shard,
+which lets us state all thresholds over nodes. In general, the number of shards is a
+fixed protocol parameter and a node may control several of them, counting with the
+corresponding weight towards every threshold; sections 4.5 and 7 describe how shards
+are assigned to nodes and reassigned across epochs.
+2
 
- 
- 
- 
- Search arXiv 
- 
- 
- 
- 
- 
- Press Enter to search · Advanced search 
- 
- 
- 
- 
- 
- 
- 
- 
---> 
+W alrus: An Efficient Decentralized Storage Network
+Table 1: Comparison of decentralized storage approaches.
+Replication
+for10−12
+Write/Read
+Cost
+Single Shard
+Recovery
+Non-blocking
+Epoch Change
+Replication [17, 27]25× O(𝑛|blob|) O(|blob|)No
+Classic ECC [21, 26]3× O(|blob|) O(|blob|)No
+W alrus+Red Stuff(this work)4.5× O(|blob|) O(|blob|/𝑛)Yes
+3.1 Problem Statement
+In a nutshell, a Complete Data Storage protocol allows a writer to
+write a blob to a network of storage nodes (Write Completeness);
+ensures that readers read it consistently despite a potentially mali-
+cious writer (Read Consistency); and ensures that any reader can
+read it despite some failures and malicious behavior among storage
+nodes (Validity). More formally:
+Definition 1(Complete Data Storage).Given a network of 𝑛=
+3𝑓+ 1nodes, where up to 𝑓 are malicious, let𝐵 be a blob that a writer
+𝑊 wants to store within the network and share with a set of readers
+𝑅. A protocol for Complete Data Storage guarantees three properties:
+• Write Completeness: If a writer𝑊 is honest, then every honest node
+holding a commitment to blob 𝐵 eventually holds a part 𝑝 (derived
+from𝐵), such that𝐵can be recovered fromO(|𝐵|/|𝑝|)parts.
+• Read Consistency: Two honest readers, 𝑅1 and𝑅2, reading a suc-
+cessfully written blob 𝐵 either both succeed and return 𝐵 or both
+return⊥.
+• Validity: If an honest writer𝑊 successfully writes𝐵, then an honest
+reader𝑅holding a commitment to𝐵can successfully read𝐵.
+Definition 2(Asynchronous Complete Data Storage).A Complete
+Data Storage protocol that is secure in asynchronous networks is an
+Asynchronous Complete Data Storage (ACDS) protocol.
+3.2 Strawman Design
+In this section, we iterate through two strawman designs and dis-
+cuss their inefficiencies.
+Strawman I: Replication.The simplest protocol uses replication
+in the spirit of Filecoin [ 17] and Arweave [ 27]. The writer 𝑊
+broadcasts its blob𝐵 along with a binding commitment to𝐵 (e.g.,
+𝐻𝐵 =hash(𝐵) ) to all storage nodes and then waits to receive 𝑓+ 1
+receipt acknowledgments. These acknowledgments form an avail-
+ability certificate, which guarantees availability as at least one
+acknowledgment is from an honest node. The writer can publish
+this certificate on the blockchain, which ensures that it is visible to
+every other honest node, which can then successfully Read(𝐵). This
+achieves Write Completeness since eventually all honest nodes will
+hold blob 𝐵 locally. The rest of the properties also hold trivially.
+Note that the reader never reads⊥.
+Although the full-replication protocol is simple, it requires the
+writer to send data of sizeO(𝑛|𝐵|) over the network, which is also
+the total cost of storage. Additionally, if the network is asynchro-
+nous, it can cost up to𝑓+ 1requests to guarantee a correct replica is
+contacted, which would lead toO(𝑛|𝐵|) cost per recovering storage
+node with a total cost ofO(𝑛 2|𝐵|) over the network. Similarly, even
+S31
+S11
+S21
+S41
+Encode: 
+from f+1 to nslivers
+Figure 1: Encoding a blob in one dimension. First, the blob is
+split into 𝑓+ 1systematic slivers and then a further2 𝑓 repair
+slivers are encoded.
+a read can be very inefficient in asynchrony, as the reader might
+need to send𝑓+1requests with a cost ofO(𝑛|𝐵|).
+Strawman II: Encode & Share.To reduce the upfront data dissemina-
+tion cost, some distributed storage protocols such as Storj [21] and
+Sia [26] use RS coding [19]. The writer𝑊 divides its blob𝐵 into𝑓+ 1
+slivers and encodes2𝑓 extra repair slivers (figure 1). Thanks to the
+encoding properties, any𝑓+ 1slivers can be used to recover𝐵. Each
+sliver has a size ofO(|𝐵|/𝑛) . The writer𝑊 then commits to the
+slivers using a binding commitment such as a Merkle tree [12] and
+sends each node a separate sliver together with a proof of inclusion.
+The nodes receive their slivers and check them against the commit-
+ment; if the sliver is correctly committed, they acknowledge by sign-
+ing the commitment. The writer𝑊 can then generate an availability
+certificate from2𝑓+1signatures and post it on the blockchain.
+A reader continuously requests slivers from the nodes until it
+receives𝑓+ 1valid replies (i.e., replies that are verified against the
+commitment). The reader is guaranteed to receive them since at
+least𝑓+ 1honest nodes have stored their sliver. The reader then
+reconstructs blob𝐵 from the slivers and additionally re-encodes
+the recovered value and recomputes the commitment [ 6, 12]. If
+writer𝑊 was honest, the recomputed commitment will match
+the commitment from the availability certificate and the reader
+outputs𝐵. Otherwise, writer𝑊 may not have committed to a valid
+encoding, in which case the commitments do not match and the
+reader outputs⊥.
+As before, the nodes that did not get slivers during the sharing
+phase can recover them by reading 𝐵. If the output of the read
+operation is⊥, the node returns⊥ on all future reads. Otherwise,
+the node stores its encoded sliver and discards the rest of𝐵. Note
+that this recovery process is expensive: recovery costsO(|𝐵|) even
+if the storage cost afterwards isO(|𝐵|/𝑛).
+This second protocol reduces the dissemination costs signifi-
+cantly at the expense of extra computation (encoding/decoding
+3
 
- 
- 
- Computer Science > Distributed, Parallel, and Cluster Computing 
- 
+George Danezis et al.
+and committing to slivers from𝐵). Disseminating blob𝐵 only costs
+O(|𝐵|) , which is the same cost as reading it. However, complete
+dispersal still costs O(𝑛|𝐵|) , because, as we saw, the process of
+recovering missing slivers requires downloading the entire blob𝐵.
+Given that there can be up to 𝑓 storage nodes that did not manage
+to get their sliver from writer 𝑊 and need to invoke the recov-
+ery protocol, the protocol hasO(𝑛|𝐵|) total cost. This is not only
+important during the initial dispersal, but also in cases where the
+storage node set changes (at epoch boundaries) as the new set of
+storage nodes needs to read its slivers by recovering them from the
+previous set of storage nodes.
+3.3 Final Design:Red Stuff
+In this section we present the high-level design ofRed Stuff. The
+algorithms can be found in section 5 and the proofs in section 6.
+The encoding protocol above achieves the objective of a low
+overhead factor with very high assurance, but is still not suitable
+for a long-lasting deployment. The main challenge is that in a long-
+running large-scale system, storage nodes routinely experience
+faults, lose their slivers, and have to be replaced. Additionally, in
+a permissionless system, there is some natural churn of storage
+nodes even when they are well incentivized to participate.
+Both of these cases would result in enormous amounts of data
+being transferred over the network, equal to the total size of data
+being stored, in order to recover the slivers for new storage nodes.
+This is prohibitively expensive. We instead want the system to be
+self-healing such that the cost of recovery is proportional only to
+the data that needs to be recovered and scales inversely with𝑛.
+Red Stuffachieves this. It encodes blobs in two dimensions (2D
+encoding): The primary dimension is equivalent to the RS encoding
+used in prior systems. However, in order to allow efficient recovery
+of slivers of𝐵 we also encode on a secondary dimension.Red Stuff
+is based on linear erasure coding (see section 2) and the Twin-
+code framework [18], which provides erasure-coded storage with
+efficient recovery in a crash-tolerant setting with trusted writers.
+We adapt this framework to make it suitable in the Byzantine fault-
+tolerant (BFT) setting with a single set of storage nodes, and we
+add additional optimizations that we describe further below.
+Encoding.Our starting point is the second strawman that splits the
+blob into𝑓+ 1slivers. Instead of simply encoding repair slivers, we
+first add one more dimension to the splitting process: the original
+blob is split into 𝑓+ 1primary slivers (horizontal in the figure)
+and into2𝑓+ 1secondary slivers (vertical in the figure). Figure 2
+illustrates this process. As a result, the blob is now split into(𝑓+
+1)( 2𝑓+ 1) symbols that can be visualized in an[𝑓+ 1, 2𝑓+ 1] matrix.
+Given this matrix we then generate repair symbols in both di-
+mensions. We take each of the2𝑓+ 1columns (of size 𝑓+ 1) and
+extend them to𝑛 symbols such that there are𝑛 rows. We assign each
+of the rows as theprimary sliverof a node (figure 2a). This almost
+triples the total amount of data we need to send and is very close to
+what 1D encoding does in Strawman II. In order to provide efficient
+recovery for each sliver, we also take the initial [𝑓+ 1, 2𝑓+ 1]
+matrix and extend each of the𝑓+ 1rows (of size2 𝑓+ 1) with repair
+symbols to𝑛 symbols (figure 2b) using our encoding scheme. This
+creates𝑛 columns, which we assign as thesecondary sliverof each
+node, respectively.
+S31
+S11
+S21
+S41
+S32
+S12
+S22
+S42
+S33
+S13
+S23
+S43
+Encode columns: 
+from f+1 to n
+primary
+slivers
+(a) Primary encoding in two dimensions. The blob is split into2 𝑓+ 1
+columns and 𝑓+ 1rows. Each column is encoded as a separate blob
+with2𝑓 repair symbols. Then each resulting row is the primary sliver
+of the respective node.
+S14
+S24
+S11
+S21
+S12
+S22
+S13
+S23
+Encode rows: 
+from 2f+1 to n
+secondary slivers
+(b) Secondary encoding in two dimensions. The blob is split into
+2𝑓+ 1columns and 𝑓+ 1rows. Each row is encoded as a separate blob
+with𝑓 repair symbols. Then each resulting column is the secondary
+sliver of the respective node.
+Figure 2: 2D encoding /Red Stuff.
+For each sliver, we compute a vector commitment over all sym-
+bols of the extended sliver (i.e., including the repair symbols), form-
+ing thesliver commitment. The commitments for every sliver form
+the blobmetadata. Using these, nodes can later, when queried for
+a single symbol, prove that the symbol they return is the sym-
+bol originally written, which enables Byzantine fault tolerance for
+Red Stuff. A vector commitment to the metadata then forms the
+blob commitment.
+Write Protocol.The Write protocol ofRed Stuffuses a pattern
+similar to that of the RS-code protocol. The writer𝑊 first encodes
+the blob and creates a sliver pair for each node. A sliver pair𝑖 is the
+pair of the𝑖th primary and secondary slivers. There are𝑛= 3𝑓+ 1
+sliver pairs, one per node.
+Then,𝑊 sends the metadata (i.e., all sliver commitments) to
+every node, along with the respective sliver pair. The nodes check
+their own sliver pair against the commitments, recompute the blob
+commitment, and reply with a signed acknowledgment if all checks
+pass. Once2𝑓+ 1signatures are collected, 𝑊 aggregates them into
+a certificate and posts it on-chain tocertifythe blob’s availability.
+The nodes then keep openings of the blob commitment to their
+sliver commitments, locally encode the metadata with a 1D(𝑓+ 1)-
+out-of-𝑛 encoding (along with another vector commitment to the
+parts of the encoded metadata), and keep the part assigned to them,
+together with the opening of their part. This is needed since the
+metadata needs to be available for nodes that need to recover their
+slivers (seeSliver Healingbelow). However, fully replicating the
+metadata would result in a quadratic overhead, while this approach
+reduces the overhead to a constant per node (i.e., from quadratic
+4
 
- 
- arXiv:2505.05370 (cs)
- 
- 
- 
- 
- 
- [Submitted on 8 May 2025 ( v1 ), last revised 10 Aug 2026 (this version, v4)] 
- Title: Walrus: An Efficient Decentralized Storage Network 
- Authors: George Danezis , Giacomo Giuliari , Eleftherios Kokoris Kogias , Markus Legner , Jean-Pierre Smith , Alberto Sonnino , Karl Wüst View a PDF of the paper titled Walrus: An Efficient Decentralized Storage Network, by George Danezis and 6 other authors 
- View PDF 
- HTML (experimental) 
+W alrus: An Efficient Decentralized Storage Network
+to linear system-wide overhead). Our production deployment cur-
+rently forgoes this optimization and stores the metadata in full on
+every node.
+In theoretical asynchronous network models with reliable deliv-
+ery, the above would result in all correct nodes eventually receiving
+a sliver pair from an honest writer. However, in practical proto-
+cols, the writer needs to stop retransmitting. It is safe to stop the
+retransmission after2𝑓+ 1signatures are collected, leading to at
+least𝑓+ 1correct nodes (out of the2 𝑓+ 1that responded) holding
+a sliver pair for the blob.
+Read Protocol.The Read protocol is similar to the one for one-
+dimensional RS codes. It starts with𝑅 collecting the metadata, i.e.,
+the list of sliver commitments for the blob commitment. To do so,
+𝑅 requests the 1D encoded metadata parts from the nodes along
+with the opening proofs for the encoded metadata. Since at least
+𝑓+ 1of any2 𝑓+ 1replies originate from honest nodes, the vector
+commitment on which the majority of the replies agree is the correct
+one; parts whose openings do not verify against it are discarded
+before decoding.
+Since honest nodes only store metadata that they verified against
+id when it was written, this binds the decoded metadata to the blob.
+Then𝑅 requests a read for the blob commitment from all nodes and
+they respond with the primary sliver they hold (this may happen
+gradually to save bandwidth). Each response is checked against the
+corresponding commitments in the commitment set for the blob.
+When𝑓+ 1correct primary slivers are collected, 𝑅 decodes𝐵, re-
+encodes it, and recomputes the metadata. If it matches the metadata
+retrieved earlier, then𝑅outputs𝐵; otherwise, it outputs⊥.
+Sliver Healing.The big advantage ofRed Stuffcompared to the
+RS-code protocol is its self-healing property. This comes into play
+when nodes that did not receive their slivers directly from𝑊 try to
+recover them. Any storage node can recover its secondary sliver by
+asking𝑓+ 1storage nodes for the symbols that exist in their row,
+which should also exist in the (extended) column of the requesting
+node (figures 3a to 3c). This means that eventually all2𝑓+ 1honest
+nodes will have secondary slivers. At that point, any node can also
+recover its primary sliver by asking the2 𝑓+ 1honest nodes for
+the symbols in their column (figure 3d) that should also exist in the
+(extended) row of the requesting storage node. In each case, the
+responding node also sends the opening for the requested symbol
+of the commitment of the source sliver. This allows the receiving
+node to verify that it received the symbol intended by the writer
+𝑊, which ensures correct decoding if𝑊was honest.
+Since the size of a symbol isO(|𝐵|/𝑛 2), and each storage node
+will downloadO(𝑛) total symbols, the cost per node remains at
+O(|𝐵|/𝑛) and the total cost to recover the blob is O(|𝐵|) , which
+is equivalent to the cost of a Read and of a Write. As a result, by
+usingRed Stuff, the communication complexity of the protocol is
+(almost4) independent of𝑛, making the protocol scalable.
+Security.Section 6 provides proofs thatRed Stuffsatisfies all prop-
+erties of an ACDS. Informally, Write Completeness is ensured by
+the fact that a correct writer will confirm that at least 𝑓+ 1correct
+nodes received sliver pairs before stopping retransmissions. The
+4Depends on the vector commitment scheme used.
+sliver recovery algorithm can then ensure that the remaining hon-
+est nodes can efficiently recover their slivers from these, until all
+honest nodes eventually hold their respective sliver, or can prove
+that the encoding was incorrect. Validity holds due to the fact that
+2𝑓+ 1correct nodes will eventually hold correct sliver pairs, and
+therefore a reader that contacts all nodes will eventually get enough
+slivers to recover the blob. Read Consistency holds since two correct
+readers that decode a blob from potentially different sets of slivers,
+re-encode it and check the correctness of the encoding. Either both
+output the same blob if it was correctly encoded or both output⊥
+if it was incorrectly encoded.
+Discussion on Replication Cost.The benefits ofRed Stuffdo not
+come for free. There is an increase in the total storage cost of the
+system compared to classic BFT erasure codes, from3 × to4.5×.
+But this is necessary, as we need the extra information to allow for
+efficient recovery. Without it, the recovery cost for a single sliver
+would beO(|𝐵|)instead ofO(|𝐵|/𝑛).
+A naive application of our 2D encoding in which nodes store
+fully extended slivers would lead to a storage amplification of9×.
+However, nodes only store a sufficient number of symbols (2𝑓+ 1for
+primary,𝑓+ 1for secondary) that allows them to locally decode the
+rest of the extended sliver when they need to communicate symbols
+that are not stored to support another node’s recovery, resulting
+in a factor4 .5× instead. This trades CPU for storage, which is a
+favorable trade-off forW alrusas it has minimal CPU requirements.
+Note additionally that we do not use a symmetric [𝑓+ 1,𝑓+ 1]
+matrix, as it would result in double the replication cost. Instead, our
+design achieves the minimum replication cost at the expense of a
+slightly more structured recovery procedure.
+4W alrus: A Decentralized Blob Store
+The previous section presentedRed Stuff, an encoding algorithm
+designed for efficient recovery. However, an encoding algorithm
+alone is not sufficient for a complete storage system. In this section,
+we presentW alrus, which integrates an encoding algorithm with
+a blockchain that serves as a control plane for metadata and gover-
+nance. Within an epoch, clients interact withW alrusthrough two
+operations: writing blobs and reading blobs.
+Walrusrequires an Asynchronous Complete Data Storage
+(ACDS) protocol and a blockchain to coordinate storage nodes
+and track metadata. Our implementation usesRed Stuff(sec-
+tion 3.3) instantiated with Reed-Solomon codes [19] for the erasure
+coding, Merkle trees [ 12] for the vector commitments, and the
+Sui blockchain [ 4] as the control plane. These choices are not
+fundamental;Walruscan use any components that satisfy the
+requirements in section 2.
+Beyond basic read and write operations,W alrusmust also han-
+dle an additional concern: storage nodes may join or leave the
+system over time. Section 4.5 presents our epoch-change algorithm,
+which enables permissionless participation of hundreds of nodes
+with seamless handover between committees.
+4.1 Writing a Blob
+The process of writing a blob inW alruscan be seen in algorithm 3
+and figure 4. The process begins with the writer ( ➊) encoding a
+blob usingRed Stuff. This process yields sliver pairs, a list of sliver
+5
 
- 
- Abstract: Decentralized storage faces a fundamental trade-off between replication overhead, recovery efficiency, and security guarantees. Current approaches either rely on full replication, incurring substantial storage costs, or employ erasure-coding schemes that struggle with efficient recovery, especially under high churn. We present Walrus, a decentralized blob storage system that addresses these limitations through multiple technical innovations.
- At the core of Walrus is Red Stuff, a two-dimensional erasure-coding protocol that achieves high security with only a 4.5x replication factor, while providing self-healing of lost data. This means that recovery is done without centralized coordination and requires bandwidth proportional to the amount of lost data.
- However, Red Stuff on its own is not sufficient for Walrus, as it is designed with a static set of participants in mind. To further support decentralization, we also introduce a multi-stage epoch-change protocol that efficiently handles storage node churn while maintaining uninterrupted availability during committee transitions. Our system incorporates authenticated data structures to defend against malicious clients and ensure data consistency throughout storage and retrieval. Walrus has been deployed in production since March 2025 and has secured 686 TB of data by July 2026. We conduct an experimental evaluation of the deployed system and demonstrate that Walrus achieves practical performance at scale and outperforms the Arweave decentralized storage system.
- 
+George Danezis et al.
+S31
+S11
+S21
+S32
+S12
+S33
+S13
+S23
+S14
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S44
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S42
+S33
+S13
+S23
+S43
+S34
+S44
+(a) Nodes 1 (green) and 3 (red) hold a primary and secondary sliver
+each, corresponding to an unextended row and column, respectively.
+S31
+S11
+S21
+S32
+S12
+S33
+S13
+S23
+S14
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S44
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S42
+S33
+S13
+S23
+S43
+S34
+S44
+(b) Nodes 1 and 3 extend their slivers and send the intersection of the
+resulting rows/columns with the columns/rows of node 4 to node 4
+(bold green and red).
+S31
+S11
+S21
+S32
+S12
+S33
+S13
+S23
+S14
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S44
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S42
+S33
+S13
+S23
+S43
+S34
+S44
+(c) Node 4 uses the 𝑓+ 1symbols on its column to recover the missing
+symbols of its extended secondary sliver (purple). It then sends any
+other recovering node the recovered intersections of this column
+with their row.
+S31
+S11
+S21
+S32
+S12
+S33
+S13
+S23
+S14
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S33
+S13
+S23
+S43
+S34
+S44
+S14
+S24
+S31
+S11
+S21
+S41
+S32
+S12
+S42
+S33
+S13
+S23
+S43
+S34
+S44
+(d) Node 4 uses the 𝑓+ 1symbols on its row that it received from
+nodes 1 and 3, symbol S44, which it recovered in the previous step
+(purple), and at least 𝑓− 1further symbols sent by other nodes after
+they recover their own secondary slivers (not needed in this example)
+to recover the missing symbols of its primary sliver (teal).
+Figure 3: Nodes 1 and 3 help node 4 recover its sliver pair.
+Blockchain
+N1
+N2
+N4
+N3
+User
+4
+5
+3
+1
+2
+build 
+blob id
+buy
+space
+collect
+acks
+publish
+PoA
+build
+PoA
+Figure 4:W alruswrite flow. The writer generates the blob
+ID of the file to store, acquires storage space through the
+blockchain, submits the encoded file toW alrus, collects2𝑓+ 1
+acknowledgments, and submits them as proof of availability
+to the blockchain.
+commitments, and a blob commitment. The writer derives ablob ID
+id by hashing the blob commitment with additional metadata such
+as the length of the file and the type of the encoding (algorithm 1).
+Then, the writer (➋) submits a transaction on the blockchain to
+acquire sufficient space for the blob to be stored during a sequence
+of epochs, and toregisterthe blob. The blob ID and the blob size are
+sent. The blockchain smart contract needs to secure sufficient space
+to store both the encoded slivers on each node and all metadata
+associated with the commitments for the blob. Some payment may
+be sent along with the transaction to secure empty space, or empty
+space over epochs can be a resource that is attached to this request
+to be used. Our implementation allows for both options.
+Once the register transaction commits (➌), the writer informs
+the storage nodes of their obligation to store the slivers of the blob
+identified by id, sending them the transaction together with the
+commitments and the primary and secondary slivers assigned to
+the respective storage nodes along with proofs that the slivers are
+consistent with the published id. This proof is the list of sliver
+commitments itself: the storage node recomputes id from the com-
+mitments and checks that it matches the registered blob ID; it then
+recomputes the commitment of each of the two slivers it received
+and compares the results against the corresponding entries (algo-
+rithm 1). After the sliver pairs and commitments are verified and
+stored, the node responds with a signed acknowledgment overid.
+Finally, the writer waits to collect2 𝑓+ 1signed acknowledg-
+ments (➍), which constitute an availability certificate. This cer-
+tificate is then published on-chain ( ➎), which denotes thePoint
+of A vailability(PoA) for the blob inWalrus. The PoA signals the
+obligation for storage nodes to keep the slivers available for reads.
+At this point, the writer can delete the blob from local storage and
+go offline. Additionally, this PoA can be used as proof of availability
+of the blob by the writer to third-party users and smart contracts.
+Nodes listen to the blockchain for events indicating that a blob
+reached its PoA. If they do not hold sliver pairs for this blob, they
+execute the recovery process to get commitments and sliver pairs
+for all blobs past their PoA. This ensures that eventually all correct
+nodes will hold sliver pairs for all blobs.
+4.2 Reading a Blob
+Reading a blob proceeds in three phases: metadata retrieval, sliver
+collection, and reconstruction with verification. Given a blob ID
+6
 
- 
- 
- 
- Comments: 
- 15 pages, 7 figures. To be published in the Proceedings of the 2026 ACM SIGSAC Conference on Computer and Communications Security (CCS '26) 
- 
- 
- Subjects: 
- 
- Distributed, Parallel, and Cluster Computing (cs.DC) ; Cryptography and Security (cs.CR) 
- 
- ACM  classes: 
- H.3 
- 
- 
- Cite as: 
- arXiv:2505.05370 [cs.DC] 
- 
- 
-   
- (or 
- arXiv:2505.05370v4 [cs.DC] for this version)
- 
- 
- 
-   
- https://doi.org/10.48550/arXiv.2505.05370 
- 
- 
- Focus to learn more 
- 
- 
- 
- arXiv-issued DOI via DataCite 
- 
- 
- 
- 
- Related DOI :
- 
- https://doi.org/10.1145/3830454.3832580 
+W alrus: An Efficient Decentralized Storage Network
+id, the client first requests the metadata from the storage nodes.
+Once it has retrieved the metadata, the client proceeds to request
+primary slivers. The client collects primary slivers from storage
+nodes, verifying each against the sliver commitments from the
+metadata. After obtaining𝑓+ 1valid slivers, the client reconstructs
+the blob using erasure decoding.
+The final verification step ensures consistency: the client re-
+encodes the reconstructed blob and recomputes the metadata. If this
+matches the metadata retrieved earlier, the client outputs the blob;
+otherwise, the encoding was inconsistent and the client outputs
+⊥. This check guarantees that all honest readers either obtain the
+same blob or reject it entirely—a property that follows directly from
+Red Stuff’s guarantees. In the fault-free case, the total download
+is only slightly larger than the original blob size, since primary
+slivers contain the blob data with modest redundancy overhead.
+Moreover, in a steady state, reads are still available with up to2𝑓
+faulty shards, as only𝑓+1slivers are needed.
+4.3 Recovery of Slivers
+One issue with writing blobs in asynchronous networks or when
+nodes crash-recover is that not every node gets their sliver during
+the write. This is not a problem, as protocols can function without
+completeness. Nevertheless, inWalruswe opted to use a two-
+dimensional encoding scheme because it allows for completeness,
+i.e., the ability of every honest storage node to recover and even-
+tually hold a sliver for every blob past PoA. This allows (1) better
+load balancing of read requests as all nodes can reply to reads and
+(2) dynamic availability of nodes, which enables reconfiguration
+without needing to reconstruct and rewrite every blob.
+All these benefits rely on the ability of storage nodes to recover
+their slivers efficiently. The protocol closely follows theRed Stuff
+recovery protocols illustrated in figure 3. When a storage node sees
+a certificate of a blob for which it has not received slivers, it tries to
+recover its sliver pair from the rest of the storage nodes. For this, it
+requests from all storage nodes the symbols corresponding to the
+intersection of the recovering node’s primary/secondary sliver with
+the signatory nodes’ secondary/primary slivers. Given that2 𝑓+ 1
+nodes signed the certificate, at least𝑓+ 1will be honest and reply.
+This is sufficient for all2𝑓+ 1honest nodes to eventually hold their
+secondary slivers. As a result, when all honest nodes hold their
+secondary slivers, they can share those symbols corresponding to
+the recovering nodes’ primary slivers; those nodes then reach the
+2𝑓+1threshold and also recover their primary slivers.
+4.4 Handling Byzantine Faults during Encoding
+One last challenge forW alrusis handling Byzantine faults, both
+for writers and for storage nodes. First, storage nodes could misbe-
+have by acknowledging slivers that they do not hold or by serving
+wrong slivers during read/recovery. We defend against these attacks
+through the commitment to slivers that the writer creates, meaning
+that any invalid sliver will be rejected (algorithm 1, line 28).
+Second, a malicious client could upload slivers that are inconsis-
+tent, i.e., do not correspond to a correct encoding of a blob. In that
+case, a node may not be able to recover a sliver that is consistent
+with the commitment of the symbols that it received.W alrusdoes
+not require certified blobs to be recoverable (which is the primary
+goal of AVID [ 5]), as the writer can always encode recoverable
+garbage data. Instead, it is guaranteed that unrecoverable blobs will
+have a third-party-verifiable proof of inconsistency, associated with
+id, after a read fails.
+The read process executed by a correct reader rejects any incon-
+sistently encoded blob by default (algorithm 1, line 35), and as a
+result, sharing this proof is not a necessity to ensure consistent
+reads. However, agreeing on the inconsistency allows nodes to
+delete this blob’s data and thus save space and bandwidth.
+To prove inconsistency, the storage node shares the inconsistency
+proof—consisting of the symbols that it received for recovery and
+their inclusion proofs—with the other nodes, who can verify it
+by performing a trial recovery themselves. After verifying this
+fraud proof, each verifying node attests on-chain that id is invalid.
+After observing𝑓+ 1such attestations, all nodes will subsequently
+respond with⊥ to any request for the inconsistent blob’s slivers,
+along with a pointer to the on-chain evidence for the inconsistency.
+This means that even if a malicious writer colludes with𝑓 mali-
+cious nodes to certify an invalid blob, the rest of the storage nodes
+will detect this during a read or recovery and produce an inconsis-
+tency proof, guaranteeing agreement among honest readers.
+4.5 Committee Reconfiguration
+The number of shards is a protocol parameter, fixed at 1000 in the
+current deployment, and 𝑛= 3𝑓+ 1counts shards rather than
+operators. The number of shards therefore does not grow with the
+number of nodes in the committee in practice: shards are assigned
+to nodes in proportion to their delegated stake, so a larger commit-
+tee only changes how the same shards are distributed and never
+requires re-encoding. The security invariant is stated over shards
+as well, requiring that the adversary control at most1/3of them.
+Walrusis orthogonal to the mechanism that enforces or incen-
+tivizes this invariant: the current deployment uses delegated proof
+of stake, but proof of work, proof of personhood, or random com-
+mittee sampling from a larger population would serve equally well.
+W alrusis a decentralized protocol; therefore, it is natural that
+the set of storage nodes will fluctuate between epochs. When a
+new committee replaces the current committee between epochs,
+reconfiguration takes place. The goal of the reconfiguration pro-
+tocol is to preserve the invariant that all blobs past the PoA are
+available, regardless of whether the set of storage nodes changes.
+Additionally,Walrusmust continue to perform reads and writes
+for blobs to ensure no downtime even if the reconfiguration process
+takes hours.5
+Core Design.At a high level, the reconfiguration protocol ofW al-
+rusis similar to the reconfiguration of blockchain systems, since
+W alrusalso operates in quorums of storage nodes. However, the
+reconfiguration ofWalrushas its own challenges because the
+migration of state is orders of magnitude more expensive than in
+classic blockchain systems. The most important challenge is the
+race between writing blobs for epoch𝑒 and transferring slivers from
+outgoing storage nodes to incoming storage nodes during the recon-
+figuration event between𝑒 and𝑒+ 1. More specifically, if the amount
+5Unlike blockchain protocols where reconfiguration simply transfers responsibility
+for validation, inWalrusit transfers responsibility for data storage on the order of
+terabytes or even petabytes.
+7
 
- 
- 
- 
- 
- Focus to learn more 
- 
- 
- 
- 
- DOI(s) linking to related resources
- 
- 
- 
- 
- 
- 
- 
- 
- 
- Submission history From: Markus Legner [ view email ] [v1] 
- Thu, 8 May 2025 16:06:41 UTC (385 KB) 
- [v2] 
- Mon, 9 Jun 2025 16:08:54 UTC (342 KB) 
- [v3] 
- Fri, 20 Feb 2026 16:24:40 UTC (268 KB) 
- [v4] 
- Mon, 10 Aug 2026 12:49:12 UTC (237 KB) 
- 
- 
- 
- 
- 
- Full-text links: 
- Access Paper: 
- 
- 
-View a PDF of the paper titled Walrus: An Efficient Decentralized Storage Network, by George Danezis and 6 other authors View PDF HTML (experimental) TeX Source
- 
- 
- 
- view license 
- 
- 
- 
- Current browse context: 
- cs.DC 
+George Danezis et al.
+of data written in epoch𝑒 exceeds what the departing storage node
+can transfer to the incoming storage node, then the epoch will never
+finish. This problem is exacerbated when some of the outgoing stor-
+age nodes of 𝑒 are unavailable, as this means that the incoming
+storage nodes need to recover the slivers from the committee.
+To resolve this problem without shutting off the write path, we
+take a different approach than blockchain protocols. Specifically,
+we require writes to be directed to the committee of 𝑒+ 1the
+moment the reconfiguration starts, while still directing reads to
+the old committee, instead of having a single point at which both
+reads and writes are handed over to the new committee. We can
+afford to do this, unlike blockchains, becauseWalrusdoes not
+handle its state consistency (which is the responsibility of Sui in
+our deployment) and hence can have divergence and duplication.
+However, this creates challenges when it comes to reading fresh
+blobs, as during the handover period it is unclear which nodes store
+the data. We handle this by including in the metadata of every blob
+the epoch in which it was first written. If the epoch is𝑒+ 1, then the
+client is asked to direct reads to the new committee; otherwise, it
+can direct reads to the old committee. This happens only during the
+handover period (when both committees need to be live and secure).
+Once a member of the new committee has bootstrapped its part of
+the state, i.e., it has received all slivers for its shards, it signals that it
+is ready to take over. When nodes of the new committee collectively
+holding2𝑓+ 1shards have signaled this, the reconfiguration process
+terminates and all reads are redirected to the storage nodes of the
+new committee.
+The Importance ofRed Stufffor Reconfiguration.As we mentioned
+above, a significant challenge arises during epoch change when
+some nodes are faulty. In prior work, a single faulty node would
+require bandwidth equal to the size of the file to be transferred
+over the network of storage nodes. This makes epoch changes
+prohibitively expensive and is the reason no prior decentralized
+system has one. The key enabler ofWalrus’s ability to handle
+this gracefully is ourRed Stuffalgorithm, as it allows for the
+bandwidth cost of the faulty case to be on the same order as that of
+the fault-free case. We discuss the associated overheads in section 7.
+Security Arguments.In a nutshell, reconfiguration ensures all ACDS
+properties across epochs. The key invariant is that the reconfig-
+uration algorithm ensures that if a blob is to be available across
+epochs, in each epoch 𝑓+ 1correct shards (potentially different
+ones) hold slivers. This is the purpose of the explicit signaling, by
+nodes collectively holding2 𝑓+ 1shards, that unlocks the epoch
+change. Therefore, eventually all other honest storage nodes can
+recover their sliver pairs, and in all cases, honest nodes in the next
+epoch are able to recover correct sliver pairs for𝑓+ 1shards as a
+condition to move epochs.
+5 Detailed Algorithms
+This section supplements section 4 by providing detailed algorithms
+for client and storage node operations (algorithms 2 and 3).
+In addition to the helper functions specified in algorithm 1,
+these algorithms also leverage the following (intuitive) functions:
+ByteSize(𝐵) to compute the size of a blob 𝐵 in bytes;Erasure-
+Decode(𝑇,𝑡,𝑛) to erasure-decode the source data from a set𝑇 of
+Algorithm 1W alrushelper functions.
+1:nodes⊲committee of storage nodes,|nodes|=𝑛=3𝑓+1
+2:procedureEncodeBlob(𝐵)
+3:𝐸←SplitIntoMatrix(𝐵,(𝑓+1)×(2𝑓+1))⊲the source
+symbols
+4:𝐸←[ErasureEncode(𝐸 (∗,𝑗),𝑓+1,𝑛):𝑗∈[0,2𝑓+1)] ⊤
+⊲extend columns:[𝑛×(2𝑓+1)]
+5:𝐸←[ErasureEncode(𝐸 (𝑖,∗),2𝑓+1,𝑛):𝑖∈[0,𝑛)]
+⊲extend rows:[𝑛×𝑛]
+6:𝑆 p←[𝐸 (𝑖,∗) :𝑖∈[0,𝑛)]⊲primary slivers, one per node
+7:𝑆 s←[𝐸 (∗,𝑖) :𝑖∈[0,𝑛)] ⊤ ⊲secondary slivers, one per node
+8:return(𝑆 p,𝑆 s)
+9:procedureMakeMetadata(𝑆 p,𝑆 s)
+10:𝑀 p←[MerkleTree(𝑆 (p,𝑖)):𝑖∈[0,𝑛)]
+11:𝑀 s←[MerkleTree(𝑆 (s,𝑖)):𝑖∈[0,𝑛)]
+12:𝑀←(𝑀 p,𝑀 s)
+13:return𝑀
+14:procedureMakeBlobId(𝑀,size)
+15:(𝑀 p,𝑀 s)←𝑀
+16:(ℎ p,ℎ s)←(MerkleTree(𝑀 p),MerkleTree(𝑀 s))
+17:ℎ←Hash(ℎ p,ℎ s)⊲the blob commitment
+18:id←Hash(ℎ,size)
+19:returnid
+20:procedureEncodeMetadata(𝑀)
+21:𝑚←ErasureEncode(𝑀,𝑓+1,𝑛)⊲𝑛metadata shares
+22:𝜏←MerkleTree(𝑚)
+23:return[(𝑖,𝑚 𝑖,𝜏,Opening(𝑚,𝑖)):𝑖∈[0,𝑛)]⊲one piece per
+node
+24:procedureDecodeMetadata(𝑃)⊲metadata pieces(𝑖,𝑚,𝜏,𝜋)
+25:𝜏 ★←Majority([𝜏:(𝑖,𝑚,𝜏,𝜋)∈𝑃])⊲by honest majority
+26:𝑉←{(𝑖,𝑚):(𝑖,𝑚,𝜏,𝜋)∈𝑃,VerifyOpening(𝜏 ★,𝑚,𝜋,𝑖)}
+⊲verified shares
+27:returnErasureDecode(𝑉,𝑓+1,𝑛)
+28:procedureVerifySliver(𝑆 (𝑥,𝑖),𝑀)⊲sliver type𝑥∈{p,s}
+29:(𝑀 p,𝑀 s)←𝑀
+30:returnMerkleTree(𝑆 (𝑥,𝑖))=𝑀 𝑥
+𝑖
+31:procedureDecodeBlobFromPrimary({𝑆 (p,∗)}𝑓+1,𝑀)
+32:𝐵←ErasureDecode({𝑆 (p,∗)}𝑓+1,𝑓+1,𝑛)
+33:(𝑆 p,𝑆 s)←EncodeBlob(𝐵)⊲re-encode
+34:𝑀 ′←MakeMetadata(𝑆 p,𝑆 s)
+35:if𝑀 ′ ≠𝑀then return⊥
+36:return𝐵
+at least𝑡 out of𝑛 correctly encoded symbols or slivers (section 2);
+ErasureEncode(𝐷,𝑡,𝑛) to erasure-encode data𝐷 into𝑛 symbols
+such that any𝑡 of them can recover𝐷 (section 2);Hash(·) to com-
+pute a cryptographic hash;InconsistencyProof(𝑇) to assemble
+from the collected symbols and openings𝑇 a third-party-verifiable
+proof that the encoding is inconsistent (section 4.4);Majority(𝑣) to
+return the most frequent element of a vector𝑣;MerkleTree(𝑣) to
+compute a Merkle tree over a vector input𝑣;NodeIndex(𝑁,nodes)
+to obtain the index of node𝑁 in the committee;Opening(𝑣,𝑖) to
+8
 
- 
- 
- < prev 
- 
-   |   
- next > 
- 
- 
- new 
- | 
- recent 
- | 2025-05 
- 
- Change to browse by:
- 
- cs 
- cs.CR 
- 
- 
+W alrus: An Efficient Decentralized Storage Network
+Algorithm 2W alrusclient operations.
+1:nodes
+// Store a blob
+2:procedureStoreBlob(𝐵,expiry)
+3:(𝑆 p,𝑆 s)←EncodeBlob(𝐵)
+4:𝑀←MakeMetadata(𝑆 p,𝑆 s)
+5:size←ByteSize(𝐵)
+6:id←MakeBlobId(𝑀,size)
+7:ReserveBlob(id,size,expiry)
+8:𝑅←{}
+9:for𝑖∈[0,|nodes|)do
+10:𝑁←nodes[𝑖]
+11:StoreRqst←(id,size,𝑀,𝑆 (p,𝑖),𝑆(s,𝑖))
+12:𝑅←𝑅∪{(𝑁,StoreRqst)}
+13:𝐶 𝐴←await 2𝑓+1 : {𝑐←Send(𝑁,𝑟) :(𝑁,𝑟)∈𝑅}⊲ signed acks
+14:StoreCertificate(𝐶 𝐴,id)⊲the availability certificate
+// Retrieve metadata
+15:procedureRetrieveMetadata(id)
+16:MetadataRqst←(id)
+17:𝑃 𝑀←await 2𝑓+1 :{𝑝←Send(𝑁,MetadataRqst):
+𝑁∈nodes}⊲metadata pieces
+18:returnDecodeMetadata(𝑃 𝑀)
+// Read from primary
+19:procedureReadBlob(id)
+20:𝑀←RetrieveMetadata(id)
+21:SliversRqst←(id)
+22:{𝑆 (p,∗)}𝑓+1 ←await 𝑓+1 :{𝑆 (p,𝑖)←Send(𝑁,SliversRqst):
+𝑁=nodes[𝑖],VerifySliver(𝑆 (p,𝑖),𝑀)}
+23:𝐵←DecodeBlobFromPrimary({𝑆 (p,∗)}𝑓+1,𝑀)
+24:return𝐵
+compute the opening for the entry at index𝑖 of the vector commit-
+ment to𝑣;ReqestSymbol(𝑚,id,(𝑟,𝑐)) to request the symbol at
+position(𝑟,𝑐) of the blob id from node𝑚, together with an opening
+against the commitment of the sliver that contains it;Send(𝑁,msg)
+to send the message msg to node𝑁 over the authenticated channel;
+Sign(𝑥) to sign𝑥 with the node’s key;SplitIntoMatrix(𝐷,𝑟×𝑐)
+to reshape data𝐷 into a matrix of the specified size; andVerify-
+Opening(𝜏,𝑥,𝜋,𝑖) to verify with the opening𝜋 that𝑥 is the entry
+at index𝑖of the vector committed to by𝜏.
+Furthermore, the client and storage nodes use the following func-
+tions to interact with the blockchain:IsRegistered(id) to check if
+a blob ID id is registered on the blockchain;ReadCertificate(id)
+to read an availability certificate for blob IDid from the blockchain;
+ReserveBlob(id,size,expiry) to acquire storage for a blob of size
+size until epoch expiry and register the blob IDid on the blockchain;
+andStoreCertificate(𝐶𝐴,id) to store the availability certificate
+𝐶𝐴 for blob IDidon the blockchain.
+Table 2 summarizes the main notations used in the algorithms.
+Subscripts of matrices and vectors denote access to a specific index.
+6Red StuffProofs
+This section formally proves thatRed Stuffsatisfies all properties
+of an ACDS scheme.
+Algorithm 3W alrusstore operations.
+1:N⊲identifier of the storage node
+2:db 𝑚 ⊲persists this node’s encoded metadata part
+3:db 𝑏 ⊲persists slivers
+// Store slivers
+4:procedureStoreSlivers(StoreRqst)
+5:(id,size,𝑀,𝑆 (p,𝑖),𝑆(s,𝑖))←StoreRqst⊲𝑖is this node’s index
+6:if¬IsRegistered(id)then return⊥
+7:id ′←MakeBlobId(𝑀,size)
+8:ifid ′ ≠idthen return⊥
+9:if¬VerifySliver(𝑆 (p,𝑖),𝑀)then return⊥
+10:if¬VerifySliver(𝑆 (s,𝑖),𝑀)then return⊥
+11:(𝑀 p,𝑀 s)←𝑀
+12:db 𝑚[id]←(EncodeMetadata(𝑀) 𝑖,
+Opening(𝑀 p,𝑖),Opening(𝑀 s,𝑖))
+⊲metadata piece and openings of the blob commitment
+13:db 𝑏[id]←(𝑆 (p,𝑖),𝑆(s,𝑖))⊲may be truncated (section 3.3)
+14:returnSign(id)⊲signed acknowledgment
+// Serve slivers (primary path for reads)
+15:procedureServeSlivers(SliversRqst)
+16:id←SliversRqst
+17:if¬ReadCertificate(id)then
+18:return⊥⊲ensure on-chain availability certificate exists
+19:(𝑆 (p,𝑖),𝑆(s,𝑖))←db 𝑏[id]
+20:return𝑆 (p,𝑖) ⊲serve primary sliver for read threshold𝑓+1
+// Recover one sliver of this node from verified intersections
+21:procedureRecoverSliver(id,nodes,𝑖,𝑀,𝑥)⊲sliver type𝑥∈{p,s}
+// ask each node𝑚with index𝑗for the symbol shared by
+//𝑆(𝑥,𝑖) and𝑆( ¯𝑥,𝑗) , opened against𝑀 ¯𝑥
+𝑗
+22:𝑄←await 𝑡𝑥 :{(𝑗,𝑧,𝜋)←ReqestSymbol(𝑚,id,𝑝 𝑥(𝑖,𝑗)):
+𝑚∈nodes, 𝑗=NodeIndex(𝑚,nodes),
+VerifyOpening(𝑀 ¯𝑥
+𝑗,𝑧,𝜋,𝑖)}
+23:𝑋←{(𝑗,𝑧):(𝑗,𝑧,𝜋)∈𝑄}⊲verified symbols
+24:𝑆 (𝑥,𝑖)
+0 ←ErasureDecode(𝑋,𝑡 𝑥,𝑛)⊲source symbols
+25:𝑆 (𝑥,𝑖) ←ErasureEncode(𝑆 (𝑥,𝑖)
+0 ,𝑡𝑥,𝑛)⊲fully extended sliver
+26:ifMerkleTree(𝑆 (𝑥,𝑖))≠𝑀 𝑥
+𝑖 then
+27:return(⊥,InconsistencyProof(𝑄))⊲see section 4.4
+28:return(𝑆 (𝑥,𝑖),⊥)
+// Recover slivers for this node (symbol-level)
+29:procedureRecoverSlivers(id,nodes)
+30:if¬ReadCertificate(id)then return⊥⊲only past the PoA
+31:𝑀←RetrieveMetadata(id)
+32:⊲required to verify openings; defined in algorithm 2
+33:(𝑀 p,𝑀 s)←𝑀
+34:𝑖←NodeIndex(N,nodes)⊲this node’s row/column index
+35:(𝑆 (s,𝑖),𝜑)←RecoverSliver(id,nodes,𝑖,𝑀,s)⊲secondary first
+36:if𝜑≠⊥then return𝜑⊲inconsistency proof
+37:(𝑆 (p,𝑖),𝜑)←RecoverSliver(id,nodes,𝑖,𝑀,p)
+38:if𝜑≠⊥then return𝜑⊲inconsistency proof
+39:db 𝑏[id]←(𝑆 (p,𝑖),𝑆(s,𝑖))⊲persist both slivers
+40:db 𝑚[id]←(EncodeMetadata(𝑀) 𝑖,
+Opening(𝑀 p,𝑖),Opening(𝑀 s,𝑖))
+41:returnok
+9
 
- 
- 
- References & Citations 
- 
- NASA ADS Google Scholar 
- Semantic Scholar 
- 
- 
- 
+George Danezis et al.
+Table 2: Main notations used in theW alrusalgorithms.
+𝐸(𝑖,𝑗) Symbol at position(𝑖,𝑗)of an encoded blob
+𝑆p The set of primary slivers
+𝑆s The set of secondary slivers
+𝑆(p,𝑖) The primary sliver held by storage node𝑖
+𝑆(s,𝑖) The secondary sliver held by storage node𝑖
+{𝑆(p,∗)}𝑓+1 Any set of𝑓+1primary slivers
+𝑆(𝑥,𝑖)
+0 The source symbols of the sliver𝑆(𝑥,𝑖)
+¯𝑥The sliver type other than𝑥, i.e., ¯p=s
+𝑡𝑥 Reconstruction threshold:𝑡 p =2𝑓+1,𝑡 s =𝑓+1
+𝑝𝑥(𝑖,𝑗)Position of the symbol shared by𝑆 (𝑥,𝑖) and𝑆( ¯𝑥,𝑗)
+𝑀The blob metadata(𝑀 p,𝑀 s)
+𝑀p Metadata associated with the primary slivers
+𝑀s Metadata associated with the secondary slivers
+ℎThe blob commitment over the metadata𝑀
+idThe blob ID, i.e.,Hash(ℎ,size)
+6.1 Write Completeness
+We show thatRed Stuffsatisfies Write Completeness. Informally,
+if an honest writer writes a blob 𝐵 to the network, every honest
+storage node eventually holds a correctly encoded primary and
+secondary sliver of𝐵. For this part we assume the writer is honest
+and provides a correct vector commitment𝑀.
+Lemma 1(Primary Sliver Reconstruction).If a party holds a set
+of(2𝑓+ 1) symbols{𝐸(𝑖,∗)}2𝑓+1 from a primary sliver 𝑆(p,𝑖) , it can
+obtain the complete primary sliver𝑆 (p,𝑖) .
+Proof. The proof directly follows from the reconstruction prop-
+erty of erasure codes with reconstruction threshold(2𝑓+1).□
+Lemma 2(Secondary Sliver Reconstruction).If a party holds a set
+of(𝑓+ 1) symbols{𝐸(∗,𝑖)}𝑓+1 from a secondary sliver 𝑆(s,𝑖) , it can
+obtain the complete secondary sliver𝑆 (s,𝑖) .
+Proof. The proof directly follows from the reconstruction prop-
+erty of erasure codes with reconstruction threshold(𝑓+1).□
+Theorem 1.Red Stuffsatisfies Write Completeness (definition 1).
+Proof. To write a blob 𝐵, an honest writer 𝑊 sends at least
+(2𝑓+ 1) correctly encoded slivers (parts) to different storage nodes,
+along with a binding vector commitment𝑀 over those slivers. For
+these nodes the property holds by definition. Now let us assume a
+node𝑖 that is not in the initial2𝑓+ 1recipients. The node will ask
+every node 𝑗 for the shared symbols in its primary (i.e.,𝐸(𝑖,𝑗) ) and
+secondary (i.e.,𝐸(𝑗,𝑖) ) sliver. Given the binding vector commitment
+𝑀, node 𝑗 can either send the true symbols or not reply. Since at
+least2𝑓+ 1nodes acknowledged 𝑀, node𝑖 will get𝑓+ 1correct
+symbols for its primary sliver{𝐸(𝑖,∗)}𝑓+1 and𝑓+ 1correct symbols
+for its secondary sliver{𝐸(∗,𝑖)}𝑓+1 . From lemma 2, this means that
+𝑖will reconstruct its full secondary sliver𝑆 (s,𝑖) .
+Since this reasoning applies to any generic node𝑖, it holds for all
+nodes. As a result, eventually all2𝑓+ 1honest nodes will reconstruct
+their secondary slivers𝑆(s,∗) . Every time a node 𝑗 reconstructs its
+secondary sliver, it also replies to node𝑖 with the shared symbol,
+which is part of the primary sliver of 𝑖 (i.e., 𝐸(𝑖,𝑗) ). As a result,
+eventually𝑖 will go from {𝐸(𝑖,∗)}𝑓+1 to{𝐸(𝑖,∗)}2𝑓+1 . This allows
+node𝑖to apply lemma 1 and reconstruct its primary sliver𝑆 (p,𝑖) .
+Since this reasoning applies to any node𝑖, it holds for all nodes
+and concludes the proof that all honest nodes will eventually hold
+both their primary and secondary slivers.□
+6.2 Read Consistency
+We prove thatRed Stuffsatisfies Read Consistency. Informally, if
+two honest readers read a blob𝐵 stored on the network, they either
+both eventually obtain𝐵or both eventually fail and obtain⊥.
+Theorem 2.Red Stuffsatisfies Read Consistency (definition 1).
+Proof. Note that the encoding scheme is deterministic and the
+last step of reading is to re-run the encoding and reconstruct𝑀. As
+a result, a reader that accepts the read as correct needs to output𝐵.
+The challenge with Read Consistency is whether the writer can
+convince two readers that collect different slivers to output𝐵 and
+⊥, respectively. Let us assume that two honest readers𝑅1 and𝑅2
+read a blob𝐵 from the network and𝑅1 eventually obtains𝐵 while
+𝑅2 eventually obtains⊥.
+There are two scenarios for𝑅 2 to output⊥:
+(1)𝑅 2 gets 𝑓+ 1replies that match the vector commitment 𝑀
+and tries to reconstruct. After reconstruction, re-encoding, and
+recomputing the vector commitment, it does not match𝑀.
+(2) Some node failed to reconstruct its secondary sliver. By the
+algorithm, this node will hold a proof of inconsistency, which
+it will send to𝑅 2.
+In either scenario,𝑅1 should also have detected the inconsistency
+during the reconstruction and output ⊥; otherwise, the binding
+property of the vector commitment would not hold. Hence a con-
+tradiction.□
+6.3 Validity
+We prove thatRed Stuffsatisfies Validity. Informally, if an honest
+writer writes a correctly encoded blob 𝐵 to the network, every
+honest reader eventually obtains𝐵.
+Theorem 3.Red Stuffsatisfies Validity (definition 1).
+Proof. To write a blob𝐵, an honest writer𝑊 constructs𝑛 cor-
+rectly encoded slivers (parts) along with a binding vector commit-
+ment𝑀 over those slivers. Since the writer is honest, from theo-
+rem 1, at least2𝑓+ 1honest storage nodes will hold their respective
+slivers. Let nodes denote the entire set of storage nodes. An honest
+reader queries each storage node𝑁∈nodes for its primary slivers,
+verifies each against𝑀, and, once it holds𝑓+ 1, uses them to recon-
+struct𝐵. Since all honest storage nodes will eventually reply to the
+reader and𝑊 was honest, the reader will eventually obtain𝐵. □
+7 Evaluation
+Our evaluation aims at demonstrating the following claims:
+C1W alrusachieveslow latency, bounded by network delay.
+C2W alrusclients achievehigh read and write throughput.
+C3W alrusreconfigures and recoverswithout downtime.
+To make the evaluation as realistic as possible, we perform mea-
+surements on the publicWalrusdeployments described below,
+10
 
- 
- export BibTeX citation 
- Loading... 
- 
+W alrus: An Efficient Decentralized Storage Network
+thus exposing the system to real-world conditions, real users, and
+infrastructure outside our control.
+7.1 Production Deployments
+TheW alrusprotocol has powered a decentralized production test-
+net since October 2024 (redeployed in April 2025), and a main-
+net since March 2025. The storage nodes and clients on these
+networks are written in asynchronous multi-core Rust. They use
+axum [25] for HTTPS networking, fastcrypto [ 14] for cryptogra-
+phy, rocksdb [13] for storage, reed-solomon-simd [16] for erasure
+coding, and Sui [23] as a fast blockchain. The code is open-source
+and available at https://github.com/MystenLabs/walrus.
+Both networks use the same encoding parameters with 1000
+shards across approximately 100 storage nodes, although the num-
+ber of nodes and their shard distribution varied slightly over time.
+The following values were observed on 2026-07-29:6
+Mainnet.TheWalrusmainnet comprises 95 storage nodes in 17
+countries, the top 5 in terms of the total stake being the USA, Fin-
+land, the Netherlands, Germany, and Lithuania. No single country
+has more than1/3of the stake. Besides Europe and North America,
+nodes are also located in the APAC and LATAM regions. Nodes
+hold between 4 and 26 shards (median: 7, P90: 22).
+Most storage nodes run a recent LTS version of Ubuntu with at
+least 16 CPU cores, 128 GB RAM, and 1 Gbps bandwidth. Hardware
+varies across Intel and AMD CPUs and HDD, SSD, and NVMe
+storage. Nodes offer between 7.0 TB and 2.03 PB of storage (median:
+55 TB, P90: 100 TB, P99: 362 TB). The total system capacity (encoded
+size) is 4.00 PB, 56% of which is currently used. 7 Aside from the
+large storage capacity, nodes are modestly provisioned similarly to
+typical quorum-based blockchains [24].
+Since the public launch in March 2025, 17.6 million unique blobs
+have been registered by 9,675 wallets with a total unencoded size
+of 686 TB, 477 TB of which is still active. The maximum number
+of blobs certified in one day was around 834,000 on 2025-04-02
+(approximately 10 blobs per second). The maximum total unen-
+coded size of blobs certified in one day was 21.0 TB on 2026-01-29
+(corresponding to an average goodput of approximately 1.95 Gbps).
+Testnet.TheWalrustestnet comprises 101 storage nodes with a
+geographical and stake distribution similar to that of the mainnet.
+Node specifications are slightly lower, with most nodes having at
+least 8 CPU cores and 64 GB RAM. Storage capacities vary between
+322 GB and 75 TB (median: 5.0 TB, P90: 16.5 TB), resulting in a
+system capacity of 333 TB.
+7.2 Baselines
+The other two main operational decentralized storage networks are
+Filecoin and Arweave. To compareW alruswith Filecoin, we focus
+on two metrics: (1) the time until a client obtains an incentivized
+cryptographic guarantee that a file has been durably stored, and (2)
+6Committee, shard, and capacity values are read from the on-chain state. Blob counts,
+registered and active sizes, and peak-day figures are based on our index ofWalrus
+events on Sui. Country distribution is based on geolocation of the nodes’ public IP
+addresses. Hardware information was self-reported by operators in a questionnaire.
+Some of these values are also shown on https://walrus.chainviz.io.
+7The “system capacity” here refers to the contract-enforced capacity based on a vote
+by the committee. The total amount of storage reported by nodes in the committee is
+7.86 PB.
+Table 3: Time to write and read on Filecoin [ 8] and to store
+until finality on Arweave for 10 kB, 10 MB, 20 MB, 70 MB,
+and 135 MB files. Arweave reads are shown in figure 5.
+System Operation Latency
+Filecoin Write & secure seal 1.5 h
+Read from secured copy 3 h
+Arweave Store to finality (10 kB) 38 min
+Store to finality (10 MB–135 MB) 35–36 min
+the time to read the sealed (secured) copy, as opposed to a transient
+cached “hot” copy. Because Filecoin relies on resource-intensive
+proofs of storage [9], the latency to reach these guarantees is (within
+sector limits, up to 32 GiB) largely independent of file size. Table 3
+reports these latencies: 1.5 hours to write and seal, and 3 hours to
+read the sealed copy [8].
+Arweave guarantees storage through its mining algorithm,
+which takes tens of minutes and allows it to quickly fulfill storage
+promises when compared to Filecoin. Table 3 illustrates the end-
+to-end latency to store blobs of varying sizes on Arweave. Write
+latency averages 35 to 38 minutes, regardless of the blob’s size,
+highlighting that the bottleneck is in the mining algorithm.
+The following sections demonstrate thatWalrus’s separation
+of consensus from data storage results in latencies that are orders
+of magnitude smaller than those of both Filecoin and Arweave.
+7.3 System Performance
+We evaluatedW alrus’s performance on thepublic testnetby collect-
+ing latency and throughput measurements as of 2026-01-12 from
+an AWS m5d.8xlarge instance (10 Gbps bandwidth, 32 vCPUs,
+128 GB RAM) located in US East (N. Virginia). This client was used
+for evaluation and is not part of theW alrustestnet.
+W alrusLatency.Figure 5 illustrates the end-to-end latencies of
+Walrusfor 50 stores and reads of random blobs of various sizes.
+Up to four blobs were written or read concurrently; all blobs were
+written before any were read. The measurements span from before
+the client encodes the blob until it creates a PoA on the blockchain,
+which is after finality but may be before all 1000 shards have re-
+ceived their respective slivers.
+The read latencies of bothW alrusand Arweave were low, even
+for large blobs. OnWalrus, blobs up to 135 MB were read in less
+than 5 seconds. By contrast, Arweave’s read latencies were around
+25 seconds for the 135 MB files. This difference follows from how
+the two systems retrieve data: aW alrusclient requests 𝑓+ 1pri-
+mary slivers concurrently from several different storage nodes
+(algorithm 2), each carrying roughly1/(𝑓+ 1) of the blob, so the
+download aggregates the bandwidth of the nodes it contacts and is
+ultimately limited by the client’s own link. An Arweave client in-
+stead downloads the entire file from a single node, whose resources
+are also shared with the consensus protocol.
+Median write latencies onW alruswere higher than read laten-
+cies and remained less than 20 seconds for blobs up to 135 MB. For
+small blobs, less than 20 MB, the write latencies were consistently
+11
 
- 
- 
- 
- BibTeX formatted citation 
- × 
- 
- 
- loading... 
- 
- 
- Data provided by: 
- 
- 
- 
- 
- Bookmark 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- Bibliographic Tools 
- 
- Bibliographic and Citation Tools 
- 
- 
- 
- 
- 
- 
- Bibliographic Explorer Toggle 
- 
- 
- 
- Bibliographic Explorer ( What is the Explorer? ) 
- 
- 
- 
- 
- 
- 
- 
- Connected Papers Toggle 
- 
- 
- 
- Connected Papers ( What is Connected Papers? ) 
- 
- 
- 
- 
- 
- 
- Litmaps Toggle 
- 
- 
- 
- Litmaps ( What is Litmaps? ) 
- 
- 
- 
- 
- 
- 
- 
- scite.ai Toggle 
- 
- 
- 
- scite Smart Citations ( What are Smart Citations? ) 
- 
- 
- 
- 
- 
- 
- 
- 
+George Danezis et al.
+0 25M 50M 75M 100M 125M
+Blob Size (B)
+0
+5
+10
+15
+20
+25Latency (s)
+Walrus Read
+Walrus Write
+Arweave Read
+Figure 5: Median read and write latencies for various unen-
+coded blob sizes onW alrusand read latencies on Arweave.
+Arweave writes require minutes and so are presented in ta-
+ble 3. Error bars indicate the 5th and 95th percentile latencies.
+1Ki 64Ki 8Mi 16Mi 32Mi 64Mi
+0.0
+2.6
+10.0
+20.0
+30.0
+40.0
+50.0Latency (s)
+Check status
+Publish PoA
+Register
+Encoding
+Data upload
+Figure 6: Latencies for various operations during a single blob
+upload for various sizes. The data upload latency indicates
+the latency to upload to all online shards, as opposed to the
+minimum necessary quorum.
+around 10 seconds. Both were significantly lower than Arweave’s
+write to finality, which required over 30 minutes (table 3).
+Figure 6 provides more details onW alrus’s write latencies for
+the various blob sizes. Each write operation consists of five key
+steps:encoding(erasure encoding the blob),check status(checking
+prior storage status of the blob),register(reserve space for the blob),
+data upload(uploading slivers to storage nodes and retrieving the
+signed acknowledgments that form the availability certificate), and
+publish PoA(committing the PoA to the blockchain).
+These operations either have constant latencies: check status,
+register, publish PoA; or variable latencies: encoding and data up-
+load. For these six blob sizes, the constant latencies were less than
+2.6 seconds. In contrast, most of the write time was dominated by
+0 25M 50M 75M 100M 125M
+Blob Size (B)
+0
+100M
+200M
+300M
+400MClient Throughput (B/s)
+Walrus Read
+Walrus Write
+Arweave Read
+Figure 7: Single-client throughput ofW alrusand Arweave
+for various unencoded blob sizes.
+the uploads of the slivers and metadata and the retrieval of the
+acknowledgments. For small blobs, this upload latency was pri-
+marily composed of the overhead for the constant-sized metadata
+uploads, but grew linearly from around 8 MiB upward. Therefore,
+these results validate our claimC1:W alrusachieves low latency
+and is bounded by network delays.
+Client Throughput.Figure 7 illustrates the throughput (in bytes per
+second) that a singleW alrusand Arweave client can achieve. The
+read throughput ofWalruswas measured by requesting stored
+blobs at a constant rate for 10–20 seconds (depending on the blob
+size) before increasing the request rate by 30–60 requests/minute
+and repeating. The throughput was then the highest constant re-
+quest rate before the first read failure (e.g., timeout). The write
+throughput was measured by performing uploads with a constant
+8 concurrent requests, the client’s configured concurrency, which
+was taken as a reasonable default for a commodity system. In both
+cases, the reported throughput is the request throughput multi-
+plied by the blob size. Arweave’s write throughput is omitted: its
+client communicates only with a central gateway, so we could not
+measure it reliably.
+As expected,W alrus’s read throughput increases with the blob
+size, as fewer requests for larger amounts of data better utilize the
+network connections between the client and the storage nodes.
+Accordingly, the single client achieved around 400 MB/s through-
+put for 135 MB blobs. By contrast, Arweave’s read throughput
+was severely limited by the blockchain interactions. TheW alrus
+client’s write throughput linearly increased to around 62 MB/s.
+The limiting factor here was the client’s configuration of 8 workers
+and concurrent requests. This could be relaxed until the bottleneck
+becomes the user’s CPU or network, as each worker maintains its
+own blockchain state and Sui supports a much higher throughput
+in transactions per second. However, this configuration is already
+sufficient to saturate many residential connections. In contrast,
+Arweave’s client plateaued at around 7 MB/s, which is the limit
+of the consensus protocol to agree on storing data. As such, these
+12
 
- 
- Code, Data, Media 
- 
- Code, Data and Media Associated with this Article 
- 
- 
- 
- 
- 
- 
- alphaXiv Toggle 
- 
- 
- 
- alphaXiv ( What is alphaXiv? ) 
- 
- 
+W alrus: An Efficient Decentralized Storage Network
+results validate claimC2:W alrusenables clients to read and write
+at high throughput.
+7.4 Epoch-Change Overhead
+The main overhead associated with the transition from oneW alrus
+epoch to another arises from shards being relocated across epochs,
+that is, when a shard assigned to a node in epoch𝑒 is reassigned to
+a different node in epoch𝑒+1.
+The transfer of a shard to another node requires sending slivers of
+all active blobs and, if the new owner was not part of the committee
+in epoch𝑒, all blob metadata. During ashard transfer, the previous
+owner of the shard sends the shard’s slivers to the new owner. If
+the previous owner is unwilling or unable to do so, the receiving
+node instead performsshard recovery.
+Shard reassignments on mainnet have been frequent but mostly
+small. Across the 36 epochs between the launch in March 2025 and
+July 2026, twelve epoch changes reassigned five or more shards:
+epochs 2, 6, 9, 11, 16, 20, 23, 27, 28, 30, 32, and 36. The largest
+reassignment moved 27 shards at epoch 2 (2025-04-08), when the
+network was young and held 4.4 million blobs; the largest since
+then moved 13 shards, at epochs 28 (2026-04-07) and 36 (2026-07-28).
+In at least three cases, shards were moved from a node that was
+no longer available, requiring the new owners torecovertheir new
+shards (epochs 17, 20, and 23). We describe two shardtransfersand
+two shardrecoveriesin further detail. 8
+At epoch 9 (2025-07-15), a joining node received 4 shards. For the
+9.9 million blobs that were live at the time, a total of 636 GB of blob
+metadata was transferred over 12.5 hours at around 113 Mbps; and
+79.5 million slivers, 890 GB, over 15.25 hours at around 129 Mbps.
+At epoch 11 (2025-08-12), a node holding 12 shards left the commit-
+tee and its shards were reassigned to twelve different nodes, one
+each. Every receiving node was already in the previous committee
+and therefore held the metadata, so only slivers had to be trans-
+ferred: 6.6 million primary and 6.6 million secondary slivers per
+shard, about 210 GB each and 2.5 TB in total. Since each receiver
+synchronized independently of the others, up to seven shards were
+transferred concurrently, at an aggregate rate of roughly 1.4 Gbps
+on average and 2.5 Gbps at peak, and the last shard completed about
+four hours after the epoch change.
+We also analyze two epoch changes that required recovery be-
+cause the node leaving the committee was no longer online to hand
+over its slivers. At epoch 17 (2025-11-04), a node holding 4 shards
+was removed, and each of its shards held slivers for approximately
+465,000 blobs.9 Three of these shards were reassigned to a single
+node, which recovered them sequentially in 17 to 21 hours each,
+and the fourth was recovered by another node. At epoch 20 (2025-
+12-16), a node holding 7 shards was removed and its shards were
+distributed across seven nodes, each recovering slivers for approx-
+imately 521,000 blobs. Five shards were recovered concurrently,
+which took approximately 64 hours in total. Recovery of one of the
+8Committee memberships and shard assignments are computed from the system object
+at each epoch. Sliver counts, transfer volumes, and durations are based on Prometheus
+metrics voluntarily reported by node operators, which is also how we distinguish
+transferred from recovered shards.
+9The drop in the number of blobs relative to earlier epochs is due to the fact that
+users started bundling multiple files within a single blob around June 2025 to reduce
+overheads and cost, and earlier blobs expired over time.
+other shards took 16 hours; the seventh recovery was interrupted
+and resumed only after its node came back online.
+These cases demonstrate thatWalruscan efficiently recover
+even from the complete failure of a node holding several shards.
+Note that in all of these cases,Walrusremained available for
+storing and reading data, thus validating claimC3.
+8 Related Work
+IPFS [2] provides a decentralized store for files, and is extensively
+used by blockchain systems and decentralized apps for their storage
+needs. It provides content-addressable storage for blocks, and uses
+a distributed hash table (DHT) to maintain a link between file
+replicas and nodes that store them. Publishers must pin files to
+storage nodes, usually for a fee, to ensure the files remain available.
+The underlying storage uses replication on a few nodes for each file.
+Filecoin [17] extends IPFS, using a longest-chain blockchain and
+a cryptocurrency (FIL) to incentivize storage nodes. Publishers
+acquire storage contracts with a few nodes, and payments are made
+in the cryptocurrency. Filecoin mitigates the risk that these nodes
+delete the replicas by requiring storage nodes to hold differently
+encoded copies of the file, and performing challenges against each
+other for the encoded files. These copies are encoded in such a way
+that it is slow to reproduce them from the original copy, to avoid
+relay attacks. As a result, if the user wants to access the original file,
+they need to wait a long time for the decoding of a copy, unless some
+storage node has a hot copy. Since there is no in-built incentive for
+storing hot copies, this service usually costs extra.
+Arweave [27] mitigates slow reads through a Proof-of-Access
+algorithm that incentivizes storage nodes to store as many files
+as possible to maximize rewards. This is implemented in conjunc-
+tion with a full replication strategy, and results in replication levels
+almost equal to those of classic state machine replication. Addition-
+ally, the system only allows files to be stored “forever”, through
+a mechanism of pre-payment—which lacks the flexibility to con-
+trol lifetime and deletion, and is capital-inefficient since payment
+is upfront.
+In contrast to Filecoin and Arweave,W alrususes erasure cod-
+ing to maintain a very low overhead of4.5× while ensuring that
+data survives the loss of up to2/3of the shards and that the sys-
+tem continues to accept writes even if up to1/3of the shards are
+unresponsive. Furthermore,W alrusdoes not implement its own
+separate blockchain for node management but uses Sui instead.
+Storj [21] is a distributed storage solution that leverages en-
+coding to achieve a low replication factor. Its deployed network
+implements a Reed-Solomon-based erasure-coding scheme with a
+29/80configuration [ 22], wherein a file is encoded into 80 parts,
+with any 29 sufficient for reconstruction. This approach results in a
+2.75× replication factor, offering a substantial reduction in storage
+costs compared to prior systems. However, a key limitation is its
+inability to efficiently heal lost parts. The system relies on users
+to reconstruct the full file and subsequently re-encode it to facil-
+itate the recovery of lost parts. In contrast,Walrus’s use ofRed
+Stuffincorporates an efficient reconstruction mechanism, which
+is critical for the healing property of the erasure-coding scheme,
+especially under the churn that occurs naturally in a permissionless
+system.Red Stuffbuilds on the Twin-code framework [ 11, 18],
+13
 
- 
- 
- 
- 
- 
- Links to Code Toggle 
- 
- 
- 
- CatalyzeX Code Finder for Papers ( What is CatalyzeX? ) 
- 
- 
+George Danezis et al.
+which uses two linear encodings of data to enhance the efficiency
+of sliver recovery. However, unlike Twin-code,Red Stuffencodes
+data across differently sized dimensions and integrates authenti-
+cated data structures, achieving Write Completeness (as defined in
+definition 1) and ensuring Byzantine fault tolerance.
+Modern blockchains provide some storage, but it is prohibitively
+expensive to store larger blobs due to the costs of full replication
+across all validators, as well as potentially long retention times to
+allow verifiability. Within the Ethereum ecosystem specifically, the
+current scaling strategy around L2s involves posting blobs on the
+main chain that represent bundles of transactions to be executed
+and verified via either zero-knowledge or fraud proofs. Specialized
+networks, such as Celestia, based on availability sampling [1], have
+emerged to fulfill this need off the main Ethereum chain. In Celestia,
+two-dimensional Reed-Solomon codes are used to encode blobs,
+and symbols are distributed to light nodes to support “trustless”
+availability. However, all blobs are fully replicated across the val-
+idators of the system for a limited time period of about a month.
+Walrusinstead offers proofs of availability with arbitrarily long
+retention periods and a reduced cost of storage per node, which
+allows the system to scale inexpensively.
+The most closely related work to ours is Semi-AVID [15], which
+has also been explored as an alternative to provide data availabil-
+ity for rollups. It is similar to the Strawman II design, meaning
+that although it can achieve the critical property of verifiable data
+storage, it cannot achieve Write Completeness unless the full data
+is reconstructed. This makes it prohibitively expensive for epoch
+change and only suitable for either permissioned systems with no
+churn or short-lived data storage. This is the main challenge with
+AVID [5], which is optimized to provide verifiability of data stor-
+age, disallowing the output of⊥. This is overkill, as a malicious
+writer can simply encode garbage data instead of a failed encoding.
+Hence, the machinery to detect and reject failed encodings that
+AVID provides is unnecessarily constraining and expensive.
+9 Conclusion
+We introduceW alrus, a novel approach to decentralized blob stor-
+age that leverages fast erasure codes and modern blockchain tech-
+nology. By utilizing theRed Stuffencoding algorithm and the
+Sui blockchain,Walrusachieves high resilience and low storage
+overhead while ensuring efficient data management and scalabil-
+ity. Our system operates in epochs, with all operations sharded
+by id, enabling it to handle large volumes of data. The innovative
+two-dimensional BFT encoding protocol ofRed Stuffallows for
+efficient data recovery, load balancing, and dynamic availability of
+storage nodes, addressing key challenges faced by existing decen-
+tralized storage systems.
+Furthermore,Walrusprovides a committee reconfiguration
+protocol that guarantees uninterrupted data availability during
+network evolution. Our contributions include defining the prob-
+lem of Asynchronous Complete Data Storage, presenting theRed
+Stuffprotocol, and providing a full end-to-end system design with
+W alrus, including a production-grade implementation and deploy-
+ment, paving the way for future advancements in decentralized
+storage technologies.
+Acknowledgments
+This work was funded by Mysten Labs. We would like to express
+our gratitude to Dmitri Perelman, He Liu, Pei Deng, Sadhan Sood,
+William Bradley, and Zhe Wu for their invaluable contributions to
+bringingWalrusto production and to Damir Shamanaev for his
+assistance in constructing the smart contracts that connectW alrus
+with the Sui blockchain. We extend a special thank you to Joachim
+Neu for identifying a serious vulnerability in our previous testnet
+implementation. This vulnerability was related to its use of RaptorQ
+for erasure coding and led us to replace RaptorQ with RS codes.
+References
+[1] Mustafa Al-Bassam, Alberto Sonnino, Vitalik Buterin, and Ismail Khoffi. 2021.
+Fraud and data availability proofs: Detecting invalid blocks in light clients. In
+Financial Cryptography and Data Security (FC). Springer, Berlin, Heidelberg,
+279–298. doi:10.1007/978-3-662-64331-0_15
+[2] Juan Benet. 2014. IPFS - Content addressed, versioned, P2P file system.
+arXiv:1407.3561 [cs.NI] doi:10.48550/arXiv.1407.3561
+[3] Nazanin Zahed Benisi, Mehdi Aminian, and Bahman Javadi. 2020. Blockchain-
+based decentralized storage networks: A survey.Journal of Network and Computer
+Applications162 (2020), 102656. doi:10.1016/j.jnca.2020.102656
+[4] Sam Blackshear, Andrey Chursin, George Danezis, Anastasios Kichidis, Lefteris
+Kokoris-Kogias, Xun Li, Mark Logan, Ashok Menon, Todd Nowacki, Alberto
+Sonnino, Brandon Williams, and Lu Zhang. 2024. Sui Lutris: A blockchain
+combining broadcast and consensus. InACM SIGSAC Conference on Computer
+and Communications Security (CCS). ACM, New York, NY, USA, 2606–2620.
+doi:10.1145/3658644.3670286
+[5] Christian Cachin and Stefano Tessaro. 2005. Asynchronous verifiable informa-
+tion dispersal. InIEEE Symposium on Reliable Distributed Systems (SRDS). IEEE
+Computer Society, Piscataway, NJ, USA, 191–202. doi:10.1109/RELDIS.2005.9
+[6] Dario Catalano and Dario Fiore. 2013. Vector commitments and their applications.
+InPublic-Key Cryptography (PKC). Springer, Berlin, Heidelberg, 55–72. doi:10.
+1007/978-3-642-36362-7_5
+[7] John R. Douceur. 2002. The Sybil attack. InInternational Workshop on Peer-to-Peer
+Systems (IPTPS). Springer, Berlin, Heidelberg, 251–260. doi:10.1007/3-540-45748-
+8_24
+[8] Filecoin. 2026. Network performance. Retrieved July 21, 2026 from https://docs.
+filecoin.io/networks-and-tools/networks/mainnet/network-performance
+[9] Ben Fisch. 2018. PoReps: Proofs of space on useful data. https://eprint.iacr.org/
+2018/678 Cryptology ePrint Archive, Paper 2018/678.
+[10] Chuanlei Li, Minghui Xu, Jiahao Zhang, Hechuan Guo, and Xiuzhen Cheng. 2024.
+SoK: Decentralized storage network.High-Confidence Computing4, 3 (2024),
+100239. doi:10.1016/j.hcc.2024.100239
+[11] Ninoslav Marina, Aneta Velkoska, Natasha Paunkoska, and Ljupcho Baleski.
+2015. Security in Twin-code framework. InInternational Congress on Ultra
+Modern Telecommunications and Control Systems and Workshops (ICUMT). IEEE,
+Piscataway, NJ, USA, 247–252. doi:10.1109/ICUMT.2015.7382437
+[12] Ralph C. Merkle. 1988. A digital signature based on a conventional encryption
+function. InAdvances in Cryptology (CRYPTO). Springer, Berlin, Heidelberg,
+369–378. doi:10.1007/3-540-48184-2_32
+[13] Meta Platforms. 2012. RocksDB. Retrieved July 21, 2026 from https://rocksdb.org
+[14] Mysten Labs. 2022. fastcrypto. Retrieved July 21, 2026 from https://github.com/
+MystenLabs/fastcrypto
+[15] Kamilla Nazirkhanova, Joachim Neu, and David Tse. 2022. Information dis-
+persal with provable retrievability for rollups. InACM Conference on Ad-
+vances in Financial Technologies (AFT). ACM, New York, NY, USA, 180–197.
+doi:10.1145/3558535.3559778
+[16] Anders Trier Olesen. 2023. reed-solomon-simd. Retrieved July 21, 2026 from
+https://github.com/AndersTrier/reed-solomon-simd
+[17] Yiannis Psaras and David Dias. 2020. The InterPlanetary File System and the
+Filecoin network. InIEEE/IFIP International Conference on Dependable Systems
+and Networks, Supplemental Volume (DSN-S). IEEE, Piscataway, NJ, USA, 80–80.
+doi:10.1109/DSN-S50200.2020.00043
+[18] K. V. Rashmi, Nihar B. Shah, and P. Vijay Kumar. 2011. Enabling node repair
+in any erasure code for distributed storage. InIEEE International Symposium on
+Information Theory (ISIT). IEEE, Piscataway, NJ, USA, 1235–1239. doi:10.1109/
+ISIT.2011.6033732
+[19] Irving S. Reed and Gustave Solomon. 1960. Polynomial codes over certain finite
+fields.J. Soc. Indust. Appl. Math.8, 2 (1960), 300–304. doi:10.1137/0108018
+[20] Fred B. Schneider. 1990. Implementing fault-tolerant services using the state
+machine approach: a tutorial.Comput. Surveys22, 4 (1990), 299–319. doi:10.1145/
+98163.98167
+14
 
- 
- 
- 
- 
- 
- DagsHub Toggle 
- 
- 
- 
- DagsHub ( What is DagsHub? ) 
- 
- 
- 
- 
- 
- 
- 
- 
- GotitPub Toggle 
- 
- 
- 
- Gotit.pub ( What is GotitPub? ) 
- 
- 
-
- 
- 
- 
- 
- 
- Huggingface Toggle 
- 
- 
- 
- Hugging Face ( What is Huggingface? ) 
- 
- 
-
- 
- 
- 
- 
- 
- ScienceCast Toggle 
- 
- 
- 
- ScienceCast ( What is ScienceCast? ) 
- 
- 
- 
-
- 
- 
- 
- 
- 
- 
- 
-
- 
- Demos 
- 
- Demos 
- 
- 
- 
- 
- 
- 
- Replicate Toggle 
- 
- 
- 
- Replicate ( What is Replicate? ) 
- 
- 
- 
- 
- 
- 
- 
- Spaces Toggle 
- 
- 
- 
- Hugging Face Spaces ( What is Spaces? ) 
- 
- 
- 
- 
- 
- 
- 
- Spaces Toggle 
- 
- 
- 
- TXYZ.AI ( What is TXYZ.AI? ) 
- 
- 
- 
- 
- 
- 
- 
- 
- Related Papers 
- 
- Recommenders and Search Tools 
- 
- 
- 
- 
- 
- 
- Link to Influence Flower 
- 
- 
- 
- Influence Flower ( What are Influence Flowers? ) 
- 
- 
- 
- 
- 
- 
- 
- Core recommender toggle 
- 
- 
- 
- CORE Recommender ( What is CORE? ) 
- 
- 
- 
- 
- 
- Author 
- Venue 
- Institution 
- Topic 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
-
- 
- 
- About arXivLabs
- 
- 
- 
- 
- arXivLabs: experimental projects with community collaborators 
- arXivLabs is a framework that allows collaborators to develop and share new arXiv features directly on our website. 
- Both individuals and organizations that work with arXivLabs have embraced and accepted our values of openness, community, excellence, and user data privacy. arXiv is committed to these values and only works with partners that adhere to them. 
- Have an idea for a project that will add value for arXiv's community? Learn more about arXivLabs . 
- 
- 
- 
- 
- 
- 
-
- 
- 
- 
- 
- Which authors of this paper are endorsers? |
- Disable MathJax ( What is MathJax? )
+W alrus: An Efficient Decentralized Storage Network
+[21] Storj Labs, Inc. 2018. Storj: A decentralized cloud storage network framework.
+https://www.storj.io/storjv3.pdf
+[22] Storj Labs, Inc. 2026. Understanding file repair in a distributed network. Retrieved
+July 30, 2026 from https://storj.dev/learn/concepts/file-repair
+[23] Sui Foundation. 2023. Sui. Retrieved July 21, 2026 from https://sui.io
+[24] Sui Foundation. 2026. Validator deployment and configuration. Retrieved July
+21, 2026 from https://docs.sui.io/guides/operator/validator/validator-config
+[25] Tokio. 2021. axum. Retrieved July 21, 2026 from https://github.com/tokio-
+rs/axum
+[26] David Vorick and Luke Champine. 2014. Sia: Simple decentralized storage.
+Whitepaper, Nebulous Inc. https://sia.tech/sia.pdf
+[27] Sam Williams, Viktor Diordiiev, Lev Berman, India Raybould, and Ivan Uemlianin.
+2019. Arweave: A protocol for economically sustainable information permanence.
+Arweave yellow paper, DRAFT-1. https://www.arweave.org/yellow-paper.pdf
+[28] Ennan Zhai, Ruichuan Chen, David Isaac Wolinsky, and Bryan Ford. 2014. Head-
+ing off correlated failures through Independence-as-a-Service. InUSENIX Sym-
+posium on Operating Systems Design and Implementation (OSDI). USENIX As-
+sociation, Berkeley, CA, USA, 317–334. https://www.usenix.org/system/files/
+conference/osdi14/osdi14-paper-zhai.pdf
+15

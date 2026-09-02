@@ -1,0 +1,938 @@
+Concurrency Control in Groupware Systems 
+C.A. Ellis 
+S.J. Gibbs 
+MCC, Austin, Texas 
+Abstract. Groupware systems are computer-based systems 
+that support two or more users engaged in a common task, 
+and that provide an interface to a shared environment. These 
+systems frequently require fine-granularity sharing of data 
+and fast response times. This paper distinguishes real-time 
+groupware systems from other multi-user systems and dis- 
+cusses their concurrency control requirements. An algorithm 
+for concurrency control in real-time groupware systems is 
+then presented. The advantages of this algorithm are its sim- 
+plicity of use and its responsiveness: users can operate di- 
+rectly on the data without obtaining locks. The algorithm 
+must know some semantics of the operations. However the 
+algorithm’s overall structure is independent of the semantic 
+information, allowing the algorithm to be adapted to many 
+situations. An example application of the algorithm to group 
+text editing is given, along with a sketch of its proof of cor- 
+rectness in this particular case. We note that the behavior 
+desired in many of these systems is non-serializable. 
+1. Introduction 
+Real-time groupware systems are multi-user systems where 
+the actions of one user must quickly be propagated to the 
+other users. An example that many find easy to relate to is 
+the multi-player game. Here the movement of one player’s 
+token, perhaps a tank or spaceship, triggers updates on the 
+displays of all players. Other examples can be found in the 
+area of computer-supported cooperative work [CSCW86, 
+CSCW88]. For instance, in real-time computer conferencing 
+[Sari&j], the users, who are often at different locations, com- 
+municate through a software medium. This software might 
+allow the users to view and modify a shared graph structure 
+[Stef87] or edit a shared outline [Elli88a]. Our research 
+group has been studying, and experimenting with these types 
+of systems for several years. We now recognize that there 
+are significant challenges in implementing these systems that 
+typically do not arise in other applications. Some of these 
+challenges [Elli88b] reside in the areas of group interfaces, 
+access control, social protocols, and coordination of group 
+operations. For instance, groupware introduces new com- 
+plexities to the user interface: the interface must depict 
+group activity, and designers must weigh the need for group 
+focus against the potential for distraction. Concurrency con- 
+trol also has novel aspects within groupware as we will dem- 
+onstrate in this paper. 
+An invocation of a groupware system is informally called a 
+session. Sessions in which we have participated are typically 
+Permission to copy without fee all or part of this material is granted provided that 
+the copies are not made or distributed for direct commercial advantage, the ACM 
+copyright notice and the title of the publication and its date appear, and notice is 
+given that copying is by pemksmn of the Association for Computing Machinery. 
+To copy otherwise, or to republish, requires a fee and/or specific pemkion. 
+0 1989 ACMO-89791~317-S/89/0005/0399 $1.50 
+an hour or two in length but may be much shorter or much 
+longer. At any point in time, a session consists of a group of 
+users called the participants. The session provides each par- 
+ticipant with an interface to a shared context, for instance 
+participants may see synchronized views of evolving data. 
+The system’s response time is the time necessary for the ac- 
+tions of one user to be reflected by their own interface; the 
+notification time is the time necessary for one user’s actions to 
+be propagated to the remaining users’ interfaces. 
+Real-time groupware systems are characterized by the fol- 
+lowing: 
+* highly interactive - response times must be short. 
+* real-time - notification times must be comparable to 
+response times. 
+* distributed - in general, one cannot assume that the 
+participants are all connected to the same machine or 
+even to the same local area network. 
+* volatile - participants are free to come and go during 
+a session. 
+*ad hoc - generally the participants are not following 
+a pre-planned script, it is not possible to tell a priori 
+what information will be accessed. 
+*focused - during a session there is high degree of 
+access conflict as participants work on and modify the 
+same data. 
+*external channel - often participants are connected 
+by an external (to the computer system) channel such 
+as an audio or video link. 
+It is useful to distinguish groupware systems from other 
+multi-user systems. For example, both database manage- 
+ment systems and timesharing operating systems support 
+multiple users. However neither of these are groupware since 
+they provide little notification - if one user performs some 
+action, perhaps inserting a tuple or creating a process, other 
+users are not normally notified of the action and may only 
+learn of it by explicitly querying the system. 
+One example of groupware is GROVE (GROUP Outline View- 
+ing Editor) [Elli88a], an outline editor which we imple- 
+mented in the Software Technology Program at MCC. It is 
+intended for use by a group of people simultaneously work- 
+ing on a textual outline. GROVE supports multiple views of 
+the outline, each view is displayed in a group window (a win- 
+dow replicated over a set of machines). A window may be 
+private, shared, or public. A GROVE group window is shown 
+in Figure 1. Participants can modify the underlying outline 
+by performing standard editing operations (insert, delete, 
+cut, paste, etc.) in the window, they may also open and close 
+parts of the outline (using the small buttons on the left side) 
+or change the read and write permissions of outline items. In 
+addition to displaying views, group windows also indicate 
+who is using the window. The window in Figure 1 will appear 
+on the workstations of the three users shown along the bot- 
+399 
+
+addition to displaying views, group windows also indicate cations do not appear to be suitable in this context. In the 
+who is using the window. The window in Figure 1 will appear following we identify some of the issues related to concur- 
+on the workstations of the three users shown along the bot- rency control in groupware systems and then discuss the 
+tom border. An important characteristic of this system is that 
+edits performed by any participant are rather immediately 
+seen on the screens of all participants (real-time notifica- 
+tion). 
+drawbacks of current approaches. 
+view id 
+1. Item l is readable and writable. 
+1.1 Item 1.1 is also readable and writable. 
+*. This private item is readable and writable. 
+*.* This private item is read-only. 
+rtgure 1 bmuvt group wmaow 
+A very closely related class of groupware systems is what 
+might be called non-real-time groupware. Examples are edi- 
+tors such as CES [Grie86], Quilt [CoheBB], or Shared Books 
+[LewiBB]. These editors allow a group of users to work on 
+the same document, however each user typically works on 
+their own section at their own pace. As a result sessions are 
+less focused and are longer in duration (days or even weeks 
+in length); also real-time notification may not be necessary 
+because of the asynchronous nature of participants’ actions. 
+Given these distinctions, the remainder of this paper will 
+concentrate upon real-time groupware, although we will sim- 
+ply use the term “groupware systems.” 
+In this paper we present an algorithm for concurrency control 
+in groupware systems. The next section explores issues re- 
+lated to concurrency control in this context and describes 
+problems with alternative approaches. In Section 3 we pro- 
+vide a model for groupware systems. The algorithm is devel- 
+oped in Section 4 and applied to GROVE in Section 5. Dis- 
+cussion of its correctness is presented in Section 6. 
+2. Concurrency Control Problem 
+Concurrency control is needed within groupware systems to 
+help resolve conflicts between participants, and to allow 
+them to perform tightly coupled group activities. For exam- 
+ple, with a group editor such as GROVE, clearly there is a 
+conflict if one participant deletes a sentence while a second 
+inserts a word into the sentence. The various approaches to 
+resolving these situations, such as explicit locking or transac- 
+tion processing, that have been developed for database appli- 
+2.1 Issues 
+wyS1WIS. Although there has been little experience in the 
+evaluation of interfaces to groupware systems [GrudBB, 
+E]]i89] it appears that some form of a WYSIWfS (what you 
+see is what I see) interface [Stef87] is necessary to maintain 
+group focus. If each user sees a slightly different or out-of- 
+date version then the session’s cohesiveness is soon lost. 
+WYSIWIS interfaces have two implications on concurrency 
+control. First response times are important - the time taken 
+to access data, modify data, or notify users of changes must 
+be as short as possible. Secondly, if the concurrency control 
+scheme entails the use of modes where actions of one user 
+are not immediately seen by the others, then the effect of 
+these modes on the group’s dynamics must be considered 
+and only allowed if they are not disruptive. 
+Wide-area Distribution. One of the main benefits of group- 
+ware systems is that they allow people to work together, in 
+real-time, even though separated by great physical distances. 
+Consequently these systems may be geographically distrib- 
+uted. With current communications technology, transmission 
+times and rates for wide-area networks are significantly 
+worse than those found in their local area counterparts, the 
+possible impact on response time musr be taken into ac- 
+count. 
+Replication. Because the response time demands of group- 
+ware systems are so high, the data state is usually replicated 
+for each participant. This allows many potentially expensive 
+operations to be done locally. For instance, consider an edit- 
+ing session where one participant is in Los Angles and the 
+400 
+
+other Austin. Typically each participant would be working in 
+a windowing environment. If the object being edited is not 
+replicated then even simple scrolling operations require com- 
+munication between the two sites. The resulting degradation 
+in response time may be catastrophic. 
+Robustness. Traditionally robustness refers to recovery from 
+unusual circumstances, typically these are component fail- 
+ures - the crash of a site or a communications link. While 
+these are also concerns of groupware systems, there is also a 
+second form of robustness these systems must achieve, in 
+particular, robustness to user actions. For example, the addi- 
+tion of a new user to the set of users issuing transactions on 
+a database is not normally considered a major problem. 
+However, with groupware systems, the addition of a partici- 
+pant may result in what amounts to a reconfiguration of the 
+system. Clearly the concurrency control algorithm must 
+adapt to such reconfigurations and in general recover from 
+“unexpected” user actions (abruptly leaving the session, go- 
+ing away for coffee, . ..). 
+2.2 Other Approaches 
+Locking. One solution to concurrency control is simply to lock 
+data before it is modified. For instance, in an editor such as 
+GROVE, outline items could be locked whenever a user 
+places their cursor over an item. There are a number of tech- 
+niques suited to interactive environments which decrease the 
+probability of a lock request being refused. For example, 
+with “tickle locks” [Grie86], a request to a locked resource 
+will be granted if the current holder is inactive. Another tech- 
+nique is to provide participants with visual indicators of 
+locked resources [Stef87] and so decrease the likelihood of 
+requests being issued for locked objects. There are three 
+main problems with locking: First there is the overhead in 
+requesting and obtaining the lock, this may include waiting if 
+the data is already locked. In any case there will be a degra- 
+dation in response time. Secondly, there is the question of 
+granularity. In a text editor it is not clear just what should be 
+locked when the user moves the cursor to the middle of a 
+line and inserts a character. Should the enclosing paragraph 
+or sentence be locked, or just the word or character? Fine 
+granularity locking is less constraining to the participants but 
+entails greater overhead. The third problem is determining 
+when locks should be requested and released. Using the pre- 
+vious example, should the lock be requested when the cursor 
+is moved or when the key is struck? The system should not 
+burden the user with these questions but it is hard to auto- 
+matically embed locking into editor commands. For exam- 
+ple, if locks are released when the cursor is moved then a 
+user could move to one place to copy some text only to be 
+locked out from pasting it into their previous location. 
+Transactions. Transaction mechanisms have been used for 
+concurrency control in interactive multi-user systems (for 
+example, CES or Quilt), but, these are loosely-coupled sys- 
+tems and have less demanding response time requirements. 
+For groupware systems there are a number of problems. 
+First there is the complication of distributed concurrency 
+control algorithms based on transaction processing and the 
+subsequent cost to response time. Secondly, if transactions 
+are implemented using locks there are the problems men- 
+tioned above, while if some other method is used, such as 
+timestamps, a user’s actions may be aborted by the system. 
+(Only aborts explicitly requested by the user should become 
+visible at the user interface.) Generally, transactions are not 
+well suited to interactive use, for instance a user with two 
+transactions active in separate windows on the same object 
+would be presented with two different data states - it would 
+be better if the windows showed the same state. 
+There appears to be a basic philosophical difference between 
+databases and groupware systems. The former strive to give 
+each user the illusion of being the only user of the system, 
+while groupware systems strive to make the actions of each 
+user visible to the others. Thus the shielding of one user 
+from seeing the intermediate states of another’s transaction 
+is in opposition to the goals of interactive groupware sys- 
+tems. There has been some work on “opening up” transac- 
+tions [BancBS] however the emphasis of this work has been 
+on coordination of nested transactions rather than elimina- 
+tion of the constraints imposed by locking and transactions. 
+Single Active Participant. Some real-time computer-con- 
+ferencing systems are intended for situations where only one 
+participant at a time “has the floor” [Lant86]. Access to the 
+floor may be controlled by software or through an external 
+protocol (for example, verbal agreement by the participants). 
+The main problem with this approach is that it is limited to 
+just those situations where having a single active participant 
+fits the dynamics of the session, in particular, it is not suited 
+for sessions with much parallelism among participants. It 
+may overly inhibit the free and natural flow of information 
+among participants. Additionally, if change of floor is left to 
+an external protocol then participants’ errors in following the 
+protocol, or non-cooperation (refusal to follow the protocol), 
+can result in two participants believing they have the floor 
+(and potentially issuing conflicting operations). 
+Dependency-detection. One recent proposal for concurrency 
+control in groupware systems is the dependency-detection 
+model [Stef87]. Dependency detection is based on the use of 
+timestamps to detect conflicting operations; conflicts are re- 
+solved by manual intervention. The great advantage of this 
+method is that no synchronization is necessary, non-conflict- 
+ing operations are performed immediately upon receipt, so 
+response is very good. Mechanisms which involve the user, 
+in general, are appropriate and valuable in groupware appli- 
+cations. However, any method which requires user interven- 
+tion to assure data integrity is vulnerable to user error. 
+Reversible Execution. This is another recent proposal for con- 
+currency control in groupware systems. With reversible exe- 
+cution [Sari85], operations are executed immediately but in- 
+formation is kept so that they may be undone later if neces- 
+sary. Many optimistic concurrency control mechanisms fall 
+within this category [Bern87]. A global time ordering in de- 
+fined for the operations (this may be provided by a central 
+sequencer or by ordering on timestamps and site identifiers). 
+When it is detected that two operations have been executed 
+out of order, they are undone and re-executed in the correct 
+order. As with dependency-detection, this method is very re- 
+sponsive. It’s disadvantages are the need of a global ordering 
+of operations and the unpleasant possibility that an operation 
+will appear on the user’s screen and later disappear because 
+it is undone. There are groupware systems in which the forc- 
+ing of a total ordering is inappropriate. This paper will show 
+an example of operations on a group editor where total or- 
+dering produces undesirable behavior. 
+The model and algorithm which we present next apply to 
+environments where the data is replicated at all sites. Control 
+is distributed and locking is not used. 
+3. The Model 
+A groupware system consists of a Set of participant Systems 
+connected by a communications network. We are particularly 
+concerned with a distributed workstation environment where 
+the local computing facilities associated with each participant 
+are capable of storing a significant subset of the operational 
+401 
+
+data, performing operations on this data locally, and option- 
+ally displaying the data via different user interfaces and dif- 
+ferent views. We call a participant system a site. There is one 
+site per user. Usually a site corresponds to a machine (the 
+user’s workstation), however some machines may run multi- 
+ple Sites. We assume that any site can communicate with any 
+other site. 
+More formally we model a groupware system by a structure 
+of the form G = -5, O> where: 
+S is a set of sites, 
+0 is a set of parameterized operators. 
+Each site consists of a site process, a site object, and a unique 
+site identifier. The site object is a passive data object. Since 
+the various users will be viewing different site objects, we 
+want to maintain consistency among site objects as much as 
+possible (i.e. site objects should look the same). A site ob- 
+ject’s structure is application specific; examples could in- 
+clude a document, a hypertext node, or a CAD design object. 
+The set 0 consists of operators defined on site objects. For 
+example, a simple text processing system might have a char- 
+acter string as its site object at all sites, and then define 0 as 
+{Ol, 02) where: 
+01 = insert[X; P] insert character X at position P 
+02 = delete[P] delete the character at position P 
+The operations which can be applied to any site object are 
+particular instances of the operators. In the previous case 
+this would be things like o = Ot[x; 31. Each operation 
+changes the state of the site object, for instance o(‘abc’) is 
+‘abxc’. 
+The site process performs three kinds of activities: 
+1) operation generation: an operation is specified by 
+the site’s user. The site process encapsulates the op- 
+eration in an operation request which is broadcast to all 
+sites. 
+2) operation reception: an operation request is received 
+from some site. 
+3) operation execution: an operation request is exe- 
+cuted. 
+We make the following assumptions: 
+Al the number of sites is constant, 
+A2 messages are received exactly once and without 
+error, 
+A3 it is not possible for a message to be executed be- 
+fore it is generated. 
+It is possible to extend this model and our algorithm to ac- 
+count for a varying number of sites over time. This extension 
+will be discussed at the end of this section. The second as- 
+sumption should be satisfied by the communications proto- 
+cols so we take it as given. 
+Given the above model, we now define correctness of a 
+groupware system. First, following Lamport [Lamp78], we 
+define a partial ordering of all operations in terms of the 
+local generation and execution sequences. 
+Definition. Given operations o and p, generated by sites s 
+and t, then o precedes p iff: 
+1) s = t and the generation of o happened before the gen- 
+eration of p, or 
+2) s # t and the execution of o at t happened before the 
+generation of p. 
+Definition. The Precedence Property states that if one opera- 
+tion, 0, precedes another, p, then at each site the execu- 
+tion of o happens before the execution of p. 
+Definition. A groupware session is quiescent iff all generated 
+operations have been executed at all sites, that is, there 
+are no requests in transit or waiting to be executed by a 
+site process. 
+Definition. The Convergence Property states that site objects 
+are identical at all sites at quiescence. 
+Definition. A groupware system is correct iff the convergence 
+property and the precedence property are always satisfied. 
+One possible solution is to extend the partial ordering ob- 
+tained from precedence to a total ordering. If operations are 
+executed in this order at all sites then both the precedence 
+and convergence properties are satisfied and the system is 
+correct. The total ordering may be obtained by the use of a 
+distributed algorithm [Lamp781 or by use of a centralized 
+coordinator process. (Using a coordinator, a request is first 
+sent to the coordinator which then broadcasts the request to 
+all sites.) However, in addition to lack of robustness, there 
+are two problems with relying on a total ordering. First, re- 
+sponsiveness is lost since operations are not executed when 
+requested but after some delay. Secondly, if a user requests 
+an operation, their user interface should then be locked until 
+the request has been executed - otherwise a following re- 
+quest will refer to the current state of the site object but will 
+be performed when the site object is in a possibly different 
+state. 
+We seek a solution where the only constraint on execution 
+order is the precedence property. The problem is that the 
+precedence property does not imply the convergence prop- 
+erty. This can be seen by looking at non-commuting opera- 
+tions. For instance, take the system G = <{Sl S2,}, {delete)> 
+and the operation orderings shown in Figure 2. 
+:f-Jz ~~: Sl Sp -sites+ Sl t 
+SP 
+Figure 2 Non-overlapping (a) and Overlapping (b) Operations 
+In the non-overlapping case, 01 precedes 02 and both sites 
+execute the operations in the same order resulting in conver- 
+gence. However, when the operations “overlap” there is no 
+precedence among 01 and 02. The order of execution need 
+not be the same at each site and the system may not con- 
+verge. For example, if 01 = delete[3] and 02 = delete[2] then: 
+01 o on(‘abcd’)) = ol(‘acd’) = ‘ac’ 
+02 o ot(‘abcd’)) = o&abd’) = ‘ad’ 
+(Here o indicates composition of operations.) 
+Even more troublesome is the case where the deletes overlap 
+and refer to the same position. Here, since neither site sees 
+the other’s delete before generating its delete, we would like 
+each site to only delete one character and treat the second 
+delete as redundant. However, there is no serial ordering of 
+the two delete operations which produces the desired result- 
+in either case an extra character is deleted. This is one ex- 
+ample of non-serializable behavior. Much of the literature 
+concerning database concurrency and replicated systems de- 
+fines correctness in terms of serializability. This example 
+suggests situtations where non-serialized correctness criteria 
+are needed. 
+402 
+
+The approach we propose is that, faced with situations such 
+as the above, instead of executing 01 o 02 at one site and 02 O 
+01 at the other, we execute 01’ o 02 and 02’ o 01 where 01’ 
+and 02’ are transformed operations. 01’ and 02’ are obtained 
+from 01 and 02 respectively, and calculated so that 01’ 0 02 
+when applied to a site object has the same effect as 02’ 0 01. 
+In the following we describe how operations may be trans. 
+formed and when this should be done. 
+4. The Algorithm 
+we Will now look at a concurrency control algorithm for 
+groupware systems which is based upon the notion of opera- 
+tion transformation. This algorithm has a number of proper- 
+ties which make it suitable for groupware. First, operations 
+are performed immediately on their originating site, thus re- 
+sponsiveness is good. Secondly, locks are not necessary so 
+all data remains accessible to group members. Finally, the 
+algorithm is fully distributed, and resilient to site failure (in 
+the sense that the remaining sites can continue without inter- 
+ruption) . 
+Intuitively, the algorithm works as follows. When an opera- 
+tion is generated at a site, the site process executes the op- 
+eration, generates a priority for the operation, and sends in- 
+formation including the operation and its priority to all other 
+sites. When an operation is received at a site (site 0, auxil- 
+iary information is examined to see if the sending site exe- 
+cuted operations which have not yet been executed at site i 
+(i.e., a “future operation”). If so, the operation is queued; if 
+not, the operation is executed. If site i has executed opera- 
+tions which have not yet been executed at the sending site 
+(i.e., a “past operation”), then the priority of the operation is 
+checked and the operation may be transformed before it is 
+executed. In the remainder of this section, we describe this 
+algorithm more precisely. The priority is based upon the site 
+identifiers, and is application dependent. Therefore it will be 
+explained in section 6 in the context of our group editor ap- 
+plication. 
+4.1 Transformation Matrix 
+Tron@-motion Matrix. The transformation matrix is the key 
+to resolving conflicting operations. Given a groupware sys- 
+tem G = &, O>, then G’s transformation matrix, T, is an m X 
+m matrix, where m is the cardinality of the set 0. Each com- 
+ponent of T is a function which transforms operations into 
+other operations. Given two operations or and Oj, with Priori- 
+ties pi and pi, and which are instances of operators 0, and 
+0,) let: 
+aen T is such that following is satisfied: 
+0) 0 Oi 6 O(! 0 Oj 
+This represents a necessary, but not sufficient condition. 
+Specification of a general, sufficient condition is an elusive 
+endeavor. We consider this specification further in the next 
+section in conjunction with our group editor example. 
+4.2 Data Structures 
+Stare Vectors. Let N be the number of sites in the system (We 
+are assuming that IV is constant). Each site has a unique 
+identifier, the site ID (for example its network address). For 
+simplicity assume that the sites are identified by the integers 
+1 . . . N. The state vector of site j, is a N component Vector 
+where the i’th component indicates how many operations 
+from site i have been executed by j. Given two state vectors, 
+Si and Sj, we say that: 
+1) Si = Sj if each component of Si is equal to the 
+corresponding component in Sj, 
+2) Si < Sj if each component of Si is less than or 
+equal to the corresponding component in 
+Sj and at least one component of Sr is less 
+than the corresponding component in 9 
+(Si < Sj provided Sr < 9 or Si = 3). 
+3) Si > Sj if at least one component of Si is greater 
+than the corresponding component in sb 
+Requests. Requests are tuples of the form 4, s, o, p7 where i 
+is the originating site’s identifier, s the originating site’s state 
+vector, o is an operation, and p is the priority associated with 
+0. 
+A request’s state vector is used to enforce the precedence 
+property. For instance, in both cases shown in Figure 3, site 
+S2 can determine from rp’s state vector that according to the 
+dORT algorithm, it must await the arrival of rl before exe- 
+cuting r2’s operation. 
+pq pf+J time 
+si 32 so Sl SP ’ 
+Figure 3 Precedence Detection 
+Request Queue. Requests waiting to be executed by a site 
+process are kept in the site’s request queue. A request, <j, s, 
+o. p7, in Qi, the request queue for site i, indicates that o has 
+been requested by site j while in state s. An entry is added to 
+the request queue when: 1) the site process receives a re- 
+quest from the network, or 2) the site process receives a re- 
+quest from site’s user. Entries are removed from the request 
+queue when the site process determines that the requested 
+operation may be executed. (Note, although we use the term 
+“queue,” entries need not be removed in first-in-first-out 
+order.) 
+Request Log. Each site process maintains a log of requests 
+executed at its site. A request, <j, s, o. ~7, in Lie the log for 
+site i, indicates that site i while in state s, executed operation 
+o (requested by site J). The log is ordered by insertion so it is 
+possible to find the first entry, the most recent entry, and to 
+step through in insertion order. 
+4.3 The Distributed Operational Transformation 
+((IOPT) Algorithm 
+We now give a specification of what we call the distributed 
+operational transformation (abbreviated as dOIT) algorithm. 
+The following is the algorithm as executed by the i’th site 
+process. 
+Initialization: 
+Qi+emPty 
+Lt + empty 
+Si + CO, 0, a*.( O> 
+403 
+
+Generate Operations: 
+receive operation o from the user interface 
+calculate the priority, p, of CJ 
+Qi + Qi + 4, pi, 0, p> 
+broadcast 4, si, o, ps to all other sites 
+Receive Operations: 
+receive <j, 9, Oj, Pi> from the network 
+Qi t Qi + 4, 9, Ojt Pj> 
+Execute Operations: 
+for each <j, 9, ob Pi> E Qi where Sj 2 Sj begin 
+Qi + Qi - <j, SjB Oj Pi> 
+if Sj < Si 
+<k, Sk, ok, pk> + most recent entry in Li 
+where 4 I sj (or B if none) 
+d0 while 4, Jic, ok, &> # 0 and Oj # 0 
+if the k’th component of Sj 
+is s the k’th component of $ 
+let u be the index of 01 (Oj is an instance of 0,) 
+let v be the h&X of ok (ok is an instance of 0,) 
+Oi + Tuv(“j* Ok, Pjs Pk) 
+fi 
+<k, a, ok, pk> + next entry in Lj (or 0 if none) 
+od 
+fi 
+perform operation Oj on i’s site object 
+Li C Li + <j, Sj, Oj, Pj> 
+si c Si with j’th component incremented by 1 
+end 
+The initialization section simply sets the site’s log and re- 
+quest queue to empty and initializes the site’s state vector. 
+The second section receives a local operation (from the site’s 
+user), forms a request which is added to the request queue 
+Qi, and broadcasts the request to the other sites. The third 
+section adds requests from the network to the request queue. 
+The bulk of the algorithm deals with operation execution. 
+The request queue is examined for requests, rj = <j, 9, 0) 
+Pi>, which may be executed. Whether rj can be executed is 
+determined by comparing 9 to the site’s state vector si; there 
+are three possibilities: 
+Case I: 9 > Si 
+The request cannot be executed at this time (site j 
+has executed operations which have not yet been 
+executed by site i) and so is left on the queue. 
+Case II: Sj = Sj 
+When the two states are equal Oj is executed imme- 
+diately without transformation. 
+Case III: Sj C Si 
+In this case the request can also be executed. How- 
+ever, since rj refers to a state “older” than site i’s 
+current state, Oj must first be transformed. Site i’s 
+log, Li, is examined for requests which were not 
+accounted for by site j (i.e., requests which i has 
+executed but which were not executed on j prior to 
+the generation of rj). Each such logged request is 
+then used to transform Oj. 
+The second and third case both lead to the execution of Oj. 
+When this occurs the operation is applied to the site object, 
+added to the log, and the state vector is incremented. 
+4.4 Quiescence 
+As mentioned at the beginning of this section we have made 
+a number of assumptions (fixed number of sites, no failures) 
+that could in practice limit the usefulness of this algorithm. 
+Furthermore, as it stands, the algorithm has a continuously 
+growing data structure (the log) which must be scanned when 
+calculating a request’s priority and when transforming opera- 
+tions. These problems can be solved by regularly quiescing 
+the system. Quiescence should be enforced periodically (e.g., 
+once per minute) and when the system falls quiet for an ex- 
+tended period of time (e.g., ten seconds). Detection of quies- 
+cence is equivalent to the well known distributed consensus 
+problem; algorithms for this problem may also detect site 
+failures (dependent upon the characteristics of the underly- 
+ing processing and message systems). When the system is 
+quiescent the log can be reset (set to null) and participants 
+can enter and leave the session. Furthermore the session ob- 
+ject can be check-pointed by each site. 
+5. An Example 
+We now consider the four transformation matrix entries for 
+the insert and delete operations. This transform is applied in 
+cases where the sending site is different from the receiving 
+site. We are thus assured that i is not equal to j; therefore (as 
+we shall see in the next section) the priority pi does not 
+equal Pi, If we have two operations Oi = insert[Xi; Pi] and Oj 
+= insert[X$ Pj] originating from sites i and j then T11 is de- 
+fined as: 
+Tll(Oi, Oj, pi, Pi) = 0; where 
+if(Pi < Pj) 
+0; = insert[Xi; Pi] 
+else if(Pi > Pj) 
+0; = insert[Xj; Pj t l] 
+else I’ Pi = Pj “I 
+if(Xi = Xj) 
+0; = 0 
+else 
+n(Pi > Pj) 
+0; = insert[Xi; Pj + l] 
+else I* pi < Pj ‘i 
+0; = insert[Xj; Pi] 
+fl 
+fi 
+fi 
+There are two interesting cases in the definition of T11. First, 
+when the arguments of both operations are equal, 0; is set to 
+null. The reason is that since i #j (T is never applied to pairs 
+of operations from the same site) it must be that two differ- 
+ent sites have requested the same operation before seeing 
+each others’ request, hence it is possible to ignore one re- 
+quest. The second interesting case is when Pi = Pj (i.e., the 
+positions are equal), such conflicts are resolved by using the 
+priority order associated with each request. Priority is used 
+for tie-breaking when similar operations are initiated concur- 
+rently. All nodes must order these in the same way. One 
+would think that a priority consisting Of the unique Site ID 
+would be sufficient, but we will see in the next section that it 
+is not. The priority of an operation used in T is a composite 
+of its predecessor’s priority and its originating site ID. 
+404 
+
+The remaining entries of T are quite simple, we list them 
+here for completeness: 
+‘M(delete[Pi], delete[Pj], pi, pj) = 0; where 
+if(Pi < Pj) 
+0; i delete[Pi] 
+else if (Pi > Pj) 
+0; = delete[Pi - l] 
+else 
+0; = 0 
+fi 
+Ttn(insert[Xi; Pi], delete[Pj], pi, pi) = 0; where 
+if(Pi < Pj) 
+0; = inSert[Xi; Pi] 
+else 
+0; = inSert[Xj; Pi - l] 
+fi 
+T2t(delete[Pi], insert[Xj; Pi], pi, pi) = 0; where 
+if(Pi < Pj) 
+0; = del&[Pi] 
+else 
+0; = delete[Pi + l] 
+fi 
+6. Discussion of Correctness 
+Lets consider the above examples where the operations are 
+GROVE editor operations being applied to textual outlines. 
+The session object for GROVE is a tree of outline items 
+where each item contains text. Rather than specify T in full 
+for all of GROVE’s operators, we will restrict consideration 
+to the simplification where the session object is a character 
+string, and the two operators are 01 = insert[X; P], and 02 = 
+delete[P] as previously defined. 
+Lets examine the workings of our algorithm for the session 
+shown in Figure 4 which has three sites and multiple overlap 
+ping operations. We first do this using the site number as the 
+priority. Suppose that initially the site object is the null string 
+at all sites and that site 1 initiates operation insert[x;l]; site 
+2 initiates insert[y;l]; and site 3, insert[z;l]. At site 3, the z 
+is first appended to the site object, then the insert x opera- 
+tion arrives. Although its priority is lower, it is appended in 
+front of the z (due to temporal precedence). Finally the in- 
+sert y operation arrives and its priority is compared to both 
+of the previous two operations. Since its priority (2) is lower 
+insert 2 
+insert y 
+time 
+sites -c 3 1 2 
+Figure 4 Mixed Priority Example 
+than that of site 3, it is changed by the transform T to in- 
+Sett[y;2] and is inserted after the x and before the z. The 
+final string is xyz. 
+At site 2, it first prefixes y to its session object, and then 
+prefixes z from site 3. When the insert x operation arrives 
+from site 1, its priority is compared to that of the previously 
+executed insert y operation, and this causes the incoming 
+operation to be changed to insert[x;2]. Note that due to tem- 
+poral precedence, the operation’s priority is not compared to 
+the insert z from site 3. The final string at this site is zxy 
+which is inconsistent with the xyz at node 3. 
+In Figure 4, the x generated by the operation instigated by 
+site 1 must occur to the left of the z instigated by site 3 
+because the participant at site 1 saw the insertion of the z, 
+and then explicitly requested an operation which would place 
+an x in the position in front of (to the left of) the z. Transfor- 
+mations and other insert operations could cause other char- 
+acters to be inserted between the x and the z, but to satisfy 
+our correcmess criteria, they should not cause the x to occur 
+after (to the right of) the z in the final string. 
+Temporal precedence suggests a problem with one of the 
+transforms in the session depicted by Figure 4. At site 2, the 
+position parameter of the insert x operation is incremented 
+before it is executed. The intent is to move the x past the y 
+which has higher precedence, but the actual effect is to move 
+the x past the z which violates the temporal precedence con- 
+straint. At this point we might try changing the transform 
+rule so that if the priority of x is less than the priority of y, 
+then we put x to the left of y (rather than to the right as we 
+proposed above.) Although this patch works in this case, it 
+fails in other rather similar cases; the problem is deeper than 
+this and requires a different type of solution. 
+The fundamental difficulty with this example is the dilemma 
+that our rules require x to be placed before y and y to be 
+placed before z and z to be placed before x. This dilemma 
+arises because node 2 has a precedence that separates a 
+predecessor priority (3) from its successor’s priority (1). Our 
+suggested solution is to define the priority of an operation as 
+a list composed of its largest predecessor’s priority, concate- 
+nated with its own site ID, so that an unrelated operation’s 
+priority can never separate them. Note that this priority cal- 
+culation only needs to be applied to operations with the same 
+position parameter. In this example, the operation insert x 
+would have a priority of (3,l) which is a list containing its 
+site ID preceded by its predecessor’s ID. The priority of (3,l) 
+as well as its predecessor (3) is defined to be larger than the 
+priority (2), so this operation will have a very similar priority 
+to its predecessor. We next state the generalization of this 
+which works for an arbitrary directed acyclic graph (dag) of 
+operations, and sketch the outline of its proof. 
+Priority Calculation: The priority of an operation Oi is calcu- 
+lated at the originating site at the time of execution, and is 
+included when the operation is sent to all other sites. If there 
+are operations in the local log whose original position (before 
+transformation) is equal to the operation being initiated, then 
+the highest of these priorities is chosen and the local site ID 
+is appended to it to form the priority of Oi. If there are no 
+such operations in the local log, then the priority is simply 
+the local site ID. 
+Priority Comparison: Two priorities are compared element by 
+element, from beginning of the list to the first element in 
+which they differ. Which ever is larger at the element where 
+the lists differ has the higher priority. If one list is a sublist 
+of the other, then one operation is a predecessor of the other. 
+405 
+
+We choose the longer list to have higher priority so that the 
+successor will be placed to the left of the predecessor in the 
+session object. 
+Proof Outline: The details of the full proof are beyond the 
+scope of this paper, so we only sketch the main ideas here. 
+Each operation arrives with its state vector and its priority. 
+An invariant which is useful within our proof is the position 
+counter. Each inserted character may be shifted to the left or 
+right during the course of its session, and the net amount of 
+this shift at a particular site is the position counter for that 
+character. Note that this shifting may be explicit by way of 
+transformations applied to the operation when it is being 
+executed, or implicit when a later executed operation inserts 
+or deletes another character at the same or an earlier posi- 
+tion in the string. 
+The proof that the proposed algorithm using the priority list 
+scheme is correct proceeds by showing that (1) the same 
+value will be attained for the position counter of an arbitrary 
+character no matter what ordering of operations is used (Con- 
+sistency), and (2) if Oi occurs before Oj at the same insertion 
+position, then the position counter of Oi will be greater than 
+the position counter of Oj (temporal precedence). 
+The operations performed in a session could arrive at a pas- 
+sive site (i.e. a site which initiates no operations) in any or- 
+der. Any arrival ordering of these operations can be obtained 
+from any other ordering by a sequence of transpositions of 
+adjacent operations. Therefore the proof of correctness can 
+proceed by showing that the correctness properties are main- 
+tained during any transposition. 
+We will not examine all cases, but consider the critical case 
+in which two overlapping insert operatioris at the same posi- 
+tion, Oi = insert[xi; P] and Oj = insert[xj; P], are transposed. 
+The following discussion argues that the values of the posi- 
+tion counters for these inserted characters (denoted by q 
+and Cj), and those of other operations, is not altered by the 
+transposition. 
+Since these operations overlap, we know that neither is a 
+temporal precedent to the other. Assume without loss of gen- 
+erality that the priorities are pi c Pi. Whenever Oi is executed 
+before Oj, the log is searched and Ci is altered from the in- 
+itial value of P to some new value Pi; later when Oj is exe- 
+cuted, Xj is inserted before Xi causing Xi to be implicitly 
+shifted to the right. Thus in this case, the value of Cj after Oi 
+and Oj complete is Pi+l. If we now transpose, and if Oj is 
+executed before Oi, then Oi encounters the same log items, 
+but it also encounters Oj in the log. At this encounter, Ci is 
+incremented, so that its final value is Pi+1 in this case also. 
+NOW consider the operation Oj. First suppose Oj is executed 
+before Oi. Let Cj have some value Pj after the execution of Oj. 
+Then when the log is examined during the processing of Oi, 
+since Oj'S priority is higher than Oi, Cj is not incremented. In 
+the case where Oj is executed after Oi, it sees Oi in the log, but 
+priority considerations leave Cj unincremented. So the value 
+of Cj is unchanged by the transposition. Obviously, the trans- 
+position has no effect upon the counters of other operations 
+in the session, so our argument is complete. 
+In the case of temporal precedence between the operations 
+being transposed, queuing will necessarily occur so that the 
+order of actual execution is not changed. To verify the tem- 
+poral precedence property, one must argue from the defini- 
+tions of the priority list and the priority calculation to infer 
+that if Oi occurs temporally before Oj, then the position 
+counter of Oi will always be greater than the position counter 
+Of Oj (Ci > Cj). 
+We have not discussed the case involving insertions at differ- 
+ent positions. The position counter of a character is affected 
+by insertion of a character at a smaller valued position (ear- 
+lier in the string), but not by insertion at a larger valued 
+position. There is no need to use priority numbers in this 
+case. We have also not discussed cases involving deletion. 
+These cases are easier because deletions are frequently com- 
+mutative. If Oi and Oj are deletions, then Oi followed by Oj is 
+frequently the same as Oj followed by Oi. 
+7. Conclusions and Future Developments 
+This paper has introduced the notion of groupware, and pre- 
+sented a novel algorithm for concurrency control within 
+groupware systems. Groupware reflects a change in empha- 
+sis from using the computer to solve problems to using the 
+computer to facilitate human interaction. For these systems 
+to be accepted requires fine-granularity sharing of data, 
+rapid response time, and rapid notification time. Therefore, 
+the algorithm presented does not use locking, performs non- 
+serializable sets of operations, and works in a workstation 
+environment with replicated data and distributed control. 
+This algorithm was presented in the context of GROVE, a 
+group editor which we have implemented within the Software 
+Technology Program at MCC. It also seems applicable to 
+other groupware such as hypertext systems. Notice that in 
+these systems, users frequently apply associative access tech- 
+niques rather than accessing objects by name. Thus, within a 
+text editing application, users browse and point at the items 
+they want to update; the individual characters are not given 
+separate immutable names or unique addresses. 
+Future work includes generalizing the characterization of our 
+transform matrix, and extending our proof technique to en- 
+compass hypertext and other groupware. We will also con- 
+tinue to incorporate these ideas within groupware systems 
+which we are constructing, and will be constructing in the 
+future. We have been developing and applying the notion of 
+a team automaton to model and prove various properties of 
+groupware systems. We hope that this will be useful in our 
+correctness proof extensions. In conclusion, we believe that 
+the new emphasis on groupware suggests a number of inter- 
+esting and challenging frontiers. Perhaps this paper can help 
+to stimulate work at these frontiers. 
+Acknowledgements 
+Thanks to Gail Rein, the other member of the groupware 
+team, who put in much effort to help implement GROVE and 
+its user interface. Thanks also to Ira Forman, whose advice 
+and comments were very useful in our consistency and cor- 
+rectness work. We are pleased to acknowledge MCC and our 
+managers within the Software Technology Program at MCC 
+for creating a stimulating environment within which this 
+work could be done. 
+406 
+
+References 
+[Banc85] Bancilhon, G., Kim, W., and Korth, H.F. A Model 
+of CAD Transactions, Proc. Intl. Conv. on Very Large Data 
+Bases, pp. 25-33, 1985. 
+[Bern871 Bernstein, P., Goodman, N., and Hadzilacos, V. 
+Concurrency Control and Recovery in Database Systems, Ad- 
+dison-Wesley, 1987. 
+[Cohe88] Cohen, M., Fish, R., Kraut, R., and Leland, M. 
+Quilt: A Collaborative Tool for Cooperative Writing, 
+Proc. ACM SIGOIS ConJ, pp. 30-37, 1988. 
+[CSCW86] Proceedings of the Conference on Computer-Sup- 
+ported Cooperative Work (Austin, Tex., Dec. 3-S). ACM, 
+New York, 1986. 
+[CSCWSS] Proceedings of the Conjerence on Computer-Sup- 
+ported Cooperative Work (Portland, Or., Sept. 23-25). 
+ACM, New York, 1988. 
+[Elli88a] Ellis, CA., Gibbs, S.J., and Rein, G. Design and 
+Use of a Group Editor, Rep. STP-263-88, MCC Software 
+Technology Program, Austin, Tex., 1988. 
+[Elli88b] Ellis, C.A., Gibbs, S.J., and Rein, G. Groupware, 
+Rep. SIP-414-88, MCC Software Technology Program, 
+Austin, Tex., 1988. 
+[Elli89] Ellis, C.A., Rein, G.L., and Jarvenpaa, S.L. Nick 
+Experimentation: Some Selected Results, Hawaii Int. 
+Conf. on System Sciences, 1989. 
+[Grie86] Grief, I., Seliger, R., and Weihl, W. Atomic Data 
+Abstractions in a Distributed Collaborative Editing Sys- 
+tem, Proceedings of the 13th Annual Symposium on Princi- 
+ples of Programming Languages, pp. 160-172, 1986. 
+[Grud88] Grudin, J. Why CSCW Applications Fail: Prob- 
+lems in the Design and Evaluation of Organizational In- 
+terfaces, Proc. CSCW88, 1988. 
+[Lamp781 Lamport, L. Time, Clocks, and the Ordering of 
+Events in a Distributed System, CACM 21(7), pp. 
+558-565, 1987. 
+[Lant86] Lantz, K.A. An Experiment in Integrated Multime- 
+dia Conferencing, Proc. Conf. on Computer-Supported CO- 
+operative Work, pp. 267-275, 1986. 
+[Lewis81 Lewis, B. and Hodges, J. Shared Books: Collabora- 
+tive Publication Management for an Office Information 
+System, Proc. ACM SIGOIS Conf., pp. 197-204, 1988. 
+[Sari851 Sarin, S. and Grief, I. Computer-Based Real-Time 
+Conferences, Computer, 18(10), pp. 33-45, 1985. 
+[Stef87] Stefik, M., Foster, G., Bobrow, D.G., Kahn, K., 
+Lanning, S., and Suchman, L. Beyond the Chalkboard: 
+Computer Support for Collaboration and Problem Solving 
+in Meetings, CACM 30(l), pp. 32-47, 1987. 
+407 

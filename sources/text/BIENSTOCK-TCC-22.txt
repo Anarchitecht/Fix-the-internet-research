@@ -1,17 +1,2353 @@
-Client Challenge 
- 
- 
- 
- 
- 
- 
- 
- JavaScript is disabled in your browser. 
- Please enable JavaScript to proceed. 
- 
- 
- 
- 
- A required part of this site couldn’t load. This may be due to a browser
- extension, network issues, or browser settings. Please check your
- connection, disable any ad blockers, or try using a different browser.
+On the Worst-Case Ineﬃciency of CGKA
+Alexander Bienstock ∗ Yevgeniy Dodis † Sanjam Garg ‡ Garrison Grogan §
+Mohammad Hajiabadi ¶ Paul Rösler †
+September 18, 2022
+Abstract
+Continuous Group Key Agreement (CGKA) is the basis of modern Secure Group Messaging
+(SGM) protocols. At a high level, a CGKA protocol enables a group of users to continuously
+compute a shared (evolving) secret while members of the group add new members, remove other
+existing members, and perform state updates. The state updates allow CGKA to oﬀer desirable
+security features such as forward secrecy and post-compromise security.
+CGKA is regarded as a practical primitive in the real-world. Indeed, there is an IETF
+Messaging Layer Security (MLS) working group devoted to developing a standard for SGM
+protocols, including the CGKA protocol at their core. Though known CGKA protocols seem
+to perform relatively well when considering natural sequences of performed group operations,
+there are no formal guarantees on their eﬃciency, other than theO(n) bound which can be
+achieved by trivial protocols, wheren is the number of group numbers. In this context, we ask
+the following questions and provide negative answers.
+1. Can we have CGKA protocols that are eﬃcient in the worst case?We start by answering
+this basic question in the negative. First, we show that a natural primitive that we
+call Compact Key Exchange (CKE) is at the core of CGKA, and thus tightly captures
+CGKA’s worst-case communication cost. Intuitively, CKE requires that: ﬁrst,n users
+non-interactively generate key pairs and broadcast their public keys, then, some other
+special user securely communicates to thesen users a shared key. Next, we show that
+CKE with communication costo(n) by the special usercannot be realized in a black-box
+manner from public-key encryption, thus implying the same for CGKA, wheren is the
+corresponding number of group members.
+An extended abstract [10] of this article appears in the proceedings of TCC 2022.
+∗New York University,abienstock@cs.nyu.edu
+†New York University,dodis@cs.nyu.edu. Partially supported by gifts from VMware Labs and Algorand Foun-
+dation, and NSF grants 1815546 and 2055578.
+‡UC Berkeley and NTT Research,sanjamg@berkeley.edu. This research is supported in part by DARPA under
+Agreement No. HR00112020026, AFOSR Award FA9550-19-1-0200, NSF CNS Award 1936826, and research grants
+by the Sloan Foundation, and Visa Inc. Any opinions, ﬁndings and conclusions or recommendations expressed in
+this material are those of the author(s) and do not necessarily reﬂect the views of the United States Government or
+DARPA.
+§garrisonwgrogan@gmail.com
+¶University of Waterloo, mdhajiabadi@uwaterloo.ca. Work supported by an NSERC Discovery Grant
+RGPIN/03270-2022.
+†New York University,paul.roesler@cs.nyu.edu
+1
+
+2. Can we realize one CGKA protocol that works as well as possible in all cases?Here again,
+we present negative evidence showing that no such protocol based on black-box use of
+public-key encryption exists. Speciﬁcally, we show two distributions over sequences of
+group operations such that no CGKA protocol obtains optimal communication costs on
+both sequences.
+1 Introduction
+Secure Group Messaging (SGM) platforms such as Signal Messenger, Facebook Messenger, What-
+sApp, etc., are used by billions of people worldwide. SGM has received lots of attention recently,
+including from the IETF Messaging Layer Security (MLS) working group [8], which is creating
+an eponymous standard for SGM protocols. While these protocols’ security properties are well
+documented, understanding theireﬃciency properties remains a central research question.
+Continuous Group Key Agreement (CGKA) is at the core of SGM protocols. First formalized
+in [3], CGKA allows a group of users to continuously compute a shared (evolving) symmetric key.
+This shared group key is re-computed as users asynchronously add (resp. remove) others to (resp.
+from) the group, as well as execute periodic state refreshes. CGKA provides very robust security
+guarantees: it not only requires privacy of group keys from non-members, including the facilitating
+delivery server (which users send CGKA ciphertexts to, in case other group members are oﬄine),
+but much more. Even in the event of a state compromise in which a user’s secret state is leaked
+to an adversary, group keys should shortly become private again through ordinary protocol state
+refreshes. Furthermore, in face of such a state compromise, past group keys should remain secure.
+The former security requirement is referred to aspost-compromise security(PCS), while the latter
+is referred to asforward secrecy(FS).
+Ideally, for use in practice, CGKA protocols should use simple, well-established, and eﬃcient
+cryptographic primitives and haveO(logn) communication per operation (or at most sub-linear),
+wherenis the number of group members. Indeed, many CGKA protocols in the literature described
+belowclaimtohave“fair-weather”O(logn)communication, meaningthatwhenconditionsare good,
+communication cost per operation isO(logn). Such informal claims have pleased practitioners and
+supported their beliefs that CGKA can be used in the real-world. However, no such formal eﬃciency
+guarantees, nor any non-trivial deﬁnitions of suchgood conditions have ever been established.
+Indeed, as elaborated upon below, there are no formal analyses showing that a CGKA protocol can
+do any better than the trivialO(n) communication cost per operation, on any non-trivial sequence
+of operations.
+CGKA protocols in the literature. Many CGKA protocols have been introduced in the
+literature to provide the above security properties. The largest portion of these are based on a
+basic tree structure, as in the Asynchronous Ratchet Tree (ART) protocol [22] and the TreeKEM
+family of protocols [3, 9, 6, 5, 4, 11, 1], the simplest of which is currently used in MLS [8]. Most of
+these tree-based protocols are of the same approximate form (although they have slightly diﬀerent
+eﬃciency proﬁles; see [6] for a comparison based on simulations): each node contains a Public Key
+Encryption (PKE) key pair, users are assigned to the leaves and only store the secret keys on the
+path from their leaf to the root, and the root is the group secret. When a user executes an operation,
+they refresh the secret keys along the path(s) of one (or more) leaves to the root, encrypting these
+secrets to the siblings along the path(s). Thus, invery speciﬁcgood conditions, communication can
+2
+
+easily be seen to beO(logn). However, due to PCS requirements (elaborated on below), the trees
+in all of these protocols may periodicallydegrade, resulting inΩ(n) communication complexity in
+the worst case, even amortized over many operations.
+Instead of using a tree structure, Weidneret al. suggest using pairwise channels of the Con-
+tinuous Key Agreement scheme derived from the famous two-party Signal Secure Messaging pro-
+tocol [36, 30, 2, 21, 32, 14, 18]. However, this trivial construction of course requiresΩ(n) commu-
+nication per operation.
+In summary, all known CGKA protocols (based on public-key encryption) achieve the same
+worst-case eﬃciency as the trivial protocol.
+1.1 Our Results
+In this paper, we work towards understanding the possible eﬃciency guarantees thatany CGKA
+protocol can achieve in the worst-case, i.e., in cases when the conditions arenot good. We start by
+asking the following question:
+Can we construct a CGKA protocol that does better than the trivial CGKA protocol in the
+worst-case?
+We provide a negative answer to the above question. In particular, we show that every CGKA
+(from PKE) has large Ω(n) worst-case communication cost. Although one can hope that this
+worst-case will not occur often in practice, until there are better, well-deﬁned assumptions on the
+structure of operation sequences under which practitioners hope that good eﬃciency bounds can
+be proven, there is always a danger of bad eﬃciency in some cases. As the ﬁrst step of this lower
+bound, we show that a natural primitive which we callCompact Key Exchange(CKE) is at the core
+of CGKA, and in fact tightly captures the worst-case communication cost of CGKA. The heart of
+our negative result is then a black-box separation showing that PKE are insuﬃcient for eﬃciently
+realizing CKE. Finally, using the above equivalence, we translate this result into the aforementioned
+lower bound on CGKA.
+Given that no CGKA protocol can be eﬃcient in the worst case, we ask:
+Can we realize one CGKA protocol that works as well as possible in all cases?
+Here again, we present negative evidence showing that no such protocol based on black-box use
+of PKE exists. Speciﬁcally, we show two distributions over sequences of group operations such that
+no single CGKA protocol making only black-box use of PKE obtains optimal communication costs
+on both sequences. That is, any CGKA protocol which acts well on one distribution of operations
+must have much worseΩ(n) communication cost on the other distribution; otherwise, it violates
+our CKE lower bound.
+1.2 Compact Key Exchange
+To prove our CGKA lower bound, we ﬁrst isolate and deﬁneCompact Key Exchange(CKE), a
+novel primitive that captures one type of scenario that results in large CGKA communication.
+CKE is related to Multi-Receiver Key Encapsulation Mechanisms [34]. It involvesn users who
+each non-interactively broadcasts a public key, and another special user who sends thosen users
+an encryption of a symmetric key, which only then users can decrypt. As explained below, we will
+show that CKE isequivalent to CGKA, in terms of worst-case communication complexity.
+3
+
+1.3 Standard Security of Continuous Group Key Agreement
+Our CGKA lower bound focuses on the eﬃciency ramiﬁcations of post-compromise security (PCS).
+The standard form of PCS required for CGKA in the literature [3, 6, 22, 1] is in fact quite strong.
+Informally, it requires the following two properties:
+1. Double-join prevention.A malicious user may memorize randomness used in operations they
+execute. If they are removed from the group at a later time, they must be prevented from
+using this memorized randomness tore-join the group without invitation.
+2. Resilience to randomness leakage.An honest user’s malfunctioning device may continuously
+leak randomness which the user samples for CGKA operations (e.g., due to implementation
+ﬂaws or an installed virus). Once the leakage is stopped (due to updating the implementation
+or removing the virus) and the user performs a state update, the adversary must be prevented
+from using the previously leaked randomness to obtain future group secrets.
+Thus, once a user is removed, all group secrets should be independent of any randomness sampled
+by them. Similarly, if a user executes a state refresh, all new group secrets should be independent
+of any randomnesspreviously sampled by them.
+We emphasize that while the two properties above are rather strong, weakening PCS to exclude
+them (i.e., where we assume randomness is never leaked and securely deleted after each operation)
+yields many trivial CGKA protocols (from any PKE) withO(logn) worst-case communication. For
+example, one can simply use Tainted TreeKEM (TTKEM) [6]without taints.1 In all these protocols
+honest parties need to sample secrets for other parties, and are then trusted to delete them once
+communicated (encrypted) to these other parties. Clearly, most real-world implementations should
+not be comfortable with this level of trust, and should especially strive for property 1 above instead.
+Indeed, from very early on in the MLS standardization initiative, requiring property 1 was deemed
+important2 and ultimately prioritized over eﬃciency3 in the version of TreeKEM used by MLS [8,
+§13.1]. This protocol, as well as other existing protocols, such as TTKEM, explicitly prevent
+double-joins (e.g., by sometimesblanking or tainting nodes that are not on the path to the root
+from the leaf of a user that is executing an operation) at great eﬃciency cost;Ω(n) in the worst-
+case. Moreover, even though property 2 may seem especially strong, all CGKA deﬁnitions in the
+literature require both properties [3, 6, 22, 1], and our lower bound holds for both (in isolation).
+Nevertheless, we leave it as an interesting topic for future work to study what kind of eﬃciency
+guarantees can be obtained in a more restricted setting, where property 2 is not required.
+1.4 Equivalence of CKE and CGKA Worst-Case Communication Complexity
+The ﬁrst step in proving ourΩ(n) CGKA lower bound (from PKE) is showing that CKE and
+CGKA with the standard PCS notion detailed above are equivalent, both in terms of implication
+and worst-case communication complexity. It is important to note that in all our deﬁnitions of CKE
+and CGKA, we specify the weakest correctness and security requirements under which our lower
+1We give a more detailed summary of TTKEM in Appendix F.
+2First proposal of the TreeKEM design with a discussion about the double-join problem:https://mailarchive.
+ietf.org/arch/msg/mls/e3ZKNzPC7Gxrm3Wf0q96dsLZoD8/
+3Proposal to prevent double-joins in TreeKEM, resulting in linear complexity in the worst-case: https:
+//mailarchive.ietf.org/arch/msg/mls/Zzw2tqZC1FCbVZA9LKERsMIQXik/
+4
+
+bounds hold. This onlystrengthens our lower bound. For example, we only consider non-adaptive,
+passive adversaries.
+CKEisattheCoreofCGKA. InSection3, weshowthatCGKAimpliesCKEandfurthermore
+that the worst-case communication complexity of CKE from black-box PKE lower bounds that of
+CGKA from the same primitives. The intuition is as follows. Consider a CGKA group withn
+members at a certain time during its lifetime. To ensure that our lower bound is meaningful, we
+allow for any sequence of operations to be executed up until this point. Now, consider the situation
+in which userA adds k new users. If the CGKA protocol only uses PKE, then each added user
+only stores secrets (besides their own) that were generated by userA.4 If userB removes userA
+as the next operation, then due to PCS, every secret which thek added users shared with any of
+the current group members cannot be re-used; userA must have generated all of them and thus
+could potentially (maliciously) re-join the group without being added if one of the secrets is reused.
+Thus, as part of the remove operation, userB must communicate the new group key to each of the
+other k added users, with only the knowledge of their (independent) public keys. This is exactly
+the setting of CKE. Indeed ifk = Ω(n), and additionally we can show that the ciphertext size for
+CKE must beΩ(n), then we can show the same for when userB removes userA in CGKA above.
+Furthermore, if userC then removes userB, we are in the same situation again, and thus this
+ciphertext must also beΩ(n). We can repeat this scenarioad inﬁnitum, where after a user executes
+a remove in the sequence, they add a new user, such that even amortized over a long sequence of
+operations, the communication cost isΩ(n). We in fact further generalize this result in Section 3
+to intuitively show that ifαusers add thek new users then execute𝓁rounds of sequential state
+refreshes, the combined communication cost of each round isΩ(k).
+A bit more formally, we show how to construct CKE fork users from CGKA in a manner such
+that if the CGKA ciphertext is small for the above operation and the CGKA protocol only uses
+PKE in a black-box manner, then the corresponding CKE ciphertext is small, contradicting our
+lower bound for CKE, discussed below.
+Diﬀerence from lower bound of [11].It is important to mention that our CGKA communica-
+tion complexity lower bound already holds for fully synchronous, non-concurrent CGKA executions.
+Hence, the lower bound by Bienstocket al.[11] that uses symbolic proof techniques to show a com-
+munication lower bound for concurrently initiated operations in CGKA executions (with required
+fast PCS recovery5) is entirely independent with respect to our employed methods and resulting
+statement.
+CKE tightly implies CGKA. For completeness, in Appendix E we also show that one can
+use CKE to construct a CGKA protocol where the worst-case communication complexity of the
+CGKA protocol is proportional to that of the used CKE protocol. The CGKA protocol simply lets
+the user, executing a given CGKA operation, run the CKE algorithm of the special CKE user to
+communicate a fresh group key to the public keys of all current CGKA group members. Therefore,
+4Note: for any CGKA protocol, it could be that each of the addedk users may share secrets with all of the current
+group members, derived from non-interactive key exchange using key-bundles stored on a server. However, these
+shared secrets are only between pairs of users, and thus do not seem useful for establishing the group secret (since
+secure communication between pairs of users can already be achieved via PKE).
+5Unlike in [1] who circumvent the [11] lower bound by allowing for slower PCS recovery.
+5
+
+CGKA and CKE are surprisingly equivalent in terms of both cryptographic strengthand worst-
+case (communication) complexity; f one could construct CKE eﬃciently, they could also construct
+CGKA eﬃciently, and vice versa.
+1.5 Black-Box Compact Key Exchange Lower Bound
+InordertoprovetheCGKAlowerboundsdiscussedabove, weneedalowerboundontheunderlying
+CKE primitive. Therefore, in Section 4, we prove a black-box separation showing that all CKE
+protocols that make black-box use of public-key encryption (PKE) require the ciphertext sent from
+the special user to then users to have sizeΩ(n), irrespective of the sizes of the public keysthat
+the n users have sent to the special user. Our impossibility holds even if the scheme comes with
+a CRS, of arbitrary size. Ruling out schemes that allow for a CRS will help us with our CGKA
+lower bounds.
+Intuitively, since then public keys are generated independently from each other, our result
+implies that there is no non-trivial “compression” operation that the special user can do to save over
+the trivial protocol: choosing a key and separately encrypting the key to each user independently.
+Relations to broadcast encryption. We note that the notion of CKE is incomparable to
+that of broadcast encryption, at least in an ostensible sense. Recall that a broadcast encryption
+scheme is a type of attribute-based encryption that allows for broadcasting a message to a subset of
+users, in a way that the resulting ciphertext is compact. One crucial diﬀerence between broadcast
+encryption and CKE is that under CKE, users have independent secret keys, while under broadcast
+encryption, user secret keys are correlated, all obtained via a master secret key.
+Relations to other black-box impossibility results. The work of Boneh et al. [15] shows
+that identity-based encryption (IBE) is black-box impossible from trapdoor permutations (TDPs).
+A striking similarity between IBE and CKE is that both deal with some form of compactness: that
+of public parameters (PP) for IBE and of ciphertexts in CKE. The techniques of [15] crucially rely
+on the number of identities being much larger than the number of queries required to generate a
+public parameter. In our setting, this is no longer the case: the number of queries made by the
+encryption algorithm to generate a compact ciphertext may be much larger thann, and hence the
+techniques of [15] do not work in our setting. In addition, we allow the CRS to grow with the
+number of identities.
+Extensions and limitations of our impossibility results.We believe that out impossibility
+should extend quite naturally to separate CKE from trapdoor permutations (TDPs), though we
+have not worked out the details. Our impossibility results have no bearing on the base primitive
+being used in a non-black-box way, and indeed by using strong tools such as indistinguishability
+obfuscation (which inherently results in non-black-box constructions), one might be able to build
+compact CKE.
+Overview. Our impossibility result is proved relative to a random PKE oracleO := ( g, e, d).
+We give an attack against any CKE protocol (CRSGen, Init, Comm, Derive) (Deﬁnition 4.2)
+instantiated with O. To give some intuition about the attack, supposee is an encryption oracle,
+whose output length (i.e., the ciphertext length) is suﬃciently larger than its input length (i.e.,
+6
+
+the length of(pk,m,r )). This in particular implies that in order to get a valid(pk,c )—one under
+which there exists somem and r such that e(pk,m,r ) = c—one has to call the e oracle ﬁrst.
+Now if a CKE ciphertext forn users has lengtho(n), this means that one can “embed” at most
+o(n) valid e-ciphertexts intoC. Say the ciphertexts arec1,...,ct with corresponding public keys
+pk1,..., pkt, wheret∈o(n). This means that we need at mostt eﬀective trapdoors (with respect to
+O) to decryptC, namely the trapdoors that correspond to(pk1,..., pkt). Also, sinceC should be
+decryptable by each user, the set of “eﬀective” trapdoors for each user (those required to decryptC)
+should be a subset of all theset trapdoors. Now sincet =o(n), there exists a user whose eﬀective
+trapdoors are a subset of all other users. But since the CKE secret keys for all users are generated
+independently and with no correlations, if we run the CKE key generation algorithm many times,
+we should be able to recover all the required trapdoors, for at least one user. This is the main idea
+of the proof.
+The above overview is overly simplistic, omitting many subtleties. For example, ane-ciphertext
+that is decrypted may come from one of the public keysPK1,..., PKn (which can be arbitrarily
+large), and not fromC itself. Second, the notion of “embedded ciphertexts” inC is not clear. We
+will formalize all these subtleties in Section 4 and will give a more detailed overview there, after
+establishing some notation.
+New techniques. Our proofs introduce some techniques that may be of independent interest.
+Firstly, our proofs involve oracle sampling steps (a technique also used in many other papers), but
+one novel thing in our proofs is that we need to make sure that the sampled oracles do not contain
+a certain set of query/response pairs. In comparison, prior oracle sampling techniques involve
+choosing oracles that agree with a set of query/answer pairs. This technique of making certain
+query/response pairs oﬀ-limits, and the implications proved, might ﬁnd applications in proving
+other impossibility results. Moreover, our proofs use theorems about non-uniform attacks against
+random oracles [23, 20] to argue that ano(n) CKE ciphertext cannot embedn ciphertexts; we ﬁnd
+this connection novel.
+In Section 4, we will give an overview (and the proof) for the restricted construction setting in
+which oracle access is of the form(CRSGeng, Initg, Comme, Derived). This will capture most of
+the ideas that go into the full proof. We will then give a proof for the general construction case in
+Section C.
+1.6 No Single Optimal CGKA Protocol Exists
+In Section 5, we present another negative result for CGKA protocols that make black-box use of
+PKE. Naturally, CGKA protocols proceed in an online manner such that users do not know which
+operations will be executed next. Therefore, users have to make choices when executing operations
+that may result in unnecessary communication. We leverage this situation to show that there
+does not exist anysingle CGKA protocol that makes black-box use of PKE and that has optimal
+communication costs for every sequence that may be executed. More speciﬁcally, for every CGKA
+protocol Π, there exists some distribution of CGKA operationsSeq and some other CGKA protocol
+Π′such that Π has much higher communication costs thanΠ′when executing Seq.
+Our driving example is as follows: suppose again that starting with a CGKA group in arbitrary
+state, k users are added by userA and remain oﬄine. Next,αusers (including userA) execute
+state refreshes. In this case, some protocols might use a strategy which, through these state
+refreshes, create and communicate extra redundant secrets for thek added users, while others
+7
+
+may use a strategy which simply relies on those secrets communicated by userA. For the former
+strategy, if thek added users afterwards come online and execute their own state refreshes, then
+the communication of these extra secrets will have been unnecessary, and a protocol which follows
+the latter strategy will have much lower communication cost. However, for the latter strategy,
+if one of theα−1 users, user j, who only communicated a small amount (o(k)) in their state
+refresh thereafter remains oﬄine while the otherα−1 users execute rounds of sequential state
+refreshes, then we know from what we prove in Section 3 that each of the rounds will haveΩ(k)
+communication cost. This is intuitively because thek added users mostly share secrets with the
+α−1 users excluding userj, and thus when theseα−1 users perform state refreshes, they must
+re-communicate secrets to thek added users. On the other hand, a protocol that follows the former
+strategy can have much lower communication cost if the state refresh ciphertext of userj alone was
+large (Ω(k)). This is intuitively because thek added users still share enough secrets with userj,
+so that when the otherα−1 users execute their state refreshes, they do not need to communicate
+much new to the added users.
+1.7 Lessons Learned for Practice
+Our results show that the execution of a CGKA protocol causes impractical communication over-
+head amongst the group members if (1) the CGKA protocol is built from PKE only, (2) the CGKA
+protocol achieves the weakest accepted notion of security, and (3) group members of the protocol
+execution initiate certain non-trivial operation sequences. We note that, on an intuitive level, PKE
+are essentially the only building blocks of all practical CGKA constructions. Furthermore, all of the
+non-trivial operation sequences employed for our lower bounds are legitimate, andcould happen
+in practice. Consequently, impractical worst-case communication overheads seem to be inevitable.
+However, in order to avoid such impractical communication overheads, one could (a) try to ﬁnd
+suitable practical building blocksother than PKE to circumvent the lower bound, (b) lower the
+security requirements for CGKA (which we strongly advise against!), or (c) identifyall problematic
+operation sequences and then forbid their execution. We believe that (a) ﬁnding better construc-
+tions and (c) identifying all such problematic operation sequences are interesting questions that
+we leave open for future work. However, for (a), we emphasize that one would ultimately need to
+circumvent our CKE lower bound. Although one may be able to do so using strong primitives such
+as indistinguishability obfuscation (as in the multi-party non-interactive key exchange of [16]), we
+view it as a challenging problem to do so frompractical tools other than PKE.
+We provide some further consequences of our lower bound in practice below.
+CGKA with two administrators. Many real-world SGM systems in production may impose
+membership policies on users. That is, it could be that there are only a few “administrators” that
+are allowed to add and remove others from the group, while everyone else can only update their state
+and send messages. As shown by [12], for the setting in which there is only everone administrator,
+CGKA boils down to the classical setting of Multicast Encryption [35, 37, 28, 17, 29, 33, 13].
+Since there is only one administrator in Multicast,O(logn) communication complexity is easily
+achieved even with security property 1 above [12] (however, security property 2 already results
+in Ω(n) complexity for the administrator in Multicast). This is due to the fact that the sole
+administrator is never removed and executes all operations; thus she can use a tree as in some of
+the aforementioned CGKA protocols, and never allow it to degrade.
+8
+
+Therefore, a natural question is: In the setting of two administrators that can replace one
+another with new administrators, and where only property 1, but not property 2, is required for
+the administrators; can we retainO(logn) communication?6 One can observe that our above lower
+bound answers this question in the negative. Indeed, there only ever need to be two administrators
+in the group. If so, then as above, one administrator can addk users, then the second administrator
+can replace the ﬁrst with a new third administrator, then the third administrator can replace the
+second administrator, and so on. Thus, the jump from one to two administrators in the worst case
+requires communication to increase fromO(logn) to Ω(n) per operation, if security property 1 (and
+not 2) is required.
+MLS propose-and-commit framework. The latest MLS protocol draft (version 14) [8], uses
+the “propose-and-commit” framework for CGKA. In this framework, users can publish many mes-
+sages thatproposediﬀerent group operations (adding/removing others or updating their state), and
+a new group key is not established until some user subsequently publishes acommit message. The
+motivation behind this design is to allow for greater concurrency of CGKA operations: In prior
+drafts of MLS, users would attempt to establish a new group key with each operation. If many users
+desired to execute an operation at the same time and published corresponding CGKA ciphertexts,
+the delivery server would have to choose one such ciphertext to deliver to all group members (and
+thus only one of the group operations would be executed). With propose-and-commit, the delivery
+server still has to choose between commit messages, but many proposed group operations can be
+combined inside a single commit.
+We however observe that we can still apply our above CGKA lower bound to this framework.
+Indeed, consider the scenario wherein one user (resp. administrator)A proposes to addk users,
+then publishes a commit for these additions. Thereafter, some other user (resp. administrator)B
+can replaceA in a new proposal, then publish a commit for this replacement. Again, replacements
+can be repeated ad inﬁnitum, and it can easily be seen that each such commit will still cost
+Ω(n) communication. Hence, our result of Section 3 naturally holds in the propose-and-commit
+framework.
+2 Deﬁnitions
+In this section, we deﬁne syntax and non-adaptive, one-way notions of security for Continuous
+Group Key Agreement and Compact Key Exchange. First, we introduce some notation.
+Notation. For algorithmA,y←A(x;r) means thatA on inputx with randomnessr outputsy.
+If r is not made explicit, it is assumed to be sampled uniformly at random, and we use notation
+y←$ A(x). We will also use the notationx←$ X to denote uniformly random sampling from set
+X. We will use dictionaries for our CGKA security game. The value stored with keyx in dictionary
+D is denoted byD[x]. The statementD[∗]←v initializes a dictionaryD in which the default value
+for each key isv.
+6If neither administrator is removed, of courseO(logn) communication can be retained if they share a multicast
+tree.
+9
+
+2.1 Continuous Group Key Agreement
+In the simple, restricted form that we consider here,Continuous Group Key Agreement(CGKA)
+allows a dynamic set of users to continuously establish symmetric group keys. For participating
+in a group, a user ﬁrst generates a public key and a secret state via algorithmGen. With the
+secret state, a user can add or remove users to or from a group via algorithmsAdd and Rem.
+Furthermore, each user can update the secrets in their state from time to time to recover from
+adversarial state corruptions via algorithmUp. We call the latter three actionsgroup operations.
+After all users process a group operation via algorithmProc, they share the same group key. In
+order to analyze themost eﬃcientform of CGKA, we assume a central bulletin boardB to which
+public information on the current group structure is posted (initially empty). Thus, newly added
+users can obtain the relevant information about the group (which intuitively may be of sizeΩ(n)
+anyway, wheren is the current number of group members) fromB, instead of receiving it explicitly
+from the adding user. Note: the MLS protocol speciﬁcation indeed suggests the added user can
+obtain the group tree of the protocol (sizeΩ(n)) from a bulletin board (the delivery server) in this
+manner [8].
+In the following, the added user simply downloads theentire board. Of course, in practice, this
+would be very ineﬃcient, but this only strengthens our lower bound on the amount of communica-
+tion sent betweencurrent group members (as opposed to the amount of information retrieved from
+the bulletin board by added users).
+Deﬁnition 2.1.A Continuous Group Key Agreementscheme CGKA = (Gen, Add, Rem, Up,
+Proc) consists of the following algorithms:7
+• Gen is a PPT algorithm that outputs(ST, PK).
+• Add is a PPT algorithm that takes in (ST, PK), where ST is the secret state of the user
+invoking the algorithm andPK is the public key of the added user, and outputs(ST′,K,C ),
+where ST′is the updated secret state of the invoking user,K is the new shared group key, and
+C is the ciphertext that is sent to (and then processed by) the group members. For eﬃciency
+purposes,C = (CG,CB) consists of a shareCG that is sent to all group membersdirectly and
+a shareCB that is posted to the central bulletin boardB.
+• Rem is a PPT algorithm that takes in (ST, PK), where ST is the secret state of the user
+invoking the algorithm andPK is the public key of the removed user, and outputs(ST′,K,C )
+as above.
+• Up is a PPT algorithm that takes in secret stateST of the user invoking the algorithm and
+outputs (ST′,K,C ) as above.
+• Proc is a deterministic, polynomial time algorithm that takes in(ST,CG), where ST is the
+secret state of the user invoking the algorithm andCG is the ciphertextdirectly received for an
+operation, and outputs updated state and group key(ST′,K ). For users that were just added
+to the group,Proc additionally takes in bulletin boardB. If the operation communicated via
+C removes the processing user from the group,K is set to a special symbol⊥.
+7For the sake of comprehensible communication analysis, we do not provide an explicitCreate(ST, PK1,..., PKn)
+algorithm (for which in practice,Ω(n) ciphertext size could be tolerated). Instead, we require the group creator to
+one-by-one add PK1,...PKn, which allows us to prove a more meaningful lower bound on justAdd, Rem, and Up
+operations.
+10
+
+Initialization: Set (i)t = 0; (ii) W eakEpochs, W eakUsers=∅; and (iii)G[∗], Rand[∗], ST[∗], K[∗]←⊥.
+• Gen() executes (ST, PK)←$ Gen(), sets ST[PK]←ST, and returnsPK.
+• Add(PK, PK∗) ﬁrst aborts if (i)PK = PK∗; (ii)t⁄= 0 and PK /∈G[t]; or (iii)PK∗∈G[t]. Otherwise it:
+1. For randomly sampledr, setsRand[PK,t +1]←r and executes(ST[PK], K[t+1, PK], (CG,CB))←
+Add(ST[PK], PK∗;r).
+2. Sets G[t + 1]←G[t]∪{PK, PK∗}.
+3. For everyPK′∈G[t]\{PK}, executes(ST[PK′], K[t+1, PK′])←Proc(ST[PK′],CG). Also executes
+(ST[PK∗], K[t + 1, PK∗])←Proc(ST[PK∗],CG, B).
+4. If (W eakUsers\ G[t + 1])⁄=∅, sets W eakEpochs←W eakEpochs∪{t + 1}.
+5. Increments t←t + 1 and returns (CG,CB).
+• Rem(PK, PK∗) ﬁrst aborts if (i)t = 0; (ii) PK = PK∗; (iii) PK /∈G[t]; or (iv)PK∗/∈G[t]. Otherwise, it:
+1. For randomly sampledr, setsRand[PK,t +1]←r and executes(ST[PK], K[t+1, PK], (CG,CB))←
+Rem(ST[PK], PK∗;r).
+2. Sets G[t + 1]←G[t]\{PK∗}.
+3. For every PK′∈G[t]\{PK}, executes (ST[PK′], K[t + 1, PK′])←Proc(ST[PK′],CG).
+4. If (W eakUsers\ G[t + 1])⁄=∅, sets W eakEpochs←W eakEpochs∪{t + 1}.
+5. Increments t←t + 1 and returns (CG,CB).
+• Up(PK) ﬁrst aborts if (i)t = 0; or (ii)PK /∈G[t]. Otherwise, it:
+1. For randomly sampledr, setsRand[PK,t +1]←r and executes(ST[PK], K[t+1, PK], (CG,CB))←
+Up(ST[PK];r).
+2. Sets G[t + 1]←G[t] and W eakUsers←W eakUsers\{PK}.
+3. For every PK′∈G[t + 1]\{PK}, executes (ST[PK′], K[t + 1, PK′])←Proc(ST[PK′],CG).
+4. If (W eakUsers\ G[t + 1])⁄=∅, sets W eakEpochs←W eakEpochs∪{t + 1}.
+5. Increments t←t + 1 and returns (CG,CB).
+• Corr(PK) ﬁrst setsW eakUsers←W eakUsers∪{PK}and W eakEpochs←W eakEpochs∪{t′≤t :
+PK∈G[t′]}. Then it returnsST[PK] and Rand[PK,t′], for everyt′≤t.
+Figure 1: The CGKA correctness and security games.
+Correctness and Security. We deﬁne correctness and security of CGKA via games that are
+played by an adversaryA, in whichA controls an execution of the CGKA protocol. For simplicity
+and clarity, we only consider anon-adaptive protocol execution in asingle group. The games are
+speciﬁed in Figure 1.
+Before either game starts, the adversary speciﬁes the sequence of queries to the oraclesGen(),
+Add(), Rem(), Up(), and Corr() that will be executed.Gen() allows the adversary to initialize
+a new user, from which it receives the corresponding public key PK. The other oracles allow
+the adversary to execute group operations, i.e., to add, remove, and update users, respectively.
+Additionally, for the security game, the adversary beforehand speciﬁes theepoch t which it will
+attack, i.e., for which it will guess the group key. The game starts in epocht = 0, then incrementst
+each time a group operation oracle is queried. The game forces the adversary to ﬁrst queryAdd()
+to initialize the group. It keeps track of group members for each epoch using dictionaryG. For
+11
+
+simplicity, in each group operation query, the game immediately uses each current group member’s
+state to process the resulting ciphertext directly sent to them,CG, along with the current bulletin
+board B, in the case of an added user. DictionaryK keeps track of the group key that each user
+computes for each epoch. Each group operation oracle returnsC = (CG,CB) to the adversary.
+Deﬁnition 2.2.A CGKA schemeCGKA is correct if for every adversaryA against the correctness
+game deﬁned by Figure 1, and for allt and PK, PK′∈G[t]: Pr
+
+K[t, PK] = K[t, PK′]
+
+= 1.
+Our notion of security is slightly weakened compared to the standard deﬁnition in the CGKA
+literature, which only strengthens our lower bound. That is, the corruption of a user may aﬀect
+the security of those keys that were established in the past while this user was a group member.
+Thus, forward secrecy is not captured. Also, we do not consider authenticity.8 However, our
+notion still captures basic security requirements plus standard PCS requirement (mentioned in the
+introduction), as explained below.
+We ﬁrst explain the importance of dictionaryRand, in addition to sets W eakEpochsand
+W eakUsers, which allow the game to capture this security.Rand keeps track of the random-
+ness the users sample to execute the operations of each epoch. Intuitively, W eakEpochsand
+W eakUserskeep track of those epochs and users that are insecure, respectively. When the adver-
+sary queries oracleCorr(PK), the game returns the corresponding user’s secret state, as well as the
+randomness which she used to executeall of her past group operations. Thus, the game addsPK
+to W eakUsersand since we do not require forward secrecy, it also adds toW eakEpochsevery
+past epoch in which the corresponding user was in the group. Now, for everyUp(PK) query, the
+game removes PK from W eakUsers. This in part captures PCS: in every group operation query,
+if there are still weak users in the group (i.e.,(W eakUsers\ G[t + 1])⁄=∅), then the game adds
+the new epocht + 1 to W eakEpochs. So, if there is a member of the group that was corrupted
+and did not since update their state, the epoch is deemed weak. Conversely, as soon as every group
+member updates their state or is removed after a corruption, epochs are no longer deemed weak.
+After receiving all return values of the pre-speciﬁed sequence’s queries to these oracles, the
+adversary outputs a keyK. This keyK is a guess for the actual group key established in epocht,
+where t is the pre-speciﬁed attack epoch. Note that this recoverability deﬁnition is weaker than
+standard indistinguishability deﬁnitions, which strengthens our lower bound.
+Deﬁnition 2.3.A CGKA scheme CGKA is secure if for every PPT adversaryA = (A1,A2)
+against the security game deﬁned by Figure 1:
+Pr [K←$A2(ω,Trans) :K = K[t, PK∗];t /∈W eakEpochs;
+PK∗∈G[t]; (ω,Seq,t )←$A1(1λ) ]≤negl(λ),
+whereA1 non-adaptively speciﬁes the sequence of oracle queriesSeq and the attacked epocht, and
+A2 guesses the attacked key when obtaining the transcript of oracle return valuesTrans.
+2.2 Compact Key Exchange
+We can now deﬁne Compact Key Exchange with access to a common reference string (CRS). Such
+protocols allow some users1,...,n to sample independent (across users) key pairs(SK1, PK1), ...,
+8Analyzing the eﬀect of required authenticity under weak randomness [7] on (communication) complexity in the
+group setting [31], as well as of extended security goals such as anonymity [25] remains an interesting open question.
+12
+
+(SKn, PKn), then publicly broadcast PK1,..., PKn. Upon reception of these public keys, special
+user 0 generates a keyK and messageC, and broadcastsC. Finally, upon reception ofC, every
+user i∈[n] uses SKi, the set of public keys{PKj}j∈[n], andC to deriveK.
+Deﬁnition 2.4.A Compact Key Exchangescheme CKE = (CRSGen, Init, Comm, Derive) in the
+standard model with common reference stringCRS∈CRSconsists of the following algorithms:
+• Init is a PPT algorithm that takes inCRS←$ CRSGen(1λ) and outputs (SK, PK).
+• Comm is a PPT algorithm that takes inCRS and set{PKi}i∈[n] and outputs (K,C ).
+• Derive is a deterministic, polynomial time algorithm that takes inCRS, SKi, wherei∈[n],
+set{PKj}j∈[n], andC, and outputsK.
+For correctness, we require that for anyn, and for everyi∈[n]:
+Pr
+
+K←Derive
+(
+CRS, SKi,{PKj}j∈[n],C
+)
+: (K,C )←$ Comm
+(
+CRS,{PKj}j∈[n]
+)
+;
+∀j∈[n], (SKj, PKj)←$ Init(CRS);
+CRS←$ CRSGen(1λ)
+
+= 1.
+For security, we require that for every PPT adversaryA that speciﬁesn = poly(λ):
+Pr
+
+K←$A
+(
+CRS,{PKi}i∈[n],C
+)
+: (K,C )←$ Comm
+(
+CRS,{PKi}i∈[n]
+)
+;
+∀i∈[n], (SKi, PKi)←$ Init(CRS);
+CRS←$ CRSGen(1λ)
+
+≤negl(λ).
+Ideally,|C|should be a small function (perhaps independent) ofn.
+Remark 2.5.Of course, there is a simple CKE protocol (without CRS) from PKE schemePKE =
+(Gen, Enc, Dec), where |C|= O(λ·n): Init() simply samples sk ←$ {0, 1}λ, then computes
+pk ←Gen(sk) and outputs (sk, pk). Comm({pki}i∈[n]) samples K ←$ {0, 1}λ, and for each
+i∈[n] computes ci ←$ Enc(pki,K ). It then outputs (K,C ), where C = (c1,...,cn). Finally,
+Derive(ski,{pkj}j∈[n],C ) computesK←Dec(ski,ci) and outputsK. Correctness and security fol-
+low trivially.
+3 From CGKA to CKE Tightly
+In this section, we show that CKE is at the core of CGKA, both in terms of cryptographic strength
+and worst-case communication complexity, by providing atight construction of the former from
+the latter. The simpler counter direction—building CGKA from CKE, tightly—is provided in
+Appendix E. From these two reductions, we show that the worst-case communication complexity
+of CGKA operations is asymptotically equivalent to the size of CKE ciphertexts. That is, we
+show that the best possible size of a CKE ciphertext implies 1. a lower bound on the worst-case
+communication complexity of CGKA operations; and 2. an upper bound for the same. With this
+result, we additionally prove that the communication overhead in a CGKA group is necessarily
+increased if group members remain oﬄine after they were added to the group. Indeed, based
+13
+
+on our Ω(n) lower bound on CKE ciphertext size for protocols that make black-box use of PKE
+from Section 4, we show that worst-case communication overhead for CGKA protocols that make
+black-box use of PKE isΩ(k), where k is the number of added users who remain inactive after
+being added to the group. Furthermore, we show that this holds even for (unboundedly) many
+consecutive operations.
+To illustrate our proof idea, consider the following execution of a CGKA protocol: Let users
+A and B be members of an existing CGKA group. UserA adds k new users to this group before
+user B removes A from the group andB ﬁnally conducts a state update. AfterA is removed
+and B updates his state, the group must share a key that is secure even ifA is corrupted after
+he is removed orB was corrupted before his update, and there were no other corruptions. (Note
+that these corruptions ofA and B must be harmless w.r.t. security becauseA was removed and
+B updated his state to recover according to PCS.) We observe that the only information received
+by thek new users so far wereA’s add-ciphertexts andB’s remove- and update-ciphertexts. Since
+A may have been corrupted (which reveals the randomness she used for adding thek users), the
+add-ciphertexts may contain no conﬁdential payload. Similarly,B might have been corrupted until
+he updated his state. Hence,B’s ciphertext that updates his state is the only input from which
+the k users can derive a secure group key. This update ciphertext intuitively corresponds to a
+CKE ciphertext that establishes a key with thek newly added users. In our proof, we generalize
+this intuition to show that, as long ask new group members remain passive, a recurring linear
+communication overhead inΩ(k) cannot be avoided when active group members repeatedly update
+the group’s key material.
+3.1 Embedding CGKA Ciphertexts in CKE Ciphertexts
+With our proof that CGKA implies CKE, we directly lift the communication-cost lower bound
+for CKE from Section 4 to certainbad sequences in a CGKA execution. That means, our proof
+implies that such bad sequences in a CGKA execution lead to a linear communication overhead in
+the number ofaﬀectedusers. For this, we build a CKE construction that embeds speciﬁc CGKA
+ciphertexts in its CKE ciphertexts. Thus, a CGKA scheme that achieves sub-linear communication
+costs in the number of aﬀected group members for these embedded ciphertexts results in a CKE
+with compact ciphertexts, which contradicts our lower bound from Section 4.
+Components of Bad Sequences. Intuitively, abad CGKA sequenceis an operation sequence
+in a CGKA session during whichk passive usersare added to the group that stay oﬄine while (few)
+other members actively conduct CGKA operations continuously. A CGKA session that contains
+such a sequence can be split into (1) apre-add phase that ends when the ﬁrst of thesek passive
+users is added and (2) the subsequentbad sequence itself. The bad sequence contains (2.a) the
+add operations due to which the passive users become group members as well as (2.c) multiple,
+potentially overlapping, iterations of collective update assistances. With these collective update
+assistances, the active users update key material for the newly added passive users, which causes
+the communication overhead inΩ(k). From the perspective of eachcollective update assistance,
+the remaining operations in abad sequencecan be categorized into (2.b)ineﬀective pre-assistance
+operations and (2.d) an irrelevant end. (The numbering in the above enumeration reﬂects the
+order of these components within the bad sequence; We illustrate an exemplary bad sequence in
+Figure 2.)
+14
+
+A
+B
+C
+D
+E
+F
+Up
+Up
+Up
+1 Pre-Add
+Phase
+2.a Add
+Operations
+t2
+*t1
+* t3
+*
+2.b Ineffective
+Pre-Assistance
+2.c Effective
+Operations
+Up Up
+Up
+Passive
+Users
+Active
+Users
+Add(E)
+Add(F) Rem(D)
+Rem(C)
+Figure 2: Bad CGKA sequence withactive usersA, B and passive usersE, F. A and B perform
+three collective update assistancesthat end with operationst∗
+1,t∗
+2, andt∗
+3, respectively. Theeﬀective
+operations of each assistance are marked with colored frames. Operations between the lastadd
+operation and a frame are part of the respectiveineﬀective pre-assistance.
+Let sequence Seq = (Op1,..., Opn) be the execution schedule of a CGKA session, where each
+Opt is a tuple that refers to an executed group operation with the following format: Opt =
+(Up, PK,⊥) means that PK updates their state; Opt = (Add, PK, PK∗) means that PK adds PK∗;
+Opt = (Rem, PK, PK∗) means that PK removes PK∗; see Section 2.1 for more details. Further, let
+PU,|PU|= k, be the public key set of thek passive users, such that for everyPK∗∈PU there
+exists an operation(Add,·, PK∗) but neither an operation(Rem,·, PK∗) nor an operation(·, PK∗,·)
+in sequence Seq.
+(1) The pre-add phasestarts at the beginning of the entire sequence and ends with thetA
+1−1th
+operation, where OptA
+1
+= (Add,·, PK∗) is the ﬁrstoperation that adds a userPK∗∈PU to the
+group. (2.a) The add operations, starting with operationOptA
+1
+, end with thelast operation OptA
+k
+=
+(Add,·, PK∗) that adds a userPK∗∈PU to the group. (Also operations other than adding passive
+users can be contained in this phase.)
+(2.c)Theﬁrstcollective update assistanceendswhenallactiveusersconductedtheirﬁrstupdate
+after the add operations. During such acollective update assistance, the active users both propagate
+new own key material but also collectively establish and communicate newkey material for the
+passive users. We deﬁneAUt∗as the public key set ofusers who areactive between thetA
+1 th and
+t∗th operation. That means PK∗∈AUt∗iﬀthere exists at least one operationOpt = (·, PK∗,·)
+but no operation Opt = (Rem,·, PK∗) for tA
+1 ≤t≤t∗in sequence Seq. Every collective update
+assistance by active users in setAUt∗is determined by its ﬁnal operationOpt∗,t∗>t A
+k, for which it
+must hold that all usersPK∗∈AUt∗conducted an update operation between thetA
+k +1 th andt∗th
+operation. Such a collective update assistanceconsists of a set ofeﬀective operationsEOt∗from
+sequence Seq. Theseeﬀective operationsestablish key material with the passive users and, in total,
+have a communication overhead ofΩ(k) as we will prove.(2.b) Operations executed prior to the
+t∗th operation that are not in setEOt∗are calledineﬀective pre-assistance operations. (2.d) The
+remaining sequence after thet∗th operation is theirrelevant end. In summary, a bad sequence
+from the perspective of one (out of potentially many)collective update assistancesis structured as
+follows: (2.a)add operationsbetween thetA
+1 th andtA
+k th operation, (2.b)ineﬀective pre-assistance
+15
+
+operations between the tA
+k + 1th and t∗−1th operation, (2.c) eﬀective operationsbetween the
+tA
+k + 1th andt∗th operation that constitute thiscollective update assistance, and (2.d)irrelevant
+end after thet∗th operation.
+The eﬀective operationsconsist of all active users’ operations since their respective most recent
+update operation. That means, for each active user public keyPK∈AUt∗, the set ofeﬀective
+operations EOt∗in acollective update assistancecontains all operationsOpt′= (·, PK,·) that were
+initiated since the most recent update operationOptPK = (Up, PK,·)by userPK, wheretPK≤t′≤t∗
+with maximaltPK, respectively.
+Intuition for a Bad Sequence. Active users establish secret key material for passive users
+in collective update assistances. The communication overhead in Ω(k) that is induced by such a
+collective update assistancecan be distributed among all correspondingeﬀective operations. That
+means, active users can trade the work of establishing key material and the corresponding necessary
+communication overhead within each collective update assistance. However, it is important to
+emphasize that operations only establish key material to passive userseﬀectivelyif the involved
+active users are not corrupted at that point. Hence, from the perspective of a CGKA group
+key computed with thet∗th operation, prior operations only contribute eﬀectively to its secure
+computation if the involved users were able to recover from a potential earlier corruption. Such a
+recovery from a corruption is achieved via an update operation. This is the reason why theeﬀective
+operations are deﬁned as each active user’s last operations since their most recent state update.
+During and after these state updates, the active users collectively assist the passive users in securely
+deriving the same CGKA group key in thet∗th operation.
+Based on the above terminology, we formulate our communication overhead lower bound in the
+following theorem:
+Theorem 3.1(CGKA Lower Bound). Let Seq be an execution schedule of a CGKA session during
+which k passive users are added to the group until thetA
+k th operation. Lett∗determine the last
+operation of any subsequent collective update assistance such that all active users in set AUt∗
+conduct an update between thetA
+k +1th andt∗th operation. Finally, letEOt∗be the corresponding set
+of eﬀective operationsthat consist of allactive users’most recent update and subsequent operations
+until the t∗th operation. The total size of ciphertexts sent by operations in setEOt∗is Ω(k) for
+every CGKA construction that makes black-box use of PKE.
+We want to note that our lower bound could be extended to morebad sequenceswith equally
+damaging eﬀect on the communication overhead. For clarity and compactness, we focus on the
+chosen speciﬁcation.
+Proof Sketch. The proof of Theorem 3.1 is provided in Appendix D. In summary, this proof
+proceeds as follows: We build a CKE construction that internally uses a CGKA scheme to execute
+a CGKA execution scheduleSeq. For establishing a CKE key tok public keys, this sequenceSeq
+contains at least onecollective update assistancefor k passive users. The core idea of the CKE
+construction is that precisely theeﬀective operations’CGKA ciphertexts of thiscollective update
+assistance in the CGKA sequence are embedded in the committed CKE ciphertext. Hence, the
+total ciphertext size of theseeﬀective CGKA operationsequals the size of the CKE ciphertext. All
+remainingoperationsintheCGKAsequence(i.e., pre-add phase,add operations, andineﬀective pre-
+assistance operations) are, in diﬀerent shapes, encoded in the CKE common reference stringCRS.
+16
+
+The complex but interesting idea of this construction, and hence of this proof, is the isolation
+of the eﬀective operationsfrom the remaining operations in the entire sequence as well as their
+encoding in the CKE ciphertext such that CKE functionality and security are reached. As part of
+the proof, we reduce the security of this CKE construction to the security of the underlying CGKA
+scheme. Finally, we show that a CGKA scheme that executes schedule Seq without inducing
+a communication overhead ofΩ(k) for the eﬀective operationsimplies a CKE construction with
+compact ciphertexts.
+In Corollary 3.2 we formulate a simpler, more speciﬁc variant of bad sequences that is directly
+implied by Theorem 3.1. Consider a sequenceSeq in which the active users, after adding the passive
+users, only conduct state update operations. Then, theeﬀective operationsof eachcollective update
+assistance in sequence Seq are simply the most recent state updates by each active user.
+Corollary 3.2(Eﬀective Update Operations). Let Seq be an execution schedule of a CGKA session
+during whichk passive usersare added to the group until thetA
+k th operation. Lett∗determine the
+last operation of any subsequentcollective update assistancesuch that allactive usersin set AUt∗
+conduct an update between thetA
+k +1th andt∗th operation. If all operations after thetA
+k th operation
+are state updates, then the total size of ciphertexts sent due to the most recent updates by each active
+user in set AUt∗is Ω(k) for every CGKA construction that makes black-box use of PKE, where
+|AUt∗|=|EOt∗|.
+Overlapping Collective Update Assistances. We want to point out thateﬀective operations
+of diﬀerentcollective update assistancesmay overlap. For example, an active userA may update
+their state during the sequenceSeqprecisely once after the passive users were added. The remaining
+active usersB and C may repeatedly perform new updates until the end of the sequence. In this
+case, the eﬀective operationsof all collective update assistancesin sequence Seq will include the
+singleupdateoperationby Aandalwaysthemostrecentoperationsof B andC sincetheirrespective
+latest update in this sequence. As we will show in Section 5, there exists no optimal strategy to
+exploit the fact that eﬀective operations ofdiﬀerentcollective update assistances canoverlap. For
+example, one cannot successfully predict whichsingle eﬀective operations are inseveral collective
+update assistances and thus make thesesingle operations have large communication overhead, so
+that large costs are not repeated several times.
+Continuous Update Assistances. We ﬁnally come back to our motivating example CGKA
+execution schedule. In this schedule, only one userA adds thek passive users, and another user
+B removes A thereafter. In order to show that addingk passive users can induce acontinuous
+communication overhead, we extend this execution schedule: after adding thek passive users, l
+active users replace each other, one after another. More precisely, ﬁrst a userA adds k users as
+well as a second userB, then userB removes A and adds a new userC, then C replaces user
+B by a new userD, and so on. Each of these active users additionally performs a state update
+after replacing their predecessor. The eﬀect of this cascade of replace-update sequences is that each
+contained update operation constitutes a singlecollective update assistance, individually inducing
+a communication overhead of Ω(k).9 As a result, the entire schedule induces a communication
+9We strike out “collective” because each update assistance is conducted by a single active user in this execution
+schedule.
+17
+
+overhead of Ω(k·l). We formally deﬁne this CGKA execution schedule in Deﬁnition 3.3 and give
+the corresponding Corollary 3.4.
+Deﬁnition 3.3(Continuous Update Assistance). Let Seq be an operation schedule of a CGKA
+session during which userPK0 adds k passive usersto the group until thetA
+k th operation. Schedule
+Seq contains a Continuous Update Assistanceof lengthl after thetA
+k th operation ifSeq proceeds
+after thetA
+k th operation withl repetitions of operation sequences(Opi,A, Opi,R, Opi,U),i∈[l], where
+Opi,A = (Add, PKi, PKi+1), Opi,R = (Rem, PKi+1, PKi), and Opi,U = (Up, PKi+1,⊥) for indepen-
+dent users PKj,j ∈[l + 1].
+Corollary 3.4(Continuous Communication Overhead). For every CGKA execution scheduleSeq
+that contains aContinuous Update Assistanceof lengthl after thetA
+k th operation, the total size
+of ciphertexts output by the 3l operations after the tA
+k th operation is Ω(k·l) for every CGKA
+construction that makes black-box use of PKE.
+The proof of Corollary 3.4 is a direct application of Theorem 3.1 via a simple hybrid argument
+that considers each replace-update sequence inSeq as acollective update assistance.
+4 CKE Lower Bound from PKE
+Before showing our lower bound for CKE from PKE, we need to deﬁne the model in which we
+prove it.
+Preliminaries. For a functionf we writef(∗) = y to indicatef(x) = y for some inputx. We
+generalize this notation for the case in which some part of the input is ﬁxed, writingf(a1,∗) =y,
+interpreted in the natural way. Many other preliminaries are deferred to Appendix A.
+CKE in theΨ-model. The model for our proof gives the protocol and adversary access to an
+oracle distribution, deﬁned as follows:
+Deﬁnition 4.1.We deﬁne an oracle distributionΨ that produces oracles(O, u, v), where O =
+(g, e, d). The distribution is parameterized over a security parameterλ, but we keep it implicit for
+better readability.
+• g:{0, 1}λ↦→{0, 1}3λis a random length-tripling function, mapping a secret key to a public
+key.
+• e:{0, 1}3λ×{0, 1}×{0, 1}λ↦→ {0, 1}3λ: is a random function satisfying the following:
+for every pk ∈ {0, 1}3λ, the function e(pk,·,·) is injective; i.e., if (m,r )⁄= (m′,r′), then
+e(pk,m,r )⁄= e(pk,m′,r′).
+• d :{0, 1}λ×{0, 1}3λ↦→{0, 1}is the decryption oracle, whered(sk,c ) outputs m∈{0, 1}if
+e(g(sk),m,∗) =c; otherwise, d(sk,c ) =⊥.
+• v:{0, 1}3λ×{0, 1}3λ↦→{⊥,⊤}, is a ciphertext-validity checking oracle:v(pk,c ) outputs⊤if
+c is in the range ofe(pk,·,·) (that is,c := e(pk,∗,∗)); otherwise, it outputs⊥.
+18
+
+• u:{0, 1}3λ×{0, 1}3λ↦→{0, 1}∪{⊥}, is an oracle that decrypts wrt invalid public keys; given
+(pk,c ), if there existssk such that g(sk) = pk, then u(pk,c ) =⊥; otherwise, if there exists a
+message m∈{0, 1}such that e(pk,m,∗) =c, returnm; else, return⊥.
+Now, we can deﬁne CKE in theΨ-model.
+Deﬁnition 4.2.A Compact Key Exchangescheme in the Ψ-model is deﬁned equivalently as in
+Deﬁnition 2.4, except that each of the CKE algorithms and the adversary additionally have access
+to the Ψ oracles. We denote such access usingΨ as a superscript in the corresponding algorithms,
+e.g., InitΨ (CRS). All other syntax and security requirements stay the same.
+4.1 Proof Outline
+Our lower bound is derived from the following two lemmas. The ﬁrst lemma shows a random
+(g, e, d) constitutes an ideally-secure PKE protocol, even against adversaries that have access to
+the oracles (u, v), in addition to (g, e, d). The second lemma shows that the security of any
+proposed CKE protocol(CRSGen, Init, Comm, Derive), instantiated with a randomO := (g, e, d),
+may be broken by an adversary making at most a polynomial number of queries to(O, u, v). The
+black-box separation will then follow.
+Lemma 4.3 (O is secure against (O, u, v)). For any polynomial-query adversary A:
+Pr[AO,u,v(pk,c ) = b] ≤1/2 + 1
+2λ/2, where (g, e, d, u, v) ←$ Ψ, O := ( g, e, d), b ←$ {0, 1},
+sk←${0, 1}λ, pk = g(sk), r←${0, 1}λand c = e(pk,b ;r).
+The following lemma shows how to break compact CKE constructions relative to the PKE
+oracles. The lemma shows that even for encrypting single-bit keys (i.e.,|K|= 1), a CKE ciphertext
+cannot be sub-linear inn.
+Lemma 4.4(Breaking CKE relative to(O, u, v)). Let (CRSGen, Init, Comm, Derive) be a can-
+didate black-box construction of CKE, where for any CKE ciphertextC,|C|≤3λ(n−1)
+2 . For any con-
+stantc, there exists a polynomial-query adversaryBrkO,u,v such thatPr[BrkO,u,v(PK1,..., PKn,C ) =
+K]≥1−1
+λc, where (g, e, d, u, v)←$ Ψ, O := ( g, e, d), CRS←$ CRSGenO(1λ), (PKi,∗)←$
+InitO(CRS) for i∈[n], and (K,C )←$ CommO(CRS, PK1,..., PKn).
+Roadmap. Lemma 4.3 is proved in a straightforward way (hence omitted), given the random
+nature of the oracles. The proof of Lemma 4.4 is the main technical bulk of our paper, consisting
+of the description of an attacker and attack analysis. We ﬁrst describe the attacker for the case
+(Initg, Comme, Derived) in Section 4.2, and will then describe an attack against general construc-
+tions in Appendix C. Lemma 4.4 will follow similarly from the below simpler attack. We may now
+obtain the following from Lemmas 4.3,4.4, proved via standard black-box separation techniques.
+Theorem 4.5. There exists no fully-black-box construction of CKE schemes from PKE schemes
+with CKE ciphertext sizeo(n)|c|, where|c|denotes the ciphertext size of the base PKE scheme.
+4.2 Attack for (CRSGeng, Initg, Comme, Derived)
+We will show an attack for the case in which oracle access is of the form(CRSGeng, Initg, Comme,
+Derived). This already captures the main ideas behind the impossibility result. We will then show
+how to relax this assumption.
+19
+
+Attack overview. Let (PK1,..., PKn,C ) be the public keys and the ciphertext. We show an
+impossibility as long as|C|≤3λ(n−1)
+2 , where recall that3λis the size of a base ciphertext as per
+oracles generated byΨ (Deﬁnition 4.1). This particular choice for the size ofC will ensure thatC
+can “embed” at mostn−1 base ciphertexts, in a sense we will later deﬁne in Lemma A.2.
+For simplicity, in this overview we assume that the scheme does not have a CRS. The attack
+is based on the following high-level idea. During the generation of each(PKi, SKi)←$ Initg(1λ) a
+set of g-type query/answer pairs made. LetKPairi ={(pki,1, ski,1),..., (pki,t, ski,t)}be the set of
+public/secret key pairs produced during the generation ofPKi. These public keys are in someway
+encoded in PKi, and the ability to decrypt with respect to these basepki,j public keys is the only
+advantage that theith party, who hasSKi, has over an adversary.
+Consider a random execution of(K,C )←$ Comme(PK1,..., PKn), and letQ ={(pk1,bi,ri,ci)|
+i∈[f]}contain the set of all query/answer pairs, and letQc ={c1,...,cf}. Since the ciphertextC
+is compact,C can embed at most(n−1) ciphertexts ci from the setQc. By embedding we mean
+anyone, including the legitimate users, given onlyC can extract at mostn−1 valid pairs(pki,ci)
+without querying e.
+Now for each user consider its local decryption execution. Each user performing decryption will
+need to decrypt pairs of the form(pk,c ), in order to recover a sharedK. We focus on those pairs
+which are valid, meaning thatc is in the range ofe(pk,·,·). Looking ahead, the reason for this is
+that for invalid pairs for which the answer is⊥, an adversary can already simulate the answer by
+calling u. Let S′
+i be the set of valid pairs that come up during decryption performed by useri. Since
+C embeds at mostn−1 valid pairs (pk,c ), for some userh: S′
+h⊆S′
+1∪...S′
+h−1. In other words,
+the set of base trapdoors needed to decryptS′
+h is a subset of those forS′
+1∪...S′
+h−1. Moreover, in
+order for any user to be able to decrypt some(pk,c ), the user should have observed a query/answer
+pair (pk, sk) during its execution ofInitg(1λ). Thus, recalling KPairh, the set of base secret keys
+needed to decrypt elements inS′
+h is a subset ofKPair1∪...,∪KPairh−1. But each of theseKPairi
+sets (fori∈[n]) is obtained by runningInitg(1λ) on a security parameter, and so if an adversary
+runs Initg(1λ) many times and collects all query/answer pairs in a setFreq, the adversary with
+high probability will collect all the trapdoors needed to successfully decrypt for at least one user.
+How to perform simulated decryption?So far, the discussion above says that an adversary
+can collect a setFreq which with high probability contains all(pk, sk) pairs needed to decrypt with
+respect to at least one user. But even givenFreq, it is unclear how to perform decryption for any
+user. The adversary cannot simply “look at”Freq and somehow decryptC — the adversary will
+need a secret keySK to be able to runDerive(SK,·). The solution is to let the adversary sample a
+“fake” secret keys for users, in a manner consistent with query-answer knowledge ofFreq.
+We make the following assumption for the construction(CRSGeng, Initg, Comme, Derived)
+that we want to prove an impossibility for. The assumption is made only for ease of exposition.
+Assumption 4.6. We assume for any oracle (g, e, d)←$ Ψ picked as in Deﬁnition 4.1, each
+algorithm in (CRSGeng, Initg, Comme, Derived) makes only a security parameterλnumber of
+queries.
+Deﬁnition 4.7(Partial oracles and consistency). We say a partial oracleO1 (deﬁned only on a
+subset of all points) isΨ-valid if for someO2∈Supp(Ψ): O1⊆O2, whereSupp denotes the support
+of a distribution. We say an oracle(g, e, d) is PKE-valid if it satisﬁes PKE completeness. A partial
+PKE-valid oracle is one which is a subset of a PKE-valid oracle. Note that anyΨ-valid oracle is
+20
+
+PKE-valid as well. We say a partial oracleO1 is consistent with a set of query/response pairsS if
+O1∪S is PKE-valid.
+We also need to deﬁne the notion of a partial oracle forbidding a set of query/response pairs.
+This technique of forbidding a set of query/answer pairs will be used extensively in our construc-
+tions, and to the best of our knowledge, no previous impossibility results deal with this technique.
+Deﬁnition 4.8(Forbidding queries). Let Forbid consists of “wildcard” queries/ responses, of the
+form (q− →z ∗) or (∗− →z u), wherez∈{g, e}. We say that a partial oracleO1 = (˜g, ˜e) forbids Forbid
+if (a) for any(q− →z ∗)∈Forbid the oracle ˜z is not deﬁned on inputq and (b) for any(∗− →z u) the
+oracle ˜z is not deﬁned on any input point with a corresponding outputu (i.e., y is not in the set of
+output points deﬁned under˜z).
+The attacker will ﬁrst perform many random executions ofInitg(CRS) to collect all likely
+query/response pairs: those that appear during a random execution with a high-enough proba-
+bility. This will allow the adversary to learn the secret keys for all likely basepk’s that might
+be embedded to more than one user’s CKE public key. Once this step is done, the attacker will
+sample partial oracles that are consistent with the set of collected query/answer pairs. Recall that
+by Assumption 4.6 any execution ofInitg(CRS) makes exactlyλqueries. We say a partial oracle
+O′(deﬁned only on a subset of points) is minimal for an executionInitO′
+(CRS;R), if the execution
+makes queries only to those points deﬁned inO′, and nothing else. This means in particular that
+O′is deﬁned only onλpoints. In the deﬁnition below, we talk about samplingminimal partial
+oracles O′that agree with some set of query/answer pairs.
+Deﬁnition 4.9(Sampling partial oracles). We deﬁne the procedureConsOrc. In this deﬁnition we
+assume that the algorithm Initg,e makes both g and e queries (as opposed to g only), since this
+deﬁnition will also be used for the general attack.
+• Input: (CRS, PK, Freq, Forbid): A CRS CRS, public key PK, and set of query/answer pairs
+Freq and a set of query/answer pairsForbid. The set Forbid consists of “wildcard” forbidden
+queries/responses, of the form(q− →z ∗) or (∗− →z u), wherez∈{g, e}.
+• Output: (SK, O′) or⊥, produced as follows. Sample a partial Ψ-generated O′= ( g′, e′)
+deﬁned only onλqueries (see Assumption 4.6), sample randomnessR and a resultant SK
+uniformly at random subject to the conditions that (a)O′is consistent with Freq; (b) O′
+forbids Forbid (Deﬁnition 4.8) (c)InitO′
+(CRS;R) = (PK, SK) and (d) O′is R-minimal: the
+execution of InitO′
+(CRS;R) makes only queries to those inO′, and nothing else. If no such
+(SK, O′) exists, output⊥.10
+In our attack, the adversary will try performing simulated decryptions for diﬀerent parties. The
+adversary will do so by sampling a simulated secret key~SK for that party, along with a partial oracle
+g′relative to which~SK is a secret key for that party’s public keyPK (i.e., (PK,~SK)←$ Initg′
+(CRS)).
+The adversary will then perform decryption with respect to an oracleg′♦∗O that is the result of
+superimposing g′on the real oracleO. We will deﬁne the superimposed oracle below. Essentially,
+the superimposed oracle is deﬁned in a way so that it agrees withg′, it is a valid PKE oracle,
+and also agrees with the real oracle as much as possible. In the deﬁnition below we deﬁne this
+10This can happen because of the presence of forbidding queries inForbid.
+21
+
+superimposing process, but note that we are not claiming that the output ofg′♦∗O on a given
+query can be necessarily obtained by making a polynomial number of queries toO.
+As notation we use (sk1 − →g pk1) to denote a query/answer pair of g-type. We use similar
+notation for other types of queries. IfL is a set of query/answer pairs, we useQuery(L) to denote
+the query parts of the elements ofL.
+Deﬁnition 4.10(Composed Oracles♦∗). Let O := (g, e, d) be aΨ-valid oracle (a possible output
+of Ψ) and let
+g′:={(sk1− →g pk1),..., (skw− →g pkw)}
+be a partialΨ-valid oracle consisting of onlyg-type queries. We deﬁne a composed oracleg′♦∗O :=
+(~g, e,~d) as follows.
+• ~g(·): for a givensk, let~g(sk) ∆= pki if sk = ski for i∈[w]; otherwise,~g(sk) ∆= g(sk).
+• ~d(·,·): for a given pair(sk,c ), deﬁne~d(sk,c ) as follows. Assuming pk =~g(sk), if there exists
+m∈{0, 1}such thatc = e(pk,m,∗), returnm; otherwise, return⊥.
+In the deﬁnition above notice that the resulting oracle(~g, e,~d) is Ψ-valid (i.e., and hence a
+valid PKE oracle, satisfying PKE completeness) as long asO and g′are Ψ-valid. Thus, we have
+the following lemma.
+Lemma 4.11.Assuming O and g′are Ψ-valid, (~g, e,~d), obtained as in Deﬁnition 4.10, isΨ-valid,
+and hence PKE-valid.
+4.2.1 Description of the Attacker Against(CRSGeng, Initg, Comme, Derived)
+Brkg,e,d,u,v(CRS, PK1,..., PKn,C ): The attack is based on two integersη,η′, instantiated later.
+1. Let Decrypt = 0, Forge = 0, and Forbid =∅.
+2. Do the following forηiterations. Sample randomnessR and executeInitg(CRS;R) and record
+all query/response pairs inFreq.
+3. Sample γ←$ [η′] and do the followingγtimes. Run (PK,∗)←$ Initg(CRS) using fresh
+randomness, sample (~SK, g′)←$ ConsOrc(CRS, PK, Freq, Forbid), and for every(sk− →g pk)∈
+g′\Freq, add (sk− →g ∗) to Forbid; also, if(∗− →g pk) /∈Freq, add (∗− →g pk) to Forbid.11 At the
+end of each iteration, updateFreq by adding all queries made during(PK,∗)←$ Initg(CRS)
+to Freq.
+4. Fori∈[n]
+(a) Sample (~SKi, g′
+i)←$ ConsOrc(CRS, PKi, Freq, Forbid). If (~SKi, g′
+i) =⊥, then halt.12
+(b) Let g′
+i♦∗O = (~g, e,~d).
+11Note that sinceInit makes only g queries, the output ofConsOrc (Deﬁnition 4.9) does not have ane′oracle.
+12This can happen because the setForbid makes some queries/responses oﬀ-limits.
+22
+
+(c) Execute Derive~d(~SKi,{PKi},C ) and answer the queries as follows. For a queryqu :=
+((sk,c )− →
+~d
+?), if (sk− →g ∗)∈Freq or (sk− →g ∗) /∈g′, then reply to the query withd(sk,c ).
+Otherwise, letting pk = ~g(sk) — which can be computed eﬃciently — if(sk′− →g pk)∈
+Freq for some sk′, reply toqu with d(sk′,c ). Else,
+i. if v(pk,c ) =⊥, then reply toqu with⊥;
+ii. else if u(pk,c ) =m⁄=⊥, then reply toqu with m;
+iii. else, add (pk,c ) to Chal, and if i < n, go to the nexti (Step 4); otherwise, set
+Forge = 1 and halt.
+(d) If we have not halted so far, letting ~Ki be the output of the simulated decryption
+Derive~d(CRS, PK1,..., PKn,~SKi,C ), return~Ki, set Decrypt = 1 and halt.
+Notation 4.12.Let (CRS, PK1,..., PKn,C ) be as above. LetQC be the set of query/response pairs
+made to generateCRS←$ CRSGeng(1λ). Fori∈[n] let QGeni be the set of query/response pairs
+made to generate (PKi, SKi)←$ Initg(CRS). Let K be the corresponding key forC, and suppose
+QEnc is the set of query/response pairs made to generate(K,C )←$ Comme(CRS, PK1,..., PKn).
+4.2.2 Attack Analysis
+We deﬁne some events that will help us to analyze the eﬀectiveness of the attack.
+Deﬁnition 4.13.We deﬁne the following events, based on the variables introduced in Notation 4.12
+and for attackerBrk.
+• Event Evnt1 is the event thatDecrypt = 1, and Evnt2 is the event thatForge = 1.
+• Event Emptyi for i∈[n]: the event thatg′
+i =∅.13 We let Empty :=⋁
+i Emptyi.
+• Event Agree: for all h∈[n], g′
+h agrees with∪i⁄=hQGeni∪QC∪QEnc. If g′
+h is empty, then
+agreement is assumed to hold.
+• Event Surprisei for i ∈[n]: there exists (∗ − →g pk) ∈g′
+i such that (∗ − →g pk) ∈QC and
+(∗− →g pk) /∈Freq. If g′
+i is empty, we saySurprisei does not hold. We letSurprise :=⋁
+i Surprisei.
+• Event Spoof: the event that for some h∈[n], there exists (∗ − →g pk)∈g′
+h such that (a)
+(∗− →g pk) /∈∪i∈[n]QGeni∪QC∪Freq and (b) pk is g-valid; namely, g(∗) = pk.
+• Event Intersect: the event that for two distincti,j ∈[n], there is either an intersection query
+between QGeni and QGenj not picked up byFreq, or there is an intersection response between
+QGeni and QGenj not picked up byFreq. That is, the event that(QGeni\ QGenj)\Freq⁄=∅
+or there existspk such that (∗− →g pk)∈QGeni and (∗− →g pk)∈QGenj and (∗− →g pk) /∈Freq.
+In the following lemmas we will bound the probability of each of the above events. Lemma 4.20
+will make use of these bounds to bound the probability of the attack being successful.
+13This is the same thing as(~SKi, g′
+i) =⊥, namely the output ofConsOrc(), in Deﬁnition 4.9, is⊥. The output of
+ConsOrc() may indeed be⊥due to the presence of forbidding queries inForbid.
+23
+
+Lemma 4.14.Assumingη≥λ0.1, for anyi∈[n] Pr[Emptyi]≤ 1
+2ω(logλ) + 2λ1.1η′
+η . Thus, Pr[Empty]≤
+n
+2ω(logλ) + 2nλ1.1η′
+η
+Lemma 4.15. Assumingη≥λ0.1, Pr[Agree]≥1− n
+2ω(log(λ))−nλ
+η′−n2λ1.1
+η .
+Lemma 4.16. For anyi∈[n] Pr[Surprisei]≤λ
+η′. As a result,Pr[Surprise]≤nλ
+η′.
+Lemma 4.17. We havePr[Spoof]≤1
+22λ.
+Lemma 4.18. Assumingη≥λ0.1, Pr[Intersect]≤2n2λ1.1
+η + n2
+2ω(logλ).
+Proof. Letp = λ0.1
+η and note thatpη≥ω(logλ). By Lemma A.7, for any ﬁxed and distincti andj,
+the probability that(QGeni\ QGenj)\Freq⁄=∅is at most2λ1.1
+η + 1
+2ω(logλ). The proof now follows
+by the union bound over all pairs of(i,j ), which is less thann2.
+Lemma 4.19. Suppose|C|≤3λ(n−1)
+2 , whereC is the CKE ciphertext. For any constantc >0,
+assuming η′≥nλc+1 and η≥nη′λ1.1+c, Pr[Evnt2]≤5
+λc.
+Lemma 4.20(Attack eﬀectiveness). Suppose|C|≤3λ(n−1)
+2 , whereC is the CKE ciphertext. For
+any constantc> 0, assumingη′≥nλc+1 and η≥4nη′λ1.1+c, Pr[~K =K]≥1−10
+λc.
+Proof. We have Pr[Evnt1∨Evnt2∨Empty] = 1 . This is because whenever Brk halts, the halt-
+ing condition speciﬁed in Line 4a (eventEmpty), or Line 4(c)iii (eventEvnt2) or Line 4d (event
+Evnt1) must be triggered. Thus,Pr[Evnt1]≤Pr[Evnt2] + Pr[Empty]. By Lemma 4.15Pr[Agree]≤
+−n
+2ω(log(λ))−nλ
+η′−n2λ1.1
+η . By the particular values ofηandη′, Pr[Agree]≤3
+λc. Moreover, by invoking
+Lemmas 4.14 and 4.19 for these values ofηand η′, we havePr[Empty]≤1
+λc Pr[Evnt2]≤5
+λc.
+Pr[~K =K]≥Pr[~K =K|Evnt1∧Agree∧Empty] Pr[Evnt1∧Agree∧Empty]
+≥1(1−Pr[Evnt2]−Pr[Empty]−Pr[Agree]−Pr[Empty])≥1−5
+λc−3
+λc−2
+λc = 1−10
+λc.
+The reason that Pr[~K = K |Evnt1∧Agree∧Empty] = 1 is that, the oracle ~O := (~g, e,~d),
+deﬁned in Line 4b ofBrk, is PKE-valid (c.f., Lemma 4.11). Also,(C,K ) is a possible output of
+Comm~O(PK1,..., PKn), since Comm makes only encryption queries. Let h∈[n] be the index
+for which Evnt1 holds. Since Agree occurs, CRS and (PKi,∗) for i ⁄= h are a possible output
+of CRSGen~g(1λ) and Init~g(CRS), respectively. Also, we know(~SKh, PKh) is a possible output of
+Init~g(CRS), because~g and g′
+h agree with each other. Now sinceEvnt1∧Emptyholds, this means that
+Evnt2∧Empty holds, which means Line 4(c)iii ofBrk is never hit, and so the simulated decryption
+performed by Brk (for the indexh) results in the same value asDerive~d(~SKh, PK1,..., PKn,C ).
+The proof is now complete.
+5 No Single Optimal CGKA Protocol Exists
+In this section, we will show that there is nosingle best CGKA protocol. More precisely, for any
+CGKA protocol Π, there is a distribution of CGKA sequences and some other CGKA protocol
+24
+
+Π′such that on sequences drawn from this distribution,Π′has much lower expected amortized
+communication cost thanΠ. We make the same restriction on protocols that we have throughout
+the paper: the protocols are only allowed to use PKE.
+The main intuition behind this section is the following: As we saw from Corollary 3.2 of Theo-
+rem 3.1, if starting with a group ofn users with public keysPK1,...PKn in any state (for example,
+every user has just executed an update),
+1. k users are added to the group and then remain oﬄine (i.e., do not execute any operations),
+2. Then theαusers (w.l.o.g., users1,...,αwith public keysPK1,...PKα) that have been online
+since the ﬁrst of the above users was added all update,
+the combined size of their ciphertexts must beΩ(k). Now, consider the scenario in which user
+1 adds all of thek new users, then updates, and then users2,...,αall execute updates. While
+adding thek new users, user 1 may or may not have built some structure for group members to
+communicate with them until they come online (for example, in TTKEM, c.f. Appendix F, user1
+would have sampled and communicated key pairs for all nodes that are on the paths from thek
+users’ leaves to the root). The protocolΠ is then left with a choice regarding the updates of users
+2,...,α. Roughly, either:
+(a) Each of the users2,...,αrebuild complete structure themselves (say, sample and communi-
+cate their own key pairs for nodes on the paths from thek users’ leaves to the root, as user
+1 would have done when adding them in TTKEM) to communicate with thek newly added
+users; or
+(b) At least one such useri does not (i.e., they only rebuild asymptotically incomplete structure
+themselves) and thus relies on some asymptotically non-trivial amount of structure created
+by the users that have executed operations before them to communicate with thek added
+users.
+We will however show that both (a) and (b) can be losing strategies; i.e., no matter if a protocol
+Π chooses strategy (a) or (b) (or probabilistically favors one over the other), it can be starkly
+outperformed by another protocol Π′when executing certain sequences (by the same amount in
+both cases). In the case of (a), if after users 2,...,αexecute their updates, thek added users
+come online and execute their own updates, then users 2,...,αall rebuilt complete structure
+themselves unnecessarily – thek added users can themselves create structure which allows others
+to communicate with them thereafter usingO(logn)communication each (for example, in TTKEM,
+theywouldjustsamplekeypairsfortheirpaths). Thereforeifallsubsequentoperationsareupdates,
+the communication of the protocol can easily stay low. So, ifΠ chose (a) then it communicated a
+factor of Ω(k/ logn) more than it had to during the updates of Step2; or Ω(n/ logn) if k = Ω(n).
+In Section 5.1, we formally deﬁne the distribution containing such sequences asActiveBad and in
+Section 5.2 formally prove the statement of the previous sentence. (Technically, for fairness reasons
+when comparing with the result of the next paragraph, we also account for the communication of a
+certain number of updates after Step2. So the result, while qualitatively the same, is quantitatively
+not as stark.)
+In the case of (b) consider the scenario in which (i) one of theαactive users, userj, is randomly
+selected to become passive for the remainder of the sequence, i.e., they never execute another
+operation, then (ii) the otherα−1 active users perform𝓁rounds of taking turns executing updates.
+25
+
+If Π chose strategy (b) and userj is the one who only rebuilt asymptotically incomplete structure
+themselves, then according to Corollary 3.2, each of the𝓁rounds of Step (ii) will have highΩ(k)
+communication each. However, if strategy (a) had been chosen byΠ (and user 1 built complete
+structure as well) then the communication of userj would allow for the𝓁rounds of Step (ii) to
+be executed with low communication:O(αlogn) (using TTKEM-like updates; we explain more
+later). So ifΠ chose (b) then in expectation, it communicated a factor ofΩ(𝓁k/(α·(kα+𝓁αlogn)))
+more than it had to; orΩ(n/ logn) if k = Ω(n), 𝓁= Θ(n/ logn), andα=O(1). In Section 5.1, we
+formally deﬁne the distribution containing such sequences asLazyBad and in Section 5.2 formally
+prove the statement of the previous sentence (albeit with slightly diﬀerent concrete parameters for
+k, 𝓁, andα).
+5.1 Bad Sequences of Operations
+We ﬁrst formally deﬁne the two distributions of sequences,LazyBad and ActiveBad, such that for
+any CGKA protocolΠ, we can choose one of these distributions and it will be the case that there is
+some Π′which has much lower expected communication thanΠ on that distribution. BothLazyBad
+and ActiveBad are parameterized by:
+• n: The number of users in the group before user1 adds the new users;
+• PreAddSeq: The operations of the pre-add phase, i.e., the sequence ofvalid operations (the
+ﬁrst operation isAdd to create the group, only users that are not in the group are added
+by users in the group, only users in the group are removed by other users in the group, only
+users in the group can execute an update, and at the end ofSeq the group hasn members)
+to be executed before thek adds and subsequent operations ofActiveBad or LazyBad.
+• k: The number of users added by user1;
+• α: the number of active users after the ﬁrst of thek users is added; and
+• 𝓁: For LazyBad, the number of rounds of updates in which one of the originally active users
+is passive. We use𝓁in ActiveBad only to ensure that on input the same parameters, the two
+types of sequences have the same length (for fairness reasons).
+We deﬁne both types of sequences as distributions, even thoughActiveBad(n, PreAddSeq,k,α,𝓁) is
+just one sequence (i.e., that sequence is drawn from the distributionActiveBad(n, PreAddSeq,k,α,𝓁)
+with probability 1). In the following, we will assume that both n and k are powers of 2, for
+simplicity. Also, we will often make the parameters n, k, α, and 𝓁implicit and simply refer
+to ActiveBad(n, PreAddSeq,k,α,𝓁) as ActiveBad(PreAddSeq) and LazyBad(n, PreAddSeq,k,α,𝓁) as
+LazyBad(PreAddSeq). We ﬁrst deﬁneLazyBad(PreAddSeq):
+Deﬁnition5.1.A sequenceSeq of CGKA operations drawn from distributionLazyBad(n, PreAddSeq,
+k,α,𝓁) consists of the following phases:
+• Phase P0: The pre-add phase, i.e., the operationsOp1,..., OptA
+1−1 of PreAddSeq.
+• Phase P1: For i∈[k] operations Op1,i = (Add, PK1, PKn+i). Then operation Op1,k+1 =
+(Up, PK1,⊥).
+• Phase P2: Fori∈[α−1] operations Op2,i = (Up, PKi+1,⊥).
+26
+
+• Phase P3: Let j ←$ [α]. Then, for each m ∈[𝓁]: for every i < j (resp. i > j),
+Op3,(m−1)(α−1)+i = (Up, PKi,⊥) (resp. Op3,(m−1)(α−1)+i−1 = (Up, PKi,⊥)), where PKi is
+the most recent public key of useri.
+Next, we deﬁneActiveBad(PreAddSeq), which has the same phases0−2 as LazyBad(PreAddSeq),
+but diﬀers in phase3 as described above:
+Deﬁnition 5.2.A sequence Seq of CGKA operations drawn from distribution ActiveBad(n,
+PreAddSeq,k,α,𝓁) consists of the same phasesP0-P2 as above then:
+• Phase P3: Fori∈[𝓁·(α−1)]: Op3,i = (Up, PKn+1+(i mod α),⊥), where PKn+1+(i mod α) is
+the most recent public key of usern + 1 + (i mod α).
+Note that by Theorem 3.1, for every CGKA protocol it must be that update Op1,k+1 =
+(Up, PK1,⊥) in Phase P1 of either distribution requires Ω(k) communication, no matter what
+the operations ofPreAddSeq were and what structure the adds of user1 in PhaseP1 created. Since
+with O(k) communication, user 1 can in this update create full structure with which other users
+in the group can communicate with the addedPKn+1...,PKn+αthereafter (as in TTKEM), it is
+intuitively the best choice for a protocol to use this behavior for user1. Thus, since we aim to
+deﬁne these two distributions in a way that emphasizes the diﬀerent choices protocols can make to
+minimize communication, user1’s ﬁrst update is included in PhaseP1 and we deﬁne the commu-
+nication complexity of a protocol executing a sequence drawn from one of these two distributions
+to include only the communication costs of the operations in PhaseP2 and P3:
+Deﬁnition 5.3. Let Seq be a sequence of CGKA operations drawn from distribution
+LazyBad(PreAddSeq) (resp. ActiveBad(PreAddSeq)) and CCΠ [Op] be the communication cost of
+a CGKA protocolΠ executing operation Op of Seq after executing all preceding operations ofSeq
+in order. Then:
+1. The amortized communication complexityof a protocolΠ that executes Seq is CCΠ [Seq] :=
+(∑
+Op∈P2∪P3 CCΠ [Op])/((α−1)·(𝓁+ 1)), where P2 and P3 are the corresponding phases in
+Seq of LazyBad(PreAddSeq) (resp. ActiveBad(PreAddSeq)).
+2. The expected amortized communication complexityof a protocol Π on random Seq drawn
+from LazyBad(PreAddSeq) (resp. ActiveBad(PreAddSeq)) is
+CCΠ (LazyBad(PreAddSeq)) := ESeq←$LazyBad(PreAddSeq)[CCΠ [Seq]]
+(resp. CCΠ (ActiveBad(PreAddSeq)) := ESeq←$ActiveBad(PreAddSeq)[CCΠ [Seq]]),
+where the randomness is over the choice ofSeq and the random coins ofΠ.
+5.2 Suboptimality of all CGKA Protocols
+We now state and prove our Theorem showing that all CGKA protocols must have suboptimal ex-
+pectedamortizedcommunicationcomplexityoneither LazyBad(PreAddSeq)or ActiveBad(PreAddSeq).
+First, we deﬁne a speciﬁcPreAddSeq which intuitively leaves the CGKA group in afull state:
+Deﬁnition 5.4.Valid sequence of CGKA operationsFulln contains the following operations in or-
+der: (Add, PK1, PK2), (Add, PK1, PK3),..., (Add, PK1, PKn), (Up, PK1,⊥), (Up, PK2,⊥),..., (Up,
+PKn,⊥).
+27
+
+Theorem 5.5.Let𝓁=O(k/ logn). Then for every CGKA protocolΠ and every PreAddSeq, there
+exists some other protocolΠ′such that either
+CCΠ (LazyBad(PreAddSeq))≥CCΠ′(LazyBad(Fulln))·Ω(𝓁/α2), or
+CCΠ (ActiveBad(PreAddSeq))≥CCΠ′(ActiveBad(Fulln))·Ω(k/𝓁logn).
+Note thatPreAddSeq can be anyvalid sequence that results in a group withn members, includ-
+ing (but not limited to)Fulln. As will be seen, our results combine general lower bounds for the
+considered protocol Π on any PreAddSeq, with upper bounds for protocolsΠ′on speciﬁcallyFulln.
+Before proving the Theorem, we separate CGKA protocolsΠ into two classes based on their ex-
+pectedbehaviorinphase P2ofasequencedrawnfrom LazyBad(PreAddSeq)or ActiveBad(PreAddSeq).
+The ﬁrst class of protocols are more likely than not to have somelazy user in phaseP2: i.e., a user
+whose update operation Op2,i = (Up, PKi+1,⊥) in phase P2 has communication cost CCΠ [Op] =
+o(k). The other class of protocols are the opposite – they are more likely than not to have only
+heavy users in phaseP2: i.e., all users have update operationsOp2,i = (Up, PKi+1,⊥) in phase P2
+with communication costCCΠ [Op] = Ω(k).
+Deﬁnition 5.6.CGKA protocolΠ is Lazy if Pr[∃i∈[α−1] : CCΠ [Op2,i] =o(k)]> 1/2. Otherwise,
+Π is Active.
+We ﬁrst show that there is a protocolΠ Active that has eﬃcient communication on sequences drawn
+from LazyBad(Fulln).
+Lemma 5.7. There is a protocol Π Active that has expected amortized communication cost
+CCΠ Active(LazyBad(Fulln)) =O(k/𝓁+ logn) on random Seq drawn fromLazyBad(n, Fulln,k,α,𝓁).
+Proof. The protocolΠ Active simply executes in phasesP0and P1as TTKEM does (c.f. Appendix F).
+It is easy to see that for anySeq drawn from LazyBad(n, Fulln,k,α,𝓁), after phaseP1 all nodes on
+the paths of added users’ (PKn+1,..., PKn+k) leaves to the root are tainted by user1, and all other
+nodes are untainted. Then, in phaseP2 each of the users that executeUp(PKi) behave as user1
+did in phaseP1, except that they refresh those nodes that are on the direct path of their own leaf,
+instead of user1’s leaf: i.e., they each independently refresh the tainted nodes of user1 (those on
+the paths from the leaves corresponding toPKn+1,..., PKn+k) in addition to the nodes on their
+direct path. Since there areO(k + logn) such nodes, it can easily be seen that each suchUp(PKi)
+can be done with communication costCCΠ [Op] = O(k + logn) (by systematically generating new
+secrets for each node and decrypting it to the public keys of its children, from the bottom of the
+tree to the top) and thus the total communication cost of phaseP2 is O((k + logn)·α). Then, in
+phase P3, the users that executeUp(PKi) in each of the𝓁repetitions simply refresh the nodes on
+their direct path and use the public keys generated by the userj that remains passive in phaseP3
+(i.e., does not execute any operations) to communicate with the added usersPKn+1,..., PKn+k; all
+other key pairs on the added users’ paths are never again used. Therefore, the total communication
+cost of phaseP3 is O(𝓁·α·logn). Thus, CCΠ Active(LazyBad) =O(k/𝓁+ logn).
+The security of Π Active follows almost immediately from the security of TTKEM and thus we
+omit a formal proof for brevity. Informally, the security of phasesP0 and P1 follows directly from
+the security of TTKEM. Now, assume that when phaseP2 begins, all users outside of users1,...,α
+that have been corrupted by the adversary have since executed anUp operation and they are never
+corrupted by the adversary again. If this is not the case, then security of the subsequent operations
+28
+
+is not required for any CGKA protocolΠ since, by correctness, the adversary can recover all group
+secrets of these operations. There are two scenarios to consider: First, if the chosen passive user
+j is corrupted after its update Up(PKj) of phase P2, then anyway for any CGKA protocol Π,
+security of the operations in phaseP3 is not required, as above. Otherwise, ifj is not corrupted
+after its update Up(PKj) of phase P2, then the key pairs that it generates for those nodes that
+are on the paths from the leaves corresponding toPKn+1,..., PKn+k remain secure. Additionally,
+the users that execute operationsUp(PKi) in phase P3 simply no longer encrypt to the key pairs
+generated by usersm other than userj for these nodes, so even if some such userm is corrupted,
+no secrets are encrypted to such key pairs it has generated. Moreover, they otherwise execute their
+update according to TTKEM, so their updates facilitate recovery as in TTKEM, and thus security
+follows.
+Now we show that those protocolsΠ that areLazy do not have eﬃcient communication on sequences
+drawn from LazyBad(PreAddSeq) for any PreAddSeq.
+Lemma 5.8.For every protocolΠ that isLazy and everyPreAddSeq, the expected total communica-
+tion costCCΠ (LazyBad(PreAddSeq)) = Ω(k/α2) on randomSeq drawn fromLazyBad(n, PreAddSeq,
+k,α,𝓁).
+Proof. Since Π is Lazy, with probability greater than1/2, one of the usersi who executesUp(PKi)
+in phase P2 does so with communication costCCΠ [Op] = o(k). The probability that this user is
+the userj randomly chosen in phaseP3 to remain passive (i.e., not execute any more operations)
+for the rest of Seq is 1/α. If this is indeed the case, then by Corollary 3.2, since the update
+of PKi had communication cost o(k), we know that each of the𝓁repetitions of phase P3 will
+have total communication costΩ(k). Putting things together, we have that forLazy protocols Π,
+CCΠ (LazyBad(PreAddSeq))> 1
+2α·(𝓁·Ω(k))/O(α·𝓁) = Ω(k/α2).
+Next we show that there is a protocolΠ Lazy that has eﬃcient communication on sequences drawn
+from ActiveBad(Fulln).
+Lemma 5.9. There is a protocol Π Lazy that has expected total communication cost
+CCΠ Lazy(ActiveBad(Fulln)) =O(logn) on random Seq drawn fromActiveBad(n, Fulln,k,α,𝓁).
+Proof. Π Lazy is simply TTKEM (c.f. Appendix F): It is easy to see that for any Seq drawn
+from ActiveBad(n, Fulln,k,α,𝓁), after phase P1 all nodes that are on the paths of added users’
+(PKn+1,..., PKn+k) leaves to the root are tainted by user1, and all other nodes are untainted.
+Therefore, it is obvious that all operations Up(PKi) of P2 and P3 have communication cost
+CCΠ [Op] = O(logn), since all such executing users own 0 taints. Thus CCΠ Lazy(ActiveBad) =
+O(logn).
+Finally, we show that those protocolsΠ that are Active do not have eﬃcient communication on
+sequences drawn fromActiveBad(PreAddSeq) for any PreAddSeq.
+Lemma 5.10. For every protocolΠ that is Active and every PreAddSeq, its expected total com-
+munication cost CCΠ (ActiveBad(PreAddSeq)) = Ω( k/𝓁) on random Seq drawn from ActiveBad(n,
+PreAddSeq,k,α,𝓁).
+29
+
+Proof. Since Π is Active, with probability at least1/2, all of the usersi that execute operations
+Up(PKi) in phase P2 do so with communication costCCΠ [Op] = Ω(k). If this is the case, then we
+know that phaseP2 has total communication costΩ(α·k). Putting things together, we have that
+for Active protocols Π, CCΠ (ActiveBad(PreAddSeq))≥1
+2·Ω(α·k)/O(α·𝓁) = Ω(k/𝓁).
+Proof of Theorem 5.5.Combining the results of Lemmas 5.7, 5.8, 5.9, and 5.10, Theorem 5.5 easily
+follows.
+The following corollary thus easily follows:
+Corollary 5.11. Letk = Ω(n), 𝓁= Θ(√n), andα=O(√logn). Then for every protocolΠ, there
+exists some other protocolΠ′such that either on a random sequence drawn fromActiveBad(Fulln), or
+from LazyBad(Fulln), Π′has a factor ofΩ(√n/ logn) better amortized communication in expectation
+than Π does.
+References
+[1] Alwen, J., Auerbach, B., Noval, M.C., Klein, K., Pascual-Perez, G., Pietrzak, K., Walter, M.:
+Cocoa: Concurrent continuous group key agreement. In: Advances in Cryptology - EURO-
+CRYPT 2022 (2022)
+[2] Alwen, J., Coretti, S., Dodis, Y.: The double ratchet: Security notions, proofs, and modular-
+ization for the Signal protocol. In: Ishai, Y., Rijmen, V. (eds.) EUROCRYPT 2019, Part I.
+LNCS, vol. 11476, pp. 129–158. Springer, Heidelberg (May 2019)
+[3] Alwen, J., Coretti, S., Dodis, Y., Tselekounis, Y.: Security analysis and improvements for
+the IETF MLS standard for group messaging. In: Micciancio, D., Ristenpart, T. (eds.)
+CRYPTO 2020, Part I. LNCS, vol. 12170, pp. 248–277. Springer, Heidelberg (Aug 2020)
+[4] Alwen, J., Coretti, S., Jost, D., Mularczyk, M.: Continuous group key agreement with active
+security. In: Pass, R., Pietrzak, K. (eds.) TCC 2020, Part II. LNCS, vol. 12551, pp. 261–290.
+Springer, Heidelberg (Nov 2020)
+[5] Alwen, J., Jost, D., Mularczyk, M.: On the insider security of mls. Cryptology ePrint Archive,
+Report 2020/1327 (2020),https://eprint.iacr.org/2020/1327
+[6] Alwen, J., Capretto, M., Cueto, M., Kamath, C., Klein, K., Markov, I., Pascual-Perez, G.,
+Pietrzak, K., Walter, M., Yeo, M.: Keep the dirt: Tainted treekem, adaptively and actively
+secure continuous group key agreement. In: 2021 IEEE Symposium on Security and Privacy
+(SP). IEEE (2021)
+[7] Balli, F., Rösler, P., Vaudenay, S.: Determining the core primitive for optimally secure ratch-
+eting. In: Moriai, S., Wang, H. (eds.) ASIACRYPT 2020, Part III. LNCS, vol. 12493, pp.
+621–650. Springer, Heidelberg (Dec 2020)
+[8] Barnes, R., Beurdouche, B., Robert, R., Millican, J., Omara, E., Cohn-Gordon, K.:
+The Messaging Layer Security (MLS) Protocol. Internet-Draft draft-ietf-mls-protocol-14, In-
+ternet Engineering Task Force (May 2022), https://datatracker.ietf.org/doc/html/
+draft-ietf-mls-protocol-14, work in Progress
+30
+
+[9] Bhargavan, K., Barnes, R., Rescorla, E.: TreeKEM: Asynchronous Decentralized Key
+Management for Large Dynamic Groups (2018), pubs/treekem.pdf, published at https:
+//mailarchive.ietf.org/arch/msg/mls/e3ZKNzPC7Gxrm3Wf0q96dsLZoD8
+[10] Bienstock, A., Dodis, Y., Garg, S., Grogan, G., Hajiabadi, M., Rösler, P.: On the worst-case
+ineﬃciency of CGKA. In: TCC 2022. LNCS, Springer (2022)
+[11] Bienstock, A., Dodis, Y., Rösler, P.: On the price of concurrency in group ratcheting protocols.
+In: Pass, R., Pietrzak, K. (eds.) TCC 2020, Part II. LNCS, vol. 12551, pp. 198–228. Springer,
+Heidelberg (Nov 2020)
+[12] Bienstock, A., Dodis, Y., Tang, Y.: Multicast key agreement, revisited. In: Galbraith, S.D.
+(ed.) Topics in Cryptology – CT-RSA 2022. pp. 1–25. Springer International Publishing, Cham
+(2022)
+[13] Bienstock, A., Dodis, Y., Yeo, K.: Forward secret encrypted ram: Lower bounds and applica-
+tions. In: TCC 2021: 19th Theory of Cryptography Conference (2021)
+[14] Bienstock, A., Fairoze, J., Garg, S., Mukherjee, P., Raghuraman, S.: A more complete analysis
+of the signal double ratchet algorithm. Cryptology ePrint Archive, Report 2022/355 (2022),
+https://ia.cr/2022/355
+[15] Boneh, D., Papakonstantinou, P.A., Rackoﬀ, C., Vahlis, Y., Waters, B.: On the impossibility
+of basing identity based encryption on trapdoor permutations. In: 49th FOCS. pp. 283–292.
+IEEE Computer Society Press (Oct 2008)
+[16] Boneh, D., Zhandry, M.: Multiparty key exchange, eﬃcient traitor tracing, and more from
+indistinguishability obfuscation. In: Garay, J.A., Gennaro, R. (eds.) CRYPTO 2014, Part I.
+LNCS, vol. 8616, pp. 480–499. Springer, Heidelberg (Aug 2014)
+[17] Canetti, R., Garay, J., Itkis, G., Micciancio, D., Naor, M., Pinkas, B.: Multicast security: a
+taxonomy and some eﬃcient constructions. In: IEEE INFOCOM ’99. Conference on Computer
+Communications. Proceedings. Eighteenth Annual Joint Conference of the IEEE Computer
+and Communications Societies. The Future is Now (Cat. No.99CH36320). vol. 2, pp. 708–716
+vol.2 (1999)
+[18] Canetti, R., Jain, P., Swanberg, M., Varia, M.: Universally composable end-to-end secure
+messaging. Cryptology ePrint Archive, Report 2022/376 (2022),https://ia.cr/2022/376
+[19] Canetti, R., Kalai, Y.T., Paneth, O.: On obfuscation with random oracles. In: Dodis, Y.,
+Nielsen, J.B. (eds.) TCC 2015, Part II. LNCS, vol. 9015, pp. 456–467. Springer, Heidelberg
+(Mar 2015)
+[20] Chung, K.M., Lin, H., Mahmoody, M., Pass, R.: On the power of nonuniformity in proofs of
+security. In: Kleinberg, R.D. (ed.) ITCS 2013. pp. 389–400. ACM (Jan 2013)
+[21] Cohn-Gordon, K., Cremers, C., Dowling, B., Garratt, L., Stebila, D.: A formal security
+analysis of the signal messaging protocol. In: 2017 IEEE European Symposium on Security
+and Privacy (EuroS P). pp. 451–466 (2017)
+31
+
+[22] Cohn-Gordon, K., Cremers, C., Garratt, L., Millican, J., Milner, K.: On ends-to-ends encryp-
+tion: Asynchronous group messaging with strong security guarantees. In: Lie, D., Mannan,
+M., Backes, M., Wang, X. (eds.) ACM CCS 2018. pp. 1802–1819. ACM Press (Oct 2018)
+[23] Coretti, S., Dodis, Y., Guo, S., Steinberger, J.P.: Random oracles and non-uniformity. In:
+Nielsen, J.B., Rijmen, V. (eds.) EUROCRYPT 2018, Part I. LNCS, vol. 10820, pp. 227–258.
+Springer, Heidelberg (Apr / May 2018)
+[24] Dodis, Y., Guo, S., Katz, J.: Fixing cracks in the concrete: Random oracles with auxiliary
+input, revisited. In: Coron, J.S., Nielsen, J.B. (eds.) EUROCRYPT 2017, Part II. LNCS, vol.
+10211, pp. 473–495. Springer, Heidelberg (Apr / May 2017)
+[25] Dowling, B., Hauck, E., Riepel, D., Rösler, P.: Strongly anonymous ratcheted key exchange.
+In: ASIACRYPT 2022. LNCS (2022)
+[26] Garg, S., Hajiabadi, M., Mahmoody, M., Mohammed, A.: Limits on the power of garbling
+techniques for public-key encryption. In: Shacham, H., Boldyreva, A. (eds.) CRYPTO 2018,
+Part III. LNCS, vol. 10993, pp. 335–364. Springer, Heidelberg (Aug 2018)
+[27] Gennaro, R., Trevisan, L.: Lower bounds on the eﬃciency of generic cryptographic construc-
+tions. In: 41st FOCS. pp. 305–313. IEEE Computer Society Press (Nov 2000)
+[28] Harney, H., Muckenhirn, C.: Rfc2093: Group key management protocol (gkmp) speciﬁcation
+(1997)
+[29] Mittra, S.: Iolus: A framework for scalable secure multicasting. In: Proceedings of the ACM
+SIGCOMM ’97 Conference on Applications, Technologies, Architectures, and Protocols for
+Computer Communication. p. 277–288. SIGCOMM ’97, Association for Computing Machinery,
+New York, NY, USA (1997),https://doi.org/10.1145/263105.263179
+[30] Perrin, T., Marlinspike, M.: The double ratchet algorithm (2016), https://signal.org/
+docs/specifications/doubleratchet/
+[31] Poettering, B., Rösler, P., Schwenk, J., Stebila, D.: SoK: Game-based security models for
+group key exchange. In: Paterson, K.G. (ed.) CT-RSA 2021. LNCS, vol. 12704, pp. 148–176.
+Springer, Heidelberg (May 2021)
+[32] Rösler, P., Mainka, C., Schwenk, J.: More is less: On the end-to-end security of group chats in
+signal, whatsapp, and threema. In: 2018 IEEE European Symposium on Security and Privacy,
+EuroS&P 2018 (2018)
+[33] Sherman, A.T., McGrew, D.A.: Key establishment in large dynamic groups using one-way
+function trees. IEEE Transactions on Software Engineering 29(5), 444–458 (2003)
+[34] Smart, N.P.: Eﬃcient key encapsulation to multiple parties. In: Blundo, C., Cimato, S. (eds.)
+SCN 04. LNCS, vol. 3352, pp. 208–219. Springer, Heidelberg (Sep 2005)
+[35] Wallner, D., Harder, E., Agee, R.: Rfc2627: Key management for multicast: Issues and
+architectures (1999)
+32
+
+[36] Weidner, M., Kleppmann, M., Hugenroth, D., Beresford, A.R.: Key agreement for decentral-
+ized secure group messaging with strong security guarantees. In: Vigna, G., Shi, E. (eds.)
+ACM CCS 2021. pp. 2024–2045. ACM Press (Nov 2021)
+[37] Wong, C.K., Gouda, M., Lam, S.S.: Secure group communications using key graphs. In: Pro-
+ceedings of the ACM SIGCOMM ’98 Conference on Applications, Technologies, Architectures,
+and Protocols for Computer Communication. p. 68–79. SIGCOMM ’98, Association for Com-
+puting Machinery, New York, NY, USA (1998),https://doi.org/10.1145/285237.285260
+A Omitted Preliminaries
+Lemma A.1.Letx1,...,xr be independent boolean random variables where for alli∈[r], Pr[xi =
+1]≥p. Then, Pr[x1 =···=xr = 0]≤1
+epr.
+Proof. For all realx: 1 +x≤ex, and hence(1−p)≤e−p.
+The black-box attack against CKE protocols makes use of the following lemma about output
+compression with respect to random oracles. The proof of this result uses a simple adaptation
+of the output compression technique from [24] (which, in turn, goes back to [27]), developed in
+the context of the auxiliary random oracle model. We simply tweak the parameters to match our
+precise setting.
+Lemma A.2. Let A = (Ag
+0, Ae
+1) be a two-phase adversary, whereAg
+0(1λ) outputs a stringx0 while
+only calling g, and Ae
+1(x0) outputs a string x1 while only calling e. Let Bg,u,v,d(x0,x 1) be an
+adversary that takes as input (x0,x 1), makes some number of queries to(g, u, v, d) (but not to
+e) and outputs a setChal ={(pk1,c 1),..., (pkw,cw)}. We say the eventSuccess holds if (i)w≥
+⌈2|x1|
+3λ⌉+ 1; (ii) all the pairs are distinct, and (iii) for alli∈[w] v(pki,ci) = ⊤. We then have
+Pr[Success]≤2−λ/2 = negl(λ), where the probability is taken over(g, e, d, u, v)←$ Ψ and the
+random coins ofA and B.
+Proof. (Sketch) As in all output compression results, we will show that the existence of such
+algorithms A, B, where B’s probability of success isε= 2−λ/2, leads to a pair of (computationally
+unbounded) compression/decompression algorithmsC and D which successfully compress a random
+function e :{0, 1}3λ×{0, 1}×{0, 1}λ→{0, 1}3λin a provably impossible way. Namely: (1) the
+output ofC(e) will save more thanlog(1/ε) bits compared to the length ofe; (3)D can successfully
+recover e with probability 1−εon the (“short”) output of the compressorC(e).
+In our case, we can ﬁx random oracles(g, u, v, d) and local randomness ofA, B, and only focus
+on compressing e. Our compressor C(e) will emulate the run A, B, and will only succeed when
+A, B jointly producew values Chal ={(pk1,c 1),..., (pkw,cw)}satisfying conditions (i)-(iii) of the
+Lemma. Inparticular, condition(iii)impliesthatforeachofthe w values (pki,ci)thereexistsinputs
+(mi,ri)∈{0, 1}×{0, 1}λs.t. e(pki,mi,ri) = ci. Our compressor C(e) will then output: (a) the
+compression stringx1 output by Ae
+1(x0); (b) the setIn ={(m1,r 1),..., (mw,rw)}in lexicographic
+order; (c) in lexicographic order, the set of all other outputs ofe except forw “special” input points
+(pki,mi,ri).
+We need to check two things now. First, that the output ofC(e) is enough forD to reconstruct
+e (when A, B succeed). Second, that the output ofC(e) is too short under the conditions of the
+Lemma. For the ﬁrst part, notice thatD has all the information it needs to successfully complete
+33
+
+the run of A, B, and thus obtain the setChal ={(pk1,c 1),..., (pkw,cw)}. This is so because x1
+is the only string which depended one, and C(e) was considerate enough to provide it in (a).
+Coupled with the setIn ={(m1,r 1),..., (mw,rw)}provided by the compressor in (b),D now has
+all the information to ﬁgure out thew input/output relationships missing in (c): namely, that
+e(pki,mi,ri) =ci for alli.
+It remains to argue that under the conditions (i) of the Lemma,C(e) would save more than
+log(1/ε) bits. Namely, the naive representation ofw outputs compressed in parts (a)+(b) of the
+compression string is3λwbits. However,C(e) only spent|x1|+w(1 +λ) bits. Thus, we must have
+that:
+|x1|+w(1 +λ) + log(1/ε)≥3wλ
+Recalling that we setw = (⌈2|x1|
+3λ⌉+ 1), we get that|x1|≥3(w−1)λ/2, and thus
+3(w−1)λ/2 +w(1 +λ) + log(1/ε)≥3wλ
+This easily implieslog(1/ε)≥wλ/2≥λ/2, orε≤2−λ/2.
+Lemma A.3.LetX1,...,Xt+1 be independent, Bernoulli random variables, wherePr[Xi = 1] =p,
+for alli≤t + 1. Then
+Pr[X1 = 0∧···∧Xt = 0∧Xt+1 = 1]≤1
+t.
+Deﬁnition A.4(Heavy queries/responses). Suppose Af(1λ) is an oracle-aided algorithm with ac-
+cess to an oraclef. We say a queryqu isp-heavy if the probability thatqu is asked during a random
+execution of Af(1λ) is at leastp. We say a responsey is ap-heavy response if the probability that
+a query/answer of the form (∗− →
+f
+y) occurs during a random execution ofAf(1λ) is at leastp.
+We say a set of query/answer pairsFreq contains a query qu if (qu− →
+f
+∗)∈Freq. We say a set
+of query/answer pairs Freq contains a responsey if (∗− →
+f
+y)∈Freq. Notice that ify has several
+pre-images (i.e., severalx1,...,xw such thatf(xi) =y for alli∈[w]), as long asFreq has at least
+one of those preimages (i.e., for somei∈[w]: (xi− →
+f
+y)∈Freq), we sayFreq contains the response
+y. That is, Freq does not need to contain all the pre-images ofy to deemy contained inFreq.
+Lemma A.5 (Heavy query/response learner). Suppose Af(1λ) is an oracle-aided algorithm with
+access to an oraclef, makingt :=t(λ)∈poly(λ) queries. Supposep = 1
+poly(λ), and letη≥ω(logλ)
+p .
+Let Freq be the set of all query/answer pairs generated duringηrandom executions of Af(1λ).
+With probability at least1− 1
+2ω(log(λ)), the setFreq contains both allp-heavy queries qu and p-heavy
+responsesy.
+Proof. We show that for anyp-heavy query qu the probability that qu does not occur duringη
+random executions is at most 1
+eω(logλ). Similarly, we show that for anyp-heavy response y, the
+probability thaty never occurs as a response duringηrandom executions is at most 1
+eω(logλ). Since
+the number ofp-heavy queries andp-heavy responses is at most2t2/p = poly(λ) in total (see below
+on why), the probability of missing at least onep-heavy query qu or at least onep-heavy response
+y is at most poly(λ)
+eω(logλ)≤ 1
+2ω(logλ), as desired.
+To see why we have at mostt2/p = poly(λ)p-heavy queries, note that ifqu isp-heavy, then for
+some indexi∈[t]: qu isithp/t-heavy (i.e., the probability that theith query isqu is at leastp/t).
+34
+
+For any indexi∈[t] we have at mostt/p queries which areith p/t-heavy. Thus, we have at most
+t2/p = poly(λ) queries which are globallyp-heavy.
+Similarly, if an outputy is ap-heavy response, then, by deﬁnition, the probability thaty occurs
+as a response to a query during a random execution ofAf(1λ) is at leastp. Thus, for some index
+i∈[t]: y is anith p/t-heavy response; namely, the probability that the output of theith query is
+y is at leastp/t. For anyi∈[t] we have at mostt/p responses which areith p/t-heavy response.
+Thus, we have at mostt2/p = poly(λ) responses which are globallyp-heavy.
+For ap-heavy query qu and i∈[η] let xi = 0 if qu does not occur during theith execution of
+Af(1λ). By Lemma A.1, the probability thatqu does not appear during any of theηexecutions is
+at most 1
+epη≤ 1
+eω(logλ).
+Similarly, for ap-heavy responsey, letxi = 0 if y does not occur as a response during theith
+execution of Af(1λ). By Lemma A.1, the probability thaty never appears as a response duringη
+executions is at most 1
+epη≤ 1
+eω(logλ).
+Lemma A.6. Let Af(1λ), t and p = 1
+poly(λ) be as in Lemma A.5. Let Freq be the set of all
+query/answer pairs generated duringηrandom executions ofAf(1λ), whereη≥ω(logλ)
+p . Let Q be
+a set of query/answer pairs generated during a random execution ofAf(1λ), made independently of
+Freq. Let L be a set oft queries made independently ofQ. Then the probability that there exists a
+query in L which also appears inQ\Freq is at most 1
+2ω(log(λ)) +tp.
+Proof. Let Bad be the event we need to bound. We let Collect be the event that all p-heavy
+queries are collected byFreq. By Lemma A.5,Pr[Collect]≤ 1
+2ω(log(λ)). Assuming Collect holds, the
+probability that any ﬁxed query ofL appears in Q\Freq is at mostp, and so the probability that
+some query ofL appears in Q\Freq is at mosttp. Thus,
+Pr[Bad]≤Pr[Collect] + Pr[Bad|Collect]≤ 1
+2ω(log(λ)) +tp, (1)
+as desired.
+Lemma A.7 (Intersection queries/responses learner). Let Af(1λ) be an oracle-aided algorithm
+making t :=t(λ)∈poly(λ) queries. Supposep = 1
+poly(λ), and letη≥ω(logλ)
+p . Let Freq be formed by
+recording all query/answer pairs made duringηrandom executions ofAf(1λ). Let Q1 and Q2 be
+the sets of query/answer pairs made during two random independent executions ofAf(1λ). We say
+Q1 and Q2 have an intersection query if(Q1\ Q2)⁄=∅. We say Q1 and Q2 have an intersection
+response, if there exists somey such that y occurs as a response in both Q1 and Q2; namely,
+(∗− →
+f
+y)∈Q1 and (∗− →
+f
+y)∈Q2. The probability that there exists an intersection query or an
+intersection response betweenQ1 and Q2 which is not picked up byFreq is at most 2tp + 1
+2ω(logλ).
+That is,
+Pr[(((Q1\ Q2)\Freq))⁄=∅)
+
+(∃y s.t. (∗− →
+f
+y)∈Q1∧(∗− →
+f
+y)∈Q2∧(∗− →
+f
+y) /∈Freq)]≤
+2tp + 1
+2ω(logλ)
+Proof. Let Intersect be the probability of the event we want to bound. By Lemma A.5 the probabil-
+ity of the event,Pick, that allp-heavy queriesqu and allp-heavy responsesy are picked up byFreq
+35
+
+is at leastα:= 1− 1
+2ω(logλ). Assuming Pick, the probability that any ﬁxed queryqu of Q1 appears
+in Q2\Freq is at mostp. The reason is that sincePick holds and qu /∈Freq, the query qu is not
+p-heavy, hence occurring with probability at mostp during another random execution. Similarly,
+the probability that any ﬁxed responsey contained in Q1 also appears in Q2\Freq is at mostp.
+Assuming Pick, the probability there existsqu∈Q1 such that qu∈Q2\Freq is at mosttp, by the
+union bound. Similarly, assumingPick, the probability there exists a responsey in Q1 such thaty
+also appears inQ2\Freqis at mosttp. Thus, Pr[Intersect]≤ 1
+2ω(logλ) +(1− 1
+2ω(logλ) )2tp≤2tp+ 1
+2ω(logλ).
+The proof is now complete.
+Lemma A.8(Hitting the image of random injective function). Let Af(1λ) be a polynomial-query
+algorithm with access to an oraclef :{0, 1}λ→{0, 1}3λchosen uniformly at random from the set
+of all functions from{0, 1}λto{0, 1}3λ. The adversary A at the end outputst points. We have
+Pr[(y1,...,yt)←$ Af(1λ) and∃i∈[t] and x s.t. yi =O(x)∧(∗− →
+O
+yi) /∈QA]≤2−2λ,
+where the probability is taken over the random choice off as well asA’s random coins, and where
+QA is the set of allA’s query-answer pairs.
+B Omitted Proofs from Section 4
+Proof of Lemma 4.14.We prove this fori = 1. We will use Lemma A.6. For this proof, letFreq
+denote the value ofFreq right after Line 2 (and before executing Line 3) ofBrk’s execution. If the
+event Empty1 occurs, there must exist a queryqu := (sk− →g pk)∈QGen1 such that (a)qu /∈Freq
+and (sk− →g ∗)∈Forbid, or (b)(∗− →g pk)∈Forbid and (∗− →g pk) /∈Freq. If neither (a) nor (b) holds,
+there will always exist a(~SKi, g′
+i) as per line 4a ofBrk’s computation. Letp = λ0.1
+η and notice that
+η≥ω(logλ)
+p .
+Deﬁne a setL of queries as follows:
+• For any(sk− →g ∗)∈Forbid, add (sk− →g ?) to L; and
+• for any (∗− →g pk)∈Forbid, if g−1(pk)⁄=⊥, add (sk− →g ?) to L, where sk = g−1(pk).14
+If the eventEmpty1 occurs, then the eventE deﬁned asQuery(QGen1\Freq)\ L⁄=∅holds.
+Since the setForbid, as well asL, are formed independently ofQGen1, and thatL has most2η′λ
+elements, invoking Lemma A.6 forp = λ0.1
+η and t :=|L|≤2η′λ
+Pr[Empty1]≤Pr[E]≤ 1
+2ω(logλ) + 2λ1.1η′
+η . (2)
+Proof of Lemma 4.15.We prove this for a ﬁxed value ofh (say,h = 1), and the overall bound will
+follow via a union bound, via an additional multiplicative factor ofn. Recall that Agree is the
+event that the union setS := QC∪QEnc∪i⁄=1 QGeni agrees with g′
+1, where QEnc, QC and QGeni
+14Since g is chosen at random and has a sparse range, there will exist at most one pre-image, with all but negligible
+probability.
+36
+
+are deﬁned in Notation 4.12. First, notice thatg′
+1 always agrees withQEnc, because the former has
+only g-type queries, while the latter hase-type queries. Thus, we need to bound the probability
+that for any(x− →g y)∈QC∪i⁄=1 QGeni, either (x− →g ∗) /∈g′
+1 or (x− →g y)∈g′
+1.
+We break up the eventAgree into Agree1 and Agree2. We let Agree1 be the event QC agrees
+with g′
+1, and letAgree2 be the eventS′:=∪i⁄=1QGeni agrees with g′
+1.
+We ﬁrst bound the probability ofAgree1. Let P be the process performed in each itera-
+tion of Line 3 of Brk, namely the process of sampling a fresh(PK,∗) and running (~SK, g′)←$
+ConsOrc(PK, Freq, Forbid), and updatingForbidaccordingly. Notice that(~SK1, g′
+1) of Line 4a ofBrk
+is sampled according to the same process. We say an iteration of the processP is Good if either
+(a) the sampledg′in that iteration is empty; or (b)Query(g′)\ Query(QC\Freq) =∅. Otherwise,
+we say that iteration ofP is Bad. The event Agree1 is the event that the iteration corresponding
+to (~SK1, g′
+1) in Line 4a isBad. Also, notice that since|QC|=λ, we have at mostλBad iterations.
+The reason for this is that if for some iteration the eventBad happens, then the particular query
+of QC which caused Bad is added toForbid, and so the same query cannot makeBad happen in a
+future iteration. Now since the iteration for(~SK1, g′) is the(γ+ 1)’s iteration, whereγ←$ [η′], the
+probability that that iteration isBad is at mostλ
+η′. Thus, Pr[Agree1]≤λ
+η′.
+We now bound the eventAgree2. Notice ifAgree1 holds, there must exist a query ing′
+1 that also
+appears in QGeni\Freq for somei> 1. Let p = λ0.1
+η and notice thatη≥ω(logp)
+p . Since QGeni for
+all i∈{2,...,n}is formed independently ofg′
+1, applying Lemma A.6 forp and η, the probability
+there is an intersection betweeng′
+1 and (∪i⁄=1QGeni)\Freq is at most 1
+2ω(log(λ)) +nλ1.1
+η. Here we used
+the fact that|∪i⁄=1 QGeni|<nλ.
+Proof of Lemma 4.16.Weproveitfor i = 1. Theproofworksexactlyasthatofbounding Pr[Agree1]
+in Lemma 4.15. So, we repeat the argument with the necessary modiﬁcations. Let P be the
+process performed in each iteration of Line 3 ofBrk, namely the process of sampling a fresh(PK,∗)
+and running (~SK, g′)←$ ConsOrc(PK, Freq, Forbid), and updating Forbid accordingly. Notice that
+(~SK1, g′
+1) of Line 4a ofBrk is sampled according to the same process. We say an iteration of the
+process P is Good if either (a) the sampled g′in that iteration is empty; or (b) there does not
+exist a query/answer pair (∗− →g pk)∈g′such that (∗− →g pk)∈QA\ Freq. Otherwise, we say
+that iteration ofP is Bad. The event Surprise1 is the event that the iteration corresponding to
+(~SK1, g′
+1) in Line 4a isBad. Also, notice that since|QC|= λ, we have at mostλBad processes.
+The reason for this is that if for some iteration the eventBad happens, then the particular public
+key pk of QC which causedBad is added toForbid, and so the samepk cannot makeBad happen in
+a future iteration. Now since the iteration for(~SK1, g′) is the (γ+ 1)’s iteration, whereγ←$ [η′],
+the probability that that iteration isBad is at mostλ
+η′.
+Proof of Lemma 4.17.We show whenever the eventSpoof holds, we can forge a public keypk in
+the sense of Lemma A.8, implying the bound of 1
+22λ. We build an adversary A in the sense of
+Lemma A.8, as follows. The adversaryA will generate all(PK1,..., PKn), which are the input to
+Brk, by running CRS←$ CRSGeng(1λ) and (PKi,∗)←$ Initg(CRS). Then A performs the steps
+of Brk up until producingg′
+1,..., g′
+n – while populatingFreq as in Brk’s procedure. At this point
+notice that all queries made tog by A thus far are either contained inQA∪QGen1∪···∪QGenn
+or in Freq. Thus, if the eventSpoof holds, then A has indeed forged apk.
+37
+
+Proof of Lemma 4.19.We claimPr[Evnt2∧Surprise∧Spoof∧Intersect]≤negl(λ). Assuming this,
+by Lemmas 4.16, 4.17, 4.14, 4.18
+Pr[Surprise∨Spoof∨Intersect]≤nλ
+η′+ 1
+22λ+ 2n2λ1.1
+η + n2
+2ω(logλ). (3)
+Assuming η′≥nλc+1 and η≥nη′λ1.1+c,
+Pr[Surprise∨Spoof∨Intersect]≤4
+λc. (4)
+Thus, Pr[Evnt2]≤5
+λc, as desired.
+To prove the above claim, we show whenever all the events
+Evnt2∧Surprise∧Spoof∧Intersect
+hold, we can build a forger in the sense of Lemma A.2. The desired bound will then follow.
+Since Evnt2 holds, Forge = 1 . Let Chal := {(pk1,c 2),..., (pkn,cn)}be the set of public
+key/ciphertexts built up by Brk. To apply Lemma A.2, think of (PK1,..., PKn) as x0, of C as
+x1, and ofChal as the challenge set required by the lemma. First, note that a forgerBg,u,v,d(x0,x 1)
+may indeed eﬃciently computeChal, because Brk never makes e queries, so Brk can be simulated
+by B. We have to ensure: (i)n≥⌈2|C|
+3λ⌉+ 1; (ii) all the pairs inChal are distinct, and (iii) for all
+i∈[n] v(pki,ci) =⊤. Condition (i) holds because|C|≤3λ(n−1)
+2 , by assumption. Condition (iii)
+holds by the check (4(c)i) made byBrk.
+We now show Condition (ii) holds. We will prove a stronger statement by showing that in
+fact all pki’s in the setChal are distinct.15 For anyi∈[n], we claim: (a) (∗− →g pki)∈g′
+i, (b)
+(∗− →g pki) /∈Freq, and (c) pki∈g(∗). Conditions (a) and (b) hold because otherwise none of
+the sub-bullets of Line 4c (and in particular Line 4(c)iii) would be hit, and so(pki,ci) would not
+be added to Chal. Also, (c) holds because otherwise Line (4(c)ii) ofBrk would be hit, and hence
+(pki,ci) would not be added toChal.
+Nowsince Spoof holds, Condition(a)and(c)implythatforsome ski, (ski− →g pki)∈∪i∈[n]QGeni∪
+QC∪Freq. Since (b) holds,(∗− →g pki)∈∪i∈[n]QGeni∪QC. Since Surprise and (b) hold,(∗− →g pki)∈
+∪i∈[n]QGeni. Finally, since (b) andIntersect hold, for all distincti and j: pki⁄= pkj. Indeed, since
+we already know(∗− →g pki)∈QGeni\Freq and (∗− →g pkj)∈QGenj\Freq, if pki = pkj, then the
+assumption that Intersect holds will be violated. The proof is now complete.
+C CKE Impossibility from Black-Box PKE: General Case
+In this section, we present the general attack against CKE constructions that make use of the oracles
+in arbitrary ways. To make proofs simpler, we assume that the CKE protocol is in acomplied form,
+with oracle access as(CRSGeng,e, Initg,e, Commg,e, Deriveg,e,d). Namely, we assume that no calls
+to d are made byCRSGen, Init and Comm. One may put any protocol into this compiled form by
+using standard compilation techniques [19, 26]. First, notice that we might assume thatCRSGen
+15In order for Lemma A.2 to apply it suﬃces to prove that the pairs are distinct.
+38
+
+makes no d queries, because answers to such queries can be predicted. Next, forInit we might
+assume that it does not make anyd queries that it knows the answers to already (i.e., any query
+((sk,c )− →
+d
+?) such that Init has already produced a query/response pair((pk,∗,∗)− →e c), where
+pk := g(sk)). Thus, the only non-trivial decryption queries are of the form((sk,c )− →
+d
+?) where c
+was generated byCRS←$ CRSGen(1λ). Here is where the idea of compilations comes into play: we
+might compileCRSGen and Init such thatCRSGen will sample many random executions ofInit in
+its head and will collect all decryption queries appearing there; then, it will append the answers to
+all such queries intoCRS. This way we can changeInit so that it will make no decryption queries.
+Similarly, we can get rid ofd queries forComm, since both preceding algorithms (namely,CRSGen
+and Init) can run many executions ofComm and provide decryption answers as part of their local
+outputs. Finally, we note that the reason we cannot do this step of ridding ofd queries as easily
+for Derive is that Derive takes in a private key, which is not available to the previous algorithms.
+For our general case we need a more general version of the output compression lemma, as given
+below. Informally, under this more general version, we allow the forger to calle, but it should forge
+public key/ciphertexts pairs that are not generated as part ofe queries. Due to this restriction, the
+proof template of Lemma A.2 still holds in this more general case, and we get the following more
+general variant (whose proof is omitted).
+Lemma C.1.Let Ag,e be an arbitrary adversary that makes a number of queries and outputs an ‘ad-
+vice’ stringx. Let Bg,e,u,v,d(x) be an adversary that takes as inputx, makes queries to(g, e, u, v, d)
+and outputs a setChal ={(pk1,c 1),..., (pkw,cw)}. Suppose Q is the set of all queries/responses
+made by B. We say Chal is non-trivial if for noi∈[w], ((pki,∗,∗)− →e ci)∈Q. We say the event
+Success holds if (i) w ≥ ⌈2|x|
+3λ⌉+ 1; (ii) all the pairs in Chal are distinct, (iii) for all i∈[w]
+v(pki,ci) =⊤and (iv) Chal is non-trivial. We then havePr[Success] = negl(λ), where the proba-
+bility is taken over(g, e, d, u, v)←$ Ψ and the random coins ofA and B.
+For the general attack, we need to enhance the frequent queries learner, so that it also learns
+the heavy queries ofComm, in addition to those ofInit.
+Deﬁnition C.2(Sampling frequent queries). We deﬁne a probabilistic oracle procedureFreqPubO:
+• Input: (CRS,η), whereηis an integer.
+• Output: A set of query/response pairs Freq sampled as follows. Let Freq = ∅. Do the
+following ηtimes, and record all query/answer pairs inFreq.
+1. Sample n public keys PK1,..., PKn by running Initg,e(CRS) n diﬀerent times.
+2. Execute Commg,e(PK1,..., PKn).
+We also need a procedure that allows us to super-impose a set of encryption queriesQc (sampled
+independently of e) into e, in such a way that the super-imposed encryption oracle,eimp, agrees
+with Qc, and with e as much as possible, and also thateimp has a corresponding super-imposed
+decryption oracle.
+Deﬁnition C.3.Let O := (g, e, d) be a Ψ-valid oracle and let
+Qc :={{((pk1,b 1,r 1)− →e c1),..., ((pkw,bw,rw)− →e cw)}}
+39
+
+be a set ofe-type query answer pairs, which may not agree withe. We deﬁne(eimp, dimp) := Qc♦∗O,
+obtained by super-imposingQc on O, as follows.
+First, let W ={(pk1,c 1),..., (pkp,cp)}and
+W′={(pk1, e(pk1,b 1,r 1)),..., (pkp, e(pkp,bp,rp))}.
+Deﬁne
+eimp(pk,b,r ) =
+
+
+
+ci if (pk,b,r ) = (pki,bi,ri), for somei∈[w]
+ˆc else if (pk, e(pk,b,r ))∈W,
+e(pk,b,r ) otherwise
+(5)
+where ˆc is deﬁned as follows: Lettingx be the smallest integer such that(pk, e(pk,b,r +x)) /∈W∪W′
+we set ˆc = e(pk,b,r +x). Here,r +x is done using a standard method.
+dimp(sk,c ) =
+{
+bi if g(sk) = pki and c =ci for some 1≤i≤w
+d(sk,c ) otherwise (6)
+C.0.1 Description of the Attacker
+We now give the CKE attacker for the general case. The attacker will at the end output a
+(polynomial-sized) set of keys, and we will be interested in the probability that the set contains the
+shared key. Since the set has a polynomial number of keys, we can also guess the correct key with
+a non-negligible probability, assuming that the set has indeed the correct key.
+Brkg,e,d,u,v(CRS, PK1,..., PKn,C ) :
+1. Let DecValues :=∅and Forbid =∅. The setDecValues will maintain all decryption values.
+2. Do the following forηiterations. Sample randomness R and execute FreqPubO(CRS) and
+record all query/response pairs inFreq.
+3. Sample γ←$ [η′] and do the followingγtimes. Run (PK,∗)←$ Initg(CRS) using fresh
+randomness, sample (~SK, g′, e′)←$ ConsOrc(PK, Freq, Forbid), and
+(a) for every qu := (sk− →g pk)∈g′\Freq, add (sk− →g ?) to Forbid. Also, for any(sk− →g pk)∈
+g′\Freq if (∗− →g pk) /∈Freq, add (∗− →g pk) to Forbid.
+(b) for every qu := (( pk,b,r )− →e c)∈e′\ Freq, add ((pk,b,r )− →e ?) to Forbid. Also, for
+((pk,b,r )− →e c)∈e′\Freq, if ((pk,∗,∗)− →e c) /∈Freq, add ((pk,∗,∗)− →e c) to Forbid.
+At the end of each iteration, update Freq by adding all queries made during (PK,∗)←$
+Initg(CRS) to Freq.
+4. Fori∈[n]
+(a) Sample (~SKi, g′
+i, e′
+i)←$ ConsOrc(PKi, Freq, Forbid). If (~SKi, g′
+i, e′
+i) =⊥, then halt.
+(b) Let O′′
+i = (g, e′′
+i, d′′
+i ) := e′
+i♦∗O.
+(c) Let (~gi,~ei,~di) := g′
+i♦∗O′′
+i.
+40
+
+(d) Parse e′
+i :={((pk1,∗,∗)− →e c1),..., ((pkλ,∗,∗)− →e cλ)}. For allj∈[λ], add both(pki,ci)
+and (pki, e(pki,bi,ri)) to Q. Also, for any(pk,c ) such that ((pk,∗,∗)− →e c)∈Freq, add
+(pk,c ) to Q.
+(e) Execute Derive~gi,~ei,~di(~SKi,C ) and reply to queries as follows. Reply to all ~gi and ~ei
+queries as Part 2 of Lemma C.4. For a queryqu := ((sk,c )−→
+~di
+?), if (sk− →g ∗)∈Freq
+or (sk− →g ∗) /∈g′, then reply to the query as in Part 3 of Lemma C.4. Otherwise, let
+pk = ~gi(sk) — which can be computed eﬃciently — and
+i. if (sk′− →g pk)∈Freq for some sk′, reply toqu with d(sk′,c );
+ii. if (pk,c )∈Q, then reply to the query as in Part 4 of Lemma C.4.
+iii. else if v(pk,c ) =⊥, then reply toqu with⊥;
+iv. else if u(pk,c ) =m⁄=⊥, then reply toqu with m;
+v. else, reply toqu with⊥and add (pk,c ) to Chal.
+(f) Letting ~Ki be the output of the simulated decryption ofDerive~d(~SKi,C ), add ~Ki to
+DecValues.
+We give the following lemma whose proof is immediately obtained via inspection, and so the
+proof is omitted.
+Lemma C.4. Fix an Iterationi∈[n] in Step 4 ofBrk’s procedure. Lete′
+i :={((pkj,bj,rj)− →e cj)|
+j∈[λ]}. Deﬁne
+W :={(pkj,cj)|j∈[λ]} (7)
+W′:={(pkj, e(pkj,bj,rj)|j∈[n]). (8)
+Let Q := W∪W′∪{(pk,c )|((pk,∗,∗)− →e c)∈Freq}, as in Step 4d ofBrk’s procedure.
+1. (~gi,~ei,~di) is a PKE-valid oracle; i.e., it satisﬁes perfect correctness (Deﬁnition 4.7).
+2. Both ~gi and ~ei (Step 4c) can be computed eﬃciently on all points by having oracle access to
+(g, e) and having (g′
+i, e′
+i) as input.
+3. For any(sk,c ) if (sk−→
+g′
+i
+?) /∈g′
+i, or (sk− →g ?)∈Freq, or (∗− →g pk)∈Freq where pk := ~gi(sk),
+then ˜d(sk,c ) can be eﬃciently computed by having oracle access to(g, e, d) and having g′
+i and
+e′
+i as an input.
+4. For any query ((sk,c ) − →
+~d
+?), letting pk := ~gi(sk) (which can be computed eﬃciently as
+per Line 2), if (pk,c )∈Q, then ((sk,c )− →
+~d
+?) can be computed eﬃciently, as follows. If
+((pk,b,r ) − →e c) ∈Freq for some b and c, then ~d(sk,c ) = b. If (pk,c ) ∈W′\ W, then
+~d(sk,c ) =⊥. Else, if (pk,c ) = (pkj,cj) for j∈[λ], then~d(sk,c ) =bj.
+41
+
+C.0.2 Analysis of the Attack
+We work with the events given in Deﬁnition 4.13 with the following modiﬁcations. We deﬁne the
+event
+• Event Evnt2: the event that for everyi∈[n], Line 4(e)v is hit with a value(pk,c ) such that
+((pk,∗,∗)− →e c)∈QEnc\(∪iQGeni∪QC∪Freq).
+We will bound all these bounds below. The bounds for eventsSurprise, Spoof and Intersect are
+exactly those of Lemmas 4.16, 4.17 and 4.18, with exactly the same proofs. We now bound the
+other events which require a slightly more general analysis.
+Lemma C.5.Assumingη≥λ0.1, for anyi∈[n] Pr[Emptyi]≤ 1
+2ω(logλ) +λ1.1η′
+η . Thus, Pr[Empty]≤
+n
+2ω(logλ) + nλ1.1η′
+η
+Proof. We prove this fori = 1. The event Empty1 occurs if there exists a queryqu∈QGen1 such
+that∈Forbid\Freq. This is so becauseQGen1 consists only ofg and e-type queries, and as long
+as all queries ofQGen1 can be picked byg′
+1, the eventEmpty1 will not occur. But in order for ag
+and e-type query of QGen1 becomes “oﬀ-limits”, the same query should have been put inForbid.
+Now exactly as in Lemma 4.14 we may concludePr[Emptyi]≤ 1
+2ω(logλ) + λ1.1η′
+η .
+Lemma C.6. Assumingη≥λ0.1, Pr[Agree]≥1− 3n
+2ω(log(λ))−(n2+n)λ1.1
+η −3λn
+η′−λ1.1
+η.
+Proof. We prove this for a ﬁxed value ofh (say,h = 1), and the overall bound will follow via a
+union bound. We let Agree′be the event thatg′
+1 agrees with QC∪QEnc∪i⁄=1 QGeni and Agree′′
+be the event thate′
+1 agrees with QC∪QEnc∪i⁄=1 QGeni. It is easy to see that the probability of
+Agree is at mostPr[Agree′] + Pr[Agree′′]. Using the same argument as in Lemma 4.15,Pr[Agree′]≤
+1
+2ω(log(λ)) + λ
+η′+ nλ1.1
+η.
+To boundAgree′′we break upAgree′′into Agree′′, Agree′′
+2 and Agree′′
+3, where these describe the
+events that~e1 agrees with QC, with∪i⁄=1QGeni, and withQEnc, respectively.
+We ﬁrst boundAgree′′
+1. LetP be the process performed in each iteration of Line 3 ofBrk, namely
+the process of sampling a fresh(PK,∗) and running (SK′, g′, e′)←$ ConsOrc(PK, Freq, Forbid), and
+updating Forbid accordingly. Notice that (~SK1, g′
+1, e′
+1) of Line 4a of Brk is sampled according to
+the same process. We say an iteration of the processP is Good if either (a) the sampled e′in
+that iteration is empty; or (b) there does not exists any((pk,b,r )− →e c)∈QC\ Freq such that
+either ((pk,b,r )− →e ∗)∈e′\Freq or ((pk,∗,∗)− →e c)∈e′\Freq. Otherwise, we say that iteration of
+P is Bad. By inspection, one can see that wheneverAgree′′
+1 holds, the iteration corresponding to
+(~SK1, g′
+1, e′
+1) in Line 4a isBad. Also, notice that since|QC|=λ, we have at most2λBad iterations.
+This is so because any query inQC can make at most two iterationsBad. Now since the iteration
+for (~SK1, g′
+1, e′
+1) is the(γ+ 1)’s iteration, whereγ←$ [η′], the probability that that iteration isBad
+is at most 2λ
+η′. Thus, Pr[Agree2]≤2λ
+η′.
+Exactly as in the proof of Lemma 4.15 we can deducePr[Agree′′
+2]≤ 1
+2ω(log(λ)) + nλ1.1
+η.
+To bound Agree′′
+3, notice if Agree′′
+3 holds, there must exist a query in~e1 that also appears in
+QEnc. Letp = λ0.1
+η and notice thatη≥ω(logp)
+p . Since QEnc is formed independently of~e1, applying
+Lemma A.6 forp and η, the probability there is an intersection between~e1 and QEnc\Freq is at
+most 1
+2ω(log(λ)) + λ1.1
+η.
+42
+
+We now prove a lemma analogous to Lemma 4.19.
+Lemma C.7. Suppose|C|≤3λ(n−1)
+2 , whereC is the CKE ciphertext. For any constantc > 0,
+assuming η′≥nλc+1 and η≥nη′λ1.1+c, Pr[Evnt2]≤5
+λc.
+Proof. The proof follows similarly to that of 4.19, except in the way Lemma C.1 will be invoked.
+First, similarly to Lemma C.1
+Pr[Surprise∨Spoof∨Intersect]≤4
+λc, (9)
+obtained from the way in whichηand η′are instantiated. We will now show whenever all the
+events Evnt2∧Surprise∧Spoof∧Intersect hold, we can build a forger in the sense of Lemma C.1.
+The desired bound will then follow.
+Let Chal := {(pk1,c 1),..., (pkm,cm)}be the set of public key/ciphertexts built up by Brk.
+Notice that it might be thatm > n(because upon hitting Line 4(e)v, Brk continues the exe-
+cution while pretending the answer is⊥, while adding the pair toChal), and that Chal contains
+pairs that do not cause a contradiction, when applying Lemma C.1. So, we have to remove some
+pairs from Chal, as explained below. To apply Lemma C.1, sample randomnessR for generating
+(CRS, PK1,..., PKn). Let Ag,e,d be an adversary that hasR hardwired, and which usesR to gener-
+ate (CRS, PK1,..., PKn), and which outputsC formed as(C,∗)←$ Commg,e(PK1,..., PKn) using
+fresh randomness. Now letBg,e,d,u,v(C), also gettingR hardwired in, be an adversary that usesR
+to re-generate (CRS, PK1,..., PKn) and will then simulateBrk(PK1,..., PKn,C ) to get Chal. Now
+for every pair(pk,c ) in Chal such that there was a query((pk,∗,∗)− →e c)∈∪iQGeni∪QC made by
+B, it will remove(pk,c ) from Chal. The fact that Evnt2 holds implies that Chal remains with at
+leastn pairs, none of which was generated as a result of a previouse query, byB. From this point
+on, using exactly the same arguments in Lemma 4.19, we can conclude that all pairs inChal are
+distinct and valid. The proof is now complete.
+Now that all the events have been bounded, we can prove an analogous statement to that of
+Lemma 4.20, hence proving a lowerbound on the probability of attack success. This will imply
+Lemma 4.4.
+D Proof of CGKA Lower Bound
+Proof of Theorem 3.1.We build a CKE construction that internally uses a CGKA scheme to exe-
+cute a CGKA operation sequence. For conducting a CKE commit tok public keys, this operation
+sequence contains at least onecollective update assistancefork passive users. The core idea of the
+CKE construction is that precisely theeﬀective operationsof thiscollective update assistancein the
+CGKA sequence are embedded in the committed CKE ciphertext. Hence, the total size of these
+eﬀective CGKA operationsequals the size of the CKE ciphertext. All remaining operations in the
+CGKA sequence are, in diﬀerent shapes, encoded in the CKE common reference stringCRS.
+As part of the proof, we reduce the security of this CKE construction to the security of the
+underlying CGKA scheme. Finally, we show that a CGKA scheme that executes this sequence
+without inducing a communication overhead ofΩ(k) for the eﬀective operationsimplies a CKE
+construction with compact ciphertexts.
+43
+
+CKE Construction. For clarity, we build a CKE construction that always commits tok public
+keys, wherek∈poly(λ) is ﬁxed andλis the security parameter. This CKE construction can be
+instantiated with any CGKA operation sequenceSeq that addsk passive users and performs at
+least one subsequentcollective update assistance.
+Internally, the CKE construction executes CGKA operation sequenceSeq. All eﬀective opera-
+tions of the includedcollective update assistancein that sequence are embedded in the committed
+CKE ciphertext. Thepre-add phaseas well as random coins for the remaining operations in that
+sequence (i.e.,add operationsand ineﬀective pre-assistance operations) are embedded in the CKE
+common reference stringCRS. When processing a received CKE ciphertext to derive the exchanged
+CKE key, all receivers independently execute the same CGKA operation sequenceSeq internally.
+Firstly, the pre-add phase is decoded from the CRS and processed. Then, random coins are de-
+coded from theCRS with which thek add operationsand the subsequentineﬀective pre-assistance
+operations are locally executed and then processed. Finally, the CGKA ciphertexts of theeﬀective
+operations are decoded from the received CKE ciphertext and then processed in order to compute
+the CGKA key of the last operation in thecollective update assistance. This CGKA key is output
+as the derived CKE key.
+Letk be the ﬁxed number of input public keys for CKE commits, andSeq be a CGKA execution
+schedule that addsk passive usersfrom thetA
+1 th until thetA
+k th operation and afterwards performs
+a collective update assistanceuntil thet∗th operation. Without loss of generality, sequenceSeq
+ends with thet∗th operation such that theirrelevant end of that sequence is disregarded. Then
+PU is the set of passive users’ public keys in that sequence,AUt∗is the set of active users’ public
+keys, and EOt∗is the set of eﬀective operations.
+• CRSGen:
+1. Execute (PK, ST)←$ Gen for all users in sequenceSeq except for those in setPU
+2. Add (PK, ST) to CRS for all users in setAUt∗
+3. Add only PK to CRS for all users not in setPU∪AUt∗
+4. Sample random coins for all operations inSeq and execute the sub-sequence that ends
+with thetA
+1−1th operation with their coins
+5. Add the random coins for all operations toCRS that were initiated by users in setAUt∗
+except for the random coins of operations in setEOt∗
+6. Add the output ciphertexts of all operations toCRS that were initiated by users not in
+set PU∪AUt∗
+7. Add the description ofSeq to the CRS
+8. Return CRS
+• Init(CRS):
+1. Execute (PK, ST)←$ Gen
+2. Return (PK, SK) = (PK, ST)
+• Comm(CRS,{PKi}i∈[k]):
+1. Execute sequence Seq until the tA
+1 −1th operation with the secret states of users in
+set AUt∗, respective random coins, and ciphertexts fromCRS.
+44
+
+2. Execute sequenceSeq from thetA
+1 th to thetA
+k th operation with the secret states of users
+in set AUt∗and the respective random coins fromCRS. Each of thek operations that
+add users in setPU takes a public key from input{PKi}i∈[k] as actually added CGKA
+user in a distinct order
+3. Execute sequence Seq from thetA
+k + 1th to thet∗th operation with the secret states of
+users in set AUt∗from CRS. Operations not in set EOt∗use their respective random
+coins from CRS and operations in setEOt∗use freshly sampled random coins
+4. Use the CGKA key output by thet∗th operation as CKE keyK
+5. Compose the CKE ciphertextC from the list of ciphertexts output by operations in
+set EOt∗
+6. Return (K,C )
+• Derive(CRS, SK,{PKi}i∈[k],C ):
+1. Execute steps 1 and 2 from algorithmComm identically
+2. Execute and/or process sequence Seq from the tA
+k + 1th to the t∗th operation with
+the secret states of users in set AUt∗from CRS and secret state ST from input SK.
+Operations not in setEOt∗use their respective random coins fromCRS. Operations in
+set EOt∗are processed via CGKA algorithmProc with ciphertexts from inputC and
+secret state ST from input SK
+3. Use the CGKA key output by thet∗th operation as CKE keyK
+4. Return K
+When we write “execute sequence”, we mean that all operations initiated by active users are
+indeed (re-)computed with their respective secret state and potentially ﬁxed random coins from
+CRS. This produces the corresponding output ciphertexts. The ciphertexts of all operations—
+including the ones directly stored inCRS that are initiated by users who are neither marked active
+nor passive—are then used for processing the sequence. The sequence is processed with the secret
+states of the activeand, in CKE algorithmDerive, passive users. The only operations by active
+users that are never re-processed with their own states nor re-initiated after being initiated once in
+CKE algorithmComm are the eﬀective operations in setEOt∗. The eﬀective operations in setEOt∗
+are initiated once in CKE algorithmComm and processed once per CKE receiver in CKE algorithm
+Derive.
+Security of CKE Construction.
+Lemma D.1(CKE Security). Letk∈poly(λ) be ﬁxed andSeq be a CGKA operation schedule with
+|PU|= k and with acollective update assistanceending with thet∗th operation that instantiates
+CKE construction CKE. For every adversaryA that is successful according to Deﬁnition 2.4 in
+breaking the security ofCKE there exists an adversaryB that is successful according to Deﬁnition 2.3
+in breaking the security of the underlying CGKA construction such thatAdv(A)≤Adv(B).
+Proof of Lemma D.1.We deﬁne adversaryB as follows: Given the CGKA execution scheduleSeq
+that instantiates CKE construction CKE,B composes its query to the CGKA security game by
+extending this schedule. This extended scheduleSeq′additionally speciﬁes that all active users in
+45
+
+set AUt∗are corrupted twice: (1) immediately after their public-key secret-state pairs are generated
+initially and (2) immediately before their respective ﬁrst eﬀective operation in setEOt∗begins.
+Furthermore,B speciﬁes thet∗th operation as the one that establishes the targeted key. The CGKA
+security game responds on(Seq′,t∗) with transcript Trans that contains the following information:
+• Public keys of all involved users
+• Initial secret states of all active users in setAUt∗(from the ﬁrst corruption)
+• Random coins of all operations initiated by the active users, except for the random coins of
+eﬀective operations in setEOt∗(from the second corruption)
+• Ciphertexts of all operations
+Usingthisinformation, B composesCKEcommonreferencestring CRS, CKEpublickeys{PKi}i∈[k] =
+PU, and CKE ciphertextC. B invokesA(CRS,{PKi}i∈[k],C ), which returns its guessed keyK.
+This guessed CKE keyK is forwarded to the CGKA security game as a guess for the CGKA key
+that is exchanged with thet∗th operation.
+ReductionB perfectly simulates constructionCKE and extractsA’s CKE solution to solve the
+CGKA challenge. Since every successful adversaryA is reduced to a successful adversaryB, we
+have Adv(A)≤Adv(B), which proves Lemma D.1.
+Communication Complexity of CGKA. Given ﬁxedk∈poly(λ), a CGKA operation sched-
+ule Seq with|PU|= k and a collective update assistance ending with the t∗th operation that
+instantiates CKE constructionCKE. The CKE ciphertext in constructionCKE precisely contains
+the CGKA ciphertexts of eﬀective operationsEOt∗that realize the corresponding collective update
+assistance. Assume there exists a CGKA scheme for which the eﬀective operations compute ci-
+phertexts with total sizeo(k). Using this CGKA scheme, we obtain a CKE constructionCKE with
+compact ciphertexts, which contradicts Theorem 4.5 and, consequently, proves Theorem 3.1.
+E From CKE to CGKA Tightly
+In this section, we show to build CGKA from CKE such that the worst-case communication com-
+plexity of the CGKA scheme is asymptotically proportional to that of the CKE scheme. Together
+with the result of Section 3, this shows that the worst-case size of CKE ciphertextsboth lower
+bounds and upper bounds the worst-case size of CGKA ciphertexts. Note: our CGKA scheme only
+achieves the security of Deﬁnition 2.3; i.e., we do not prove FS properties nor adaptive security
+for it. However, it is easy to see that it achieves FS similar (slightly weaker) to that of MLS [8]
+(after an Up operation, a subsequent corruption of the corresponding user does not reveal group
+keys from before the operation) and that a slightly stronger CKE deﬁnition would achieve adaptive
+security for CGKA.
+To build CGKA from CKE we, for simplicity, only consider those CKE schemes without a CRS
+(i.e., those CKE schemes satisfying Deﬁnition 2.4 withCRS = ϵ). We thus in this section omit
+CRS from the CKE syntax. Note that of course our black-box lower bound on CKE from PKE in
+Section 4 still holds for such CKE schemes.
+Using such a CKE scheme to build CGKA is straight-forward: All CGKA users duringGen set
+(ST, PK) to be the outputs(SK, PK) of the CKE algorithm Init. A group member that executes a
+46
+
+CGKA operation simply collects the public keys of the users who will be in the group after their
+operation, inputs them to the CKEComm algorithm, and outputs the resulting CKE messageC
+and group keyK. All other group members can then use CKE algorithmDerive and their CKE
+secret key to determinstically derive the group keyK in Proc.
+Formally, each user will storeM, the set of public keys of the current group members. Before,
+a given user is added to the group, they will simply storeM ={PK}, where PK is their own public
+key. CGKA = (Gen, Add, Rem, Up, Proc) is deﬁned as follows:
+• Gen() executes (SK′, PK′)←$ Init() and outputs (ST, PK) = ((SK′, PK′, M), PK′), with M =
+{PK′}.
+• Add(ST, PKadd)ﬁrstparsesST = (SK′, PK′, M)andsets M′←M∪{PKadd}, ST′←(SK′, PK′, M′).
+Then, it executes(K,C′)←$ Comm(M′), setsCG←(C′, PKadd,ϵ),CB←(PK′, PKadd,ϵ) and
+outputs (ST′,K, (CG,CB)).
+• Rem(ST, PKrem)ﬁrstparsesST = (SK′, PK′, M)andsets M′←M\{PKrem}, ST′←(SK′, PK′, M′).
+Then, it executes(K,C′)←$ Comm(M′), setsCG←(C′,ϵ,PKrem),CB←(PK′,ϵ,PKrem) and
+outputs (ST′,K, (CG,CB)).
+• Up(ST) ﬁrst parses ST = ( SKold, PKold, M) and executes (SKnew, PKnew) ←$ Init(). It
+next sets M′←(M\{PKold})∪{PKnew}, ST′←(SKnew, PKnew, M′). Then it executes
+(K,C′)←$ Comm(M′), setsCG←(C′, PKnew, PKold),CB←(PKold, PKnew, PKold) and out-
+puts (ST′,K, (CG,CB)).
+• Proc(ST,CG, (B))16 ﬁrst parsesST = (SK′, PK′, M) and CG = (C′, PKadd, PKrem). Next:
+1. If M ={PK′}, meaning the executing user was added in this operation, she computes
+the current group member public key setM′from the ciphertextsCB that have been
+posted to the bulletin boardB after each operation, then setsST′←(SK′, PK′, M′).
+2. If PK′= PKrem, the algorithm setsM′←{PK′}and ST′←(SK′, PK′, M′), and outputs
+(ST′,⊥).
+3. Otherwise, the algorithm setsM′←(M\{PKrem})∪{PKadd}and ST′←(SK′, PK′, M′).17
+If Step 2 above was not executed,K←Derive(SK′,C′, M′) is executed by the algorithm and
+(ST′,K ) is then output.
+Theorem E.1. If CKE = (Init, Comm, Derive) is a correct and secure compact key exchange pro-
+tocol, then CGKA = (Gen, Add, Rem, Up, Proc) deﬁned above is a correct and secure continuous
+group key agreement protocol.
+Proof. Correctness of CGKA clearly follows from the correctness of CKE: the CGKA operation
+executor simply executes Comm on input the current group members’ public keys to compute
+group keyK and messageC, from which all other group members can computeK using Derive.
+The executor also includes in the output direct CGKA messageCG: the public key of the added
+user during an Add operation, the public key of the removed user during aRem operation, and
+16Recall that Proc only takes inB for added users.
+17We assume{ϵ}≡∅when considering set operations including{ϵ}.
+47
+
+her old and new public key during anUp operation, so that all group members can keep track of
+the current pubic keys of other members. This information is additionally included in the bulletin
+board messageCB, so that added users can easily obtain the current group member public key set
+from the bulletin boardB.
+Fornon-adaptive security ofCGKA, we will show a reduction from the security ofCKE. Assume
+there exists some adversaryA of CGKA that succeeds in the CGKA security game with probability
+ε >negl(λ). We will useA to construct adversaryB that has advantageεin the CKE security
+game, a contradiction.
+First note that from operation sequenceSeq and challenge epocht∗whichA provides upon
+initialization of the CGKA game,B can easily compute the number of usersn in the group at epoch
+t∗, forward this to its challenger, and assign to those users at epocht∗public keys PK1,..., PKn
+received from the CKE challenger. WhenA queries Gen(), if the resulting public key will not
+be in the group in challenge epocht∗(whichB can discern from Seq), thenB simply executes
+(SK, PK)←$ Init() and sendsPK toA. Otherwise, it simply sends the correspondingPKi from the
+CKE challenger toA. WhenA queries one ofAdd(PK, PK∗) or Rem(PK, PK∗) for epocht⁄=t∗,
+B simply executesC′←$ Comm(M′), constructsCG andCB, then sends(CG,CB) toA. For query
+Up(PK) for epocht⁄=t∗, if the resulting public key will not be in the group in challenge epocht∗
+(whichB can discern from Seq), thenB ﬁrst computes(SKnew, PKnew)←$ Init(), then continues
+as above. Otherwise, it instead uses the correspondingPKi from the CKE challenger in place of
+PKnew, then continues as above. For the epocht∗query,B simply uses the challenge ciphertextC
+from the CKE challenger, constructsCG andCB, then sends(CG,CB) toA. For Corr(PK) queries
+fromA,B simply returns the correspondingSK, and the random coins which it sampled for the
+corresponding user’s executions ofComm() and Init(). WhenA sends K,B simply forwards it to
+its challenger.
+Clearly,B has perfectly simulated the CGKA security game againstCGKA forA. Namely, since
+the epoch t∗whichA challenges must not be inW eakEpochs, it must be that all users in the
+group at epocht∗were either never corrupted, or were updated since their last corruption. Thus,
+all corruptions queried byA correspond to secret states and randomness whichB generated and
+sampled, respectively, on its own. Thus sinceA wins the CGKA game with probabilityε,B wins
+the CKE game againstCKE with probabilityε, a contradiction.
+The following corollary follows immediately from the construction ofCGKA above:
+Corollary E.2. The asymptotic worst-case communication complexity ofCGKA operations with
+n group members is equivalent to the asymptotic worst-case communication complexity ofCKE
+Comm() algorithm on inputn public keys.
+F Tainted TreeKEM Summary
+Here we give a summary of Tainted TreeKEM (TTKEM). We take it almost verbatim from Alwen
+et al. [6, §2], adapting it to our notation, and removing details which are not relevant to our paper.
+F.1 Overview
+TTKEMworksoverabinarytree Tandmakesblack-boxuseofPKEprotocol PKE = (Gen, Enc, Dec)
+and PRFF. The nodes in the tree are associated with the following values:
+48
+
+• a seed ∆ ;
+• (all nodes except the root) a PKE secret/public key pair(sk, pk) derived deterministically
+from the seed; and
+• (all nodes except leaves and root) a tainter ID.
+The root has no associated public/secret key pair, instead its seed is the current group key.
+To achieve FS and PCS, and to manage group membership, it is necessary to constantly renew
+the secret keys used in the protocol. We will do this through the group operationsUp(), Rem(),
+and Add(). We will use the term refresh to refer to the renewal of a particular (set of) key(s)
+(as opposed to the group operation). Each group operation will refresh a part of the tree, always
+including the root and thus resulting in a new group key which can be decrypted by all members
+of the current group.
+Due to our simpliﬁed CGKA deﬁnition, each group member has a consistent view of the public
+information in the tree, namely public keys, tainter IDs and past operations. Furthermore, group
+members will have a partial view of the secret keys. More precisely, every user has an associated
+protocol stateST (or state for short when there is no ambiguity), which represents everything users
+need to know to stay part of the group. In particular, we deﬁne a state as the doubleST = (M, T),
+where
+• M denotes the set of group members, i.e.PK’s that are part of the group; and
+• T denotes a binary tree deﬁned as above, where for each group member, theirPK is associated
+to a leaf node.
+As mentioned, a user will generally not have knowledge of the secret keys associated to all tree
+nodes. However, if they add or remove parties, they will potentially gain knowledge of secret keys
+outside their path. We observe that this will not be a problem as long as we have a mechanism
+to keep track of those nodes and refresh them when necessary, towards this end we introduce the
+concept of tainting.
+Tainting. Whenever party i refreshes a node not lying on their path to the root, that node
+becomes tainted by partyi. Whenever a node is tainted by a partyi, that party has potentially
+had knowledge of its current secret in the past. So, if partyi was corrupted in the past, the secrecy
+of that value is considered compromised (even if she deleted that value right away and is no longer
+compromised). Even worse, all values that were encrypted to that node are compromised too. We
+will assign a tainter ID to all nodes. This can be empty, i.e. the node is untainted, or corresponds
+to a single partyi, who last generated this node’s secret but is not supposed to know it. The tainter
+ID of a node is determined by the following simple rules.
+• After partyi initialises, all internal nodes not on her path become tainted by her.18
+• If partyi updates or removes someone, refreshed nodes on her path become untainted.
+• If partyi updates or removes someone, all refreshed nodes not on her path become tainted
+by her.
+18Our CGKA syntax only allows partyi to one-by-one add other users to the group, instead of an explicit initiali-
+sation algorithm, but we keep this here for completeness.
+49
+
+Hierarchical derivation of updates. When refreshing a whole path we sample a seed ∆ 0
+and derive all the secrets for that path from it. This way, we reduce the number of decryptions
+needed to process the update, as parties only need to recover the seed for the “lowest” node that
+concerns them, and then can derive the rest locally. To derive the diﬀerent new secrets we follow
+the speciﬁcation of TreeKEMv9 [8]. Essentially, we consider a PRFF, ﬁx tagx, and together with
+Gen, we derive the keys for the nodes as follows:
+(ski, ∆ i+1) :=F (∆ i,x )
+pki←Gen(ski)
+where ∆ i is the seed for theith node (the leaf being the0th node, its parent the1st etc.) on the
+path and (ski, pki) its new key pair.
+With the introduction of tainting, it is no longer the case that all nodes to be refreshed lie on
+a path. Hence, we partition the set of all the nodes to be refreshed into paths and use a diﬀerent
+seed for each path. For this we need a unique path cover, as users processing the update will need
+to know which nodes secrets depend on which. A concrete example is given in [6, §A.2], but any
+unambiguous partition suﬃces. The only condition required is that the updating of paths is done
+in a particular common order that allows for encryptions to to-be-refreshed nodes to be done under
+the respective updated public key (one cannot hope for PCS otherwise).
+Let us stress that a party processing an update involving tainted nodes might need to retrieve
+and decrypt more than one encrypted seeds, as the refreshed nodes on its path might not all be
+derived hierarchically. Nonetheless, party needs to decrypt at mostlogn ciphertexts in the worst
+case.
+F.2 TTKEM Dynamics
+Whenever a useri wants to perform a group operation, she will generate and send the appropriate
+Update, Add or Remove message to all group members, and post the appropriate information to the
+bulletin board. Messages should contain the identity of the sender, the operation type, encryptions
+of the new seeds, and any new public keys. A more detailed description, as well as pseudo-code for
+the distinct operations is presented in [6, §A.3].
+Initialize. To create a new group with user public keysM ={PK1,...PKn}, user 1 generates
+a new treeT, where the leaves have the associated public keys corresponding to the group mem-
+bers.19 The group creator then samples new key pairs for all the other nodes inT (optimizing
+with hierarchical derivation) and crafts welcome messages for each party. These welcome messages
+should include an encryption of the seed that allows the computation of the keys of the appropriate
+path. Each party will download from the bulletin board treeT.
+Add. To add a new user withPKj to the group, useri identiﬁes a free spot for them, samples a
+seed ∆ , and derives seeds for the nodes along the path to the root. She then encrypts the new seeds
+to all the nodes in the co-path (one ciphertext per node suﬃces given the hierarchical derivation)
+and sends them over together with the public keyPKj of the added party.
+19Again, ourCGKAsyntaxdoesnothaveanexplicitinitialisationalgorithm, butwekeepthishereforcompleteness.
+50
+
+Update. To perform an Update, a user computes a path partition for the set of nodes not on her
+path that need to be refreshed (nodes tainted or with a tainted ancestor), samples a seed per such
+path, plus a seed for their path, and derives the new key-pairs for each node, as described above.
+She then encrypts the secret keys under the appropriate public keys in the copaths.
+Remove. To remove user withPKj, useri performs an Update as if it was userj, refreshing all
+nodes in userj’s path to the root, as well as all her tainted nodes (which will become tainted by
+user i after the removal).
+Process. When a user receives a protocol messageC, it identiﬁes which kind of message it is and
+performs the appropriate update of their state, by updating the list of participants if necessary,
+overwriting any keys, and updating the tainted ID’s.
+51

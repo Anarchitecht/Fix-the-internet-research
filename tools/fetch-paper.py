@@ -76,6 +76,17 @@ def main():
         except Exception as e:
             print(f"TRIED {url} -> parse failed: {type(e).__name__}: {e}")
             continue
+        # A landing page can exceed the character floor, so check for the markup only a
+        # publisher or repository page carries. Several of these together mean the retrieval
+        # produced a page about the paper rather than the paper.
+        LANDING = ("Which authors of this paper are endorsers", "Bibliographic Tools",
+                   "Skip to main content", "Connected Papers Toggle", "Semantic Scholar Toggle",
+                   "Recommenders and Search Tools", "Institutional Login",
+                   "Sign in to view", "Request a copy")
+        hits = sum(1 for sig in LANDING if sig.lower() in text[:20000].lower())
+        if hits >= 2 or (hits >= 1 and len(text) < 30000):
+            print(f"TRIED {url} -> landing page, not the paper ({hits} page-furniture markers)")
+            continue
         open(txt_path, "w").write(text)
         verdict = "FULL TEXT" if len(text) >= 6000 else "TOO SHORT - probably a stub or a paywall page"
         print(f"OK {url}\n  key={key} pages={npages} chars={len(text)} -> {txt_path}\n  {verdict}")

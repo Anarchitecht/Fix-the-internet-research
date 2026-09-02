@@ -1,12 +1,2078 @@
-JavaScript is not available. 
- We’ve detected that JavaScript is disabled in this browser. Please enable JavaScript or switch to a supported browser to continue using x.com. You can see a list of supported browsers in our Help Center. 
- Help Center 
+SplitStream: High-Bandwidth Multicast in Cooperative
+Environments
+Miguel Castro1
+Peter Druschel2 Anne-Marie Kermarrec1 Animesh Nandi2
+Antony Rowstron1 Atul Singh2
+1Microsoft Research, 7 J J Thomson Avenue, Cambridge, CB3 0FB, UK.
+2Rice University, 6100 Main Street, MS-132, Houston, TX 77005, USA∗.
+ABSTRACT
+In tree-based multicast systems, a relatively small number of
+interior nodes carry the load of forwarding multicast mes-
+sages. This works well when the interior nodes are highly-
+available, dedicated infrastructure routers but it poses a prob-
+lem for application-level multicast in peer-to-peer systems.
+SplitStream addresses this problem by striping the content
+across a forest of interior-node-disjoint multicast trees that
+distributes the forwarding load among all participating peers.
+For example, it is possible to construct eﬃcient SplitStream
+forests in which each peer contributes only as much forward-
+ing bandwidth as it receives. Furthermore, with appropri-
+ate content encodings, SplitStream is highly robust to fail-
+ures because a node failure causes the loss of a single stripe
+on average. We present the design and implementation of
+SplitStream and show experimental results obtained on an
+Internet testbed and via large-scale network simulation. The
+results show that SplitStream distributes the forwarding load
+among all peers and can accommodate peers with diﬀerent
+bandwidth capacities while imposing low overhead for forest
+construction and maintenance.
+Categories and Subject Descriptors
+C.2.4 [ Computer-Communications networks ]: Distributed
+Systems— Distributed applications; C.2.2 [ Computer-Commu-
+nications networks ]: Network Protocols— Applications, Rout-
+ing protocols ; D.4.5 [ Operating Systems ]: Reliability— Fault-
+tolerance; D.4.8 [ Operating Systems ]: Performance
+General Terms
+Algorithms, Measurement, Performance, Reliability, Exper-
+imentation
+∗Supported in part by NSF (ANI-0225660) and by a Texas
+ATP (003604-0079-2001) grant.
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+SOSP’03,October 19–22, 2003, Bolton Landing, New York, USA.
+Copyright 2003 ACM 1-58113-757-5/03/0010 ...$5.00.
+Keywords
+Peer-to-peer, application-level multicast, end-system multi-
+cast, content distribution, video streaming
+1. INTRODUCTION
+End-system or application-level multicast [8, 16, 22, 19,
+40, 32, 13, 6, 23] has become an attractive alternative to IP
+multicast. Instead of relying on a multicast infrastructure in
+the network (which is not widely available), the participat-
+ing hosts route and distribute multicast messages using only
+unicast network services. In this paper, we are particularly
+concerned with application-level multicast in peer-to-peer
+(p2p) or cooperative environments where peers contribute
+resources in exchange for using the service.
+Unfortunately, conventional tree-based multicast is inher-
+ently not well matched to a cooperative environment. The
+reason is that in any multicast tree, the burden of duplicat-
+ing and forwarding multicast traﬃc is carried by the small
+subset of the peers that are interior nodes in the tree. The
+majority of peers are leaf nodes and contribute no resources.
+This conﬂicts with the expectation that all peers should
+share the forwarding load. The problem is further aggra-
+vated in high-bandwidth applications, like video or bulk ﬁle
+distribution, where many peers may not have the capacity
+and availability required of an interior node in a conventional
+multicast tree. SplitStream addresses these problems by en-
+abling eﬃcient cooperative distribution of high-bandwidth
+content in a peer-to-peer system.
+The key idea in SplitStream is to split the content into k
+stripes and to multicast each stripe using a separate tree.
+Peers join as many trees as there are stripes they wish to
+receive and they specify an upper bound on the number of
+stripes that they are willing to forward. The challenge is to
+construct this forest of multicast trees such that an interior
+node in one tree is a leaf node in all the remaining trees and
+the bandwidth constraints speciﬁed by the nodes are satis-
+ﬁed. This ensures that the forwarding load can be spread
+across all participating peers. For example, if all nodes wish
+to receive k stripes and they are willing to forwardk stripes,
+SplitStream will construct a forest such that the forwarding
+load is evenly balanced across all nodes while achieving low
+delay and link stress across the system.
+Striping across multiple trees also increases the resilience
+to node failures. SplitStream oﬀers improved robustness to
+node failure and sudden node departures like other systems
+that exploit path diversity in overlays [4, 35, 3, 30]. Split-
+
+Stream ensures that the vast majority of nodes are interior
+nodes in only one tree. Therefore, the failure of a single
+node causes the temporary loss of at most one of the stripes
+(on average). With appropriate data encodings, applica-
+tions can mask or mitigate the eﬀects of node failures even
+while the aﬀected tree is being repaired. For example, ap-
+plications can use erasure coding of bulk data [9] or multiple
+description coding (MDC) of streaming media [27, 4, 5, 30].
+The key challenge in the design of SplitStream is to con-
+struct a forest of multicast trees that distributes the for-
+warding load subject to the bandwidth constraints of the
+participating nodes in a decentralized, scalable, eﬃcient and
+self-organizing manner. SplitStream relies on a structured
+peer-to-peer overlay [31, 36, 39, 33] to construct and main-
+tain these trees. We implemented a SplitStream prototype
+and evaluated its performance. We show experimental re-
+sults obtained on the PlanetLab [1] Internet testbed and
+on a large-scale network simulator. The results show that
+SplitStream achieves these goals.
+The rest of this paper is organized as follows. Section 2
+outlines the SplitStream approach in more detail. A brief de-
+scription of the structured overlay is given in Section 3. We
+present the design of SplitStream in Section 4. The results
+of our experimental evaluation are presented in Section 5.
+Section 6 describes related work and Section 7 concludes.
+2. THE SPLITSTREAM APPROACH
+In this section, we give a detailed overview of SplitStream’s
+approach to cooperative, high-bandwidth content distribu-
+tion.
+2.1 Tree-based multicast
+In all multicast systems based on a single tree, a partici-
+pating peer is either an interior node or a leaf node in the
+tree. The interior nodes carry all the burden of forward-
+ing multicast messages. In a balanced tree with fanout f
+and height h, the number of interior nodes is f h −1
+f −1 and the
+number of leaf nodes is f h. Thus, the fraction of leaf nodes
+increases with f. For example, more than half of the peers
+are leaves in a binary tree, and over 90% of peers are leaves
+in a tree with fanout 16. In the latter case, the forwarding
+load is carried by less than 10% of the peers. All nodes have
+equal inbound bandwidth, but the internal nodes have an
+outbound bandwidth requirement of 16 times their inbound
+bandwidth. Even in a binary tree, which would be impracti-
+cally deep in most circumstances, the outbound bandwidth
+required by the interior nodes is twice their inbound band-
+width. Deep trees are not practical because they are more
+fault prone and they introduce larger delays, which is a prob-
+lem for some applications.
+2.2 SplitStream
+SplitStream is designed to overcome the inherently unbal-
+anced forwarding load in conventional tree-based multicast
+systems. SplitStream strives to distribute the forwarding
+load over all participating peers and respects diﬀerent ca-
+pacity limits of individual peers. SplitStream achieves this
+by splitting the multicast stream into multiple stripes, and
+using separate multicast trees to distribute each stripe.
+Figure 1 illustrates how SplitStream balances the forward-
+ing load among the participating peers. In this simple ex-
+ample, the original content is split into two stripes and mul-
+2
+3 5
+8
+stripe 1
+64
+ 7
+1
+Source
+stripe 2
+Figure 1: A simple example illustrating the basic
+approach of SplitStream. The original content is
+split into two stripes. An independent multicast tree
+is constructed for each stripe such that a peer is an
+interior node in one tree and a leaf in the other.
+ticast in separate trees. For simplicity, let us assume that
+the original content has a bandwidth requirement of B and
+that each stripe has half the bandwidth requirement of the
+original content. Each peer, other than the source, receives
+both stripes inducing an inbound bandwidth requirement of
+B. As shown in Figure 1, each peer is an internal node in
+only one tree and forwards the stripe to two children, which
+yields an outbound bandwidth of no more than B.
+In general, the content is split into k stripes. Participat-
+ing peers may receive a subset of the stripes, thus controlling
+their inbound bandwidth requirement in increments ofB/k.
+Similarly, peers may control their outbound bandwidth re-
+quirement in increments of B/k by limiting the number of
+children they adopt. Thus, SplitStream can accommodate
+nodes with diﬀerent bandwidths, and nodes with unequal
+inbound and outbound network capacities.
+This works well when the bandwidth bottleneck in the
+communication between two nodes is either at the sender
+or at the receiver. While this assumption holds in many
+settings, it is not universally true. If the bottleneck is else-
+where, nodes may be unable to receive all desired stripes.
+We plan to extend SplitStream to address this issue. For ex-
+ample, nodes could monitor the packet arrival rate for each
+stripe. If they detect that the incoming link for a stripe
+is not delivering the expected bandwidth, they can detach
+from the stripe tree and search for an alternate parent.
+2.3 Applications
+SplitStream provides a generic infrastructure for high-
+bandwidth content distribution. Any application that uses
+SplitStream controls how its content is encoded and divided
+into stripes. SplitStream builds the multicast trees for the
+stripes while respecting the inbound and outbound band-
+width constraints of the peers. Applications need to encode
+the content such that(i) each stripe requires approximately
+the same bandwidth, and (ii) the content can be recon-
+structed from any subset of the stripes of suﬃcient size.
+In order for applications to tolerate the loss of a subset of
+stripes, they may provide mechanisms to fetch content from
+other peers in the system, or may choose to encode content
+in a manner that requires greater than B/k per stripe, in
+return for the ability to reconstitute the content from less
+than k stripes. For example, a media stream could be en-
+coded using MDC so that the video can be reconstituted
+
+from any subset of the k stripes with video quality propor-
+tional to the number of stripes received. Hence, if an interior
+node in a stripe tree should fail then clients deprived of the
+stripe are able to continue displaying the media stream at
+reduced quality until the stripe tree is repaired. Such an en-
+coding also allows low-bandwidth clients to receive the video
+at lower quality by explicitly requesting less stripes.
+Another example is the multicasting of ﬁle data with era-
+sure coding [9]. Each data block is encoded using erasure
+codes to generate k blocks such that only a (large) subset
+of the k blocks is required to reconstitute the original block.
+Each stripe is then used to multicast a diﬀerent one of thek
+blocks. Participants receive all stripes and once a suﬃcient
+subset of the blocks is received the clients are able to recon-
+stitute the original data block. If a client misses a number
+of blocks from a particular stripe for a period of time (while
+the stripe multicast tree is being repaired after an internal
+node has failed) the client can still reconstitute the original
+data blocks due to the redundancy. An interesting alter-
+native is the use of rateless codes [24, 26], which provide
+a simple approach to coordinating redundancy, both across
+stripes and within each stripe.
+Applications also control when to create and tear down a
+SplitStream forest. Our experimental results indicate that
+the maximum node stress to construct a forest and distribute
+1 Mbyte of data is signiﬁcantly lower than the node stress
+placed on a centralized server distributing the same data.
+Therefore, it is perfectly reasonable to create a forest to
+distribute a few megabytes of data and then tear it down.
+The results also show that the overhead to maintain a forest
+is low even with high churn. Therefore, it is also reasonable
+to create long-lived forests. The ideal strategy depends on
+the fraction of time that a forest is used to transmit data.
+2.4 Properties
+Next, we discuss necessary and suﬃcient conditions for
+the feasibility of forest construction by any algorithm and
+relate them with what SplitStream can achieve.
+Let N be the set of nodes and k be the number of stripes.
+Each node i ∈ N wants to receive Ii (0 <I i ≤ k)d i s t i n c t
+stripes and is willing to forward a stripe to up to Ci other
+nodes. We call Ii the node’s desired indegree and Ci its
+forwarding capacity. There is a set ofsource nodes(S ⊆ N)
+whose elements originate one or more of the k stripes (i.e.,
+1 ≤| S|≤ k). The forwarding capacity Cs of each source
+node s ∈ S must at least equal the number of stripes that s
+originates, Ts.
+Definition 1. Given a set of nodesN and a set of sources
+S ⊆ N, forest construction isfeasible if it is possible to con-
+nect the nodes such that each nodei ∈ N receives Ii distinct
+stripes and has no more than Ci children.
+The following condition is obviously necessary for the fea-
+sibility of forest construction by any algorithm.
+Condition 1. If forest construction is feasible, the sum
+of the desired indegrees cannot exceed the sum of the for-
+warding capacities:
+∑
+∀i∈N
+Ii ≤
+∑
+∀i∈N
+Ci (1)
+Condition 1 is necessary but not suﬃcient for the feasibil-
+ity of forest construction, as the simple example in Figure 2
+illustrates. The incoming arrows in each node in the ﬁgure
+correspond to its desired indegree and the outgoing arrows
+correspond to its forwarding capacity. The total forwarding
+capacity matches the total desired indegree in this example
+but it is impossible to supply both of the rightmost nodes
+with two distinct stripes. The node with forwarding capac-
+ity three has desired indegree one and, therefore, it can only
+provide the same stripe to all its children.
  
- Terms of Service 
- Privacy Policy 
- Cookie Policy 
- Imprint 
- Ads info 
- © 2026 X Corp.
  
- Something went wrong, but don’t fret — let’s give it another shot. Try again Some privacy related extensions may cause issues on x.com. Please disable them and try again.
+Sources
+Figure 2: An example illustrating that condition 1
+is not suﬃcient to ensure feasibility of a SplitStream
+forest.
+Condition 2 prevents this problem. It is suﬃcient to en-
+sure feasibility because it prevents the concentration of for-
+warding capacity in nodes that are unable to forward all
+stripes.
+Condition 2. A suﬃcient condition for the feasibility of
+forest construction is for Condition 1 to hold and for all
+nodes whose forwarding capacity exceeds their desired inde-
+gree to receive or originate all k stripes, i.e.,
+∀i : Ci >I i ⇒ Ii + Ti = k. (2)
+This is a natural condition in a cooperative environment
+because nodes are unlikely to spend more resources improv-
+ing the quality of service perceived by others than on im-
+proving the quality of service that they perceive. Addition-
+ally, inbound bandwidth is typically greater than or equal
+to outbound bandwidth in consumer Internet connections.
+Given a set of nodes that satisfy Condition 2, the Split-
+Stream algorithm can build a forest with very high proba-
+bility provided there is a modest amount of spare capacity
+in the system. The probability of success increases with
+the minimum number of stripes that nodes receives, Imin,
+and the total amount of spare capacity, C = ∑
+∀i∈N Ci −∑
+∀i∈N Ii. We derive the following rough upper bound on
+the probability of failure in Section 4.5:
+|N |× k × (1 − Imin
+k )
+C
+k−1 (3)
+As indicated by the upper bound formula, the probability
+of success is very high even with a small amount of spare
+capacity in the system. Additionally, we expect Imin to be
+large for most applications. For example, erasure coding for
+reliable distribution of data and MDC for video distribu-
+tion perform poorly if peers do not receive to most stripes.
+Therefore, we expect conﬁgurations where all peers receive
+all stripes to be common. In this case, the algorithm can
+guarantee eﬃcient forest construction with probability one
+even if there is no spare capacity.
+In an open cooperative environment, it is important to
+address the issue of free loaders, which appear to be preva-
+lent in Gnutella [2]. In such an environment, it is desirable
+to strengthen Condition 1 to require that the forwarding ca-
+pacity of each node be greater than or equal to its desired
+
+indegree (i.e., ∀i ∈ N : Ci ≥ Ii). (This condition may be un-
+necessarily strong in more controlled settings, for example,
+in a corporate intranet.) Additionally, we need a mecha-
+nism to discourage free loading such that most participants
+satisfy the stronger condition. In some settings, it may be
+suﬃcient to have the SplitStream implementation enforce
+the condition in the local node. Stronger mechanisms may
+use a trusted execution platform like Microsoft’s Palladium
+or a mechanism based on incentives [28]. This is an inter-
+esting area of future work.
+3. BACKGROUND
+SplitStream is implemented using tree-based application-
+level multicast. There are many proposals for how application-
+level multicast trees can be built and maintained [8, 19, 40,
+13, 32, 22, 6, 23]. In this paper, we consider the implemen-
+tation of SplitStream using Scribe [13] and Pastry [33]. It
+could also be implemented using a diﬀerent overlay protocol
+and group communication system; for example, Bayeux on
+Tapestry [39, 40] or Scribe on CAN [15]. Before describ-
+ing the SplitStream design, we provide a brief overview of
+Pastry and Scribe.
+3.1 Pastry
+Pastry is a scalable, self-organizing structured peer-to-
+peer overlay network similar to CAN [31], Chord [36], and
+Tapestry [39]. In Pastry, nodes and objects are assigned ran-
+dom identiﬁers (called nodeIds and keys, respectively) from
+a large id space. NodeIds and keys are 128 bits long and can
+be thought of as a sequence of digits in base 2b (b is a con-
+ﬁguration parameter with a typical value of 3 or 4). Given
+a message and a key, Pastry routes the message to the node
+with the nodeId that is numerically closest to the key, which
+is called the key’s root. This simple capability can be used
+to build higher-level services like a distributed hash table
+(DHT) or an application-level group communication system
+like Scribe.
+In order to route messages, each node maintains a routing
+table and a leaf set. A node’s routing table has aboutlog2b N
+rows and 2 b columns. The entries in row r of the routing
+table refer to nodes whose nodeIds share the ﬁrst r digits
+with the local node’s nodeId. The ( r + 1)th nodeId digit of
+an o d ei nc o l u m nc of row r equals c. The column in row
+r corresponding to the value of the ( r + 1)th digit of the
+local node’s nodeId remains empty. At each routing step, a
+node normally forwards the message to a node whose nodeId
+shares with the key a preﬁx that is at least one digit longer
+than the preﬁx that the key shares with the present node’s
+id. If no such node is known, the message is forwarded to a
+node whose nodeId shares a preﬁx with the key as long as
+the current node’s nodeId but is numerically closer. Figure 3
+shows the path of an example message.
+Each Pastry node maintains a set of neighboring nodes in
+the nodeId space (called the leaf set), both to ensure reliable
+message delivery, and to store replicas of objects for fault
+tolerance. The expected number of routing hops is less than
+log2b N. The Pastry overlay construction observes proxim-
+ity in the underlying Internet. Each routing table entry is
+chosen to refer to a node with low network delay, among all
+nodes with an appropriate nodeId preﬁx. As a result, one
+can show that Pastry routes have a low delay penalty:t h e
+average delay of Pastry messages is less than twice the IP
+delay between source and destination [11]. Similarly, one
+d46a1c
+d462ba
+d4213f
+d13da3
+65a1fc
+nodeId
+key
+nodeIdnodeId
+keykey
+route(m,d46a1c)
+02 128 -1
+Figure 3: Routing a message from the node with
+nodeId 65a1fc to key d46a1c. The dots depict the
+nodeIds of live nodes in Pastry’s circular namespace.
+can show the local route convergence of Pastry routes: the
+routes of messages sent to the same key from nearby nodes
+in the underlying Internet tend to converge at a nearby in-
+termediate node. Both of these properties are important for
+the construction of eﬃcient multicast trees, described below.
+A full description of Pastry can be found in [33, 11, 12].
+3.2 Scribe
+Scribe [13, 14] is an application-level group communica-
+tion system built upon Pastry. A pseudo-random Pastry key,
+known as the groupId, is chosen for each multicast group. A
+multicast tree associated with the group is formed by the
+union of the Pastry routes from each group member to the
+groupId’s root (which is also the root of the multicast tree).
+Messages are multicast from the root to the members using
+reverse path forwarding [17].
+The properties of Pastry ensure that the multicast trees
+are eﬃcient. The delay to forward a message from the root
+to each group member is low due to the low delay penalty of
+Pastry routes. Pastry’s local route convergence ensures that
+the load imposed on the physical network is small because
+most message replication occurs at intermediate nodes that
+are close in the network to the leaf nodes in the tree.
+Group membership management in Scribe is decentral-
+ized and highly eﬃcient, because it leverages the existing,
+proximity-aware Pastry overlay. Adding a member to a
+group merely involves routing towards the groupId until the
+message reaches a node in the tree, followed by adding the
+route traversed by the message to the group multicast tree.
+As a result, Scribe can eﬃciently support large numbers of
+groups, arbitrary numbers o f group members, and groups
+with highly dynamic membership.
+The latter property, combined with an anycast [14] prim-
+itive recently added to Scribe, can be used to perform dis-
+tributed resource discovery. Brieﬂy, any node in the overlay
+can anycast to a Scribe group by routing the message to-
+wards the groupId. Pastry’s local route convergence ensures
+that the message reaches a group member near the mes-
+sage’s sender with high probability. A full description and
+evaluation of Scribe multicast can be found in [13]. Scribe
+anycast is described in [14].
+
+Sour c e
+Stri pe Id  1xS tr i peI d 0x St r i peId  Fx
+NodeI d s s tar ti ng 0x
+NodeI d s s tar ti ng 1x
+N o deI ds s tarting F x
+M
+MM
+NodeI ds  startin g 2x ..E x
+Figure 4: SplitStream’s forest construction. The
+source splits the content and multicasts each stripe
+in its designated tree. Each stripe’s stripeId starts
+with a diﬀerent digit. The nodeIds of interior nodes
+share a preﬁx with the stripeId, thus they must be
+leaves in the other trees, e.g., node M with a nodeId
+starting with 1 is an interior node in the tree for
+the stripeId starting with 1 and a leaf node in other
+trees.
+4. SPLITSTREAM DESIGN
+In this section, we describe the design of SplitStream. We
+begin with the construction of interior-node-disjoint trees
+for each of the stripes. Then, we discuss how SplitStream
+balances the forwarding capacity across nodes, such that the
+bandwidth constraints of each node are observed.
+4.1 Building interior-node-disjoint trees
+SplitStream uses a separate Scribe multicast tree for each
+of the k stripes. A set of trees is said to be interior-node-
+disjoint if each node is an interior node in at most one
+tree, and a leaf node in the other trees. SplitStream ex-
+ploits the properties of Pastry routing to construct interior-
+node-disjoint trees. Recall that Pastry normally forwards a
+message towards nodes whose nodeIds share progressively
+longer preﬁxes with the message’s key. Since a Scribe tree
+is formed by the routes from all members to the groupId,
+the nodeIds of all interior nodes share some number of dig-
+its with the tree’s groupId. Therefore, we can ensure that k
+Scribe trees have a disjoint set of interior nodes simply by
+choosing groupIds for the trees that all diﬀer in the most
+signiﬁcant digit. Figure 4 illustrates the construction. We
+call the groupId of a stripe group the stripeId of the stripe.
+We can choose a value of b for Pastry that achieves the
+value of k suitable for a particular application. Setting
+2b = k ensures that each participating node has an equal
+chance of becoming an interior node in some tree. Thus,
+the forwarding load is approximately balanced. If b is cho-
+s e ns u c ht h a tk =2 i, i<b , it is still possible to ensure this
+fairness by exploiting certain properties of the Pastry rout-
+ing table, but we omit the details due to space constraints.
+Additionally, it is fairly easy to change the Pastry implemen-
+tation to route using an arbitrary base that is not a power
+of 2. Without loss of generality, we assume that 2 b = k in
+the rest of this paper.
+4.2 Limiting node degree
+The resulting forest of Scribe trees is interior-node-disjoint
+and satisﬁes the nodes’ constraints on the inbound band-
+width. To see this, observe that a node’s inbound band-
+width is proportional to the desired indegree, which is the
+number of stripes that the node chooses to receive. It is
+assumed that each node receives and forwards at least the
+stripe whose stripeId shares a preﬁx with its nodeId, be-
+cause the node may have to serve as an interior node for
+that stripe.
+However, the forest does not necessarily satisfy nodes’
+constraints on outbound bandwidth; some nodes may have
+more children than their forwarding capacity. The number
+of children that attach to a node is bounded by its indegree
+in the Pastry overlay, which is inﬂuenced by the physical
+network topology. This number may exceed a node’s for-
+warding capacity if the node does not limit its outdegree.
+Scribe has a built-in mechanism (called “push-down”) to
+limit a node’s outdegree. When a node that has reached
+its maximal outdegree receives a request from a prospec-
+tive child, it provides the prospective child with a list of
+its current children. The prospective child then seeks to be
+adopted by the child with lowest delay. This procedure con-
+tinues recursively down the tree until a node is found that
+can take another child. This is guaranteed to terminate
+successfully with a single Scribe tree provided each node is
+required to take on at least one child.
+However, this procedure is not guaranteed to work in
+SplitStream. The reason is that a leaf node in one tree may
+be an interior node in another tree, and it may have already
+reached its outdegree limit with children in this other tree.
+Next, we describe how SplitStream resolves this problem.
+4.3 Locating parents
+The following algorithm is used to resolve the case where
+a node that has reached its outdegree limit receives a join
+request from a prospective child. First, the node adopts the
+prospective child regardless of the outdegree limit. Then,
+it evaluates its new set of children to select a child to re-
+ject. This selection is made in an attempt to maximize the
+eﬃciency of the SplitStream forest.
+First, the node looks for children to reject in stripes whose
+stripeIds do not share a preﬁx with the local node’s nodeId.
+(How the node could have acquired such a child in the ﬁrst
+place will become clear in a moment.) If the prospective
+child is among them, it is selected; otherwise, one is chosen
+randomly from the set. If no such child exists, the current
+node is an interior node for only one stripe tree, and it selects
+the child whose nodeId has the shortest preﬁx match with
+that stripeId. If multiple such nodes exist and the prospec-
+tive child is among them, it is selected; otherwise, one is
+chosen randomly from the set. The chosen child is then no-
+tiﬁed that it has been orphaned for a particular stripeId.
+This is exempliﬁed in Figure 5.
+The orphaned child then seeks to locate a new parent
+in up to two steps. In the ﬁrst step, the orphaned child
+examines its former siblings and attempts to attach to a
+random former sibling that shares a preﬁx match with the
+stripeId for which it seeks a parent. The former sibling
+either adopts or rejects the orphan, using the same criteria
+as described above. This “push-down” process continues
+recursively down the tree until the orphan either ﬁnds a new
+parent or no children share a preﬁx match with the stripeId.
+If the orphan has not found a parent the second step uses
+the spare capacity group.
+4.4 Spare capacity group
+If the orphan has not found a parent, it sends an anycast
+message to a special Scribe group called the spare capacity
+
+001*
+0 89* 08 B* 08 1* 9*
+080 0
+0800
+0800 0800
+180 0
+089 *
+00 1*
+08 0*
+08B* 081 *
+080 0
+0800
+0800 0800
+08 0*
+orph an
+on 1 800
+(1) (2)
+9*
+08 5*
+089 * 08B* 081 * 001 *
+080 0
+0800
+0800 0800
+080 0
+089 *
+0 85*
+08 0*
+00 1*08B* 08 1*
+080 0
+0800
+0800 0800
+080*
+o rpha n
+ on 0800
+(3) (4)
+Figure 5: Handling of prospective children by a node that has reached its outdegree limit. Circles represent
+nodes and the numbers close to them are their nodeIds (* is a wildcard). Solid lines indicate that the bottom
+node is a child of the top node and the number close to the line is the stripeId. Dashed lines represent
+requests to join a stripe. The node with id 080* has reached its outdegree limit of 4. (1) Node 001* requests
+to join stripe 0800. (2) Node 080* takes 001* as a child and drops 9*, which was a child in stripe 1800 that
+does not share the ﬁrst digit with 080*. (3) Then node 085* requests to join stripe 0800. (4) Node 080*
+takes 085* as a child and drops 001*, which has a shorter preﬁx match with stripe 0800 than other children.
+group. All SplitStream nodes that have less children in stripe
+trees than their forwarding capacity limit are members of
+this group. Scribe delivers this anycast message to a node
+in the spare capacity group tree that is near the orphan in
+the physical network. This node starts a depth-ﬁrst search
+(DFS) of the spare capacity group tree by forwarding the
+message to a child. If the node has no children or they have
+all been checked, the node checks whether it receives one
+of the stripes which the orphaned child seeks to receive (in
+general, this is the set of stripe groups that the orphan has
+not already joined). If so, it veriﬁes that the orphan is not
+an ancestor in the corresponding stripe tree, which would
+create a cycle. To enable this test, each node maintains its
+path to the root of each stripe that it receives.
+If both tests succeed, the node takes on the orphan as a
+child. If the node reaches its outdegree limit as a result, it
+leaves the spare capacity group. If one of the tests fails, the
+node forwards the message to its parent and the DFS of the
+spare capacity tree continues until an appropriate member
+is found. This is illustrated in Figure 6.
+The properties of Scribe trees and the DFS of the spare
+capacity tree ensure that the parent is near the orphan in
+the physical network. This provides low delay and low link
+stress. However, it is possible for the node to attach to a
+parent that is already an interior node in another stripe tree.
+If this parent fails, it may cause the temporary loss of more
+than one stripe for some nodes. We show in Section 5 that
+only a small number of nodes and stripes are aﬀected on
+average.
+Anycasting to the spare capacity group may fail to locate
+an appropriate parent for the orphan even after an appropri-
+ate number of retries with suﬃcient timeouts. If the spare
+capacity group is empty, the SplitStream forest construction
+is infeasible because an orphan remains after all forwarding
+capacity has been exhausted. In this case, the application
+on the orphaned node is notiﬁed that there is no forwarding
+capacity left in the system.
+Anycasting can fail even when there are group members
+with available forwarding capacity in the desired stripe. This
+can happen if attaching the orphan to receive the stripe from
+any of these members causes a cycle because the member is
+the orphan itself or a descendant of the orphan. We solve
+this problem as follows. The orphan locates any leaf in the
+desired stripe tree that is not its descendant. It can do this
+by anycasting to the stripe tree searching for a leaf that is
+1
+2 3
+5
+4
+0
+in: {0,3,A} in: {1,…,16 }
+s pare : 2 sp are: 4
+anyca st
+for 6
+s pare : 0
+Figure 6: Anycast to the spare capacity group.
+Node 0 anycasts to the spare capacity group to ﬁnd
+a parent for the stripe whose identiﬁer starts with
+6. The request is routed by Pastry towards the root
+of the spare capacity group until it reaches node 1,
+which is already in the tree. Node 1 forwards the
+request to node 2, one of its children. Since 2 has no
+children, it checks if it can satisfy node 0’s request.
+In this case, it cannot because it does not receive
+stripe 6. Therefore, it sends the request back to
+node 1 and node 1 sends it down to its other child.
+Node 3 can satisfy 0’s request and replies to 0.
+not its descendant. Such a leaf is guaranteed to exist because
+we require a node to forward the stripe whose stripeId starts
+with the same digit as its nodeId. The orphan replaces the
+leaf on the tree and the leaf becomes an orphan. The leaf
+can attach to the stripe tree using the spare capacity group
+because this will not cause a cycle.
+Finally, anycasting can fail if no member of the spare ca-
+pacity group provides any of the desired stripes. In this case,
+we declare failure and notify the application. As we argue
+next, this is extremely unlikely to happen when the suﬃcient
+condition for forest construction (Condition 2) holds.
+4.5 Correctness and complexity
+Next, we argue informally that SplitStream can build a
+forest with very high probability provided the set of nodesN
+satisﬁes the suﬃcient condition for feasibility (Condition 2)
+and there is a modest amount of spare capacity in the sys-
+tem. The analysis assumes that all nodes inN join the forest
+
+at the same time and that communication is reliable to en-
+sure that all the spare capacity in the system is available in
+the spare capacity group. It also assumes that nodes do not
+leave the system either voluntarily or due to failures. Split-
+Stream includes mechanisms to deal with violations of each
+of these assumptions but these problems may block some
+parents that are available to forward stripes to orphans,
+e.g., they may be unreachable by an orphan due to com-
+munication failures. If these problems persist, SplitStream
+may be unable to ensure feasibility even if Condition 2 holds
+at every instant. We ignore these issues in this analysis but
+present simulation results that show SplitStream can cope
+with them in practice.
+The construction respects the bounds on forwarding ca-
+pacity and indegree because nodes reject children beyond
+their capacity limit and nodes do not seek to receive more
+stripes than their desired indegree. Additionally, there are
+no cycles by construction because an orphan does not attach
+to a parent whose path to the root includes the orphan. The
+issue is whether all nodes can receive as many distinct stripes
+as they desire.
+When node i joins the forest, it selectsIi stripes uniformly
+at random. (The stripe whose stripeId starts with the same
+digit as i’s nodeId is always selected but the nodeId is se-
+lected randomly with uniform probability from the id space.)
+Then i joins the spare capacity tree advertising that it will
+be able to forward the selected stripes and attempts to join
+the corresponding stripe trees. We will next estimate the
+probability that the algorithm leaves an orphan that cannot
+ﬁnd a desired stripe.
+T h e r ea r et w ow a y sf o ran o d ei to acquire a parent for
+each selected stripe s: (1) joining the stripe tree directly
+without using the spare capacity group, or (2) anycasting to
+the spare capacity group. If s is the stripe whose stripeId
+starts with the same digit as i’s nodeId, i is guaranteed to
+ﬁnd a parent using (1) after being pushed down zero or more
+times and this may orphan another node. The algorithm
+guarantees that i n e v e rn e e d st ou s e( 2 )t ol o c a t eap a r e n t
+on this stripe. The behavior is diﬀerent when i uses (1) to
+locate a parent on another stripe; it may fail to ﬁnd a parent
+but it will never cause another node to become an orphan.
+When a node i ﬁrst joins a stripe s, it uses (1) to ﬁnd a
+parent. If the identiﬁers of i and s do not share the ﬁrst
+digit, i may fail to ﬁnd a parent for s after being pushed
+down at most hs times (where hs is the height of s’s tree)
+but it does not cause any other node to become an orphan.
+If the trees are balanced we expect that hs is O(log|N |).
+If the identiﬁers of i and s share the same digit, i is guar-
+anteed to ﬁnd a parent using (1) but it may orphan another
+node j o nt h es a m es t r i p eo ro nad i ﬀ e r e n ts t r i p er.I nt h i s
+case, j attempts to use (1) to acquire a parent on the lost
+stripe. There are three sub-cases: (a) j looses a stripe r
+(r ⁄= s), (b) j looses stripe s and the identiﬁers of j and s
+do not share the ﬁrst digit, and (c) j looses stripe s and the
+identiﬁers of j and s share the ﬁrst digit. The algorithm
+ensures that in case (a), the ﬁrst digit in j’s nodeId does
+not match the ﬁrst digit in r’s stripeId. This ensures that
+this node j does not orphan any other node when it uses (1)
+to obtain a parent for r. Similarly, j will not orphan any
+other node in case (b). In cases (a) and (b), j either ﬁnds a
+parent or fails to ﬁnd a parent after being pushed down at
+most hr or hs times. In case (c), we can view j as resuming
+the walk down s’s tree that was started by i.
+Therefore, in all cases, i’s ﬁrst join of stripe s results in at
+most one orphan j (not necessarily i = j) that uses anycast
+to ﬁnd a parent for a stripe r (not necessarily r = s)a f t e r
+O(log|N |) messages. This holds even with concurrent joins.
+If an orphan j attempts to locate a parent for stripe r by
+anycasting to the spare capacity group, it may fail to ﬁnd
+a node in the spare capacity group that receives stripe r.
+We call the probability of this event Pf . It is also possible
+that all nodes in the spare capacity group that receive r
+are descendants of j. Our construction ensures that the
+identiﬁers of j and r do not share the ﬁrst digit. Therefore,
+the expected number of descendants of j for stripe r should
+be O(1) and small if trees are well balanced. The technique
+that handles this case succeeds in ﬁnding a parent forj with
+probability one and leaves an orphan on striper that has no
+descendants for stripe r. I ne i t h e rc a s e ,w ee n du pw i t ha
+probability of failure Pf and an expected cost of O(log|N |)
+messages on success.
+We will compute an upper bound on Pf .W e s t a r t b y
+assuming that we know the set 1, ..., l of nodes in the spare
+capacity group when the anycast is issued and their desired
+indegrees I1, ..., Il. W ec a nc o m p u t ea ne x a c tv a l u ef o rPf
+with this information:
+Pf =( 1 − I1
+k )(1 − I2
+k )...(1 − Il
+k )
+If all nodes join at least Imin stripes, we can compute an
+upper bound on Pf that does not require knowledge of the
+desired indegrees of nodes in the spare capacity group:
+Pf ≤ (1 − Imin
+k )l
+We can assume that each node i in the spare capacity
+group has spare capacity less thank; otherwise, Condition 2
+implies that Ii = k and i can satisfy the anycast request.
+Since the spare capacity in the system C = ∑
+∀i∈N Ci −∑
+∀i∈N Ii is the minimum capacity available in the spare
+capacity group at any time, l ≥ C/(k − 1) and so
+Pf ≤ (1 − Imin
+k )
+C
+k−1
+This bound holds even with concurrent anycasts because we
+use the minimum spare capacity in the system to compute
+the bound.
+There are at most |N | node joins and each node joins at
+most k stripes. Thus the number of anycasts issued during
+forest construction that may fail is bounded by |N |× k.
+Since the probability of A or B occurring is less than or
+equal to the probability of A plus the probability of B,t h e
+following is a rough upper bound on the probability that the
+algorithm fails to build a feasible forest
+|N |× k × (1 − Imin
+k )
+C
+k−1
+The probability of failure is very low even with a mod-
+est amount of spare capacity in the system. For example,
+the predicted probability of failure is less than 10 −11 with
+|N | =1 , 000, 000, k = 16, Imin =1 ,a n d C =0 .01 ×| N |.
+The probability of failure decreases whenImin increases, for
+example, it is 10−13 in the same setting when Imin =8a n d
+C =0 .001 ×| N |. When the desired indegree of all nodes
+
+equals the total number of stripes, the algorithm never fails.
+In this case, it is guaranteed to build a forest if the sum of
+the desired indegrees does not exceed the sum of the for-
+warding capacities even when there is no spare capacity.
+Next, we consider the algorithmic complexity of the Split-
+Stream forest construction. The expected amount of state
+maintained by each node O(log|N |). The expected number
+of messages to build the forest is O(|N |log|N |) if the trees
+are well balanced or O(|N |2) in the worst case. We expect
+the trees to be well balanced if each node forwards the stripe
+whose identiﬁer shares the ﬁrst digit with the node’s identi-
+ﬁer to at least two other nodes.
+5. EXPERIMENTAL EV ALUATION
+This section presents results of experiments designed to
+evaluate both the overhead of forest construction in Split-
+Stream and the performance of multicasts using the forest.
+We ran large-scale experiments on a network simulation en-
+vironment and live experiments on the PlanetLab Internet
+testbed [1]. The results support our hypothesis that the
+overhead of maintaining a forest is low and that multicasts
+perform well even with high churn in the system.
+5.1 Experimental setup
+We start by describing the experimental setup.
+Network simulation: We used a packet-level, discrete-
+event network simulator. The simulator models the prop-
+agation delay on the physical links but it does not model
+queuing delay, packet losses, or cross traﬃc because mod-
+eling these would prevent large-scale network simulations.
+In the simulations we used three diﬀerent network topology
+models: GATech, Mercatorand CorpNet. Each topology has
+a set of routers and we ran SplitStream on end nodes that
+were randomly assigned to routers with uniform probability.
+Each end node was directly attached by two LAN links (one
+on each direction) to its assigned router. The delay on LAN
+links was set to 1ms.
+GATech is a transit-stub topology model generated by the
+Georgia Tech [38] random graph generator. This model has
+5050 routers arranged hierarchically. There are 10 transit
+domains at the top level with an average of 5 routers in each.
+Each transit router has an average of 10 stub domains at-
+tached, and each stub has an average of 10 routers. The link
+delays between routers are computed by the graph generator
+and routing is performed using the routing policy weights of
+the graph generator. We generated 10 diﬀerent topologies
+using the same parameters but diﬀerent random seeds. All
+GATech results are the average of the results obtained by
+running the experiment in each of these 10 topologies. We
+did not attach end nodes to transit routers.
+Mercatoris a topology model with 102,639 routers, obtained
+from measurements of the Internet using the Mercator sys-
+tem [21]. The authors of [37] used measured data and some
+simple heuristics to assign an autonomous system to each
+router. The resulting AS overlay has 2,662 nodes. Routing
+is performed hierarchically as in the Internet. A route fol-
+lows the shortest path in the AS overlay between the AS of
+the source and the AS of the destination. The routes within
+each AS follow the shortest path to a router in the next AS
+of the AS overlay path. We use the number of IP hops as a
+proxy for delay because there is no link delay information.
+CorpNet is a topology model with 298 routers and was gener-
+ated using measurements of the world-wide Microsoft corpo-
+rate network. Link delays between routers are the minimum
+delay measured over a one month period.
+Due to space constraints, we present results only for the
+GATech topology for most experiments but we compare
+these results with those obtained with the other topologies.
+SplitStream conﬁguration: The experiments ran Pastry
+conﬁgured with b = 4 and a leaf set with size l = 16. The
+number of stripes per SplitStream multicast channel was
+k =2 b = 16.
+We evaluated SplitStream with six diﬀerent conﬁgurations
+of node degree constraints. The ﬁrst four are designed to
+evaluate the impact on overhead and performance of vary-
+ing the spare capacity in the system. We use the notation
+x × y to refer to these conﬁgurations where x is the value
+of the desired indegree for all nodes and y is the forwarding
+capacity of all nodes. The four conﬁgurations are: 16 × 16,
+16×18, 16×32 and 16×NB.T h e 1 6×16 conﬁguration has a
+spare capacity of only 16 because the roots of the stripes do
+not consume forwarding capacity for the stripes they orig-
+inate. The 16 × 18 and 16 × 32 conﬁgurations provide a
+spare capacity of 12.5% and 100%, respectively. Nodes do
+not impose any bound on forwarding capacity in the 16×NB
+conﬁguration. SplitStream is able to build a forest in any
+of these conﬁgurations with probability 1 (as shown by our
+analysis).
+The last two conﬁgurations are designed to evaluate the
+behavior of SplitStream when nodes have diﬀerent desired
+indegrees and forwarding capacities. The conﬁgurations are
+d × d and Gnutella.I n d × d, each node has a desired inde-
+gree equal to its forwarding capacity and it picks stripes to
+receive as follows: it picks the stripe whose stripeId has the
+same ﬁrst digit as its nodeId with probability 1 and it picks
+each of the other stripes with probability 0.5. The analysis
+predicts a low probability of success when building a forest
+with the d × d conﬁguration because there is virtually no
+spare capacity in the system and nodes do not receive all
+stripes. But SplitStream was able to build a forest success-
+fully in 9 out of 10 runs.
+The Gnutella conﬁguration is derived from actual mea-
+surements of inbound and outbound bandwidth of Gnutella
+peers [34]. The CDF of these bandwidths is shown in Fig-
+ure 7. This distribution was sampled to generate pairs of in-
+bound (bin) and outbound (bout) bandwidths for each Split-
+Stream node. Many nodes have asymmetric bandwidth as
+is often the case with DSL or cable modem connections.
+We assumed a total bandwidth for a stream of 320Kbps
+with 20Kbps per stripe. The desired indegree of a node was
+set to max(1 ,min(bin/20Kbps, 16)) and the forwarding ca-
+pacity to min(bout/20Kbps, 32). Approximately, 90% of the
+nodes have a desired indegree of 16. The spare capacity in
+the system is 6.9 per node. The analysis predicts a suc-
+cess probability of almost 1 when building a forest with this
+conﬁguration.
+SplitStream Implementation: The SplitStream imple-
+m e n t a t i o nu s e di nt h es i m u l a t i o ne x p e r i m e n t sh a st h r e eo p -
+timisations that were omitted in Section 4 for clarity.
+The ﬁrst optimisation reduces the overhead of cycle detec-
+tion during forest construction. As described in Section 4,
+each node maintains the path to the root of each stripe that
+it receives. Maintaining this state incurs a considerable com-
+munication overhead because updates to the path are multi-
+
+0
+20
+40
+60
+80
+100
+1 10 100 1,000 10,000 100,000 1,000,000
+Bandwidth (Kbps)
+Percentage of Hosts
+Outbound
+Inbound
+Figure 7: Cumulative distribution of bottleneck
+bandwidth for both inbound and outbound network
+links of Gnutella peers.
+cast to all descendants. We can avoid maintaining this state
+by taking advantage of the preﬁx routing properties of Pas-
+try. Cycles are possible only if some parent does not share
+a longer preﬁx with a stripeId than one of its children for
+that stripe. Therefore, nodes need to store and update path
+information only in such cases. This optimisation reduces
+the overhead of forest construction by up to 40%.
+The second optimisation improves anycast performance.
+When a node joins the SplitStream forest, it may need to
+perform several anycasts to ﬁnd a parent for diﬀerent stripes.
+Under the optimization, these anycasts are batched; the
+node uses a single anycast to ﬁnd parents for multiple stripes.
+This optimization can reduce the number of anycasts per-
+formed during forest construction by up to a factor of eight.
+The third optimization improves the DFS traversal of the
+anycast tree. A parent adds the list of its children to an
+anycast message before forwarding the message to a child. If
+the child is unable to satisfy the anycast request, it removes
+itself from the list and sends the message to one of its siblings
+(avoiding another visit to the parent).
+5.2 Forest construction overhead
+The ﬁrst set of experiments measured the overhead of for-
+est construction without node failures. They started from
+a Pastry overlay with 40,000 nodes and built a SplitStream
+forest with all overlay nodes. All the nodes joined the spare
+capacity and the stripe groups at the same time. The over-
+heads would be lower with less concurrency.
+We used two metrics to measure the overhead:node stress
+and link stress. Node stress quantiﬁes the load on nodes.
+A node’s stress is equal to the number of messages that it
+receives. Link stress quantiﬁes the load on the network. The
+stress of a physical network link is equal to the number of
+messages sent over the link.
+Node stress: Figures 8 and 9 show the cumulative distribu-
+tion of node stress during forest construction with diﬀerent
+conﬁgurations on the GATech topology. Figure 8 shows re-
+sults for the 16×y conﬁgurations and Figure 9 shows results
+for d × d and Gnutella.Ap o i n t(x, y) in the graph indicates
+that a fraction y of all the nodes in the topology has node
+stress less than or equal to x. Table 1 shows the maximum,
+mean and median node stress for these distributions. The
+results were similar on the other topologies.
+Figure 8 and Table 1 show that the node stress drops as
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+1 10 100 1000 10000
+Node Stress
+Cumulative proportion of nodes
+16 x NB
+16 x 32
+16 x 18
+16 x 16
+Figure 8: Cumulative distribution of node stress
+during forest construction with 40,000 nodes on
+GATech.
+the spare capacity in the system increases. With more spare
+capacity, nodes are orphaned less often and so there are less
+pushdowns and anycasts. The 16 × NB conﬁguration has
+the lowest node stress because there are no pushdowns or
+anycasts. The 16 × 16 conﬁguration has the highest node
+stress because each node uses an anycast to ﬁnd a parent for
+8 stripes on average. The nodes with the maximum node
+stress in all conﬁgurations (other than 16 × NB)a r et h o s e
+with nodeIds closest to the identiﬁer of the spare capacity
+group. Table 1 shows that increasing the spare capacity of
+the 16 × 16 conﬁguration by only 12.5% results in a factor
+of 2.7 decrease in the maximum node stress.
+Conf.
+ 16 × 16
+ 16 × 18
+ 16 × 32
+ 16 × NB
+ d × d
+ Gnut.
+Max
+ 2971
+ 1089
+ 663
+ 472
+ 2532
+ 1054
+Mean
+ 57.2
+ 52.6
+ 35.3
+ 16.9
+ 42.1
+ 56.7
+Median
+ 49.9
+ 47.4
+ 30.9
+ 12
+ 36.6
+ 54.2
+Table 1: Maximum, mean and median node stress
+during forest construction with 40,000 nodes on
+GATech.
+Figure 9 shows that the node stress is similar withGnutella
+and 16 ×16. Gnutella has a signiﬁcant amount spare capac-
+ity but not all members of the spare capacity group receive
+all stripes, which increases the length of the DFS traversals
+of the anycast tree. d × d has the same spare capacity as
+16 × 16 but it has lower node stress because nodes join only
+9 stripe groups on average instead of 16.
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+1 10 100 1000 10000
+Node Stress
+Cumulative proportion of nodes
+d x d
+Gnutella
+16 x 16
+Figure 9: Cumulative distribution of node stress
+during forest construction with 40,000 nodes on
+GATech.
+
+We also ran experiments to evaluate the node stress dur-
+ing forest construction for overlays with diﬀerent sizes. Fig-
+u r e1 0s h o w st h em e a nn o d es t r e s sw i t ht h e1 6×x conﬁgura-
+tions. The maximum and median node stress show similar
+trends as the number of nodes increases.
+0
+10
+20
+30
+40
+50
+60
+70
+0 5000 10000 15000 20000 25000 30000 35000 40000
+Number of nodes in SplitStream
+Average node stress
+16 x NB 16 x 32
+16 x 18 16 x 16 
+Figure 10: Mean node stress during forest construc-
+tion with varying number of nodes on GATech.
+From the analysis, we would expect the mean node stress
+to be O(logn), where n is the number of nodes. But there
+is a second eﬀect that is ignored in the analysis; the average
+cost of performing an anycast and joining a stripe group
+decreases with the group size. The ﬁrst eﬀect dominates
+when n is small and the second eﬀect compensates the ﬁrst
+for large n. This suggests that our complexity analysis is
+too pessimistic.
+The results demonstrate that the node stress during for-
+est construction is low and is largely independent of the
+number of nodes in the forest. It is interesting to contrast
+SplitStream with a centralized server distributing an s-byte
+ﬁle to a large number of clients. With 40,000 clients, the
+server will have a node stress of 40,000 handling requests
+and will send a total of s × 40, 000 bytes. The maximum
+node stress during SplitStream forest construction with the
+16 ×16 conﬁguration is 13.5 times lower, and the number of
+bytes sent by each node to multicast the ﬁle over the forest
+is bounded by s.
+Link stress: Figure 11 shows the cumulative distribution
+of link stress during forest construction with diﬀerent conﬁg-
+urations on GATech. A point ( x, y) in the graph indicates
+that a fraction y of all the links in the topology has link
+stress less than or equal to x. Table 2 shows the maximum,
+mean and median link stress for links with non-zero link
+stress. It also shows the fraction of links with non-zero link
+stress (links). Like node stress, the link stress drops as the
+spare capacity in the system increases and the reason is the
+same. The links with the highest stress are transit links.
+The results were similar on the other topologies: the me-
+dians were almost identical and the averages were about 10%
+lower in CorpNet and 10% higher in Mercator. The diﬀer-
+ence in the averages is explained by the diﬀerent ratio of the
+number of LAN links to the number of router-router links
+in the topologies. This ratio is highest in CorpNet and it is
+lowest in Mercator.
+We conclude that the link stress induced during forest
+construction is low on average. The maximum link stress
+across all conﬁgurations is at least 6.8 times lower than the
+maximum link stress in a centralized system with the same
+number of nodes.
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+1 10 100 1000 10000
+Link stress
+Cumulative proportion of links
+16 x NB
+16 x 32
+16 x 18
+16 x 16
+Figure 11: Cumulative distribution of link stress
+during forest construction with 40,000 nodes on
+GATech.
+Conf.
+ 16 × 16
+ 16 × 18
+ 16 × 32
+ 16 × NB
+ d × d
+ Gnut.
+Max
+ 5893
+ 4285
+ 2876
+ 1804
+ 5405
+ 5058
+Mean
+ 74.1
+ 65.2
+ 43.6
+ 21.2
+ 57.5
+ 70.22
+Med.
+ 52.6
+ 48.8
+ 30.8
+ 17
+ 38
+ 53
+Links
+ .99
+ .99
+ .99
+ .94
+ .99
+ .99
+Table 2: Maximum, mean, and median link stress
+for used links and fraction of links (Links) used dur-
+ing forest construction with 40,000 nodes on GAT-
+ech.
+5.3 Forest multicast performance
+We also ran experiments to evaluate the performance of
+multicast over a SplitStream forest without failures. To put
+this performance in perspective, we compared SplitStream,
+IP multicast, and Scribe. IP multicast represents the best
+that can be achieved with router support and Scribe is a
+state-of-the-art, application-level multicast system that uses
+a single tree. We used three metrics to evaluate multicast
+performance in the comparison: node stress, link stress, and
+delay penalty relative to IP.
+The experiments ran on the 40,000-node Pastry overlay
+that we described in the previous section. Our implemen-
+tation of IP multicast used a shortest path tree formed by
+the merge of the unicast routes from the source to each re-
+cipient. This is similar to what could be expected in our
+experimental setting using protocols like Distance Vector
+Multicast Routing Protocol (DVMRP) [18]. We created a
+single group for IP multicast and Scribe that all overlay
+nodes joined. The tree for the Scribe group was created
+without the bottleneck remover [13].
+To evaluate SplitStream, we multicast a data packet to
+each of the 16 stripe groups of a forest with 40,000 nodes
+(built as described in the previous section). For both Scribe
+and IP multicast, we multicast 16 data packets to the single
+group.
+Node stress: During this multicast experiment, the node
+stress of each SplitStream node is equal to its desired inde-
+gree, for example, 16 in the 16 × x conﬁgurations or less in
+others. Scribe and IP multicast also have a node stress of 16.
+The number of messages sent by each node in SplitStream
+is also bounded by the forwarding capacity of each node, for
+example, it is 16 in the 16 × 16 conﬁguration. This is im-
+portant because it enables nodes with diﬀerent capabilities
+to participate in the system.
+
+Link stress: We start by presenting results of experiments
+that measured link stress during multicast with diﬀerent
+SplitStream forest sizes. Table 3 shows the results of these
+experiments with the 16×16 conﬁguration in GATech. When
+a SplitStream node is added to the system, it uses two ad-
+ditional LAN links (one on each direction) and it induces
+a link stress of 16 in both. Adding nodes also causes an
+increase on the link stress of router-router links because the
+router network remains ﬁxed. Since the majority of links
+for the larger topologies are LAN links, the median link
+stress remains constant and the mean link stress grows very
+slowly. The maximum link stress increases because the link
+stress in router-router links increases. This problem aﬀects
+all application-level multicast systems.
+Num.
+ 500
+ 1k
+ 3k
+ 10k
+ 20k
+ 30k
+ 40k
+Mean
+ 17.6
+ 18.3
+ 17.7
+ 17.9
+ 18.7
+ 20.22
+ 20.4
+Med.
+ 16
+ 16
+ 16
+ 16
+ 16
+ 16
+ 16
+Max
+ 131
+ 233
+ 509
+ 845
+ 1055
+ 1281
+ 1411
+Links
+ 0.13
+ 0.23
+ 0.52
+ 0.89
+ 0.96
+ 0.97
+ 0.98
+Table 3: Maximum, mean and median link stress for
+used links and fraction of links ( Links) used during
+multicast with the 16 × 16 conﬁguration on GATech
+with varying number of nodes.
+The next set of experiments compared the link stress dur-
+ing multicast with diﬀerent SplitStream conﬁgurations and
+40,000 nodes on GATech. Table 4 shows the maximum,
+mean and median link stress for used links, and the fraction
+of links used in these experiments. The results show that
+the link stress tends to decrease when the spare capacity
+increases. However, the absence of bounds on forwarding
+capacity in (16 × NB) causes a concentration of stress in a
+smaller number of links, which results in increased average
+and maximum stress for used links. The average link stress
+in d × d and Gnutella is lower because nodes receive less
+stripes on average.
+Conf.
+ 16 × 16
+ 16 × 18
+ 16 × 32
+ 16 × NB
+ d × d
+ Gnut.
+Max
+ 1411
+ 1124
+ 886
+ 1616
+ 982
+ 1032
+Mean
+ 20.5
+ 19
+ 19
+ 20
+ 11.7
+ 18.2
+Med.
+ 16
+ 16
+ 16
+ 16
+ 9
+ 16
+Links
+ .98
+ .98
+ .97
+ .94
+ .97
+ .97
+Table 4: Maximum, mean, and median link stress
+for used links and fraction of links (Links) used dur-
+ing multicast with diﬀerent SplitStream conﬁgura-
+tions and 40,000 nodes on GATech.
+We picked the SplitStream conﬁguration that performs
+worst (16 × 16) and compared its performance with Scribe,
+IP multicast, and a centralized system using unicast. Fig-
+ure 12 shows the cumulative distribution of link stress during
+multicast for the diﬀerent systems on GATech with 40,000
+nodes. A point ( x, y) in the graph indicates that a fraction
+y of all the links in the topology has link stress less than or
+equal to x. Table 5 shows the maximum, mean and median
+link stress for used links, and the fraction of links used.
+The results show that SplitStream uses a signiﬁcantly
+larger fraction of the links in the topology to multicast mes-
+sages than any of the other systems: SplitStream uses 98%
+of the links in the topology, IP multicast and the central-
+ized unicast use 43%, and Scribe uses 47%. This is mostly
+because SplitStream uses both outbound and inbound LAN
+links for all nodes whereas IP multicast and the centralized
+Conf.
+ centralized
+ Scribe
+ IP
+ 16 × 16
+Max
+ 639984
+ 3990
+ 16
+ 1411
+Mean
+ 128.9
+ 39.6
+ 16
+ 20.5
+Median
+ 16
+ 16
+ 16
+ 16
+Links
+ .43
+ .47
+ .43
+ .98
+Table 5: Maximum, mean, and median link stress
+for used links and fraction of links ( Links)u s e db y
+centralized unicast, Scribe, IP, and SplitStream mul-
+ticast with 40,000 nodes on GATech.
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+1 10 100 1000 10000
+Link stress
+Cumulative proportion of links
+16 x 16 
+IP Multicast
+(a) SplitStream vs IP
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+1 10 100 1000 10000
+Link stress
+Cumulative proportion of links
+16 x 16 
+Scribe
+(b) SplitStream vs Scribe
+Figure 12: Cumulative distribution of link stress
+during multicast with 40,000 nodes on GATech.
+unicast only use inbound LAN links. Scribe uses all inbound
+LAN links but it only uses outbound LAN links for a small
+fraction of nodes (the interior nodes in the tree). We ob-
+served the same behavior on the other topologies.
+SplitStream loads the links it uses less than Scribe. Ta-
+ble 5 shows that the average stress in links used by Split-
+Stream is close to the average stress in links used by IP
+multicast (28% worse). The average link stress in links used
+by Scribe is 247% worse than that achieved by IP multi-
+cast. SplitStream also achieves a maximum link stress that
+is almost a factor of 3 lower than Scribe’s. The compar-
+ison would be even more favorable to SplitStream with a
+conﬁguration with more spare capacity.
+We also observed this behavior in the other topologies.
+The average stress in links used by SplitStream is at most
+13% worse than the average stress in links used by IP mul-
+
+ticast on CorpNet and at most 37% worse in Mercator. The
+average link stress in links used by Scribe is 203% worse
+than that achieved by IP multicast in CorpNet and 337%
+worse in Mercator.
+We conclude that SplitStream can deliver higher band-
+width than Scribe by using available bandwidth in node ac-
+cess links in both directions. This is a fundamental advan-
+tage of SplitStream relative to application level multicast
+systems that use a single tree.
+Delay penalty: Next, we quantify the delay penalty of
+SplitStream relative to IP multicast. We computed two met-
+rics of delay penalty for each SplitStream stripe: RMD and
+RAD. To compute these metrics, we measured the distribu-
+tion of delays to deliver a message to each member of a stripe
+group using both the stripe tree and IP multicast. RMD is
+the ratio between the maximum delay using the stripe tree
+and the maximum delay using IP multicast, and RAD is the
+ratio between the average delay using the stripe tree and the
+average delay using IP multicast.
+Figures 13 and 14 show RAD results for SplitStream mul-
+ticast with diﬀerent conﬁgurations with 40,000 nodes. They
+present the cumulative RAD distribution for the 16 stripes.
+Ap o i n t(x, y) in the graph indicates that a fractiony of the
+16 stripes has RAD less than or equal to y.T h er e s u l t sf o r
+RMD were qualitatively similar and the maximum RMD for
+the conﬁgurations in the two ﬁgures was 5.4 in GATech and
+4.6 in CorpNet.
+0
+2
+4
+6
+8
+10
+12
+14
+16
+0 0.5 1 1.5 2 2.5
+Delay penalty
+Cumulative stripes
+RAD (16 x NB)
+RAD (16 x 32)
+RAD (16 x 18)
+RAD (16 x 16)
+Figure 13: Cumulative distribution of delay penalty
+with 16 × x conﬁgurations on the GATech topology
+with 40,000 nodes.
+Figure 13 shows that the delay penalty increases when the
+spare capacity in the system decreases. The 16 × NB con-
+ﬁguration provides the lowest delay because nodes are never
+orphaned. The mechanisms to deal with orphaned nodes
+(push down and anycast) increase the average depth of the
+stripe trees. Additionally, the bounds on outdegree may
+prevent children from attaching to the closest prospective
+parent in the network. To put these results into context, if
+the stripe trees were built ignoring physical network prox-
+imity, the average RAD would be approximately 3.8 for the
+16 × NB conﬁguration and signiﬁcantly higher for the other
+conﬁgurations.
+Figure 14 shows that the RAD distribution is qualitatively
+s i m i l a ri nG A T e c ha n dC o r p N e tfor three representative con-
+ﬁgurations. We do not present results for Mercator because
+we do not have delay values for the links in this topology.
+The delay penalty tends to be lower in CorpNet because
+0
+2
+4
+6
+8
+10
+12
+14
+16
+012345
+Delay penalty
+Cumulative stripes
+RAD (d x d)
+RAD (Gnutella)
+RAD (16 x 16)
+(a) GATech
+0
+2
+4
+6
+8
+10
+12
+14
+16
+012345
+Delay penalty
+Cumulative stripes
+RAD (d x d)
+RAD (Gnutella)
+RAD (16 x 16)
+(b) CorpNet
+Figure 14: Cumulative distribution of delay penalty
+on GATech and CorpNet with 40,000 nodes.
+Pastry’s mechanism to exploit proximity in the network is
+more eﬀective in CorpNet than in GATech [12]. The ﬁgure
+also shows that the delay penalty with Gnutella and with
+16 × 16 is similar for most stripes. However, the variance
+is higher in Gnutella because nodes with a very small for-
+warding capacity can increase the average depth of a stripe
+tree signiﬁcantly if they are close to the top of the tree. The
+delay penalty is higher with d × d than with the other two
+conﬁgurations because the average forwarding capacity is
+lower (only 9), which results in deeper stripe trees.
+We conclude that SplitStream achieves delay that is within
+a small factor of optimal. This performance should be suﬃ-
+cient even for demanding applications that have an interac-
+tive component, e.g., large virtual class rooms.
+5.4 Resilience to node failures
+Previous experiments evaluated the performance of Split-
+Stream without failures. This section presents results to
+quantify performance and overhead with node failures. The
+performance metric is the fraction of the desired stripes re-
+ceived by each node, and the overhead metric is the number
+of control messages sent per second by each node (similar to
+node stress).
+Path diversity: The ﬁrst set of experiments analyzed the
+paths from each node i to the root of each stripe that i re-
+
+ceives. If all these paths are node-disjoint, a single node fail-
+ure can deprive i of at most one stripe (until the stripe tree
+repairs). SplitStream may fail to guarantee node-disjoint
+paths when nodes use anycast to ﬁnd a parent but this is
+not a problem as the next results show.
+Conf.
+ 16 × 16
+ 16 × 32
+ d × d
+ 16 × NB
+ Gnut.
+Max
+ 6.8
+ 6.6
+ 5.3
+ 1
+ 7.2
+Mean
+ 2.1
+ 1.7
+ 1.5
+ 1
+ 2.4
+Median
+ 2
+ 2
+ 1
+ 1
+ 2
+Table 6: Worst case maximum, mean, and median
+number of stripes lost at each node when a single
+node fails.
+In a 40,000-node SplitStream forest on GATech, the mean
+and median number of lost stripes when a random node fails
+is 1 for all conﬁgurations. However, nodes may loose more
+than one stripe when some nodes fail. Table 6 shows the
+max, median, and mean number of stripes lost by a node
+when its worst case ancestor fails. The number of stripes
+lost is very small for most nodes, even when the worst case
+ancestor fails. This shows that SplitStream is very robust
+to node failures.
+Catastrophic failures: The next experiment evaluated
+the resilience of SplitStream to catastrophic failures. We
+created a 10,000-node SplitStream forest with the 16 × 16
+conﬁguration on GATech and started multicasting data at
+the rate of one packet per second per stripe. We failed 2,500
+nodes 10s into the simulation.
+Both Pastry and SplitStream use heartbeats and probes
+to detect node failures. Pastry used the techniques described
+in [25] to control probing rates; it was tuned to achieve 1%
+loss rate with a leaf set probing period of 30s. SplitStream
+nodes send heartbeats to their children and to their parents.
+The heartbeats sent to parents allow nodes to detect when
+a child fails so they can rejoin the spare capacity group. We
+conﬁgured SplitStream nodes to send these hearbeats every
+30s. In both Pastry and SplitStream, heartbeats and probes
+are suppressed by other traﬃc.
+Figure 15 shows the maximum, average, and minimum
+number of stripes received by each node during the experi-
+ment. Nodes loose a large number of stripes with the large
+scale failure but SplitStream and Pastry recover quickly.
+Most nodes receive packets on at least 14 stripes after 30s
+(one failure detection period) and they receive all stripes af-
+ter 60s. Furthermore, all nodes receive all stripes after less
+than 3 minutes.
+Figure 16 breaks down the average number of messages
+sent per second per node during the experiment. The line
+labeled Pastry shows the Pastry overhead and the line la-
+beled Pastry+SplitStreamrepresents the total overhead, i.e.,
+the average number of Pastry and SplitStream control mes-
+sages. The ﬁgure also shows the total number of messages
+including data packets (labeled Pastry+SplitStream+Data).
+The results show that nodes send only 1.6 control mes-
+sages per second before the fa ilure. This overhead is very
+low.
+The overhead increases after the failure while Pastry and
+SplitStream repair. Even after repair, the overhead is higher
+than before the failure because Pastry uses a self-tuning
+mechanism to adapt routing table probing rates [25]. This
+mechanism detects a large number of failures in a short pe-
+0
+2
+4
+6
+8
+10
+12
+14
+16
+0 20 40 60 80 100 120 140 160 180 200 220
+Time (seconds)
+Number of Stripes
+Maximum
+Average
+Minimum
+Figure 15: Maximum, average, and minimum num-
+ber of stripes received when 25% out of 10,000 nodes
+fail on GATech.
+0
+5
+10
+15
+20
+25
+0 20 40 60 80 100 120 140 160 180 200 220
+Time (seconds)
+Number of messages per second 
+per node
+Pastry
+Pastry + SplitStream
+Pastry + SplitStream + Data
+Figure 16: Number of messages per second per node
+when 25% out of 10,000 nodes fail on GATech.
+riod and increases the probing rate (to the maximum in this
+case). Towards the end of the trace, the overhead starts to
+dip because the self-tuning mechanism forgets the failures it
+registered.
+High churn: The ﬁnal simulation experiment evaluated the
+performance and overhead of SplitStream with high churn
+in the overlay. We used a real trace of node arrivals and
+departures from a study of Gnutella [34]. The study mon-
+itored 17,000 unique nodes in the Gnutella overlay over a
+period of 60 hours. It probed each node every seven min-
+utes to check if it was still part of the Gnutella overlay. The
+average session time over the trace was approximately 2.3
+hours and the number of active nodes in the overlay varied
+between 1300 and 2700. Both the arrival and departure rate
+exhibit large daily variations.
+We ran the experiment on the GATech topology. Nodes
+joined a Pastry overlay and failed according to the trace.
+Twenty minutes into the trace, we created a SplitStream
+forest with all the nodes in the overlay at that time. We used
+the 16 × 20 conﬁguration. From that time on, new nodes
+joined the Pastry overlay and then joined the SplitStream
+forest. We sent a data packet to each stripe group every 10
+seconds. Figure 17 shows the average and 0.5th percentile of
+the number of stripes received by each node over the trace.
+The results show that SplitStream performs very well even
+under high churn: 99.5% of the nodes receive at least 75%
+of the stripes (12) almost all the time. The average number
+
+0
+2
+4
+6
+8
+10
+12
+14
+16
+0 1 02 03 04 05 06 0
+Time (hours)
+Number of stripes0.5th percentile
+Average
+Figure 17: Number of stripes received with the
+Gnutella trace on GATech.
+of stripes received by each node is between 15 and 16 most
+of the time.
+Figure 18 shows the average number of messages per sec-
+ond per node in the Gnutella trace. The results show that
+nodes send less than 1.6 control messages per second most
+of the time. The amount of control traﬃc varies mostly
+because Pastry’s self-tuning mechanism adjusts the probing
+rate to match the observed failure rate. The number of con-
+trol messages never exceeds 4.5 per second per node in the
+trace. Additionally, the vast majority of these messages are
+probes or heartbeats, which are small (50B on the wire).
+Therefore, the overhead is very low, for example, control
+traﬃc never consumes more than 0.17% of the total band-
+w i d t hu s e dw i t ha1 M b / sd a t as t r e a m .
+0
+1
+2
+3
+4
+5
+6
+7
+0 1 02 03 04 05 06 0
+Time (hours)
+Number of messages per second per 
+node
+Pastry
+Pastry + SplitStream
+Pastry + SplitStream + Data
+Figure 18: Number of messages per second per node
+with the Gnutella trace on GATech.
+5.5 PlanetLab results
+Finally, we present results of live experiments that evalu-
+ated SplitStream in the PlanetLab Internet testbed [1]. The
+experiments ran on 36 hosts at diﬀerent PlanetLab sites
+throughout the US and Europe. Each host ran two Split-
+Stream nodes, which resulted in a total of 72 nodes in the
+SplitStream forest. We used the 16 × 16 conﬁguration with
+a data stream of 320Kbits/sec. A 20Kbit packet with a se-
+quence number was multicast every second on each stripe.
+Between sequence numbers 32 and 50, four hosts were ran-
+domly selected and the two SplitStream nodes running on
+them were killed. This caused a number of SplitStream
+nodes to loose packets from one or more stripes while the
+0
+2
+4
+6
+8
+10
+12
+14
+16
+0 2 04 06 08 0 1 0 0
+Sequence number
+Number of stripes
+Average
+Minimum
+Figure 19: Number of stripes received versus se-
+quence number.
+1
+10
+100
+1000
+10000
+100000
+0 2 04 06 08 0 1 0 0
+Sequence number
+Absolute delay (msec)
+Minimum
+Average
+Maximum
+Figure 20: Packet delays versus sequence number.
+aﬀected stripe trees were repaired.
+Figure 19 shows the average and minimum number of
+stripe packets received by any live SplitStream node with
+a particular sequence number. The eﬀect of the failed nodes
+can be clearly seen. The repair time is determined primarily
+by SplitStream’s failure detection period, which triggers a
+tree repair when no heartbeats or data packets have been
+received for 30 seconds. As can be seen in Figure 19, once a
+failure has been detected SplitStream is able to ﬁnd a new
+parent rapidly.
+Figure 20 shows the minimum, average and maximum de-
+lay for packets received with each sequence number at all
+SplitStream nodes. The delay includes the time taken to
+send the packet from a source to the root of each stripe
+through Pastry. Finally, Figure 21 shows the CDF of the
+delays experienced by all packets received independent of
+sequence number and stripe.
+The delay spikes in Figure 20 are caused by congestion
+losses in the Internet1. However, Figure 21 shows that 90%
+of packets experience a delay of under 1 second. Our re-
+sults show that SplitStream works as expected in an actual
+deployment, and that it recovers from failures gracefully.
+1TCP is used as the transport protocol; therefore, lost pack-
+ets cause retransmission delays. A transport protocol that
+does not attempt to recover packet losses could avoid these
+delays.
+
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+0 200 400 600 800 1000 1200 1400 1600 1800 2000
+Absolute delay (msec)
+Fraction of packets
+Figure 21: Cumulative distribution of packet delays.
+5% of the packets experience a delay of greater then
+2 seconds and the maximum observed delay is 11.7
+seconds.
+6. RELATED WORK
+Many application-level multicast systems have been pro-
+posed [16, 22, 32, 40, 13, 6, 23]. All are based on a single
+multicast tree per sender. Several systems use end-system
+multicast for video distribution, notably Overcast [22] and
+SpreadIt [7]. SplitStream diﬀers in that it distributes for-
+warding load over all participants using multiple multicast
+trees, thereby reducing the bandwidth demands on individ-
+ual peers.
+Overcast organizes dedicated servers into a source-rooted
+multicast tree using bandwidth estimation measurements to
+optimize bandwidth usage across the tree. The main diﬀer-
+ences between Overcast and SplitStream are (i) that Over-
+cast uses dedicated servers while SplitStream utilises clients;
+(ii) Overcast creates a single bandwidth optimised multicast
+tree, whereas SplitStream assumes that the network band-
+width available between peers is limited by their connections
+to their ISP rather than the network backbone. This sce-
+nario is typical because most backbone links are over provi-
+sioned.
+Nguyen and Zakhor [29] propose streaming video from
+multiple sources concurrently, thereby exploiting path di-
+versity and increasing tolerance to packet loss. They subse-
+quently extend the work in [29] to use Forward Error Cor-
+rection [9] encodings. The work assumes that the client is
+aware of the set of servers from which to receive the video.
+SplitStream constructs multiple multicast trees in a decen-
+tralized fashion and is therefore more scalable.
+Apostolopoulos [4, 5] originally proposed utilising striped
+video and MDC to exploit path diversity for increased ro-
+bustness to packet loss. They propose building an overlay
+composed of relays, and having each stripe delivered to the
+client using a diﬀerent source. The work examines the per-
+formance of the MDC, but does not describe an infrastruc-
+ture to actually forward the stripes to the clients. Coop-
+Net [30] implements such a hybrid system, which utilises
+multiple trees and striped video using MDC. When the video
+server is overloaded, clients are redirected to other clients,
+thereby creating a distribution tree routed at the server.
+There are two fundamental diﬀerences between CoopNet
+and SplitStream: (i) CoopNet uses a centralised algorithm
+(running on the server) to build the trees while SplitStream
+is completely decentralised; and (ii) CoopNet does not at-
+tempt to manage the bandwidth contribution of individual
+nodes. However, it is possible to add this capability to Coop-
+Net.
+FCast [20] is a reliable ﬁle transfer protocol based on IP
+multicast. It combines a Forwa rd Error Correction [9] en-
+coding and a data carousel mechanism. Instead of relying on
+IP multicast, FCast could be easily built upon SplitStream,
+for example, to provide software updates cooperatively.
+In [10, 26], algorithms and content encodings are described
+that enable parallel downloads and increase packet loss re-
+silience in richly connected, collaborative overlay networks
+by exploiting downloads from multiple peers.
+7. CONCLUSIONS
+We presented the design and evaluation of SplitStream,
+an application-level multicast system for high-bandwidth
+data dissemination in cooperative environments. The sys-
+tem stripes the data across a forest of multicast trees to bal-
+ance forwarding load and to tolerate faults. It is able to dis-
+tribute the forwarding load among participating nodes while
+respecting individual node bandwidth constraints. When
+combined with redundant content encoding, SplitStream of-
+fers resilience to node failures and unannounced departures,
+even while the aﬀected multicast tree is repaired. The over-
+head of forest construction and maintenance is modest and
+well balanced across nodes and network links, even with
+high churn. Multicasts using the forest do not load nodes
+beyond their bandwidth constraints and they distribute the
+load more evenly over the network links than application-
+level multicast systems that use a single tree.
+The simulator and the versions of Pastry and SplitStream
+that ran on top of it are available upon request from Mi-
+crosoft Research. The version of Pastry and SplitStream
+that ran on PlanetLab is available for download from:http:
+//www.cs.rice.edu/CS/Systems/Pastry/FreePastry
+Acknowledgements
+We thank Manuel Costa, Alan Mislove and Ansley Post for use-
+ful discussions and help with implementation and experimenta-
+tion; Steven Gribble, Krishna Gummadi and Stefan Saroiu for the
+data from [34]; and Hongsuda Tangmunarunkit, Ramesh Govin-
+dan and Scott Shenker for the Mercator topology ([37]). We
+would also like to thank Mayank Bawa, Amin Vahdat (our shep-
+herd) and the anonymous reviewers for their comments on earlier
+drafts.
+8. REFERENCES
+[1] Planetlab. http://www.planet-lab.org.
+[2] E. Adar and B. Huberman. Free riding on Gnutella.
+First Monday, 5(10), Oct. 2000. http://firstmonday.
+org/issues/issue5_10/adar/index.html.
+[3] D. Andersen, H. Balakrishnan, F. Kaashoek, and
+R. Morris. Resilient overlay networks. InSOSP’01,
+Banﬀ, Canada, Dec. 2001.
+[4] J. G. Apostolopoulos. Reliable video communication
+over lossy packet networks using multiple state
+encoding and path diversity. In Visual
+Communications and Image Processing, Jan. 2001.
+[5] J. G. Apostolopoulos and S. J. Wee. Unbalanced
+multiple description video communication using path
+diversity. In IEEE International Conference on Image
+Processing, Oct. 2001.
+
+[6] S. Banerjee, B. Bhattacharjee, and C. Kommareddy.
+Scalable application layer multicast. In Proceedings of
+ACM SIGCOMM, Aug. 2002.
+[7] M. Bawa, H. Deshpande, and H. Garcia-Molina.
+Transience of peers and streaming media. In
+HotNets-I, New Jersey, USA, Oct. 2002.
+[8] K. Birman, M. Hayden, O. Ozkasap, Z. Xiao,
+M. Budiu, and Y. Minsky. Bimodal multicast. ACM
+Transactions on Computer Systems, 17(2):41–88, May
+1999.
+[9] R. Blahut. Theory and Practice of Error Control
+Codes. Addison Wesley, MA, 1994.
+[10] J. Byers, J. Considine, M. Mitzenmacher, and S. Rost.
+Informed content delivery across adaptive overlay
+networks. In SIGCOMM’2002, Pittsburgh, PA, USA,
+Aug. 2002.
+[11] M. Castro, P. Druschel, Y. C. Hu, and A. Rowstron.
+Exploiting network proximity in peer-to-peer overlay
+networks. Technical Report MSR-TR-2002-82,
+Microsoft Research, 2002.
+[12] M. Castro, P. Druschel, Y. C. Hu, and A. Rowstron.
+Proximity neighbor selection in tree-based structured
+peer-to-peer overlays. Technical Report
+MSR-TR-2003-52, Microsoft Research, Aug. 2003.
+[13] M. Castro, P. Druschel, A.-M. Kermarrec, and
+A. Rowstron. SCRIBE: A large-scale and
+decentralized application-level multicast
+infrastructure. IEEE JSAC, 20(8), Oct. 2002.
+[14] M. Castro, P. Druschel, A.-M. Kermarrec, and
+A. Rowstron. Scalable application-level anycast for
+highly dynamic groups. In Networked Group
+Communications, Oct. 2003.
+[15] M. Castro, M. Jones, A.-M. Kermarrec, A. Rowstron,
+M. Theimer, H. Wang, and A. Wolman. An evaluation
+of scalable application-level multicast built using
+peer-to-peer overlay networks. In INFOCOM’03, 2003.
+[16] Y. Chu, S. Rao, and H. Zhang. A case for end system
+multicast. In Proc. of ACM Sigmetrics, pages 1–12,
+June 2000.
+[17] Y. K. Dalal and R. Metcalfe. Reverse path forwarding
+of broadcast packets. Communications of the ACM,
+21(12):1040–1048, 1978.
+[18] S. Deering and D. Cheriton. Multicast routing in
+datagram internetworks and extended LANs. ACM
+Transactions on Computer Systems, 8(2), May 1990.
+[19] P. Eugster, S. Handurukande, R. Guerraoui, A.-M.
+Kermarrec, and P. Kouznetsov. Lightweight
+probabilistic broadcast. In Proceedings of The
+International Conference on Dependable Systems and
+Networks (DSN 2001), July 2001.
+[20] J. Gemmell, E. Schooler, and J. Gray. Fcast multicast
+ﬁle distribution. IEEE Network, 14(1):58–68, Jan
+2000.
+[21] R. Govindan and H. Tangmunarunkit. Heuristics for
+internet map discovery. InProc. 19th IEEE
+INFOCOM, pages 1371–1380, Tel Aviv, Israel, March
+2000. IEEE.
+[22] J. Jannotti, D. Giﬀord, K. Johnson, M. Kaashoek,
+and J. O’Toole. Overcast: Reliable multicasting with
+an overlay network. In Proc. OSDI 2000, San Diego,
+CA, 2000.
+[ 2 3 ] D .K o s t i c ,A .R o d r i g u e z ,J .A l b r e c h t ,A .B h i r u d ,a n d
+A. Vahdat. Using random subsets to build scalable
+network services. In USITS’03, Mar. 2003.
+[24] M. Luby. LT Codes. In FOCS 2002, Nov. 2002.
+[25] R. Mahajan, M. Castro, and A. Rowstron. Controlling
+the cost of reliability in peer-to-peer overlays. In
+IPTPS’03, Feb. 2003.
+[26] P. Maymounkov and D. Mazi`eres. Rateless Codes and
+Big Downloads. In IPTPS’03, Feb. 2003.
+[27] A. Mohr, E. Riskin, and R. Ladner. Unequal loss
+protection: Graceful degredation of image quality over
+packet erasure channels through forward error
+correction. IEEE JSAC, 18(6):819–828, June 2000.
+[28] T. Ngan, P. Druschel, and D. S. Wallach. Enforcing
+fair sharing of peer-to-peer resources. In IPTPS ’03,
+Berkeley, CA, Feb. 2003.
+[29] T. Nguyen and A. Zakhor. Distributed video
+streaming with forward error correction. In Packet
+Video Workshop, Pittsburgh, USA., 2002.
+[30] V. Padmanabhan, H. Wang, P. Chou, and
+K. Sripanidkulchai. Distributing streaming media
+content using cooperative networking. In The 12th
+International Workshop on Network and Operating
+Systems Support for Digital Audio and Video
+(NOSSDAV ’02), Miami Beach, FL, USA, May 2002.
+[31] S. Ratnasamy, P. Francis, M. Handley, R. Karp, and
+S. Shenker. A scalable content-addressable network. In
+Proc. ACM SIGCOMM’01, San Diego, CA, Aug. 2001.
+[32] S. Ratnasamy, M. Handley, R. Karp, and S. Shenker.
+Application-level multicast using content-addressable
+networks. In NGC’2001, Nov. 2001.
+[33] A. Rowstron and P. Druschel. Pastry: Scalable,
+distributed object location and routing for large-scale
+peer-to-peer systems. In Proc. IFIP/ACM Middleware
+2001, Heidelberg, Germany, Nov. 2001.
+[34] S. Saroiu, P. K. Gummadi, and S. D. Gribble. A
+measurement study of peer-to-peer ﬁle sharing
+systems. In Proceedings of the Multimedia Computing
+and Networking (MMCN), San Jose, CA, Jan. 2002.
+[35] A. Snoeren, K. Conley, and D. Giﬀord. Mesh-based
+content routing using XML. In SOSP’01,B a n ﬀ ,
+Canada, Dec. 2001.
+[ 3 6 ] I .S t o i c a ,R .M o r r i s ,D .K a r g e r ,M .F .K a a s h o e k ,a n d
+H. Balakrishnan. Chord: A scalable peer-to-peer
+lookup service for Internet applications. In Proc. ACM
+SIGCOMM’01, San Diego, CA, Aug. 2001.
+[37] H. Tangmunarunkit, R. Govindan, D. Estrin, and
+S. Shenker. The impact of routing policy on internet
+paths. In Proc. 20th IEEE INFOCOM, Alaska, USA,
+Apr. 2001.
+[38] E. Zegura, K. Calvert, and S. Bhattacharjee. How to
+model an internetwork. In INFOCOM96,S a n
+Francisco, CA, 1996.
+[39] B. Zhao, J. Kubiatowicz, and A. Joseph. Tapestry: An
+infrastructure for fault-resilient wide-area location and
+routing. Technical Report UCB//CSD-01-1141, U. C.
+Berkeley, April 2001.
+[40] S. Zhuang, B. Zhao, A. Joseph, R. Katz, and
+J. Kubiatowicz. Bayeux: An architecture for scalable
+and fault-tolerant wide-area data dissemination. In
+NOSSDAV’2001, June 2001.

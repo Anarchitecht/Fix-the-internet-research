@@ -1,1 +1,1900 @@
-Making sure you're not a bot! sciences sciences Making sure you're not a bot! Loading... You are seeing this because the administrator of this website has set up Anubis to protect the server against the scourge of AI companies aggressively scraping websites. This can and does cause downtime for the websites, which makes their resources inaccessible for everyone. Anubis is a compromise. Anubis uses a Proof-of-Work scheme in the vein of Hashcash, a proposed proof-of-work scheme for reducing email spam. The idea is that at individual scales the additional load is ignorable, but at mass scraper levels it adds up and makes scraping much more expensive. Ultimately, this is a placeholder solution so that more time can be spent on fingerprinting and identifying headless browsers (EG: via how they do font rendering) so that the challenge proof of work page doesn't need to be presented to users that are much more likely to be legitimate. Please note that Anubis requires the use of modern JavaScript features that plugins like JShelter will disable. Please disable JShelter or other such plugins for this domain. Sadly, you must enable JavaScript to get past this challenge. This is required because AI companies have changed the social contract around how website hosting works. A no-JS solution is a work-in-progress.
+Replicated Data Types: Speciﬁcation, Veriﬁcation, Optimality
+Sebastian Burckhardt
+Microsoft Research
+Alexey Gotsman
+IMDEA Software Institute
+Hongseok Yang
+University of Oxford
+Marek Zawirski
+INRIA & UPMC-LIP6
+Abstract
+Geographically distributed systems often rely on replicated eventu-
+ally consistent data stores to achieve availability and performance.
+To resolve conﬂicting updates at different replicas, researchers
+and practitioners have proposed specialized consistency protocols,
+called replicated data types, that implement objects such as reg-
+isters, counters, sets or lists. Reasoning about replicated data types
+has however not been on par with comparable work on abstract data
+types and concurrent data types, lacking speciﬁcations, correctness
+proofs, and optimality results.
+To ﬁll in this gap, we propose a framework for specifying repli-
+cated data types using relations over events and verifying their im-
+plementations using replication-aware simulations. We apply it to
+7 existing implementations of 4 data types with nontrivial conﬂict-
+resolution strategies and optimizations (last-writer-wins register,
+counter, multi-value register and observed-remove set). We also
+present a novel technique for obtaining lower bounds on the worst-
+case space overhead of data type implementations and use it to
+prove optimality of 4 implementations. Finally, we show how to
+specify consistency of replicated stores with multiple objects ax-
+iomatically, in analogy to prior work on weak memory models.
+Overall, our work provides foundational reasoning tools to support
+research on replicated eventually consistent stores.
+Categories and Subject Descriptors D.2.4 [Software Engineer-
+ing]: Software/Program Veriﬁcation; F.3.1 [ Logics and Meanings
+of Programs]: Specifying and Verifying and Reasoning about Pro-
+grams
+Keywords Replication; eventual consistency; weak memory
+1. Introduction
+To achieve availability and scalability, many networked computing
+systems rely on replicated stores, allowing multiple clients to issue
+operations on shared data on a number of replicas, which commu-
+nicate changes to each other using message passing. For example,
+large-scale Internet services rely on geo-replication, which places
+data replicas in geographically distinct locations, and applications
+for mobile devices store replicas locally to support ofﬂine use. One
+beneﬁt of such architectures is that the replicas remain locally avail-
+able to clients even when network connections fail. Unfortunately,
+the famous CAP theorem [19] shows that such high Availability
+and tolerance to network Partitions are incompatible with strong
+Consistency, i.e., the illusion of a single centralized replica han-
+dling all operations. For this reason, modern replicated stores often
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation
+on the ﬁrst page. Copyrights for components of this work owned by others than ACM
+must be honored. Abstracting with credit is permitted. To copy otherwise, or republish,
+to post on servers or to redistribute to lists, requires prior speciﬁc permission and/or a
+fee. Request permissions from permissions@acm.org.
+POPL ’14, January 22–24, 2014, San Diego, CA, USA.
+Copyright c© 2014 ACM 978-1-4503-2544-8/14/01. . . $15.00.
+http://dx.doi.org/10.1145/2535838.2535848
+provide weaker forms of consistency, commonly dubbed eventual
+consistency [36]. ‘Eventual’ usually refers to the guarantee that
+if clients stop issuing update requests, then the replicas
+will eventually reach a consistent state. (1)
+Eventual consistency is a hot research area, and new replicated
+stores implementing it appear every year [1, 13, 16, 18, 23, 27,
+33, 34, 37]. Unfortunately, their semantics is poorly understood:
+the very term eventual consistency is a catch-all buzzword, and
+different stores claiming to be eventually consistent actually pro-
+vide subtly different guarantees. The property (1), which is a form
+of quiescent consistency, is too weak to capture these. Although
+it requires the replicas to converge to the same state eventually, it
+doesn’t say which one it will be. Furthermore, (1) does not provide
+any guarantees in realistic scenarios when updates never stop ar-
+riving. The difﬁculty of reasoning about the behavior of eventually
+consistent stores comes from a multitude of choices to be made in
+their design, some of which we now explain.
+Allowing the replicas to be temporarily inconsistent enables
+eventually consistent stores to satisfy clients’ requests from the
+local replica immediately, and broadcast the changes to the other
+replicas only after the fact, when the network connection permits
+this. However, this means that clients can concurrently issue con-
+ﬂicting operations on the same data item at different replicas; fur-
+thermore, if the replicas are out-of-sync, these operations will be
+applied to its copies in different states. For example, two users shar-
+ing an online store account can write two different zip codes into
+the delivery address; the same users connected to replicas with dif-
+ferent views of the shopping cart can also add and concurrently
+remove the same product. In such situations the store needs to en-
+sure that, after the replicas exchange updates, the changes by dif-
+ferent clients will be merged and all conﬂicts will be resolved in a
+meaningful way. Furthermore, to ensure eventual consistency (1),
+the conﬂict resolution has to be uniform across replicas, so that, in
+the end, they converge to the same state.
+The protocols achieving this are commonly encapsulated within
+replicated data types [1, 10, 16, 18, 31, 33, 34] that implement ob-
+jects, such as registers, counters, sets or lists, with various conﬂict-
+resolution strategies. The strategies can be as simple as establishing
+a total order on all operations using timestamps and letting the last
+writer win, but can also be much more subtle. Thus, a data type
+can detect the presence of a conﬂict and let the client deal with it:
+e.g., the multi-value register used in Amazon’s Dynamo key-value
+store [18] would return both conﬂicting zip codes in the above ex-
+ample. A data type can also resolve the conﬂict in an application-
+speciﬁc way. For example, the observed-remove set [7, 32] pro-
+cesses concurrent operations trying to add and remove the same
+element so that an add always wins, an outcome that may be appro-
+priate for a shopping cart.
+Replicated data type implementations are often nontrivial, since
+they have to maintain not only client-observable object state, but
+also metadata needed to detect and resolve conﬂicts and to han-
+dle network failures. This makes reasoning about their behavior
+challenging. The situation gets only worse if we consider multi-
+
+ple replicated objects: in this case, asynchronous propagation of
+updates between replicas may lead to counterintuitive behaviors—
+anomalies, in database terminology. The following code illustrates
+an anomaly happening in real replicated stores [1, 18]:
+Replicar1→x.wr(post) i =y.rd // comment← Replicar2
+y.wr(comment) j =x.rd // empty (2)
+We have two clients reading from and writing to register objectsx
+and y at two different replicas; i and j are client-local variables.
+The ﬁrst client makes a post by writing to x at replicar1 and then
+comments on the post by writing toy. After every write, replicar1
+might send a message with the update to replicar2. If the messages
+carrying the writes ofpost tox and comment toy arrive to replicar2
+out of the order they were issued in, the second client can see the
+comment, but not the post. Different replicated stores may allow
+such an anomaly or not, and this has to be taken into account when
+reasoning about them.
+In this paper, we propose techniques for reasoning about even-
+tually consistent replicated stores in the following three areas.
+1. Speciﬁcation. We propose a comprehensive framework for
+specifying the semantics of replicated stores. Its key novel com-
+ponent is replicated data type speciﬁcations (§3), which provide
+the ﬁrst way of specifying the semantics of replicated objects
+with advanced conﬂict resolution declaratively, like abstract data
+types [25]. We achieve this by deﬁning the result of a data type
+operation not by a function of states, but of operation contexts—
+sets of events affecting the result of the operation, together with
+some relationships between them. We show that our speciﬁcations
+are sufﬁciently ﬂexible to handle data types representing a variety
+of conﬂict-resolution strategies: last-write-wins register, counter,
+multi-value register and observed-remove set.
+We then specify the semantics of a whole store with multiple
+objects, possibly of different types, by consistency axioms (§7),
+which constrain the way the store processes incoming requests in
+the style of weak shared-memory models [2] and thus deﬁne the
+anomalies allowed. As an illustration, we deﬁne consistency mod-
+els used in existing replicated stores, including a weak form of
+eventual consistency [1, 18] and different kinds of causal consis-
+tency [23, 27, 33, 34]. We ﬁnd that, when specialized to last-writer-
+wins registers, these speciﬁcations are very close to fragments of
+the C/C++ memory model [5]. Thus, our speciﬁcation framework
+generalizes axiomatic shared-memory models to replicated stores
+with nontrivial conﬂict resolution.
+2. Veriﬁcation. We propose a method for proving the correctness
+of replicated data type implementations with respect to our speci-
+ﬁcations and apply it to seven existing implementations of the four
+data types mentioned above, including those with nontrivial opti-
+mizations. Reasoning about the implementations is difﬁcult due to
+the highly concurrent nature of a replicated store, with multiple
+replicas simultaneously updating their object copies and exchang-
+ing messages. We address this challenge by proposing replication-
+aware simulations (§5). Like classical simulations from data reﬁne-
+ment [21], these associate a concrete state of an implementation
+with its abstract description—structures on events, in our case. To
+combat the complexity of replication, they consider the state of an
+object at a single replica or a message in transit separately and as-
+sociate it with abstract descriptions of only those events that led to
+it. Verifying an implementation then requires only reasoning about
+an instance of its code running at a single replica.
+Here, however, we have to deal with another challenge: code at
+a single replica can access both the state of an object and a message
+at the same time, e.g., when updating the former upon receiving the
+latter. To reason about such code, we often need to rely on cer-
+tain agreement properties correlating the abstract descriptions of
+the message and the object state. Establishing these properties re-
+quires global reasoning. Fortunately, we ﬁnd that agreement prop-
+erties needed to prove realistic implementations depend only on ba-
+sic facts about their messaging behavior and can thus be established
+once for broad classes of data types. Then a particular implementa-
+tion within such a class can be veriﬁed by reasoning purely locally.
+By carefully structuring reasoning in this way, we achieve easy
+and intuitive proofs of single data type implementations. We then
+lift these results to stores with multiple objects of different types by
+showing how consistency axioms can be proved given properties of
+the transport layer and data type implementations (§7).
+3. Optimality. Replicated data type designers strive to optimize
+their implementations; knowing that one is optimal can help guide
+such efforts in the most promising direction. However, proving
+optimality is challengingly broad as it requires quantifying over all
+possible implementations satisfying the same speciﬁcation.
+For most data types we studied, the primary optimization target
+is the size of the metadata needed to resolve conﬂicts or handle net-
+work failures. To establish optimality of metadata size, we present
+a novel method for proving lower bounds on the worst-case meta-
+data overhead of replicated data types—the proportion of metadata
+relative to the client-observable content. The main idea is to ﬁnd a
+large family of executions of an arbitrary correct implementation
+such that, given the results of data type operations from a certain
+ﬁxed point in any of the executions, we can recover the previous
+execution history. This implies that, across executions, the states at
+this point are distinct and thus must have some minimal size.
+Using our method, we prove that four of the implementations
+we veriﬁed have an optimal worst-case metadata overhead among
+all implementations satisfying the same speciﬁcation. Two of these
+(counter, last-writer-wins register) are well-known; one (optimized
+observed-remove set [6]) is a recently proposed nontrivial opti-
+mization; and one (optimized multi-value register) is a small im-
+provement of a known implementation [33] that we discovered dur-
+ing a failed attempt to prove optimality of the latter. We summarize
+all the bounds we proved in Fig. 10.
+We hope that the theoretical foundations we develop will help
+in exploring the design space of replicated data types and replicated
+eventually consistent stores in a systematic way.
+2. Replicated Data Types
+We now describe our formal model for replicated stores and intro-
+duce replicated data type implementations , which implement op-
+erations on a single object at a replica and the protocol used by
+replicas to exchange updates to this object. Our formalism follows
+closely the models used by replicated data type designers [33].
+A replicated store is organized as a collection of named ob-
+jects Obj = {x,y,z,... }. Each object is hosted at all replicas
+r,s∈ ReplicaID. The sets of objects and replicas may be inﬁnite,
+to model their dynamic creation. Clients interact with the store by
+performing operations on objects at a speciﬁed replica. Each ob-
+jectx∈ Obj has a typeτ = type(x)∈ Type, whose type signa-
+ture (Opτ, Valτ) determines the set of supported operations Opτ
+(ranged over by o) and the set of their return values Valτ (ranged
+over by a,b,c,d ). We assume that a special value ⊥∈ Valτ be-
+longs to all sets Valτ and is used for operations that return no
+value. For example, we can deﬁne a counter data type ctr and
+an integer register type intreg with operations for reading, incre-
+menting or writing an integer a: Valctr = Valintreg = Z∪{⊥} ,
+Opctr ={rd, inc} and Opintreg ={rd}∪{ wr(a)|a∈ Z}.
+We also assume sets Message of messages (ranged over bym)
+and timestamps Timestamp (ranged over byt). For simplicity, we
+let timestamps be positive integers: Timestamp = N1.
+DEFINITION 1. A replicated data type implementation for a data
+typeτ is a tupleDτ = (Σ,⃗ σ0,M, do, send, receive), where⃗ σ0 :
+
+Figure 1. Illustrations of a concrete (a) and two abstract executions (b, c)
+1: x.inc
+2: send
+3: receive
+4: x.inc
+5: send
+6: receive
+7: x.rd8: receive
+to r3
+r1 r2 r3
+(a)
+1: x.inc
+4: x.inc
+7: x.rd: 1
+vis
+vis
+(b)
+1: x.inc
+4: x.inc
+7: x.rd: 2
+vis
+vis
+(c)vis
+ReplicaID→ Σ,M⊆ Message and
+do : Opτ× Σ× Timestamp→ Σ× Valτ;
+send : Σ→ Σ×M; receive : Σ×M→ Σ.
+We denote a component ofDτ , such as do, byDτ.do. A tupleDτ
+deﬁnes the class of implementations of objects with type τ, meant
+to be instantiated for every such object in the store. Σ is the set of
+states (ranged over by σ) used to represent the current state of the
+object, including metadata, at a single replica. The initial state at
+every replica is given by⃗ σ0.
+Dτ provides three methods that the rest of the store implemen-
+tation can call at a given replica; we assume that these methods
+execute atomically. We visualize store executions resulting from re-
+peated calls to the methods as in Fig. 1(a), by arranging the calls on
+several vertical timelines corresponding to replicas at which they
+occur and denoting the delivery of messages by diagonal arrows. In
+§4, we formalize them as sequences of transitions called concrete
+executions and deﬁne the store semantics by their sets; the intuition
+given by Fig. 1(a) should sufﬁce for the following discussion.
+A client request to perform an operation o∈ Opτ triggers the
+call do(o,σ,t ) (e.g., event 1 in Fig. 1(a)). This takes the current
+state σ ∈ Σ of the object at the replica where the request is
+issued and a timestamp t∈ Timestamp provided by the rest of
+the store implementation and produces the updated object state and
+the return value of the operation. The data type implementation can
+use the timestamp provided, e.g., to implement the last-writer-wins
+conﬂict-resolution strategy mentioned in§1, but is free to ignore it.
+Nondeterministically, in moments when the network is able to
+accept messages, a replica calls send. Given the current state of the
+object at the replica, send produces a message inM to broadcast to
+all other replicas (event 2 in Fig. 1(a)); sometimes send also alters
+the state of the object. Using broadcast rather than point-to-point
+communication does not limit generality, since we can always tag
+messages with the intended receiver. Another replica that receives
+the message generated by send calls receive to merge the enclosed
+update into its copy of the object state (event 3 in Fig. 1(a)).
+We now reproduce three replicated data type implementations
+due to Shapiro et al. [33].They fall into two categories: in op-
+based implementations, each message carries a description of the
+latest operations that the sender has performed, and in state-based
+implementations, a description of all operations it knows about.
+Op-based counter (ctr). Fig. 2(a) shows an implementation of
+the ctr data type. A replica stores a pair ⟨a,d⟩, where a is the
+current value of the counter, and d is the number of increments
+performed since the last broadcast (we use angle brackets for tuples
+representing states and messages). The send method returnsd and
+resets it; the receive method adds the content of the message to
+a. This implementation is correct, as long as each message is
+delivered exactly once (we show how to prove this in§5). Since inc
+operations commute, they never conﬂict: applying them in different
+orders at different replicas yields the same ﬁnal state.
+State-based counter ( ctr). The implementation in Fig. 2(b)
+summarizes the currently known history by recording the contri-
+Figure 2. Three replicated data type implementations
+(a) Op-based counter (ctr)
+Σ = N0× N0
+M = N0
+⃗ σ0 = λr.⟨0, 0⟩
+do(rd,⟨a,d⟩,t ) = ( ⟨a,d⟩,a )
+do(inc,⟨a,d⟩,t ) = ( ⟨a + 1,d + 1⟩,⊥)
+send(⟨a,d⟩) = ( ⟨a, 0⟩,d )
+receive(⟨a,d⟩,d′) = ⟨a +d′,d⟩
+(b) State-based counter (ctr)
+Σ = ReplicaID× (ReplicaID→ N0)
+σ0 = λr.⟨r,λs. 0⟩
+M = ReplicaID→ N0
+do(rd,⟨r,v⟩,t ) = ( ⟨r,v⟩, ∑{v(s)|s∈ ReplicaID})
+do(inc,⟨r,v⟩,t ) = ( ⟨r,v [r↦→v(r) + 1]⟩,⊥)
+send(⟨r,v⟩) = ( ⟨r,v⟩,v )
+receive(⟨r,v⟩,v′) = ⟨r, (λs. max{v(s),v′(s)})⟩
+(c) State-based last-writer-wins register (intreg)
+Σ = Z× (Timestamp⨄{ 0})
+⃗ σ0 = λr.⟨0, 0⟩
+M = Σ
+do(rd,⟨a,t⟩,t′) = ( ⟨a,t⟩,a )
+do(wr(a′),⟨a,t⟩,t′) = ift<t ′ then (⟨a′,t′⟩,⊥) else (⟨a,t⟩,⊥)
+send(⟨a,t⟩) = ( ⟨a,t⟩,⟨a,t⟩)
+receive(⟨a,t⟩,⟨a′,t′⟩) = ift<t ′ then⟨a′,t′⟩ else⟨a,t⟩
+bution of every replica to the counter value separately (reminiscent
+of vector clocks [29]). A replica stores its identiﬁer r and a vector
+v such that for each replica s the entry v(s) gives the number of
+increments made by clients at s that have been received by r. A
+rd operation returns the sum of all entries in the vector. An inc
+operation increments the entry for the current replica. We denote
+byv[i↦→j] the function that has the same value as v everywhere,
+except fori, where it has the valuej. The send method returns the
+vector, and the receive method takes the maximum of each entry in
+the vectorsv andv′ given to it. This is correct because an entry fors
+in either vector reﬂects a preﬁx of the sequence of increments done
+at replicas. Hence, we know that min{v(s),v′(s)} increments by
+s are taken into account both inv(s) and inv′(s).
+State-based last-writer-wins (LWW) register ( intreg). Un-
+like counters, registers have update operations that are not com-
+mutative. To resolve conﬂicts, the implementation in Fig. 2 uses
+the last-writer-wins strategy, creating a total order on writes by as-
+sociating a unique timestamp with each of them. A state contains
+the current value, returned byrd, and the timestamp at which it was
+written (initially, we have0 instead of a timestamp). Awr(a′) com-
+pares its timestamp t′ with the timestamp t of the current value a
+and sets the value to the one with the highest timestamp. Note that
+here we have to allow fort′ <t , since we do not make any assump-
+tions about timestamps apart from uniqueness: e.g., the rest of the
+store implementation can compute them using physical or Lamport
+clocks [22]. We show how to state assumptions about timestamps in
+§4. The send method just returns the state, and the receive method
+chooses the winning value by comparing the timestamps in the cur-
+rent state and the message, like wr.
+State-based vs. op-based. State-based implementations con-
+verge to a consistent state faster than op-based implementations be-
+cause they are transitively delivering, meaning that they can prop-
+agate updates indirectly. For example, when using the counter in
+Fig. 2(b), in the execution in Fig. 1(a) the read at r3 (event 7) re-
+turns 2, even though the message from r1 has not arrived yet, be-
+causer3 learns aboutr1’s update viar2. State-based implementa-
+tions are also resilient against transport failures like message loss,
+reordering, or duplication. Op-based implementations require the
+replicated store using them to mask such failures (e.g., using mes-
+sage sequence numbers, retransmission buffers, or reorder buffers).
+
+The potential weakness of state-based implementations is the
+size of states and messages, which motivates our examination of
+space optimality in §6. For example, we show that the counter
+in Fig. 2(b) is optimal, meaning that no counter implementation
+satisfying the same requirements (transitive delivery and resilience
+against message loss, reordering, and duplication) can do better.
+3. Specifying Replicated Data Types and Stores
+Consider the concrete execution in Fig. 1(a). What are valid return
+values for the read in event 7? Intuitively, 1 or 2 can be justiﬁable,
+but not 100. We now present a framework for specifying the ex-
+pected outcome declaratively, without referring to implementation
+details. For example, we give a speciﬁcation of a replicated counter
+that is satisﬁed by both implementations in Fig. 2(a, b).
+In presenting the framework, we rely on the intuitive under-
+standing of the way a replicated store executes given in§2. Later we
+deﬁne the store semantics formally (§4), which lets us state what it
+means for a store to satisfy our speciﬁcations (§4 and§7).
+3.1 Abstract Executions and Speciﬁcation Structure
+We deﬁne our speciﬁcations on abstract executions , which in-
+clude only user-visible events (corresponding to do calls) and
+describe the other information about the store processing in an
+implementation-independent form. Informally, we consider a con-
+crete execution correct if it can be justiﬁed by an abstract execution
+satisfying the speciﬁcations that is “similar” to it and, in particular,
+has the same operations and return values.
+Abstract executions are inspired by axiomatic deﬁnitions of
+weak shared-memory models [2]. In particular, we use their pre-
+viously proposed reformulation with visibility and arbitration rela-
+tions [13], which are similar to the reads-from and coherence rela-
+tions from weak shared-memory models. We provide a comparison
+with shared-memory models in§7 and with [13] in§8.
+DEFINITION 2. An abstract execution is a tuple
+A = (E, repl, obj, oper, rval, ro, vis, ar), where
+• E⊆ Event is a set of events from a countable universe Event;
+• each event e ∈ E describes a replica repl(e) ∈ ReplicaID
+performing an operation oper(e)∈ Optype(obj(e)) on an object
+obj(e)∈ Obj, which returns the value rval(e)∈ Valtype(obj(e));
+• ro⊆ E×E is a replica order, which is a union of transitive,
+irreﬂexive and total orders on events at each replica;
+• vis⊆E×E is an acyclic visibility relation such that
+∀e,f ∈E.e
+vis
+−→f =⇒ obj(e) = obj(f);
+• ar ⊆ E× E is an arbitration relation , which is a union of
+transitive, irreﬂexive and total orders on events on each object.
+We also require thatro, vis and ar be well-founded.
+In the following, we denote components ofA and similar structures
+as inA.repl. We also use (e,f )∈ r ande
+r
+− →f interchangeably.
+Informally,e
+vis
+−→f means that f is aware of e and thus e’s
+effect can inﬂuencef’s return value. In implementation terms, this
+may be the case if the update performed bye has been delivered to
+the replica performing f beforef is issued. The exact meaning of
+“delivered”, however, depends on how much information messages
+carry in the implementation. For example, as we explain in §3.2,
+the return value of a read from a counter is equal to the number
+of inc operations visible to it. Then, as we formalize in §4, the
+abstract execution illustrated in Fig. 1(b) justiﬁes the op-based
+implementation in Fig. 2(a) reading 1 in the concrete execution in
+Fig. 1(a). The abstract execution in Fig. 1(c) justiﬁes the state-based
+implementation in Fig. 2(b) reading 2 due to transitive delivery
+(§2). There is no abstract execution that would justify reading 100.
+x.wr(empty)
+x.wr(post)
+y.wr(comment)
+ro
+ro
+y.rd: comment
+x.rd: empty
+roar
+vis
+vis
+The ar relation represents the
+ordering information provided by
+the store, e.g., via timestamps.
+On the right we show an ab-
+stract execution corresponding to
+a variant of the anomaly (2). The
+ar edge means that any replica
+that sees both writes tox should assume that post overwrites empty.
+We give a store speciﬁcation by two components, constraining
+abstract executions:
+1. Replicated data type speciﬁcations determine return values of
+operations in an abstract execution in terms of itsvis and ar rela-
+tions, and thus deﬁne conﬂict-resolution policies for individual
+objects in the store. The speciﬁcations are the key novel compo-
+nent of our framework, and we discuss them next.
+2. Consistency axioms constrain vis and ar and thereby disallow
+anomalies and extend the semantics of individual objects to that
+of the entire store. We defer their discussion to§7. See Fig. 13 for
+their ﬂavor; in particular, COCV prohibits the anomaly above.
+Each of these components can be varied separately, and our spec-
+iﬁcations will deﬁne the semantics of any possible combination.
+Given a speciﬁcation of a store, we can determine whether a set
+of events can be observed by its users by checking if there is an
+abstract execution with this set of events satisfying the data type
+speciﬁcations and consistency axioms.
+3.2 Replicated Data Type Speciﬁcations
+In a sequential setting, the semantics of a data type τ can be
+speciﬁed by a function Sτ : Op+
+τ → Valτ , which, given a non-
+empty sequence of operations performed on an object, speciﬁes the
+return value of the last operation. For a register, read operations
+return the value of the last preceding write, or zero if there is no
+prior write. For a counter, read operations return the number of
+preceding increments. Thus, for any sequence of operationsξ:
+Sintreg(ξ rd) = a, if wr(0)ξ =ξ1 wr(a)ξ2 and
+ξ2 does not contain wr operations;
+Sctr(ξ rd) = (the number of inc operations inξ);
+Sintreg(ξ inc) = Sctr(ξ wr(a)) = ⊥.
+In a replicated store, the story is more interesting. We specify
+a data type τ by a functionFτ , generalizingSτ . Just likeSτ , this
+determines the return value of an operation based on prior opera-
+tions performed on the object. However, Fτ takes as a parameter
+not a sequence, but an operation context, which includes all we
+need to know about a store execution to determine the return value
+of a given operationo—the set E of all events that are visible too,
+together with the operations performed by the events and visibility
+and arbitration relations on them.
+DEFINITION 3. An operation context for a data type τ is a tuple
+L = (o,E, oper, vis, ar), where o∈ Opτ ,E is a ﬁnite subset of
+Event, oper :E→ Opτ , vis⊆E×E is acyclic and ar⊆E×E
+is transitive, irreﬂexive and total.
+We can extract the context of an event e∈ A.E in an abstract
+executionA by selecting all events visible to it according toA.vis:
+ctxt(A,e ) = (A.oper(e),G, (A.oper)|G, (A.vis)|G, (A.ar)|G),
+whereG = (A.vis)−1(e) and·|G is the restriction to events in G.
+Thus, in the abstract execution in Fig. 1(b), the operation context of
+the read fromx includes only one increment event; in the execution
+in Fig. 1(c) it includes two.
+DEFINITION 4. A replicated data type speciﬁcation for a typeτ is
+a functionFτ that, given an operation context L forτ, speciﬁes a
+return valueFτ(L)∈ Valτ .
+
+Note thatFτ(o,∅,... ) returns the value resulting from performing
+o on the initial state for the data type (e.g.,0 for the LWW-register).
+We specify multiple data types used in a replicated store by a
+partial function F mapping them to data type speciﬁcations.
+DEFINITION 5. An abstract execution A satisﬁes F, written A|=
+F, if the return value of every event inA is computed on its context
+by the speciﬁcation for the type of the object the event accesses:
+∀e∈A.E. (A.rval(e) = F(type(A.obj(e)))(ctxt(A,e ))).
+We specify a whole store byF and a set of consistency axioms (§7).
+This lets us determine if its users can observe a given set of events
+by checking if there is an abstract execution with these events that
+satisﬁes F according to the above deﬁnition, as well as the axioms.
+Note that Fτ is deterministic. This does not mean that so is
+an outcome of an operation on a store; rather, that all the non-
+determinism arising due to its distributed nature is resolved by vis
+and ar in the context passed to Fτ . These relations are chosen
+arbitrarily subject to consistency axioms. Due to the determinacy
+property, two events that perform the same operation and see the
+same set of events produce the same return values. As we show
+in§7, this property ensures that our speciﬁcations can formalize
+eventual consistency in the sense of (1).
+We now give four examples of data type speciﬁcations, corre-
+sponding to the four conﬂict-resolution strategies mentioned in §1
+and§2: (1) operations commute, so no conﬂicts arise; (2) last writer
+wins; (3) all conﬂicting values are returned; and (4) conﬂicts are
+resolved in an application-speciﬁc way. We start by specifying the
+data types whose implementations we presented in§2.
+1. Counter (ctr) is deﬁned by
+Fctr(inc,E, oper, vis, ar) = ⊥;
+Fctr(rd,E, oper, vis, ar) =
+⏐⏐{e∈E| oper(e) = inc}
+⏐⏐. (3)
+Thus, according to Def. 5 the executions in Fig. 1(b) and 1(c) satisfy
+the counter speciﬁcation: both1 and 2 are valid return values for the
+read fromx when there are two concurrent increments.
+2. LWW-register (intreg) is deﬁned by
+Fintreg(o,E, oper, vis, ar) =Sintreg(Earo), (4)
+where Ear denotes the sequence obtained by ordering the opera-
+tions performed by the events inE according to ar. Thus, the return
+value is determined by establishing a total order of the visible oper-
+ations and applying the regular sequential semantics. For example,
+by Def. 5 in the example execution from§3.1 the read from x has
+to return empty; if we had a vis edge from the write of post to the
+read fromx, then the read would have to returnpost. As we show in
+§7, weak shared-memory models are obtained by specializing our
+framework to stores with only LWW-registers.
+We can obtain a concurrent semantics Fτ of any data type τ
+based on its sequential semanticsSτ similarly to (4). For example,
+Fctr deﬁned above is equivalent to what we obtain using this
+generic construction. The next two examples go beyond this.
+3. Multi-value register (mvr). This register [1, 18] has the same
+operations as the LWW-register, but its reads return a set of values:
+Fmvr(rd,E, oper, vis, ar) ={a|∃e∈E. oper(e) = wr(a)
+∧¬∃f∈E. oper(f) = wr( )∧e
+vis
+−→f}.
+wr(0)
+wr(2)
+vis
+wr(3)
+wr(1)
+visvis
+(We write for an expression whose value
+is irrelevant.) A read returns the values writ-
+ten by currently conﬂicting writes, deﬁned as
+those that are not superseded in vis by later
+writes; ar is not used. For example, ard would
+return{2, 3} in the context on the right.
+Figure 3. The set of conﬁgurations Conﬁg and the transition relation
+−→D: Conﬁg× Event× Conﬁg for a data type library D. We use
+e :{h1 =u1,h 2 =u2} to abbreviateh1(e) =u1 andh2(e) =u2. We
+uncurryR∈ RState where convenient.
+Objτ ={x∈ Obj| type(x) =τ}
+RState = ⋃
+X⊆Obj
+∏
+x∈X(ReplicaID→ D(type(x)).Σ)
+TState = MessageID⇀ ⋃
+τ∈Type(ReplicaID× Objτ× D(τ).M)
+Conﬁg = RState× TState
+D(type(x)).do(o,σ,t ) = (σ′,a )
+e :{act = do, obj =x, repl =r, oper =o, time =t, rval =a}
+(R[(x,r )↦→σ], T) e−→D (R[(x,r )↦→σ′], T)
+D(type(x)).send(σ) = (σ′,m ) mid /∈ dom(T )
+e :{act = send, obj =x, repl =r, msg = mid}
+(R[(x,r )↦→σ], T) e−→D (R[(x,r )↦→σ′], T[mid↦→ (r,x,m )])
+D(type(x)).receive(σ,m ) =σ′ r⁄=r′
+e :{act = receive, obj =x, repl =r, srepl =r′, msg = mid}
+(R[(x,r )↦→σ], T[mid↦→ (r′,x,m )]) e−→D
+(R[(x,r )↦→σ′], T[mid↦→ (r′,x,m )])
+4. Observed-remove set ( orset). How do we specify a repli-
+cated set of integers? The operations of adding and removing differ-
+ent elements commute and thus do not conﬂict. Conﬂicts arise from
+concurrently adding and removing the same element. For example,
+we need to decide what rd will return as the contents of the set in
+the context (rd,{e,f}, oper, vis, ar), where oper(e) = add(42)
+and oper(f) = remove(42). If we use the generic construction
+from the LWW-register, the result will depend on the arbitration
+relation:∅ ife
+ar
+− →f, and{42} otherwise. An application may re-
+quire a more consistent behavior, e.g., that an add operation always
+win against concurrent remove operations. Observed-remove (OR)
+set [7, 32] achieves this by mandating that remove operations can-
+cel only the add operations that are visible to them:
+Forset(rd,E, oper, vis, ar) ={a|∃e∈E. oper(e) = add(a)
+∧¬∃f∈E. oper(f) = remove(a)∧e
+vis
+−→f}, (5)
+In the above operation contextrd will return∅ ife
+vis
+−→f, and{42}
+otherwise. The rationale is that, in the former case, add(42) and
+remove(42) are not concurrent: the user who issued the remove
+knew that 42 was in the set and thus meant to remove it. In the
+latter case, the two operations are concurrent and thus add wins.
+As the above examples illustrate, our speciﬁcations can describe
+the semantics of data types and their conﬂict-resolution policies
+declaratively, without referring to the internals of their implemen-
+tations. In this sense the speciﬁcations generalize the concept of an
+abstract data type [25] to the replicated setting.
+4. Store Semantics and Data Type Correctness
+A data type library D is a partial mapping from typesτ to data type
+implementations D(τ) from Def. 1. We now deﬁne the semantics of
+a replicated store with a data type library D as a set of its concrete
+executions, previously introduced informally by Fig. 1(a). We then
+state what it means for data type implementations of §2 to satisfy
+their speciﬁcations of §3.2 by requiring their concrete executions
+to be justiﬁed by abstract ones. In §7 we generalize this to the
+correctness of the whole store with multiple object with respect to
+both data type speciﬁcations and consistency axioms.
+Semantics. We deﬁne the semantics using the relation −→D:
+Conﬁg× Event× Conﬁg in Fig. 3, which describes a single
+
+step of the store execution. The relation transforms conﬁgurations
+(R,T )∈ Conﬁg describing the store state:R gives the object state
+at each replica, andT the set of messages in transit between them,
+each identiﬁed by a message identiﬁer mid∈ MessageID. A mes-
+sage is annotated by the origin replica and the object to which it
+pertains. We allow the store to contain only some objects fromObj
+and thus allowR to be partial on them. We use a number of func-
+tions on events, such as act, obj, etc., to record the information
+about the corresponding transitions, so that −→D is implicitly pa-
+rameterized by them; we give their full list in Def. 6 below.
+The ﬁrst rule in Fig. 3 describes a replicar performing an opera-
+tiono on an objectx using the do method of the corresponding data
+type implementation. We record the return value using the function
+rval. To communicate the change to other replicas, we can at any
+time perform a transition deﬁned by the second rule, which puts a
+new messagem created by a call to send into the set of messages
+in transit. The third rule describes the delivery of such a message to
+a replicar other than the origin replica r′, which triggers a call to
+receive. Note that the relation−→D does not make any assumptions
+about message delivery: messages can be delivered in any order,
+multiple times, or not at all. These assumptions can be introduced
+separately, as we show later in this section. A concrete execution
+can be thought of as a ﬁnite or inﬁnite sequence of transitions:
+(R0,T 0)
+e1
+−→(R1,T 1)
+e2
+−→...
+en
+−→(Rn,Tn)...,
+where all eventsei are distinct. To ease mapping between concrete
+and abstract executions in the future, we formalize it as a structure
+on events, similarly to Def. 2.
+DEFINITION 6. A concrete execution of a store with a data type
+library D is a tuple
+C = (E, eo, pre, post, act, obj, repl, oper, time, rval, msg, srepl).
+Here E ⊆ Event, the execution order eo is a well-founded,
+transitive, irreﬂexive and total order on E, relating the events
+according to the order of the transitions they describe, time is
+injective and pre, post : E → Conﬁg form a valid sequence of
+transitions:
+(∀e∈E. pre(e)
+e
+−→D post(e))∧
+(∀e,f∈E.e
+eo
+− →f∧¬∃g.e
+eo
+− →g
+eo
+− →f =⇒ post(e) =pre(f)).
+We have omitted the types of functions on events, which are
+easily inferred from Fig. 3: e.g., act : E →{ do, send, receive}
+and time :E ⇀Timestamp, deﬁned only one with act(e) = do.
+We denote the initial conﬁguration of C by init(C) =
+C.pre(e0), wheree0 is the minimal event inC.eo. IfC.E is ﬁnite,
+we denote the ﬁnal conﬁguration of C by ﬁnal(C) = C.post(ef),
+whereef is the maximal event inC.eo. The semantics JDK of D is
+the set of all its concrete executions C that start in a conﬁguration
+with an empty set of messages and all objects in initial states, i.e.,
+∃X⊆ Obj. init(C) = ((λx∈X. D(type(x)).⃗ σ0), [ ]),
+where [ ] is the everywhere-undeﬁned function.
+Transport layer speciﬁcations. Data type implementations such
+as the op-based counter in Fig. 2(a) can rely on some guarantees
+concerning the delivery of messages ensured by the rest of the store
+implementation. They may similarly assume certain properties of
+timestamps other than uniqueness (guaranteed by the injectivity of
+time in Def. 6). We take such assumptions into account by admit-
+ting only a subset of executions from JDK that satisfy a transport
+layer speciﬁcationT , which is a predicate on concrete executions.
+Thus, we consider a replicated store to be deﬁned by a pair (D,T )
+and the set of its executions be JDK∩T .
+Even though our deﬁnition of T lets it potentially restrict data
+type implementation internals, the particular instantiations we use
+only restrict message delivery and timestamps. For technical rea-
+sons, we assume thatT always satisﬁes certain closure properties:
+for everyC∈T , the projection ofC onto events on a given object
+or a subset of events forming a preﬁx in the eo order is also inT .
+As an example, we deﬁne a transport layer speciﬁcation ensur-
+ing that a message is delivered to any single replica at most once,
+as required by the implementation in Fig. 2(a). Let the delivery re-
+lation del(C)∈C.E×C.E pair events sending and receiving the
+same message:
+e
+del(C)
+− −−− →f ⇐⇒ e
+C.eo
+− −− →f∧C.act(e) = send∧
+C.act(f) = receive∧C.msg(e) =C.msg(f).
+Then the desired condition on concrete executionsC is
+∀e,f,g ∈C.E.e
+del(C)
+− −−− →f∧e
+del(C)
+− −−− →g∧
+C.repl(f) =C.repl(g) =⇒ f =g. (T-Unique)
+Data type implementation correctness. We now state what it
+means for an implementationDτ of typeτ from Def. 1 to satisfy a
+speciﬁcationFτ from Def. 4. To this end, we consider the behavior
+ofDτ under the “most general” client and transport layer, perform-
+ing all possible operations and message deliveries. Formally, let
+JDτ K be the set of executionsC∈ J[τ↦→D τ]K of a store contain-
+ing a single object x of a type τ with the implementationDτ , i.e.,
+init(C) = (R, [ ]) for someR such that dom(R) ={x}.
+ThenDτ should satisfyFτ under a transport speciﬁcationT if
+for every concrete execution C∈ JDτ K∩T we can ﬁnd a “simi-
+lar” abstract execution satisfyingFτ and, in particular, having the
+same operations and return values. As it happens, all components
+of the abstract execution except visibility are straightforwardly de-
+termined by C; as explained in §3.1, we have some freedom in
+choosing visibility. We deﬁne the choice using a visibility witness
+V, which maps a concrete execution C∈ JDτ K to an acyclic re-
+lation on (C.E)|do deﬁning visibility (here·|do is the restriction to
+eventse withC.act(e) = do). Let
+e
+ro(C)
+−−−→f ⇐⇒ e
+C.eo
+− −− →f∧C.repl(e) =C.repl(f);
+e
+ar(C)
+−−−→f ⇐⇒ e,f ∈ (C.E)|do∧
+C.obj(e) =C.obj(f)∧C.time(e)<C. time(f).
+Then the abstract execution justifyingC∈ JDτ K is deﬁned by
+abs(C,V) = (C.E|do,E. repl|do,E. obj|do,E. oper|do,E. rval|do,
+ro(C)|do,V(C), ar(C)).
+DEFINITION 7. A data type implementation Dτ satisﬁes a speci-
+ﬁcationFτ with respect toV andT , writtenDτ sat[V,T ]Fτ , if
+∀C∈ JDτ K∩T . (abs(C,V)|= [τ↦→F τ]), where|= is deﬁned
+in Def. 5.
+As we explained informally in §3.1, the visibility witness de-
+pends on how much information the implementation puts into
+messages. Since state-based implementations, such as the ones in
+Fig. 2(b, c), are transitively delivering ( §2), for them we use the
+witnessVstate(C) = ( ro(C)∪ del(C))+|do. By the deﬁnition of
+ro(C) and del(C), (ro(C)∪ del(C)) is acyclic, soVstate is well-
+deﬁned. State-based implementations do not make any assumptions
+about the transport layer: in this case we write T = T-Any. In
+contrast, op-based implementations, such as the one in Fig. 2(a),
+requireT = T-Unique. Since such implementations are not tran-
+sitively delivering, the witness Vstate is not appropriate for them.
+We could attempt to deﬁne a witness for them by straightforwardly
+lifting the delivery relation:
+Vop(C) = ro(C)|do∪{ (e,f )|e,f ∈ (C.E)|do∧
+∃e′,f′.e
+ro(C)
+−−−→e′ del(C)
+− −−− →f′ ro(C)
+−−−→f}.
+
+However, we need to be more careful, since for op-based imple-
+mentationse
+ro(C)
+−−−→e′ del(C)
+− −−− →f′ ro(C)
+−−−→f does not ensure that the
+update ofe is taken into account byf: if there is anothersend event
+e′′ in betweene ande′, thene′′ will capture the update ofe ande′
+will not. Hence, we deﬁne the witness as:
+Vop(C) = ro(C)|do∪{ (e,f )|e,f ∈ (C.E)|do
+∧∃e′,f′.e
+ro(C)
+−−−→e′ del(C)
+− −−− →f′ ro(C)
+−−−→f
+∧¬∃e′′.e
+ro(C)
+−−−→e′′ ro(C)
+−−−→e′∧C.act(e′′) = send}.
+We next present a method for proving data type implementation
+correctness in the sense of Def. 7. In §7 we lift this to stores with
+multiple objects and take into account consistency axioms.
+5. Proving Data Type Implementations Correct
+The straightforward approach to proving correctness in the sense
+of Def. 7 would require us to consider global store conﬁgurations
+in executionsC, including object states at all replicas and all mes-
+sages in transit, making the reasoning non-modular and unintuitive.
+To deal with this challenge, we focus on a single component of
+a store conﬁguration using replication-aware simulation relations
+Rr andM, analogous to simulation (aka coupling) relations used
+in data reﬁnement [21]. TheRr relation associates the object state
+at a replica r with an abstract execution that describes only those
+events that led to this state ;M does the same for a message. For
+example, when provingDctr in Fig. 2(b) with respect toFctr in (3),
+M associates a message carrying a vector v with executions in
+which each replica s makes v(s) increments. As part of a proof
+ofDτ , we require checking that the effect of its methods, such as
+Dτ.do, can be simulated by appropriately transforming related ab-
+stract executions while preserving the relations. We deﬁne these
+transformations using abstract methods do♯, send♯ and receive♯ as
+illustrated in Fig. 4(a, b). For example, if a replicar executesDτ.do
+from a stateσ related byRr to an abstract executionI (we explain
+the use of I instead of A later), we need to ﬁnd an I′ related by
+Rr to the resulting state σ′. We also need to check that the value
+returned byDτ.do onσ is equal to that returned byFτ onI.
+These conditions consider the behavior of an implementation
+method on a single state and/or message and its effect on only
+the relevant part of the abstract execution. However, by localizing
+the reasoning in this way, we lose some global information that is
+actually required to verify realistic implementations. In particular,
+this occurs when discharging the obligation forreceive in Fig. 4(b).
+Taking a global view, σ andm there are meant to come from the
+same conﬁguration in a concrete execution C; correspondingly,I
+and J are meant to be fragments of the same abstract execution
+abs(C,V). In this context we may know certain agreement prop-
+erties correlatingI andJ, e.g., that the union of their visibility re-
+lations is itself a well-formed visibility relation and is thus acyclic.
+Establishing them requires global reasoning about whole execu-
+tionsC and abs(C,V). Fortunately, we ﬁnd that this can be done
+knowing only the abstract methods, not the implementation Dτ .
+Furthermore, these methods state basic facts about the messaging
+behavior of implementations and are thus common to broad classes
+of them, such as state-based or op-based. This allows us to estab-
+lish agreement properties using global reasoning once for a given
+class of implementations; at this stage we can also beneﬁt from the
+transport layer speciﬁcationT and check that the abstract methods
+construct visibility according to the given witness V. Then a par-
+ticular implementation within the class can be veriﬁed by discharg-
+ing local obligations, such as those in Fig. 4(a, b), while assuming
+agreement properties. This yields easy and intuitive proofs.
+To summarize, we deal with the challenge posed by a distributed
+data type implementation by decomposing reasoning about it into
+Figure 4. Diagrams illustrating replication-aware simulations
+(a) (b) (c)
+I
+do♯
+// I′
+OO
+Rr
+
+σ
+Dτ.do
+//
+Rr
+OO
+σ′
+(I,J )
+receive♯
+// I′
+OO
+Rr
+
+(σ,m )
+Dτ.receive
+//
+Rr×M
+OO
+σ′
+D
+step(C′,e,D)// D′
+OO
+G
+
+C e
+//
+G
+OO
+C′
+global reasoning done once for a broad class of implementations
+and local implementation-speciﬁc reasoning. We start by present-
+ing the general form of obligations to be discharged for a single
+implementation within a certain class (§5.1) and the particular form
+they take for the class of state-based implementations ( §5.2), to-
+gether with some examples (§5.3). We then formulate the obliga-
+tions to be discharged for a class of implementations (§5.4), which
+in particular, establish the agreement properties assumed in the per-
+implementation obligations. In [12,§B], we give the obligations for
+op-based implementations, together with a proof of the counter in
+Fig. 2(a). An impatient reader can move on to §6 after ﬁnishing
+§5.3, and come back to§5.4 later.
+Since Def. 7 considers only single-object executions, we ﬁx
+an object x of type τ and consider only concrete and abstract
+executions overx, whose sets we denote by CEx[x] and AEx[x].
+5.1 Replication-Aware Simulations
+As is typical for simulation-based proofs, we need to use auxiliary
+state to record information about the computation history. For this
+reason, actually our simulation relations associate a state or a mes-
+sage with an instrumented execution—a pair (A, info)∈ IEx of
+an abstract execution A∈ AEx[x] and a function info : A.E→
+AInfo, tagging events with auxiliary information from a set AInfo.
+As we show below, AInfo can be chosen once for a class of data
+type implementations: e.g., AInfo = Timestamp for state-based
+ones (§5.2). We useI andJ to range over instrumented executions
+and shorten, e.g., I.A.E toI.E . For a partial function h we write
+h(x)↓ forx∈ dom(h), and adopt the convention that h(x) = y
+impliesh(x)↓.
+DEFINITION 8. A replication-aware simulation betweenDτ and
+Fτ with respect to info and abstract methods do♯, send♯ and
+receive♯ is a collection of relations {Rr,M |r ∈ ReplicaID}
+satisfying the conditions in Fig. 5.
+Here info and abstract methods are meant to be ﬁxed for a given
+class of implementations, such as state or op-based. To prove a par-
+ticular implementation within this class, one needs to ﬁnd simula-
+tion relations satisfying the conditions in Fig. 5. For example, as we
+show in§5.3, the following relation lets us prove the correctness of
+the counter in Fig. 2(b) with respect to info and abstract methods
+appropriate for state-based implementations:
+⟨s,v⟩ [Rr]I ⇐⇒ (r =s)∧ (v [M]I);
+v [M] ((E, repl, obj, oper, rval, ro, vis, ar), info) ⇐⇒
+∀s.v (s) =
+⏐⏐{e∈E| oper(e) = inc∧ repl(e) =s}
+⏐⏐.
+(6)
+INIT in Fig. 5 associates the initial state at a replica r with the
+execution having an empty set of events. DO, SEND and RECEIVE
+formalize the obligations illustrated in Fig. 4(a, b). Note that do♯ is
+parameterized by an evente (required to be fresh in instantiations)
+and the information about the operation performed.
+The abstract methods are partial and the obligations in Fig. 5
+assume that their applications are deﬁned. When instantiating
+receive♯ for a given class of implementations, we let it be deﬁned
+only when its arguments satisfy the agreement property for this
+class, which we establish separately (§5.4). While doing this, we
+can also establish some execution invariants, holding of single ex-
+
+Figure 5. Deﬁnition of a replication-aware simulation{Rr,M} between
+Dτ andFτ . All free variables in each condition are implicitly universally
+quantiﬁed and have the following types: σ,σ′∈ Σ,m∈ M,I,I′,J ∈
+IEx,e∈ Event,r∈ ReplicaID,o∈ Opτ ,a∈ Valτ ,t∈ Timestamp.
+Rr⊆ Σ× IEx, r∈ ReplicaID; M⊆ M× IEx
+do♯ : IEx× Event× ReplicaID× Opτ× Valτ× Timestamp⇀ IEx
+send♯ : IEx⇀ IEx× IEx; receive♯ : IEx× IEx⇀ IEx
+INIT:Dτ.⃗ σ0(r) [Rr]I∅, whereI∅.E =∅
+DO: (do♯(I,e,r,o,a,t ) =I′ ∧D τ.do(o,σ,t ) = (σ′,a )∧ σ [Rr]I)
+=⇒ (σ′ [Rr]I′ ∧ a =Fτ (ctxt(I′.A,e )))
+SEND: (send♯(I) = (I′,J )∧D τ.send(σ) = (σ′,m )∧ σ [Rr]I)
+=⇒ (σ′ [Rr]I′ ∧ m [M]J)
+RECEIVE : (receive♯(I,J )↓∧ σ [Rr]I ∧ m [M]J)
+=⇒ (Dτ.receive(σ,m ) [Rr] receive♯(I,J ))
+ecutions supplied as parameters to do♯ and send♯. We similarly as-
+sume them in Fig. 5 via the deﬁnedness of these abstract methods.
+5.2 Instantiation for State-Based Implementations
+Fig. 6 deﬁnes the domain AInfo and abstract methods appropriate
+for state-based implementations. In§5.4 we show that the existence
+of a simulation of Def. 8 with respect to these parameters implies
+Dτ sat[Vstate, T-Any]Fτ (Theorems 9 and 10). The do♯ method
+adds a fresh event e with the given attributes to I; its timestamp
+t is recorded in info. In the resulting execution I′, the event e is
+the last one by its replica, observes all events inI and occupies the
+place in arbitration consistent witht. The send♯ method just returns
+I, which formalizes the intuition that, in state-based implementa-
+tions, send returns a message capturing all the information about
+the object available at the replica. The receive♯ method takes the
+component-wise unionI⊔J of executionsI related to the current
+state andJ related to the message, applied recursively to the com-
+ponents ofI.A andJ.A. We also assume thatI⊔J recomputes the
+arbitration relation in the resulting execution from the timestamps.
+This is the reason for recording them in info: we would not be able
+to construct receive♯(I,J ).ar solely fromI.ar andJ.ar.
+The agreement property agree(I,J ) guarantees that I⊔J is
+well-formed (e.g., its visibility relation is acyclic) and that, for each
+replica,I describes a computation extending J or vice versa. The
+latter follows from the observation we made when explaining the
+state-based counter in§2: a message or a state in a state-based im-
+plementation reﬂects a preﬁx of the sequence of events performed
+at a given replica. The ﬁrst conjunct of the execution invariant inv
+requires arbitration to be consistent with event timestamps; the sec-
+ond conjunct follows from the deﬁnition of Vstate (§4). When dis-
+charging the obligations in Fig. 5 with respect to the parameters in
+Fig. 6 for a particular implementation, we can rely on the agree-
+ment property and the execution invariant.
+5.3 Examples
+We illustrate the use of the instantiation from §5.2 on the state-
+based counter, LWW-register and OR-set. In [12,§A] we also give
+proofs of two multi-value register implementations.
+Counter: Dctr in Fig. 2(b) and Fctr in (3). Discharging the
+obligations in Fig. 5 for the simulation (6) is easy. The key case
+is RECEIVE , where the ﬁrst conjunct of agree in Fig. 6 ensures that
+min{v(s),v′(s)} increments by a replica s are taken into account
+both inv(s) and inv′(s):
+(⟨r,v⟩ [Rr]I)∧ (v′ [M]J) =⇒ (∀s. min{v(s),v′(s)} =
+|{e∈I.E∩J.E|I.oper(e) = inc∧I.repl(e) =s}|).
+Figure 6. Instantiation for state-based data type implementations. In do♯
+we omit the straightforward deﬁnition of ar′ in terms ofI.info andt.
+AInfo = Timestamp
+agree(I,J ) ⇐⇒ ∀r. (({e∈I.E|I.repl(e) =r},I. ro) is a preﬁx of
+({e∈J.E|J.repl(e) =r},J. ro) or vice versa)∧ (I⊔J∈ IEx)
+inv(I) ⇐⇒ (∀e,f ∈I.E. (e,f )∈I.ar ⇐⇒ I.info(e)<I. info(f))
+∧ ((I.vis∪I.ro)+⊆I.vis)
+do♯(I,e,r,o,a,t ) = I′, if inv(I)∧e⁄∈I.E∧I′∈ IEx
+whereI′ = ((I.E∪{e}, I.repl[e↦→r], I.obj[e↦→x], I.oper[e↦→o],
+I.rval[e↦→a], I.ro∪{ (f,e )|f∈I.E∧I.repl(f) =r},
+I.vis∪{ (f,e )|f∈I.E}, ar′), I.info[e↦→t])
+send♯(I) = ( I,I ), if inv(I)
+receive♯(I,J ) = I⊔J, if inv(I)∧ inv(J)∧ agree(I,J )
+This allows establishing receive(⟨r,v⟩,v′) [Rr] ( I⊔ J), thus
+formalizing the informal justiﬁcation of correctness we gave in§2.
+LWW-register: Dintreg in Fig. 2(c) andFintreg in (4). We asso-
+ciate a state or a message ⟨a,t⟩ with any execution that contains
+a wr(a) event with the timestamp t maximal among all other wr
+events (as per info). By inv in Fig. 6, this event is maximal in ar-
+bitration, which implies that rd returns the correct value; the other
+obligations are also discharged easily. Formally,∀r.Rr =M and
+⟨a,t⟩ [M] ((E, repl, obj, oper, rval, ro, vis, ar), info) ⇐⇒
+(t = 0∧a = 0∧ (¬∃e∈E. oper(e) = wr( )))∨
+(t> 0∧ (∃e∈E. oper(e) = wr(a)∧ info(e) =t)
+∧ (∀f∈E. oper(f) = wr( ) =⇒ info(f)≤t)).
+Optimized OR-set: Dorset in Fig. 7 andForset in (5). A problem
+with implementing a replicated set is that we often cannot discard
+the information about an element from a replica state after it has
+been removed: if another replica unaware of the removal sends
+us a snapshot of its state containing this element, the semantics
+of the set may require our receive to keep the element out of the
+set. As we prove in§6, for the OR-set keeping track of information
+about removed elements cannot be fully avoided, which makes its
+space-efﬁcient implementation very challenging. Here we consider
+a recently-proposed OR-set implementation [6] that, as we show in
+§6, has an optimal space complexity. It improves on the original
+implementation [32], whose complexity was suboptimal (we have
+proved the correctness of the latter as well; see [12,§A]).
+An additional challenge posed by the OR-set is that, according
+toForset, a remove operation may behave differently with respect
+to different events adding the same element to the set, depending on
+whether it sees them or not. This causes the implementation to treat
+internally each add operation as generating a unique instance of
+the element being added, further increasing the space required. To
+combat this, the implementation concisely summarizes information
+about instances. An instance is represented by a unique instance
+identiﬁer that is generated when a replica performs an add and
+consists of the replica identiﬁer and the number of adds (of any
+elements) performed at the replica until then. In a state ⟨r,V,w⟩,
+the vector w determines the identiﬁers of all instances that the
+current replica r has ever observed: for any replica s, the replica
+r has seen w(s) successive identiﬁers (s, 1), (s, 2),..., (s,w (s))
+generated at s. To generate a new identiﬁer in do(add(a′)), the
+replica r increments w(r). The connection between the vector
+w in a state or a message and add events es,k in corresponding
+executions is formalized in lines 1-3 of the simulation relation, also
+shown in Fig. 7. In receive we take the pointwise maximum of the
+two vectors w and w′. Like for the counter, the ﬁrst conjunct of
+agree implies that this preserves the clauses in lines 1-3.
+
+Figure 7. Optimized OR-set implementation [6] and its simulation
+Σ = ReplicaID× ((Z× ReplicaID)→ N0)× (ReplicaID→ N0)
+⃗ σ0 =λr.⟨r, (λa,s. 0), (λs. 0)⟩
+M = ((Z× ReplicaID)→ N0)× (ReplicaID→ N0)
+do(add(a′),⟨r,V,w⟩,t ) = (⟨r, (λa,s. ifa =a′∧s =r
+thenw(r) + 1 elseV (a,s )),w [r↦→w(r) + 1]⟩,⊥)
+do(remove(a′),⟨r,V,w⟩,t ) =
+(⟨r, (λa,s. ifa =a′ then 0 elseV (a,s )),w⟩,⊥)
+do(rd,⟨r,V,w⟩,t ) = (⟨r,V,w⟩,{a|∃s.V (a,s )> 0})
+send(⟨r,V,w⟩) = (⟨r,V,w⟩,⟨V,w⟩)
+receive(⟨r,V,w⟩,⟨V′,w′⟩) =
+⟨r, (λa,s. if (V (a,s ) = 0∧w(s)≥V′(a,s ))∨
+(V′(a,s ) = 0∧w′(s)≥V (a,s ))
+then 0 else max{V (a,s ),V′(a,s )}),
+(λs. max{w(s),w′(s)})⟩
+⟨s,V,w⟩ [Rr]I ⇐⇒ (r =s)∧ (⟨V,w⟩ [M]I)
+⟨V,w⟩ [M] ((E, repl, obj, oper, rval, ro, vis, ar), info) ⇐⇒
+1: ∃ distinctes,k. ({es,k|s∈ ReplicaID∧ 1≤k≤w(s)} =
+2: {e∈E| oper(e) = add( )})∧
+3: (∀s,k,j. (repl(es,k) =s)∧ (es,j
+ro−→es,k ⇐⇒ j <k))∧
+4: (∀a,s. (V (a,s )≤w(s))∧ (V (a,s )⁄= 0 =⇒
+5: (oper(es,V (a,s)) = add(a))∧
+6: (¬∃k.V (a,s )<k ≤w(s)∧ oper(es,k) = add(a))∧
+7: (¬∃f∈E. oper(f) = remove(a)∧es,V (a,s)
+vis−→f)))∧
+8: (∀a,s,k.e s,k∈E∧ oper(es,k) = add(a) =⇒
+9: (k≤V (a,s )∨∃f∈E. oper(f) = remove(a)∧es,k
+vis−→f))
+The component w in⟨r,V,w⟩ records identiﬁers of both of
+those instances that have been removed and those that are still in
+the set (are active). The component V serves to distinguish the
+latter. As it happens, we do not need to store all active instances
+of an element a: for every replica s, it is enough to keep the last
+active instance identiﬁer generated by an add(a) at this replica. If
+V (a,s ) ⁄= 0 , this identiﬁer is (s,V (a,s )); if V (a,s ) = 0 , all
+instances of a generated at s that the current replica knows about
+are inactive. The meaning of V is formalized in the simulation:
+each instance identiﬁer given byV is covered byw (line 4) and, if
+V (a,s )⁄= 0, then the event es,V (a,s) performs add(a) (line 5), is
+the last add(a) by replicas (line 6) and has not been observed by
+a remove(a) (line 7). Finally, the add(a) events that are not seen
+by a remove(a) in the execution are either the events es,V (a,s) or
+those superseded by them (lines 8-9). This ensures that returning
+all elements with an active instance in rd matchesForset.
+When a replica r performs do(add(a′)), we update V (a′,r )
+to correspond to the new instance identiﬁer. Conversely, in
+do(remove(a′)), we clear all entries in V (a′), thereby deactivat-
+ing all instances of a′. However, after this their identiﬁers are still
+recorded inw, and so we know that they have been previously re-
+moved. This allows us to address the problem with implementing
+receive we mentioned above: if we receive a message with an active
+instance (s,V′(a,s )) of an element a that is not in the set at our
+replica (V (a,s ) = 0 ), but previously existed (w(s)≥ V′(a,s )),
+this means that the instance has been removed and should not be
+active in the resulting state (the entry for (a,s ) should be 0). We
+also do the same check with the state and the message swapped.
+As the above explanation shows, our simulation relations are
+useful not only for proving correctness of data type implementa-
+tions, but also for explaining their designs. Discharging obligations
+in Fig. 5 requires some work for the OR-set; due to space con-
+straints, we defer this to [12,§A].
+Figure 8. Function step that mirrors the effect of an evente∈C′.E from
+C′∈ CEx[x] inD∈ DEx, deﬁned when so is the abstract method used
+step(C′,e,D ) =
+D[r↦→ do♯(D(r),e,r,C ′.oper(e),C′.rval(e),C′.time(e))],
+ifC′.act(e) = do∧C′.repl(e) =r
+step(C′,e,D ) =D[r↦→I,C′.msg(e)↦→J],
+ifC′.act(e) = send∧C′.repl(e) =r∧C′.msg(e)⁄∈ dom(D)∧
+send♯(D(r)) = (I,J )
+step(C′,e,D ) =D[r↦→ receive♯(D(r),D (C′.msg(e)))],
+ifC′.act(e) = receive∧C′.repl(e) =r
+5.4 Soundness and Establishing Agreement Properties
+We present conditions on AInfo and abstract methods ensuring the
+soundness of replication-aware simulations over them and, in par-
+ticular, establishing the agreement property and execution invari-
+ants assumed via the deﬁnedness of abstract operations in Fig. 5.
+THEOREM 9 (Soundness). Assume AInfo, do♯, send♯, receive♯,V
+andT that satisfy the conditions in Fig. 9 for someG. If there exists
+a replication-aware simulation betweenDτ andFτ with respect to
+these parameters, thenDτ sat[V,T ]Fτ .
+Conditions in Fig. 9 require global reasoning, but can be discharged
+once for a class of data types. For example, they hold of the
+instantiation for state-based implementations from§5.2, as well as
+one for op-based implementations presented in [12,§B].
+THEOREM 10. There existsG such that, for allDτ , the parameters
+in Fig. 6 satisfy the conditions in Fig. 9 with respect to this G,
+V =Vstate,T = T-Any.
+The proofs of Theorems 9 and 10 are given in [12, §B]. To
+explain the conditions in Fig. 9, here we consider the proof strategy
+for Theorem 9. To establish Dτ sat[V,T ] Fτ , for any C ∈
+JDτ K∩T we need to show abs(C,V)|= [τ↦→F τ]. We prove this
+by induction on the length ofC. To use the localized conditions in
+Fig. 5, we require a relation G associating C with a decomposed
+execution—a partial function D : ( ReplicaID∪ MessageID) ⇀
+IEx that gives fragments of abs(C,V) corresponding to replica
+states and messages in the ﬁnal conﬁguration of C. We write DEx
+for the set of all decomposed executions, so that G ⊆CEx[x]×
+DEx. The existence of a decomposed executionD such thatC [G]
+D forms the core of our induction hypothesis. G-C TXT in Fig. 9
+checks that the abstract methods construct visibility according toV:
+it requires the context of any event e by a replica r to be the same
+inD(r) and abs(C,V). Together with D O in Fig. 5, this ensures
+abs(C,V)|= [τ↦→F τ].
+We write C′ ∼ (C
+e
+− →(R,T )) when C′ is an extension of
+C in the following sense: C′.E = C.E⨄{e}, the other compo-
+nents ofC are those ofC′ restricted toC.E,e is last inC′.eo and
+C′.post(e) = (R,T ). For the induction step, assumeC [G]D and
+C′∼ (C
+e
+− →(R,T )); see Fig. 4(c). Then the decomposed execu-
+tionD′ corresponding toC′ is given by step(C′,e,D ), where the
+function step in Fig. 8 mirrors the effect of the event e fromC′ in
+D using the abstract methods. G-STEP ensures that it preserves the
+relationG. Crucially, G-S TEP also requires us to establish the de-
+ﬁnedness of step and thus the corresponding abstract method. This
+justiﬁes the agreement property and execution invariants encoded
+by the deﬁnedness and allows us to use the conditions in Fig. 5 to
+complete the induction. We also require G-INIT, which establishes
+the base case, and G-V IS, which formulates a technical restriction
+onV. Finally, the conditions in Fig. 9 allow us to use the transport
+speciﬁcationT by considering only executionsC satisfying it.
+6. Space Bounds and Implementation Optimality
+Object states in replicated data type implementations include
+not only the current client-observable content, but also metadata
+
+Figure 9. Proof obligations for abstract methods. Free variables are implic-
+itly universally quantiﬁed and have the following types:C,C′∈ CEx[x]∩
+T ,D∈ DEx,r∈ ReplicaID,e∈ Event, (R,T )∈ Conﬁg.
+G-C TXT: (C [G]D∧ e∈ abs(C,V).E ∧ abs(C,V).repl(e) =r)
+=⇒ ctxt(D(r).A,e ) = ctxt(abs(C,V),e )
+G-S TEP : (C′∼ (C e− →(R,T ))∧ (C [G]D))
+=⇒ (step(C′,e,D )↓∧ C′ [G] step(C′,e,D ))
+G-I NIT: (C.E ={e}∧ C.pre(e) = ( , [ ]))
+=⇒ (step(C,e,D∅)↓∧ C [G] step(C,e,D∅)),
+whereD∅ is such that dom(D∅) = ReplicaID∧
+∀r∈ ReplicaID.D∅(r).E =∅
+G-V IS: (e∈ abs(C,V).E ∧ (C is a preﬁx ofC′ underC′.eo))
+=⇒ ctxt(abs(C,V),e ) = ctxt(abs(C′,V),e )
+needed for conﬂict resolution or masking network failures. Space
+taken by this metadata is a major factor determining their efﬁciency
+and feasibility. As illustrated by the OR-set in §5.3, this is espe-
+cially so for state-based implementations, i.e., those that satisfy
+their data type speciﬁcations with respect to the visibility witness
+Vstate and the transport layer speciﬁcation T-Any. We now present
+a general technique for proving lower bounds on this space over-
+head, which we use to prove optimality of four state-based imple-
+mentations (we leave other implementation classes for future work;
+see§9). As in§5, we only consider executions over a ﬁxed object
+x of typeτ.
+6.1 Metadata Overhead
+To measure space, we need to consider how data are represented.
+An encoding of a set S is an injective function enc : S→ Λ+,
+where Λ is some suitably chosen ﬁxed ﬁnite set of characters (left
+unspeciﬁed). Sometimes, we clarify the domain being encoded
+using a subscript: e.g., encN0(1). For s ∈ S, we let lenS(s) be
+the length of encS(s). The length can vary: e.g., for an integer k,
+lenN0(k)∈ Θ(lgk). We use standard encodings (listed in [12,§C])
+for return valuesencValτ of the data typesτ we consider and assume
+an arbitrary but ﬁxed encoding of object states encDτ.Σ.
+To distinguish metadata from the client-observable content of
+the object, we assume that each data type has a specialrd operation
+that returns the latter, as is the case in the examples considered so
+far. For a concrete executionC∈ JDτ K over the objectx and a read
+evente∈ (C.E)|rd, we deﬁne state(e) to be the state of the object
+accessed ate: state(e) =R(x,C. repl(e)) for (R, ) =C.pre(e).
+We now deﬁne the metadata overhead as a ratio, by dividing the
+size of the object state by the size of the observable state. We then
+quantify the worst-case overhead by taking the maximum of this
+ratio over all read operations in all executions with given numbers
+of replicas n and update operations m. To deﬁne the latter, we
+assume that each data typeτ speciﬁes a set Updτ⊂ Opτ of update
+operations; for all examples in this paper Updτ = Opτ\{ rd}.
+DEFINITION 11. The maximum metadata overhead of an execu-
+tionC∈ JDτ K of an implementationDτ is
+mmo(Dτ,C ) = max
+{ lenDτ.Σ(state(e))
+lenValτ (C.rval(e))|e∈ (C.E)|rd
+}
+.
+The worst-case metadata overhead of an implementation Dτ
+over all executions withn replicas andm updates (2≤n≤m) is
+wcmo(Dτ,n,m ) = max{mmo(Dτ,C )|C∈ JDτ K∧
+n =|{C.repl(e)|e∈C.E}|∧
+m =|{e∈C.E|C.oper(e)∈ Updτ}|}.
+We consider only executions with m≥ n, since we are inter-
+ested in the asymptotic overhead of executions where all replicas
+are mutated (i.e., perform at least one update operation).
+Figure 10. Summary of bounds on metadata overhead for stated-based
+implementations, as functions of the number of replicasn and updatesm
+Type Existing implementation Any implementation
+algorithm ref. overhead overhead
+ctr Fig. 2(b) [32] ˆΘ(n) ˆΩ(n)
+orset Fig. 7 [6] ˆΘ(n lgm) ˆΩ(n lgm)Fig. 15, [12,§A] [32] ˆΘ(m lgm)
+intreg Fig. 2(c) [32] ˆΘ(lgm)† ˆΩ(lgm)
+mvr Fig. 17, [12,§A] new‡ ˆΘ(n lgm) ˆΩ(n lgm)Fig. 16, [12,§A] [32] ˆΘ(n2 lgm)
+† Assuming timestamp encoding isO(lgm), satisﬁed by Lamport clocks.
+‡ An optimization of [32] discovered during the optimality proof.
+DEFINITION 12. AssumeDτ and a positive functionf(n,m ).
+• f is an asymptotic upper bound (Dτ∈ ˆO(f(n,m ))) if
+supn,m→∞(wcmo(Dτ,n,m )/f(n,m ))<∞, i.e.,
+∃K >0.∀m≥n≥ 2. wcmo(Dτ,n,m )<Kf (n,m );
+• f is an asymptotic lower bound (Dτ∈ˆΩ(f(n,m ))) if
+limn,m→∞(wcmo(Dτ,n,m )/f(n,m ))⁄= 0, i.e.,
+∃K >0.∀m0≥n0≥ 2.∃n≥n0,m≥n0.
+wcmo(Dτ,n,m )>Kf (n,m );
+• f is an asymptotically tight bound (Dτ∈ ˆΘ(f(n,m ))) if it is
+both an upper and a lower asymptotic bound.
+Fig. 10 summarizes our results; as described in §5, we have
+proved all the implementations correct. Matching lower and upper
+bounds indicate worst-case optimality of an implementation (note
+that this is different from optimality in all cases). The derivation of
+upper bounds relies on standard techniques and is deferred to [12,
+§C]. We now proceed to the main challenge: how to derive lower
+bounds that apply to any implementation of τ. We present proofs
+for ctr and orset; intreg and mvr are covered in [12,§C].
+6.2 Experiment Families
+The goal is to show that for any correct implementation Dτ (i.e.,
+such thatDτ sat[Vstate, T-Any]Fτ ), the object state must store
+some minimum amount of information. We achieve this by con-
+structing an experiment family, which is a collection of executions
+Cα, whereα∈Q for some index setQ. Each experiment contains
+a distinguished read event eα. The experiments are designed in
+such a way that the object states state(eα) must be distinct, which
+then implies a lower bound lg|Λ||Q| on the size of their encoding.
+To prove that they are distinct, we construct black-box tests that
+execute the methods of Dτ on the states and show that the tests
+must produce different results for each state(eα) providedDτ is
+correct. Formally, the tests induce a read-back function rb that sat-
+isﬁes rb(state(eα)) =α. We encapsulate the core argument in the
+following lemma.
+DEFINITION 13. An experiment family for an implementationDτ
+is a tuple (Q,n,m, C, e, rb) whereQ is a ﬁnite set, 2≤ n≤ m,
+and for each α∈ Q, Cα∈ JDτ K is an execution with n replicas
+andm updates, eα∈ (Cα.E)|rd and rb :Dτ.Σ→Q is a function
+satisfying rb(state(eα)) =α.
+LEMMA 14. If (Q,n,m, C, e, rb) is an experiment family, then
+wcmo(Dτ,n,m )≥⌊ lg|Λ||Q|⌋/ (maxα∈Q len(Cα.rval(eα))).
+PROOF. Since rb(state(eα)) = α, the states state(eα) are pair-
+wise distinct and so are their encodingsenc(state(eα)). Since there
+are fewer than|Q| strings of length strictly less than⌊lg|Λ||Q|⌋, for
+
+someα∈Q we have len(enc(state(eα)))≥⌊ lg|Λ||Q|⌋. Then
+wcmo(Dτ,n,m )≥ mmo(Dτ, Cα)≥
+len(state(eα))
+len(Cα.rval(eα))≥
+⌊lg|Λ||Q|⌋
+maxα′∈Q len(Cα′.rval(eα′)). ⊓ ⊔
+To apply this lemma to the best effect, we need to ﬁnd experi-
+ment families with|Q| as large as possible and len(Cα′.rval(eα′))
+as small as possible. Finding such families is challenging, as there
+is no systematic way to derive them. We relied on intuitions about
+“which situations force replicas to store a lot of information” when
+searching for experiment families.
+Driver programs. We deﬁne experiment families using driver
+programs (e.g., see Fig. 11). These are written in imperative pseu-
+docode and use traditional constructs like loops and conditionals.
+As they execute, they construct concrete executions of the data type
+library [τ↦→D τ] by means of the following instructions, each of
+which triggers a uniquely-determined transition from Fig. 3:
+dorot do operationo onx at replicar with timestampt
+u← dorot same, but assign the return value tou
+sendr(mid) send a message forx with identiﬁer mid atr
+receiver(mid) receive the message mid at replicar
+Programs explicitly supply timestamps for do and message
+identiﬁers for send and receive. We require that they do this cor-
+rectly, e.g., respect uniqueness of timestamps. When a driver pro-
+gram terminates, it may produce a return value. For a program
+P , an implementation Dτ , and a conﬁguration (R,T ), we let
+exec(Dτ, (R,T ),P ) be the concrete execution of the data type li-
+brary [τ↦→D τ] starting in (R,T ) that results from runningP ; we
+deﬁne result(Dτ, (R,T ),P ) as the return value ofP in this run.
+6.3 Lower Bound for State-Based Counter ( ctr)
+THEOREM 15. IfDctr sat[Vstate, T-Any]Fctr, thenDctr isˆΩ(n).
+We start by formulating a suitable experiment family.
+LEMMA 16. IfDctr sat[Vstate, T-Any]Fctr,n≥ 2 andm≥n is
+a multiple of (n− 1), then tuple (Q,n,m, C, e, rb) as deﬁned in
+the left column of Fig. 11 is an experiment family.
+The idea of the experiments is to force replica 1 to remember
+one number for each of the other replicas in the system, which then
+introduces an overhead proportional to n; cf. the implementation
+in Fig. 2(b). We show one experiment in Fig. 12. All experiments
+start with a common initialization phase, deﬁned by init, where
+each of the replicas2..n performsm/(n−1) increments and sends
+a message after each increment. All messages remain undelivered
+until the second phase, deﬁned by exp(α). There replica 1 receives
+exactly one message from each replica r = 2..n, selected using
+α(r). An experiment concludes with the readeα on the ﬁrst replica.
+The read-back works by performing separate tests for each of
+the replicas r = 2..n, deﬁned by test(r). For example, to deter-
+mine which message was sent by replica 2 during the experiment
+in Fig. 12, the programtest(2): reads the counter value at replica 1,
+getting 12; delivers the ﬁnal message by replica 2 to it; and reads
+the counter value at replica 1 again, getting 14. By observing the
+difference, the program can determine the message sent during the
+experiment:α(2) = 5− (14− 12) = 3.
+PROOF OF LEMMA 16. The only nontrivial obligation is to prove
+rb(state(eα)) =α. Let (Rα,Tα) = ﬁnal(Cα). Then
+α(r)
+(i)
+= result(Dctr, (R0,T 0), (init; exp(α); test(r)))
+= result(Dctr, (Rα,Tα), test(r))
+(ii)
+= result(Dctr, (Rinit[(x, 1)↦→Rα(x, 1)],T init), test(r))
+= rb(Rα(x, 1))(r) = rb(state(eα))(r),
+Figure 11. Experiment families (Q,n,m, C, e, rb) used in the proofs of
+Theorem 15 (ctr) and Theorem 17 (orset)
+ctr orset
+Conditions onn,m (number of replicas/updates)
+m≥n≥ 2 m≥n≥ 2
+m mod (n− 1) = 0 (m− 1) mod ( n− 1) = 0
+Index setQ
+Q = ([2..n]→ [1.. m
+n−1 ]) Q = ([2..n]→ [1..m−1
+n−1 ])
+Family size|Q|
+|Q| = ( m
+n−1 )n−1 |Q| = (m−1
+n−1 )n−1
+Driver programs
+procedure init
+for allr∈ [2..n]
+for alli∈ [1.. m
+n−1 ]
+dor incrm+i
+sendr(midr,i)
+procedure init
+for allr∈ [2..n]
+for alli∈ [1..m−1
+n−1 ]
+dor add(0)rm+i
+sendr(midr,i)
+procedure exp(α)
+for allr∈ [2..n]
+receive1(midr,α(r))
+do1 rd (n+2)m // read eα
+procedure exp(α)
+for allr∈ [2..n]
+receive1(midr,α(r))
+do1 remove(0) (n+2)m
+do1 rd (n+3)m // read eα
+procedure test(r)
+u← do1 rd (n+3)m
+receive1(midr, m
+n−1
+)
+u′← do1 rd (n+4)m
+return m
+n−1− (u′−u)
+procedure test(r)
+for alli∈ [1..(m−1
+n−1 )]
+receive1(midr,i)
+u← do1 rd (n+4)m+i
+if 0∈u
+returni− 1
+return m−1
+n−1
+Deﬁnition of executions Cα
+Cα = exec(Dτ, (R0,T 0), init; exp(α))
+where (R0,T 0) = ([x↦→Dτ.⃗ σ0],∅)
+Deﬁnition of read-back function rb :Dτ.Σ→Q
+rb(σ) =λr : [2..n].result(Dτ, (Rinit[(x, 1)↦→σ],T init), test(r))
+where (Rinit,T init) = post(exec(Dτ, (R0,T 0), init))
+Figure 12. Example experiment ( n = 4 and m = 15 ) and test
+for ctr. Gray dashed lines represent the conﬁguration (Rinit[(x, 1) ↦→
+Rα(x, 1)],T init) where the test driver program is applied.
+incmid2,3: send
+e: 12 rd
+receive
+1 2 3 4
+incmid2,4: sendincmid2,5: send
+receive
+receive
+u 12 rd
+receive
+u’14 rd
+incmid2,2: send
+incmid2,1: send
+incmid3,3: sendincmid3,4: sendinc
+incmid3,2: send
+incmid3,1: send
+incmid4,3: sendincmid4,4: sendincmid4,5: send
+incmid4,2: send
+incmid4,1: send
+mid3,5: send
+initexp()test(2)
+ (2)=3 
+ (3)=4 
+ (4)=5
+where:
+(i) This is due to Dctr sat[Vstate, T-Any]Fctr, as we explained
+informally above. Let
+C′
+α = exec(Dctr, (R0,T 0), (init; exp(α); test(r))).
+Then the operation context in abs(C′
+α,Vstate) of the ﬁrst read
+in test(r) contains∑n
+r=2α(r) increments, while that of the
+second read contains (m/(n− 1))−α(r) more increments.
+(ii) We have Tα = Tinit because exp(α) does not send any mes-
+sages. Also,Rα andRinit[(x, 1)↦→Rα(x, 1)] can differ only
+
+in the states of the replicas2..n. These cannot inﬂuence the run
+of test(r), since it performs events on replica 1 only. ⊓ ⊔
+PROOF OF THEOREM 15. Given n0,m 0, we pick n = n0
+and some m ≥ n0 such that m is a multiple of (n− 1) and
+m≥ n2. Take the experiment family (Q,n,m, C, e, rb) given by
+Lemma 16. Then for any α, Cα.rval(eα) is at most the total num-
+ber of increments m in Cα. Using Lemma 14 and m≥ n2, for
+some constantsK1,K 2,K 3,K independent fromn0,m 0 we get:
+wcmo(Dctr,n,m )≥⌊ lg|Λ||Q|⌋/(maxα∈Q len(Cα.rval(eα)))≥
+K1
+lg|Λ|( m
+n−1)n−1
+lenN0(m) ≥K2
+n lg(m/n)
+lgm ≥K3
+n lg√m
+lgm ≥Kn. ⊓ ⊔
+6.4 Lower Bound for State-Based OR-Set ( orset)
+THEOREM 17. IfDorset sat[Vstate, T-Any]Forset, thenDorset is
+ˆΩ(n lgm).
+LEMMA 18. IfDorset sat[Vstate, T-Any]Forset,n≥ 2 andm≥
+n is such that (m− 1) is a multiple of (n− 1), then the tuple
+(Q,n,m, C, e, rb) on the right in Fig. 11 is an experiment family.
+The proof is the same as that of Lemma 16, except for obligation
+(i). We therefore give only informal explanations.
+The main idea of the experiments deﬁned in the lemma is to
+force replica 1 to remember element instances even after they have
+been removed at that replica; cf. our explanation of the challenges
+of implementing the OR-set from §5.3. The experiments follow a
+similar pattern to those for ctr, but use different operations. In the
+common init phase, each replica 2..n performs m−1
+n−1 operations
+adding a designated element 0, which are interleaved with sending
+messages. In the experiment phaseexp(α), one message from each
+replicar = 2..n, selected byα(r), is delivered to replica 1. At the
+end of execution, replica 1 removes0 from the set and performs the
+read eα. The return value of this read is always the empty set.
+To perform the read-back ofα(r) forr = 2..n, test(r) delivers
+all messages by replica r to replica 1 in the order they were sent
+and, after each such delivery, checks if replica 1 now reports the
+element 0 as part of the set. FromDorset sat[Vstate, T-Any]Forset
+and the deﬁnition (5) of Forset, we get that exactly the ﬁrst α(r)
+such deliveries will have no effect on the contents of the set:
+the respective add operations have already been observed by the
+remove operation that replica 1 performed in the experiment phase.
+Thus, if 0 appears in the set right after delivering the i-th message
+of replicar, thenα(r) =i−1, and if 0 does not appear by the time
+the loop is ﬁnished, thenα(r) = (m− 1)/(n− 1).
+PROOF OF THEOREM 17. Given n0,m 0, we pick n = n0 and
+some m≥ n0 such that (m− 1) is a multiple of (n− 1) and
+m ≥ n2. Take the experiment family (Q,n,m, C, e, rb) given
+by Lemma 18. For any α∈ Q, Cα.rval(eα) = ∅, which can be
+encoded with a constant length. Using Lemma 14 andm≥n2, for
+some constantsK1,K 2,K we get:
+wcmo(Dorset,n,m )≥⌊ lg|Λ||Q|⌋/ (maxα∈Q len(Cα.rval(eα)))
+≥K1n lg(m/n)≥K2n lg√m≥Kn lgm. ⊓ ⊔
+7. Store Correctness and Consistency Axioms
+Recall that we deﬁne a replicated store by a data type library
+D and a transport layer speciﬁcation T (§4), and we specify its
+behavior by a function F from types τ ∈ dom(D) to data type
+speciﬁcations and a set of consistency axioms ( §3). The axioms
+are just constraints over abstract executions, such as those shown
+in Fig. 13; from now on we denote their sets by X. So far we
+have concentrated on single data type speciﬁcations F(τ) and their
+correspondence to implementations D(τ), as stated by Def. 7. In
+this section we consider consistency axioms and formulate the
+notion of correctness of the whole store (D,T ) with respect to its
+speciﬁcation (F, X).
+Our ﬁrst goal is to lift the statement of correctness given by
+Def. 7 to a store (D,T ) with multiple objects of different data
+types. To this end, we assume a function V mapping each type
+τ∈ dom(D) to its visibility witness V. This allows us to construct
+the visibility relation for a concrete execution C ∈ JDK∩T by
+applying V(τ) to its projection onto the events on every object of
+typeτ:
+witness(V) = λC.⋃{V(type(x))(C|x)| x∈ Obj},
+where·|x projects to events over x. Then the correctness of every
+separate data type τ in the store with respect to F(τ) according to
+Def. 7 automatically ensures that the behavior of the whole store is
+consistent with F in the sense of Def. 5.
+PROPOSITION 19. (∀τ∈ dom(D). D(τ) sat[V(τ),T ] F(τ)) =⇒
+(∀C∈ JDK∩T . abs(C, witness(V))|= F).
+This motivates the following deﬁnition of store correctness. Let us
+writeA|= X when the abstract executionA satisﬁes the axioms X.
+DEFINITION 20. A store (D,T ) is correct with respect to a speci-
+ﬁcation (F, X), if for some V:
+(i)∀τ∈ dom(D). (D(τ) sat[V(τ),T ] F(τ)); and
+(ii)∀C∈ JDK∩T . (abs(C, witness(V))|= X).
+We showed how to discharge (i) in §5. The validity of axioms
+X required by (ii) most often depends on the transport layer spec-
+iﬁcationT : e.g., to disallow the anomaly (2) from §1,T needs to
+provide guarantees on how messages pertaining to different objects
+are delivered. However, data type implementations can also enforce
+axioms by putting enough information into messages: e.g., imple-
+mentations correct with respect to Vstate from§4 ensure that vis
+is transitive regardless of the behavior of the transport layer. For-
+tunately, to establish (ii) in practice, we do not need to consider
+the internals of data type implementations in D—just knowing the
+visibility witnesses used in the statements of their correctness is
+enough, as formulated in the following deﬁnition.
+DEFINITION 21. A set W of visibility witnesses and a transport
+layer speciﬁcationT validate axioms X, if
+∀C, V. (C∈T )∧ ({V(τ)|τ∈ dom(V)}⊆ W ) =⇒
+(abs(C, witness(V))|= X).
+Since visibility witnesses are common to wide classes of data types
+(e.g., state- or op-based), our proofs of the validity of axioms will
+not have to be redone if we add new data type implementations to
+the store from a class already considered.
+We next present axioms formalizing several variants of eventual
+consistency used in replicated stores (Fig. 13 and 14) and W and
+T that validate them. We then use this as a basis for discussing
+connections with weak shared-memory models. Due to space con-
+straints, we defer technical details and proofs to [12,§D].
+Basic eventual consistency. EVENTUAL and T HINAIR deﬁne a
+weak form of eventual consistency. E VENTUAL ensures that an
+event cannot be invisible to inﬁnitely many other events on the
+same object and thus implies (1) from §1: informally, if updates
+stop, then reads at all replicas will eventually see all updates and
+will return the same values (§3.2). However, EVENTUAL is stronger
+than quiescent consistency: the latter does not provide any guaran-
+tees at all for executions with inﬁnitely many updates to the store,
+whereas our speciﬁcation implies that the return values are com-
+puted according to F(τ) using increasingly up-to-date view of the
+store state. We formalize these relationships in [12,§D].
+THINAIR prohibits values from appearing “out-of-thin-
+air” [28], like 42 in Fig. 14(a) (recall that registers are initialized
+to 0). Cycles in ro∪ vis that lead to out-of-thin-airs usually arise
+
+Figure 13. A selection of consistency axioms over an execution
+(E, repl, obj, oper, rval, ro, vis, ar)
+Auxiliary relations
+sameobj(e,f ) ⇐⇒ obj(e) = obj(f)
+Per-object causality (aka happens-before) order:
+hbo = ((ro∩ sameobj)∪ vis)+
+Causality (aka happens-before) order: hb = (ro∪ vis)+
+Axioms
+EVENTUAL :
+∀e∈E.¬(∃ inﬁnitely manyf∈E. sameobj(e,f )∧¬ (e vis−→f))
+THINAIR: ro∪ vis is acyclic
+POCV (Per-Object Causal Visibility): hbo⊆ vis
+POCA (Per-Object Causal Arbitration): hbo⊆ ar
+COCV (Cross-Object Causal Visibility): (hb∩ sameobj)⊆ vis
+COCA (Cross-Object Causal Arbitration): hb∪ ar is acyclic
+Figure 14. Anomalies allowed or disallowed by different axioms
+(a) Disallowed by THINAIR:
+x,y : intreg
+i =x.rd j =y.rd
+y.wr(i) x.wr(j)
+x.rd: 42
+y.wr(42)
+y.rd: 42
+x.wr(42)
+ro rovis vis
+(b) Disallowed by POCV:
+x : orset
+x.add(1) i =x.rd j =x.rd
+x.add(2) x.add(3)
+x.add(1)
+x.add(2)
+ro
+x.rd: {2}
+x.add(3)
+x.rd: {3}
+vis
+vis ro
+(c) Allowed by COCV and COCA:
+x,y : intreg
+x.wr(1) y.wr(1)
+i =y.rd j =x.rd
+x.wr(1)
+y.rd: 0
+y.wr(1)
+x.rd: 0
+ro ro
+from effects of speculative computations, which are done by some
+older replicated stores [36].
+THINAIR is validated by{Vstate,Vop} and T-Any, and E VEN -
+TUAL by{Vstate,Vop} and the following condition on C ensuring
+that every message is eventually delivered to all other replicas and
+every operation is followed by a message generation:
+(∀e∈C.E.∀r,r′.C. act(e) = send∧C.repl(e) =r∧r⁄=r′
+=⇒ ∃f.C. repl(f) =r′∧e
+del(C)
+− −−− →f)∧
+(∀e∈C.E.C. act(e) =do =⇒∃f. act(f) =send∧e
+roo(C)
+−−−−→f),
+where roo(C) is ro(C) projected to events on the same object.
+Causality guarantees. Many replicated stores achieve availabil-
+ity and partition tolerance while providing stronger guarantees,
+which we formalize by the other axioms in Fig. 13. We call an ex-
+ecution per-object, respectively, cross-object causally consistent ,
+if it is eventually consistent (as per above) and satisﬁes the ax-
+ioms POCV and POCA, respectively, COCV and COCA. POCV
+guarantees that an operation sees all operations connected to it by
+a causal chain of events on the same object; COCV also consid-
+ers causal chains via different objects. Thus, POCV disallows the
+execution in Fig. 14(b), and COCV the one in §3.1, correspond-
+ing to (2) from§1. POCA and COCA similarly require arbitration
+to be consistent with causality. The axioms highlight the principle
+of formalizing stronger consistency models: including more edges
+into vis and ar, so that clients have more up-to-date information.
+Cross-object causal consistency is implemented by, e.g.,
+COPS [27] and Gemini [23]. It is weaker than strong consistency,
+as it allows reading stale data. For example, it allows the execution
+in Fig. 14(c), where both reads fetch the initial value of the register,
+despite writes to it by the other replica. It is easy to check that this
+outcome cannot be produced by any interleaving of the events at
+the two replicas, and is thus not strongly consistent.
+An interesting feature of per-object causal consistency is that
+state-based data types ensure most of it just by the deﬁnition of
+Vstate: POCV is validated by {Vstate} and T-Any. If the witness
+set is{Vstate,Vop}, then we needT to guarantee the following: in-
+formally, if a send evente and another event f are connected by
+a causal chain of events on the same object, then the message cre-
+ated by e is delivered to C.repl(f) by the time f is done. POCA
+is validated by {Vstate,Vop} and the transport layer speciﬁcation
+(roo(C)∪ del(C))+|do ⊆ ar(C). This states that timestamps of
+events on every object behave like a Lamport clock [22]. Condi-
+tions for COCV and COCA are similar.
+There also exist consistency levels in between basic eventual
+consistency and per-object causal consistency, deﬁned using so-
+called session guarantees [35]. We cover them in [12,§D].
+Comparison with shared-memory consistency models. Inter-
+estingly, the specializations of the consistency levels deﬁned by the
+axioms in Fig. 13 to the type intreg of LWW-registers are very
+close to those adopted by the memory model in the 2011 C and
+C++ standards [5]. Thus, POCA and POCV deﬁne the semantics
+of the fragment of C/C++ restricted to so-calledrelaxed operations;
+there this semantics is deﬁned using coherence axioms, which are
+analogous to session guarantees [35]. COCV and COCA are close
+to the semantics of C/C++ restricted to release-acquire operations.
+However, C/C++ does not have an analog of EVENTUAL and does
+not validate T HINAIR, since it makes the effects of speculations
+visible to the programmer [4]. We formalize the correspondence to
+C/C++ in [12,§D]. In the future, this correspondence may open the
+door to applying technology developed for shared-memory mod-
+els to eventually consistent systems; promising directions include
+model checking [3, 9], automatic inference of required consistency
+levels [26] and compositional reasoning [4].
+8. Related Work
+For a comprehensive overview of replicated data type research we
+refer the reader to Shapiro et al. [32]. Most papers proposing new
+data type implementations [6, 31–33] do not provide their formal
+declarative speciﬁcations, save for the expected property (1) of qui-
+escent consistency or ﬁrst speciﬁcation attempts for sets [6, 7]. For-
+malizations of eventual consistency have either expressed quiescent
+consistency [8] or gave low-level operational speciﬁcations [17].
+An exception is the work of Burckhardt et al. [10, 13], who pro-
+posed an axiomatic model of causal eventual consistency based on
+visibility and arbitration relations and an operational model based
+on revision diagrams. Their store speciﬁcation does not provide
+customizable consistency guarantees, and their data type speciﬁca-
+tions are limited to the sequentialS construction from§3.2, which
+cannot express advanced conﬂict resolution used by the multi-value
+register, the OR-set and many other data types [32]. More signif-
+icantly, their operational model does not support general op- or
+state-based implementations, and is thus not suited for studying the
+correctness or optimality of these commonly used patterns.
+Simulation relations have been applied to verify the correctness
+of sequential [25] and shared-memory concurrent data type imple-
+mentations [24]. We take this approach to the more complex set-
+ting of a replicated store, where the simulation needs to take into
+account multiple object copies and messages and associate them
+with structures on events, rather than single abstract states. This
+poses technical challenges not considered by prior work, which we
+address by our novel notion of replication-aware simulations.
+The distributed computing community has established a num-
+ber of asymptotic lower bounds on the complexity of implement-
+ing certain distributed or concurrent abstractions, including one-
+
+shot timestamp objects [20] and counting protocols [15, 30]. These
+works have considered either programming models or metrics sig-
+niﬁcantly different from ours. An exception is the work of Charron-
+Bost [14], who proved that the size of vector clocks [29] is optimal
+to represent the happens-before relation of a computation (similar
+to the visibility relation in our model). Speciﬁcations of mvr and
+orset rely on visibility; however, Charron-Bost’s result does not
+directly translate into a lower bound on their implementation com-
+plexity, since a speciﬁcation may not require complete knowledge
+about the relation and an implementation may represent it in an
+arbitrary manner, not necessarily using a vector.
+9. Conclusion and Future Work
+We have presented a comprehensive theoretical toolkit to advance
+the study of replicated eventually consistent stores, by proposing
+methods for (1) specifying the semantics of replicated data types
+and stores abstractly, (2) verifying implementations of replicated
+data types, and (3) proving that such implementations have optimal
+metadata overhead. By proving both correctness and optimality of
+four nontrivial data type implementations, we have demonstrated
+that our methods can indeed be productively applied to the kinds of
+patterns used by practitioners and researchers in this area.
+Although our work marks a big step forward, it is only a be-
+ginning, and creates plenty of opportunities for future research.
+We have already made the ﬁrst steps in extending our speciﬁcation
+framework with more features, such as mixtures of consistency lev-
+els [23] and transactions [34, 37]; see [11]. In the future we would
+also like to study more data types, such as lists used for collab-
+orative editing [32], and to investigate metadata bounds for data
+type implementations other than state-based ones, including more
+detailed overhead metrics capturing optimizations invisible to the
+worst-case overhead analysis. Even though our execution model
+for replicated stores follows the one used by replicated data type
+designers [33], there are opportunities for bringing it closer to ac-
+tual implementations. Thus, we would like to verify the algorithms
+used by store implementations [27, 34, 37] that our semantics ab-
+stracts from. This includes fail-over and session migration proto-
+cols, which permit clients to interact with multiple physical repli-
+cas, while being provided the illusion of a single virtual replica.
+Finally, by bringing together prior work on shared-memory
+models and data replication, we wish to promote an exchange of
+ideas and results between the research communities of program-
+ming languages and veriﬁcation on one side and distributed sys-
+tems on the other.
+Acknowledgements. We thank Hagit Attiya, Anindya Banerjee,
+Carlos Baquero, Lindsey Kuper and Marc Shapiro for comments
+that helped improve the paper. Gotsman was supported by the EU
+FET project ADVENT, and Yang by EPSRC.
+References
+[1] Riak key-value store. http://basho.com/products/riak-overview/.
+[2] S. V . Adve and K. Gharachorloo. Shared memory consistency models:
+A tutorial. Computer, 29(12), 1996.
+[3] J. Alglave, D. Kroening, V . Nimal, and M. Tautschnig. Software
+veriﬁcation for weak memory via program transformation. In ESOP,
+2013.
+[4] M. Batty, M. Dodds, and A. Gotsman. Library abstraction for C/C++
+concurrency. In POPL, 2013.
+[5] M. Batty, S. Owens, S. Sarkar, P. Sewell, and T. Weber. Mathematizing
+C++ concurrency. In POPL, 2011.
+[6] A. Bieniusa, M. Zawirski, N. Preguic ¸a, M. Shapiro, C. Baquero,
+V . Balegas, and S. Duarte. An optimized conﬂict-free replicated set.
+Technical Report 8083, INRIA, 2012.
+[7] A. Bieniusa, M. Zawirski, N. M. Preguic ¸a, M. Shapiro, C. Baquero,
+V . Balegas, and S. Duarte. Brief announcement: Semantics of eventu-
+ally consistent replicated sets. In DISC, 2012.
+[8] A.-M. Bosneag and M. Brockmeyer. A formal model for eventual
+consistency semantics. In IASTED PDCS, 2002.
+[9] S. Burckhardt, R. Alur, and M. M. K. Martin. Checkfence: checking
+consistency of concurrent data types on relaxed memory models. In
+PLDI, 2007.
+[10] S. Burckhardt, M. F ¨ahndrich, D. Leijen, and B. P. Wood. Cloud types
+for eventual consistency. In ECOOP, 2012.
+[11] S. Burckhardt, A. Gotsman, and H. Yang. Understanding eventual con-
+sistency. Technical Report MSR-TR-2013-39, Microsoft Research,
+2013.
+[12] S. Burckhardt, A. Gotsman, H. Yang, and M. Zawirski. Replicated
+data types: speciﬁcation, veriﬁcation, optimality (extended version),
+2013. http://research.microsoft.com/apps/pubs/?id=201602.
+[13] S. Burckhardt, D. Leijen, M. F ¨ahndrich, and M. Sagiv. Eventually
+consistent transactions. In ESOP, 2012.
+[14] B. Charron-Bost. Concerning the size of logical clocks in distributed
+systems. Information Processing Letters, 39(1), 1991.
+[15] J.-Y . Chen and G. Pandurangan. Optimal gossip-based aggregate
+computation. In SPAA, 2010.
+[16] N. Conway, R. Marczak, P. Alvaro, J. M. Hellerstein, and D. Maier.
+Logic and lattices for distributed programming. In SOCC, 2012.
+[17] A. Fekete, D. Gupta, V . Luchangco, N. Lynch, and A. Shvartsman.
+Eventually-serializable data services. In PODC, 1996.
+[18] G. DeCandia et al. Dynamo: Amazon’s highly available key-value
+store. In SOSP, 2007.
+[19] S. Gilbert and N. Lynch. Brewer’s conjecture and the feasibility of
+consistent, available, partition-tolerant web services. SIGACT News,
+33(2), 2002.
+[20] M. Helmi, L. Higham, E. Pacheco, and P. Woelfel. The space complex-
+ity of long-lived and one-shot timestamp implementations. In PODC,
+2011.
+[21] C. A. R. Hoare. Proof of correctness of data representations. Acta Inf.,
+1, 1972.
+[22] L. Lamport. Time, clocks, and the ordering of events in a distributed
+system. Commun. ACM, 21(7), 1978.
+[23] C. Li, D. Porto, A. Clement, R. Rodrigues, N. Preguic ¸a, and J. Gehrke.
+Making geo-replicated systems fast if possible, consistent when nec-
+essary. In OSDI, 2012.
+[24] H. Liang, X. Feng, and M. Fu. A rely-guarantee-based simulation for
+verifying concurrent program transformations. In POPL, 2012.
+[25] B. Liskov and S. Zilles. Programming with abstract data types. In
+ACM Symposium on Very High Level Languages, 1974.
+[26] F. Liu, N. Nedev, N. Prisadnikov, M. T. Vechev, and E. Yahav. Dy-
+namic synthesis for relaxed memory models. In PLDI, 2012.
+[27] W. Lloyd, M. J. Freedman, M. Kaminsky, and D. G. Andersen. Don’t
+settle for eventual: scalable causal consistency for wide-area storage
+with COPS. In SOSP, 2011.
+[28] J. Manson, W. Pugh, and S. V . Adve. The Java memory model. In
+POPL, 2005.
+[29] F. Mattern. Virtual time and global states of distributed systems.
+Parallel and Distributed Algorithms, 1989.
+[30] S. Moran, G. Taubenfeld, and I. Yadin. Concurrent counting. In
+PODC, 1992.
+[31] H.-G. Roh, M. Jeon, J.-S. Kim, and J. Lee. Replicated abstract
+data types: Building blocks for collaborative applications. J. Parallel
+Distrib. Comput., 71(3), 2011.
+[32] M. Shapiro, N. Preguic ¸a, C. Baquero, and M. Zawirski. A comprehen-
+sive study of Convergent and Commutative Replicated Data Types.
+Technical Report 7506, INRIA, 2011.
+[33] M. Shapiro, N. M. Preguic ¸a, C. Baquero, and M. Zawirski. Conﬂict-
+free replicated data types. In SSS, 2011.
+[34] Y . Sovran, R. Power, M. K. Aguilera, and J. Li. Transactional storage
+for geo-replicated systems. In SOSP, 2011.
+[35] D. B. Terry, A. J. Demers, K. Petersen, M. Spreitzer, M. Theimer, and
+B. W. Welch. Session guarantees for weakly consistent replicated data.
+In PDIS, 1994.
+[36] D. B. Terry, M. M. Theimer, K. Petersen, A. J. Demers, M. J. Spreitzer,
+and C. H. Hauser. Managing update conﬂicts in Bayou, a weakly
+connected replicated storage system. In SOSP, 1995.
+[37] M. Zawirski, A. Bieniusa, V . Balegas, S. Duarte, C. Baquero,
+M. Shapiro, and N. Preguic ¸a. SwiftCloud: Fault-tolerant geo-
+replication integrated all the way to the client machine. Technical
+Report 8347, INRIA, 2013.

@@ -1,17 +1,2162 @@
-Client Challenge 
- 
- 
- 
- 
- 
- 
- 
- JavaScript is disabled in your browser. 
- Please enable JavaScript to proceed. 
- 
- 
- 
- 
- A required part of this site couldn’t load. This may be due to a browser
- extension, network issues, or browser settings. Please check your
- connection, disable any ad blockers, or try using a different browser.
+Tight Proofs of Space and Replication
+Ben Fisch
+Abstract
+We construct a concretely practical proof-of-space (PoS) with arbitrarily tight security
+based on stacked depth robust graphs and constant-degree expander graphs. Aproof-of-space
+(PoS) is an interactive proof system where a prover demonstrates that it is persistently using
+space to store information. A PoS is arbitrarily tight if the honest prover uses exactly N
+space and for any ϵ > 0 the construction can be tuned such that no adversary can pass
+veriﬁcation using less than (1 −ϵ)N space. Most notably, the degree of the graphs in our
+construction are independent of ϵ, and the number of layers is only O(log(1/ϵ)). The proof
+size is O(d/ϵ). The degree d depends on the depth robust graphs, which are only required
+to maintain Ω(N) depth in subgraphs on 80% of the nodes. Our tight PoS is also secure
+against parallel attacks.
+Tight proofs of space are necessary for proof-of-replication (PoRep), which is a publicly
+veriﬁable proof that the prover is dedicating unique resources to storing one or more retriev-
+able replicas of a ﬁle. Our main PoS construction can be used as a PoRep, but data extraction
+is as ineﬃcient as replica generation. We present a second variant of our construction called
+ZigZag PoRep that has fast/parallelizable data extraction compared to replica generation and
+maintains the same space tightness while only increasing the number of levels by roughly a
+factor two.
+1 Introduction
+Proof-of-space (PoS) has been proposed as an alternative to proof-of-work (PoW) for applications
+such as SPAM prevention, DOS attacks, and Sybil resistance in blockchain-based consensus
+mechanisms [18, 21, 31]. Several industry projects 1 are underway to deploy cryptocurrencies
+similar to Bitcoin that use proof-of-space instead of proof-of-work. Proof-of-space is promoted
+as more egalitarian and eco-friendly that proof-of-work because it is ASIC-resistant and does
+not consume its resource (space instead of energy), but rather reuses it.
+A PoS is an interactive protocol between a prover and veriﬁer in which the prover use
+a minimum speciﬁed amount of space in order to pass veriﬁcation. The protocol must have
+compact communication relative to the prover’s space requirements and eﬃcient veriﬁcation. A
+PoS is persistent if repeated audits force the prover to utilize this space over a period of time.
+More precisely, there is an “oﬄine” phase in which the prover obtains challenges from a veriﬁer
+(or simulates them non-interactively via Fiat-Shamir), generates an advice stringS that it stores,
+and outputs a compact tag τ to the veriﬁer. This is followed by an “online” challenge-response
+protocol in which the prover uses its advice S to eﬃciently compute responses to the veriﬁer’s
+challenges. The soundness of the PoS relies on timing bounds on the online prover’s runtime
+enforced by frequent veriﬁer audits. Timing bounds are necessary as otherwise the prover could
+1https://chia.net/,https://spacemesh.io/, https://filecoin.io/
+1
+
+store its compact transcript and simulate the setup to re-derive the advice whenever it needs
+to pass an online proof. If the PoS resists parallelization attacks then it is unconditionally
+secure in this audit model because the prover must use the minimum amount of space to pass
+challenges within the wall-clock time allotted. Alternatively, soundness is reasoned through a
+cost beneﬁt analysis; it is assumed that a rational prover will not trade signiﬁcant computation
+for a relatively small reduction in its space utilization.
+In an (S,T )-sound PoS protocol where the prover commits to persistently utilizeN blocks of
+space, the honest prover uses S =O(N) persistent space and any adversary who passes audits
+in less than time T provably usesS = Ω(N) space. There is generally a gap between the honest
+space utilization and the lower bound on the adversary’s space. If the honest prover uses N
+space and some adversary might be able to use ϵN space then this PoS has an ϵ space gap. A
+tight PoS makes ϵ arbitrarily small depending on a construction parameter that will typically
+impact concrete eﬃciency. All else equal, a tighter PoS is obviously more desirable as it has
+tighter provable security. Nearly all existing PoS constructions have enormous space gaps [2,18],
+including those that are currently being used in practice. The one exception is a recent PoS
+protocol by Pietrzak [33] based on depth robust graphs, although it does not achieve a tight
+space gap for concretely practical parameters.
+Proof-of-replication (PoRep) [1, 19, 20, 33] is a recently proposed hybrid of PoS with proof-
+of-retrievability (PoR) [23]. A PoR demonstrates that the prover can retrieve a particular data
+ﬁle of interest, either known to the veriﬁer, committed in a public commitment, or privately
+preprocessed by a client who produces a veriﬁcation tag for the ﬁle. A PoRep demonstrates
+that the prover is dedicating unique resources to storing a retrievable copy of the ﬁle, and is
+therefore a useful proof of space. It has therefore been proposed as an alternative Sybil resistance
+mechanism that is not only ASIC resistant and eco-friendly, but also has a useful side-eﬀect: it
+provides ﬁle storage on real data. Furthermore, since the prover may run several independent
+PoReps for the same ﬁle that each require unique resources, PoReps may be used as a publicly
+veriﬁable proof of data replication/duplication.
+A PoRep is required to be a PoS, and its security as a proof of data replication is closely
+related to the space gap of the PoS. Formally, the security notion for PoReps is ϵ-rational
+replication [19], which says that an adversary can save at most an ϵ fraction of its space by
+deviating from storing the data in a replicated format. Storing data in a replicated format
+is therefore an ϵ-Nash-equilibrium. This is the best possible security notion because a prover
+can always sabotage its replicated format by scrambling its storage in an eﬃciently decodable
+(yet no longer replicated) way. A PoRep that satisﬁes ϵ-rational replication is also a PoS with
+an ϵ space gap. Intuitively, if a PoRep is not a tight proof of space then there may be some
+adversary that would be rationally incentivized to deviate from honest behavior and therefore
+likely destroy the replication format. This gives a whole new relevance to tight proofs of space,
+because the security of PoReps is only meaningful when ϵ is reasonably small.
+The goal of this work is to construct a practical and provably tight PoS that can also be
+used as PoRep that satisﬁes ϵ-rational replication for arbitrarily small ϵ.
+1.1 Related work
+The original PoS of Dziembowski et. al. [18] was based on hard to pebble directed acyclic graphs
+(DAGs), using a blend of techniques from superconcentrators, random bipartite expander graphs
+and depth robust graphs [32]. During the oﬄine initialization the prover computes a certain
+2
+
+labeling of the graph using a collision-resistant hash function where the label ev on each node
+v∈G of the graph is the output of the hash function on the labels of all parent nodes of v. It
+outputs a commitment to this labeling along with a proof (either interactive or non-interactive)
+that the committed labeling was “mostly” correct. This oﬄine proof consists of randomly
+sampled labels and their parent labels, which the veriﬁer checks for consistency. During the
+online challenge-response phase the veriﬁer simply asks for random labels that the prover must
+produce along with a standard proof that these labels are consistent with the commitment.
+Their construction leaves a space gap of at least 1 − 1
+512.
+The construction of Ren and Devadas from stacked bipartite expander graphs dramatically
+improved on the space gap, although it is not secure against parallel attacks. Their construction
+involvesλ levelsV1,...,V λ consisting of n nodes each, with edges between the layers deﬁned by
+the edges of a constant-degree bipartite expander. The prover computes a labeling of the graph
+just as in the Dziembowski et. al. PoS, however it only stores the labels on the ﬁnal level.
+Otherwise, the protocol is roughly the same. Their construction still leaves a space gap of at
+least 1/2 (and much larger with practical parameters, e.g. their construction requires at least
+degree 40 graphs to achieve a space gap of less than 2 /3).
+Recently, Abusalah et. al. [2] revived the simple PoS approach based on storing tables of
+random functions. The basic idea is for the prover to compute and store the function table
+of a random function f : [N] → [N] where f is chosen by the veriﬁer or a random public
+challenge. During the online challenge-response the veriﬁer simply asks the prover to invert f
+on a randomly sampled point x∈ [n]. The intuition for why this should be secure is that a
+prover who has not stored most of the function table will likely have to brute force f−1(x),
+performing Ω(N) work. Unfortunately, this simple approach fails to be a PoS due to Hellman’s
+time/space tradeoﬀs which enable a prover to succeed with S space and T computation for any
+ST =O(N). However, Abusalah et. al. build on this approach to achieve a provable time/space
+tradeoﬀ of SkT = Ω(ϵkTk). This PoS is not secure against parallel attacks, and also has a very
+large (even asymptotic) space gap of 1 − 1
+64 logN .
+Pietrzak [33] and Fisch et. al [20] independently proposed a simpler variant of the graph
+labeling PoS by Dziembowski et. al. based solely on pebbling a depth robust graph (DRG).
+A degree d DAG on n nodes is ( α,β )-depth robust if any subgraph on αn nodes contains a
+path of at least length βn. It is trivial to construct DRGs of large degree (a complete DAG is
+depth robust), but much harder to construct DRGs with small (constant or poly-logarithmic)
+degree. Achieving constant α,β is only possible asymptotically with degree Ω(log N). Simply
+instantiating the graph labeling PoS on a DRG results in a PoS with a 1 −α space gap that
+is also secure against parallel attacks. Fisch et. al. also suggested combining this labeling PoS
+with a veriﬁable delay function (VDF) [11] to increase the expense of labeling the graph without
+increasing the proof veriﬁcation complexity. The delay on the VDF can be tuned depending on
+the value of n. Both of these constructions were proposed in the context of designing PoReps.
+In this variant of the PoS protocol, the prover uses the labeling of the graph to encode a data
+ﬁle onn blocksD =d1,...,d n. The ith label ei is computed by ﬁrst deriving a key ki by hashing
+the labels on the parents of the ith node, and then setting ei = ki⊕di. If all the labels are
+stored then any data block can be quickly extracted from ei by recomputing ki. We’ll call this
+a DAG encoding of the data input. The VDF approach uses an additional encoding scheme
+(enc, dec) inside the DAG encoding, where enc is sequentially slow and dec is fast, to derive
+ei = enc(ki⊕di). The data is decoded by computing di = dec(ei⊕ki).
+The labeling PoS on a DRG is not technically a tight PoS because decreasingα also decreases
+3
+
+the time bound βn on the prover’s required computation to defeat the PoS. Moreover, while
+there exist constructions of (α,β ) DRGs for arbitrarily small α, these constructions are purely
+theoretical and are not viable in practice. Pietrzak [33] improved on the basic construction by
+relying on a stronger property of special DRGs [6, 32] that are ( α,β,O (logn/ϵ))-depth robust
+for all (α,β ) such that 1−α +β≥ 1−ϵ. In Pietrzak’s modiﬁed construction, the prover builds
+a DRG on 4 n nodes and only stores the labels on the topologically last n nodes. This can
+similarly be used as a PoRep where the data is encoded only on the last level and the labels on
+previous levels are just used as keys. This sacriﬁces on data extraction time because extracting
+the data requires recomputing most of the keys from scratch, which is as expensive as the PoS
+initialization.
+Pietrzak shows that a prover who deletes an ϵ′ fraction of the labels on the last n nodes
+will not be able to re-derive them in fewer than n sequential steps. The value ϵ′ can be made
+arbitrarily small, but at the expense of increasing the degree of the graph proportionally to
+1/ϵ′. Moreover, although these special DRGs achieve asymptotic eﬃciency and are incredibly
+intriguing from a theoretical perspective, they still do not have concretely practical degree.
+According to the analysis in [6], achieving just a 1 /2 space gap with a PoS on N 32 byte
+data blocks in Pietrzak’s construction would require instantiating these graphs with degree
+2, 760 logN. The proof size is at least O(λd), so even for λ = 10 (i.e. 10 bit security) and
+N = 2 30 the proof size would be at least 26MB. Furthermore, as ϵ decreases λ = O(1/ϵ) to
+maintain the same security level. To achieve a space gap of 1 /10 with 10-bit security would
+require d = 19, 310 logN and λ = 60 for a proof size of at least 1GB.
+Boneh et. al. [11] describe a simple PoRep (also a PoS) just based on storing the output
+of a decodable VDF on N randomly sampled points, which generalizes an earlier proposal by
+Sergio Demian Lerner [25]. This is in fact an arbitrarily tight PoS with very practical proof sizes
+(essentially optimal). However, the time complexity of initializing the prover’s O(N) storage
+is O(N 2), and therefore is not practically feasible for large N. This construction is similar to
+the PoS based on storing function tables [2], but uses the VDF as a moderately hard (non-
+parallelizable) function on a much larger domain (exponential in the security parameter) and
+stores a random subset of its function table. The reason for the large initialization complexity
+is that the prover cannot amortize its cost of evaluating the VDF on the entire subset of points.
+In an independent concurrent work, Cecchetti et. al [14] developed a similar idea to our
+stacked DRGs, using butterﬂy networks instead of expander graphs, to construct a primitive
+they called publicly incompressible encodings (PIEs). We elaborate on a comparison in the
+Appendix.
+1.2 Summary of Contributions
+We construct a new tight PoS based on graph labeling with asymptotic proof size O(logN/ϵ)
+where ϵ is the achieved space gap. We can instantiate this construction with relatively weak
+depth robust graphs that do not require any special properties other than retaining Ω(N) depth
+in subgraphs on some constant fraction of the nodes bounded away from 1 (e.g. our concrete
+analysis is for 80% subgraphs).
+PoS from Stacked DRGs Our basic approach is a combination of the stacked bipartite
+expanders of Ren and Devadas [35] with depth robust graphs. Instead of stacking λ line graphs
+we stackO(log(1/ϵ)) levels of ﬁxed-degree DRGs where ϵ is a construction parameter. We refer
+4
+
+to this graph construction as Stacked DRGs. We are able to show that this results in a PoS that
+has only an ϵ space gap. Intuitively, the expander edges between layers amplify the dependence
+of nodes on the last layer and nodes on earlier layers so that deletion of a smallϵ fraction of node
+labels on the last level will require re-derivation of nearly all the node labels on the ﬁrst several
+layers. Thus, since every layer is a DRG, recomputing the missing ϵ fraction of labels requires
+Ω(N) sequential computation. It is easy to see that this would be the case if the prover were
+only storing (1−ϵ)n labels on the last level and none of the labels on earlier levels, however the
+analysis becomes much more diﬃcult when the prover is allowed to store any arbitrary (1 −ϵ)n
+labels. This analysis is the main technical contribution of this work. Concretely, we analyze the
+construction with an ( n, 0.80n, Ω(n)) DRG, i.e. deletion of 20% of nodes leaves a high depth
+graph on the 80% remaining nodes, regardless of the value of ϵ.
+Our construction is eﬃcient compared to prior constructions of tight PoS primarily because
+we can keep the degree of the graphs ﬁxed for arbitrary ϵ while only increasing the number of
+levels logarithmically in 1/ϵ. In a graph labeling PoS, the oﬄine PoS proofs sampleO(1/ϵ) labels
+along with their parent labels, which the veriﬁer checks for consistency. Thus, any construction
+based on this approach that requires scaling the degree of graphs by 1/ϵ also scales the proof size
+by 1/ϵ, resulting in a proof complexity of at leastO(1/ϵ2). In our stacked DRG PoS construction
+the oﬄine proof must include queries from each level to prove that each level of computed labels
+are “mostly” correct. If done naively, O(1/ϵ) challenge labels are sampled from each level,
+resulting in a proof complexity O(d/ϵ· log(1/ϵ)) where d is the degree of the level graphs. This
+is already an improvement, however with a more delicate analysis we are able to go even further
+and show that the total number of queries over all layers can be kept at O(1/ϵ), achieving an
+overall proof complexity O(d/ϵ).2
+The PoS on Stacked DRGs can also be used as the basis for a PoRep that satisﬁes ϵ-rational
+replication for arbitrarily small ϵ.
+The PoRep variant on this PoS simply uses the labels on the 𝓁− 1st level as keys to encode
+the n-block data input D =d1,...,d n on the 𝓁th (last) level, using the same method described
+earlier for encoding data into the labels of a PoS (see Related Work, [19, 20, 33]). However,
+extracting data from this PoRep is as expensive as initializing the PoRep space because it
+requires recomputing the keys on the 𝓁− 1st level.
+PoRep from ZigZag Expander DRGs Our second contribution is a variant of the PoS on
+Stacked DRGs that compromises slightly on eﬃciency (requires double the number of levels for
+the same security guarantee) but improves the eﬃciency of extracting data when this is used as
+a PoRep. Instead of adding edge dependencies between the layers, every layer is the union of a
+DRG and a constant degree non-bipartite expander graph. The only edges between layers are
+between nodes at the same indices. Since the graph is a DAG this means that the union of a
+subset with its dependencies and targets is a constant fraction larger than the subset itself. By
+alternating the direction of the edges between layers, forming a “zig-zag”, the dependencies of a
+subset in one layer become targets of the same subset in the adjacent layer, and the dependencies
+between layers expands. We refer to this graph construction as ZigZag DRGs . The PoRep on
+ZigZag DRGs encodes in the labels of each layer the labels of the previous levels. The edges
+within a layer enforce dependencies between labels by deriving a key for each encoding using a
+2Asymptotically, this is close to the optimal proof complexity achievable for any PoS based on graph labeling
+that has an ϵ space gap. If the prover claims to be storing n labels and the proof queries less than 1 /ϵ then a
+random deletion of an ϵ fraction of these labels evades detection with probability at least (1 −ϵ)1/ϵ≈ 1/e.
+5
+
+cryptographic hash function. A special key is derived for the encoding on each ith node from the
+labels on the parents of theith node within the same layer. Essentially, this construction iterates
+the basic DAG encoding of the data inputs𝓁 times (treating each layer as an independent DAG)
+rather than performing a long key derivation. The labels in any layer can be used to recover the
+labels in the preceding layer. Furthermore, the decoding step can be done in parallel.
+c1 c2 c3 c4 c5
+d1 d2 d3 d4 d5
+c6 c7 c8 c9 c10
+c11 c12 c13 c14 c15
+Stacked DRGs
+c1 c2 c3 c4 c5
+d1 d2 d3 d4 d5
+c6 c7 c8 c9 c10
+c11 c12 c13 c14 c15
+ZigZag DRGs
+Figure 1.1: The topologies of the stacked DRGs and ZigZag DRGs are depicted with 3 layers
+and 5 nodes per layer. Red edges are the DRG edges and blue edges are expander edges. The
+blue edges in ZigZag DRGs are the same as in Stacked DRGs but projected into the layers. Blue
+edges in ZigZag DRGs are reversed every other layer while red edges are redeﬁned by reversing
+the order of the nodes. Dashed edges correspond to encoding instead of hashing dependencies.
+In the PoS on Stacked DRGs the prover computes a labeling of the graph and stores the labels on
+the nodes in green. In the PoRep on ZigZag DRGs each labeling on a layer encodes the previous
+layer and the prover stores only the encoding labels of the green nodes.
+Contents
+1 Introduction 1
+1.1 Related work . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+1.2 Summary of Contributions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+2 Preliminaries 7
+2.1 Proof of Retrievable Commitment . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+2.2 Proofs of Space . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+2.3 Proofs of Replication . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 9
+2.4 Graph pebbling games . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+2.5 Veriﬁable Delay Encodings . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+2.6 Depth Robust Graphs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+6
+
+2.7 Expander graphs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+3 Stacked DRG Proof of Space 21
+3.1 Review of the Stacked-Expander PoS . . . . . . . . . . . . . . . . . . . . . . . . . 21
+3.2 A tight PoS from stacked DRGs . . . . . . . . . . . . . . . . . . . . . . . . . . . 23
+4 “ZigZag” DRG Proof of Replication 30
+4.1 ZigZag PoRep Construction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31
+4.2 Invertible pebbling games . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 33
+4.3 PoS analysis of ZigZag PoRep . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 34
+A Concurrent work: PIEs 41
+B Stacked DRGs with Superconcentrators 44
+C Mixing Data Labels in Stacked DRGs with Expanders 48
+2 Preliminaries
+2.1 Proof of Retrievable Commitment
+A proof-of-retrievability (PoR) is an interactive proof system in which a veriﬁer sends a ﬁle F
+to a prover, retains a compact veriﬁcation key, and later obtains a compact proof that prover
+can retrieve F intact. The compactness requirement excludes trivial solutions, such as sending
+the full ﬁle F back to the veriﬁer or requiring the veriﬁer to retain F . They were introduced
+in [8,23] and further developed in [12,17,37]. An important security property of PoR is that the
+veriﬁer can extract and recover the ﬁleF through suﬃciently many successful challenge-response
+queries to the prover.
+A proof-of-retrievability (PoR) [12,17,23,37], or the related proof-of-data-possession (PDP)
+[8], is an interactive protocol that enables a prover to convince a veriﬁer that it can retrieve the
+correct contents of a prespeciﬁed ﬁle without incurring costly communication. The ﬁle is ﬁrst
+preprocessed by a client who publishes a data tag. The veriﬁer does not need to store the ﬁle and
+only retains the short data tag for veriﬁcation. In a private-key PoR the veriﬁer needs to also
+know the private-key used to generate the data tag whereas in a public-key PoR the veriﬁcation
+can be performed by anyone without access the private-key. Crucially, the prover cannot learn
+the private-key as otherwise this compromises the PoR/PDP security. PoR security is distinct
+from PDPs because it requires that there is a public extraction algorithm that can actually
+extract the contents of the ﬁle through suﬃciently many repeated interactions with the prover.
+A simple public PoR can be constructed from a Merkle commitment (i.e. a Merkle tree
+over the blocks of the ﬁle). The veriﬁer need only retain the Merkle commitment root. To
+verify that the prover is still storing a (1 −ϵ) fraction of the committed ﬁle blocks it queries
+for a randomly selected constant number of blocks. The prover then responds with the blocks
+and Merkle inclusion proofs for each. This public PoR is distinct from both public-key and
+private-key PoRs in that it is keyless and thus there is no secret key for the prover to potentially
+compromise. This is a stronger form of public veriﬁability.
+Another way to describe this protocol is as a proof-of-retrievable-commitment (PoRC) [19],
+i.e. a publicly veriﬁable proof that the prover can retrieve the contents of a committed ﬁle. The
+7
+
+security of a PoRC does not rely on any client preprocessing. In fact, this technique is used
+ubiquitously in interactive proofs, including proofs of space, CS proofs [29], and more generally
+interactive oracle proofs (IOPs) [10]. Note that without erasure codes this is only a proof that
+a (1−ϵ) fraction of the ﬁle blocks can be retrieved. This is a special case of a (1 −ϵ,C)-PoRC,
+whereC is a set cover of the committed data, and the protocol guarantees that a (1−ϵ) fraction
+of the sets (in this case blocks) can be retrieved.
+The PoRC based on a Merkle commitment can be more generally constructed from anyvector
+commitment (VC) [13,27], which is a compact commitment to a vector of m values (x1,...,x m)
+that can be opened at any index with a succinct opening proof. A VC is position binding in the
+sense that each ith position can only be opened to a unique value xi. This makes VCs distinct
+from set commitments (e.g cryptographic accumulators), which only guarantee that membership
+in the set can be veriﬁed. Merkle trees have O(logm) size opening proofs and there exist VCs
+that trade larger public parameters for constant size opening proofs [13,26].
+Similar to a PoR, the soundness of a PoRC is deﬁned in terms of a public extraction algo-
+rithm. An important distinction is that the public extraction algorithm does not require a key
+to extract the data. Without going into the details of the security deﬁnition, a PoRC scheme
+is a µ-sound (1−ϵ)-PoRC if for any adversary passing the PoRC protocol with probability µ
+there is a public extraction algorithm that can rewind the online adversary on challenges and
+ultimately extract a (1−ϵ) fraction of the blocks of the ﬁle.
+2.2 Proofs of Space
+A (persistent) proof of space (PoS) [18] is an interactive proof between and prover and veriﬁer
+in which the prover can only succeed if it persistently stores some advice of a minimum size.
+There is an “oﬄine” phase in which the prover generates this advice and outputs a compact tag
+to the veriﬁer. This is followed by an “online” phase where the veriﬁer challenges the prover
+and the prover uses its advice to generate a response.
+Formally, the PoS interactive protocol involves three protocols:
+1. Setup The setup runs on security parameters λ and outputs public parameters pp for the
+scheme. The public parameters are implicit inputs to the next two protocols.
+2. Initialization is an interactive protocol between a prover P and veriﬁer V that run on
+shared input (id,N ). P outputs Φ andS, whereS is its storage advice and Φ is a compact
+O(polylog(N)) string given to the veriﬁer.
+3. Execution is an interactive protocol betweenP andV whereP runs on inputS andV runs
+on input Φ. V sends challenges to P , obtains back a proof π, and outputs accept or reject.
+The correctness and security requirements are as follows.
+Eﬃciency. The commitment Φ isO(polylog(N)) size and the veriﬁer runs in timeO(polylog(N)).
+Completeness. The prover succeeds with probability 1 (causes veriﬁer to accept) if it follows
+the protocol honestly.
+8
+
+Soundness. The PoS is (s,t,µ )-sound if any for all adversariesP∗ running in timet and storing
+advice of size s during Execution passes veriﬁcation with probability at most µ = negl(λ). The
+PoS is parallel (s,t,µ )-sound if P∗ may run in parallel time t.
+2.3 Proofs of Replication
+We review the syntax of a PoRep scheme from [19]. PoRep operates on arbitrary dataD∈{ 0, 1}∗
+of up to O(poly(λ)) size for a given security parameter λ.
+1. PoRep.Setup(λ,T )→ pp is a one-time setup that takes in a security parameter λ, time
+parameter T , and outputs public parameters pp. T determines the challenge-response
+period.
+2. PoRep.Preproc(sk,D )→ ˜D,τD is a preprocessing algorithm that may take a secret key sk
+along with the data input D and outputs preprocessed data ˜D along with its data tag τD,
+which at least includes the size N =|D| of the data. The preprocessor operates in keyless
+mode when sk =⊥ .
+3. PoRep.Replicate(id,τD, ˜D)→R, aux takes a replica identiﬁerid and the preprocessed data
+˜D along with its tag τD. It outputs a replica R and (compact) auxilliary information
+aux which will be an input for the Prove and Verify procedures. (For example, aux could
+contain a proof about the replication output or a commitment).
+4. PoRep.Extract(pp,id,R )→ ˜D on input replica R and identiﬁer id outputs the data ˜D.
+5. PoRep.Prove(R, aux,id,r )→π on input replicaR, auxilliary information aux, replica iden-
+tiﬁer id, and challenge r, outputs a proof πid.
+6. PoRep.Poll(aux)→r: This takes as input the auxiliary replica information aux and outputs
+a public challenge r.
+7. PoRep.Verify(id,τD,r, aux,π )→{ 0, 1} on input replica identiﬁer id, data tag τD, public
+challenge r, auxilliary replication information aux, and proof π it outputs a decision to
+accept (1) or reject (0) the proof.
+PoRep interactive protocol The PoRep interactive protocol is illustrated in Figure 1. The
+setup (whether a deterministic, trusted, or transparent public setup) is run externally and pp is
+given as an input to all parties. For each ﬁle D, a preprocessor (a special party or the prover
+when operating in keyless mode, but not the veriﬁer) runs ( ˜D,τD)← PoRep.Preproc(sk,D ).
+The outputs ˜D,τD are inputs to the prover and τD to the veriﬁer.
+ϵ-Rational Replication An ideal security goal for PoRep protocols would be to guarantee
+that any prover who simultaneously passes veriﬁcation in k distinct PoRep protocols (under k
+distinct identities) where the input to PoRep.Replicate is a ﬁle Di in the ith protocol must be
+storing k independent replicas, one for each Di, even if several of the ﬁles are identical.
+Formally, “storing k independent replicas” means that the ﬁle can be partitioned into k
+independent blocks (or more generally substrings) such that each block encodes the ﬁle and
+there is a universal decode algorithm that can decode the ﬁle independently from each block.
+9
+
+Prover Veriﬁer
+Replication Phase
+1 : R, aux←
+R
+PoRep.Replicate(id,τ D, ˜D)
+id, aux
+Challenge-Response Phase
+2 : r←
+R
+PoRep.Poll(aux)
+r
+3 : π←
+R
+PoRep.Prove(R, aux,id,r )
+id,π
+4 : b←
+R
+PoRep.Verify(id,τ D,r, aux,π )
+Figure 2.1: The PoRep interactive protocol is depicted above. The setup and data preprocessing is run
+externally generatingpp and ˜D,τ D. The challenge-response protocol is timed, and the veriﬁer rejects any
+response that is received more than T time steps after sending the challenge. This is formally captured
+by requiring PoRep.Prove to run in parallel time at most T . A PoRep protocol is a special case of a PoS
+protocol where Initialization is the Replication Phase and Execution is the challenge-response phase.
+We call this a k-replication of a ﬁle. Unfortunately, this security property is impossible to
+achieve. An adversary can easily “sabotage” its replication storage, e.g. by encrypting it with a
+key and storing the key separately. This still allows the adversary to decode the original string
+quickly and otherwise interact with the veriﬁer in exactly the same way.
+Instead, a rational model of security is deﬁned in [19]. This security model, called ϵ-rational
+replication roughly says that a PoRep is a µ-sound ϵ-rational replication if for any adversary
+passing the protocol with probability µ there is an “equivalent” adversary who passes with at
+least the same probability and store a k-replication of the ﬁle without incurring more than a
+1/(1−ϵ) storage overhead (i.e. the adversary saves at most anϵ fraction of its storage by deviating
+from a k-replication strategy). The security model also accounts for auxiliary information that
+the adversary might be storing and ensures that the “equivalent” adversary can still extract all
+the same information from its storage including data unrelated to the PoRep protocol.
+Proof of space and PoRC A PoRep is implicitly a publicly veriﬁable proof of space (Sec-
+tion 2.2). A prover that passes veriﬁcation in the interactive challenge-reponse protocol for a
+ﬁle ˜D of claimed size| ˜D| =N must be using Ω(N) persistent storage. Moreover, a prover that
+passes veriﬁcation in k instances of this protocol with distinct ids id1,...,id k and claimed ﬁle
+sizes N1,...,N k must be using Ω(M) space where M =∑k
+i=1Ni. In fact, it is a tight PoS with
+10
+
+only an ϵ space gap provided that it satisﬁes ϵ-rational replication, and therefore tight proofs of
+space are necessary for PoReps. A PoRep is also a proof of retrievability of the ﬁle D. In fact,
+suﬃcient conditions for a (correct) PoRep scheme to satisfy ϵ-rational replication are that it is
+a tight PoS and a PoRC of the data and replica with respect to commitments τD and aux. This
+was proven (c.f. Lemma 2, [19]) using a knowledge of compression assumption , which roughly
+says that any prover who knows an algorithm to compress auxiliary data together with the
+incompressible replica must know an algorithm to compress the auxiliary data independently by
+the same amount and store the incompressible part separately.
+2.4 Graph pebbling games
+Pebbling games are the main analytical tool used in graph-based proofs of space and memory
+hard functions.
+Black pebbling game The black pebbling game is a single-player game on a DAGG = (V,E ).
+At the start of the game the player chooses a starting conﬁguration of P0⊆V of vertices that
+contain black pebbles. The game then proceeds in rounds where in each round the player may
+place a black pebble on a vertex only if all of its parent vertices currently contain pebbles placed
+in some prior round. In this case we say that the vertex is available. Placing a pebble constitutes
+a move, whereas placing pebbles on all simultaneously available vertices consumes a round. The
+adversary may also remove any black pebble at any point. The game stops once the adversary
+has placed pebbles on all vertices in some target/challenge set VC⊆V .
+Pebbling complexity The pebbling game on graph G with vertex set V and target set
+VC⊆ V is (s,t )-hard if no player can pebble the set VC in t moves (or fewer) starting from s
+initial pebbles, and is (s,t )-parallel-hard if no player can complete the pebbling in t rounds (or
+fewer) starting from an initial conﬁguration of at most s pebbles. If the hardness holds for any
+subset containing an α fraction of VC then the pebbling game on ( G,VC) is (s,t,α )-(parallel)-
+hard.
+In a random pebbling game a challenge node is sampled randomly from VC after the player
+commits to the initial conﬁguration P0 of s vertices, and the hardness measure includes the
+adversary’s probability of success. The random pebbling game is ( s,t,ϵ )-(parallel)-hard if from
+any s ﬁxed initial pebbles the probability that a uniformly sampled challenge node can be
+pebbled in t or fewer moves (resp. t or fewer rounds) is less than ϵ.
+Fact 1. The random pebbling game on a DAG G on n nodes with target set VC is (s,t,α )-
+parallel-hard if and only if the deterministic pebbling game on G with target set VC is (s,t,α )-
+parallel-hard.
+Proof. Fix any P0 of size s. If the random pebbling game on G with target set VC is (s,t,α )-
+parallel-hard then less than an α fraction of the nodes in VC can be pebbled individually in t
+rounds starting from P0. Therefore, every subset U in VC of size α|VC| contains at least one
+node that cannot be pebbled individually in t rounds, hence the (deterministic) pebbling game
+is (s,t,α )-parallel-hard. Conversely, if G is (s,t,α )-parallel-hard then less than an α fraction of
+nodes in VC can be pebbled individually in r rounds. Otherwise, these nodes form a subset U
+of size α|VC| and they can all be simultaneously pebbled in parallel in t rounds. This implies
+11
+
+that the probability a randomly sampled node from VC can be pebbled in t rounds is less than
+α.
+Fact 2. A random pebbling game with a single challenge is (s,t,α )-parallel-hard if and only if
+the the random pebbling with κ challenges is (s,t,α k)-parallel-hard.
+Proof. If the random pebbling game is ( s,t,α ) hard then by Fact 1 the deterministic pebbling
+game is (s,r,α ) hard, hence there are at most anα fraction of the nodes inVC that can be pebbled
+in r rounds from s initial pebbles. The probability that κ independent random challenges are
+all nodes from this α fraction is at most ακ. Conversely, if the random pebbling game is not
+(s,t,α ) hard then the adversary can pebble all the κ challenges simultaneously in parallel time
+t succeeding on each challenge individually with probability greater than α, hence succeeding
+on all the challenges with probability greater that ακ.
+DAG labeling game A labeling game on a degree d DAGG is analogous to the pebbling
+game, but involves a cryptographic hash function H :{0, 1}dm→{ 0, 1}m, often modeled as
+a random oracle. The vertices of the graph are indexed in [ n] and each ith vertex associated
+with the label ci whereci =H(i) if i is a source vertex, or otherwise ci =H(i||cparents(i)) where
+cparents(i) = {cv1,...,c vd} if v1,...,v d are the parents of the ith vertex, i.e. the vertices with a
+directed edge to vertex i. The game ends when the player has computed all the labels on a
+target/challenge set of vertices VC. A “fresh” labeling of G could be derived by choosing a salt
+id for the hash function so that Hid(x) =H(id||x), and the labeling may be associated with the
+identiﬁerid.
+The complexity of the labeling game (on a fresh identiﬁer id) is measured in queries to
+the hash function instead of pebbles. This includes the number of labels initially stored, the
+total number of queries, and the total rounds of sequential queries, etc. The labeling game is
+(s,r,q,ϵ,δ )-labeling-hard if no algorithm that stores initial advice of size s and after receiving
+a uniform random challenge node v∈ [n] makes a total of q queries to H inr sequential rounds
+can output the correct label on v with probability greater than ϵ over the challengev andδ over
+the random oracle H.
+Random oracle query complexity A general correspondence between the complexity of
+the black pebbling game on the underlying graph G and the random oracle labeling game is not
+yet known. However, Pietrzak [33] recently proved an equivalence between the parallel hardness
+of the randomized pebbling game and the parallel hardness of the random oracle labeling game
+for arbitrary initial conﬁgurations S0 adapting the “ex post facto” technique from [16].
+Theorem 1 (Pietrzak [33]). If the random pebbling game on a DAG G with n nodes and in-
+degreed is (s,r,ϵ )-parallel-hard then the labeling game onG with a random oracleH :{0, 1}md→
+{0, 1}m is (s′,r,ϵ,δ,q )-labeling-hard with s′ =s(m− 2(logn + logq))− log(1/δ).
+Generic PoS from graph labeling game Many PoS constructions are based on the graph
+labeling game [18, 33, 35]. Let G(·) be a family of d-in-regular DAGs such that Gn ←G (n)
+is a d-in-regular DAG on N > n nodes and VC(n) is a subset of n nodes from Gn. Let
+H :{0, 1}dm→{ 0, 1}m be a collision-resistant hash function (or random oracle). Let Chal(n, Λ)
+denote a distribution over challenge vectors in [ N]λ. For each n∈ N, the generic PoS based on
+12
+
+the labeling game with Gn and target set VC(n) is as follows:
+Initialization: The prover plays the labeling game on Gn using a hash function Hid = H(id||·).
+The prover does the following:
+1. Computes the labels c1,...,c N on all nodes of G and commits to them in com using any
+vector commitment scheme.
+2. Obtains vector of λ challenges⃗ r←
+R
+Chal(n) from the veriﬁer (or non-interactively derives
+them using as a seed Hid(com)).
+3. For challenges r1,...,r λ , the prover opens the label on the rith node of Gn, which was
+committed in com, as well as the labels cparents(ri) of all its parent nodes. The labels are
+added to a list L with corresponding opening proofs in a list Λ and the prover outputs the
+proof Φ = (com,L, Λ).
+The veriﬁer checks the openings Λ with respect to com. It also checks for each challenge
+specifying an index v ∈ [N], the label cv in L label and its parent labels cparents(cv), that
+cv =Hid(v||cparents(cv)). Finally, the prover stores as S only the n labels in VC.
+Execution: The veriﬁer selects κ challenge nodes v1,...,v κ uniformly at random from VC. The
+online prover uses its input S to respond with the label on v and an opening of com at the
+appropriate index. The veriﬁer can repeat this sequentially, or ask for a randomly sampled
+vector of challenge vertices to amplify soundness.
+Given the correspondence between the hardness of the random oracle labeling game and
+black pebbling game in the parallel pebbling/computation models, we will focus on parallel
+pebbling complexity as this is easier to analyze directly.
+Red-black pebbling game The soundness of the generic labeling PoS is captured through
+the red-black pebbling game. An adversary places both black and red pebbles on the graph
+initially. The red pebbles correspond to incorrect labels that the adversary computes during
+Initialization and the black pebbles correspond to labels the adversary stores in its advice S.
+Without loss of generality, an adversary that cheats generates some label that does not require
+any space to store, which is why red pebbles will be “free” pebbles and counted separately from
+black pebbles. The adversary’s choice of red pebble placements (speciﬁcally how many to place
+in diﬀerent regions of the graph) is constrained by the λ non-interactive challenges, which may
+catch these red pebbles and reveal them to the veriﬁer. The formal description of the red-black
+pebbling security game for a graph labeling PoS construction with G(n), VC(n), and Chal(n) is
+as follows.
+Red-Black-PebblesA(G,VC, Chal,t ):
+1. A outputs a set R⊆ [N] (of red pebble indices) and S⊆ [N] (of black pebble indices).
+2. The challenger samples c1,...,c λ←
+R
+Chal(n). If ci∈R for somei thenA immediately loses.
+The challenger additionally samples v1,....,v κ uniformly at random from indices in VC(n)
+and sends these to A.
+13
+
+3. A plays the random (black) pebbling game onG(n) with the challengesv1,...,v κ and initial
+pebble conﬁguration P0 =R∪S. It runs for t parallel rounds and outputs its ﬁnal pebble
+conﬁguration Pt.A wins if Pt contains pebbles on all of v1,...,v κ.
+We formally deﬁne PoS soundness for the special case of any graph labeling PoS in terms of
+complexity of Red-Black-PebblesA(G,VC,t ). Let c : N→ N denote a cost function c : N→ N
+representing the parallel time cost (e.g. in sequential steps on a PRAM machine) of computing
+a label on a node of G(n) for each n∈ N.
+Deﬁnition 1. A graph labeling PoS with G(n),VC(n), Chal(n) and cost function c(n) is parallel
+(s,c (n)·t,µ )-sound if and only if the probability that anyA wins Red-Black-PebblesA(G,VC, Chal,t )
+is bounded by µ where|S| =s.
+2.5 Veriﬁable Delay Encodings
+A veriﬁable delay encoding (VDE) is a non-parallelizable encoding that has high parallel time
+complexity to compute, but with a fast decoding operation. A VDE may be a special kind of
+veriﬁable delay function [11]. It is more restrictive than a VDF because it must be decodable,
+but it is less restrictive because the encoding does not need to be unique. Existing pactical
+(heuristic) examples of VDEs include the Pohlig-Hellmann cipher, Sloth [24], MiMC [3], and a
+special class of permutation polynomials [11].
+Formally, a VDE is a tuple of three algorithmsVDE = VDE.Setup, VDE.Enc, VDE.Dec deﬁned
+as follows (c.f. [19]).
+1. VDE.Setup(t,λ )→pp is given security parameter λ and delay parameter t produce public
+parameters pp. By convention, the public parameters also specify an input space X and
+a code spaceY. We assume that X is eﬃciently samplable. VDE.Setup might need secret
+randomness, leading to a scheme requiring a trusted setup.
+2. VDE.Enc(pp,x )→y takes an input x∈X and produces an output y∈Y .
+3. VDE.Dec(pp,y )→x takes an input y∈Y and produces an output x∈X .
+Correctness For allpp generated by VDE.Setup(λ,t ) and allx∈X , algorithm VDE.Enc(pp,x )
+must run in parallel timet with poly(log(t),λ ) processors, and VDE.Dec(pp, VDE.Enc(pp,x )) =x
+with probability 1.
+Deﬁnition 2 (sequentiality, c.f. [11]) . For a function σ(t) a VDE is σ-sequential if for any
+pair of randomized algorithms A0, which runs in total time O(poly(t,λ )), and A1, which runs
+in parallel time t−σ(t) on at most O(poly(t)) processors, the following probability distribution
+over pp← VDE.Setup(t,λ ) is negligible:
+Pr
+[
+y←A 1(α, pp,x )
+∧ y = VDE.Enc(x)
+⏐⏐⏐⏐⏐
+x←
+R
+X
+α←A 0(λ, pp,t )
+]
+< negl(λ)
+A stronger security property is for the VDE to behave like an ideal cipher [19]. This is more
+than what is needed for most applications of VDFs/VDEs, but is relevant to their application
+14
+
+to proofs of space in order to facilitate incompressibility arguments. We can argue that an
+algorithm that can use an advice string to succeed with high probability in computing the
+Encode(pp,·) function in time less than t would be able to compress the function table of a
+random permutation, similar to how advice string lower bounds are proven in the random oracle
+model.
+Deﬁnition 3 (c.f. [19]). An ideal delay permutation (IDP) is a family of oracles {O(t)
+IDP} that
+implement a random permutation Π and respond to two types of queries. On a query (q, 0) the
+oracleO(t)
+IDP internally simulates t sequential queries to Π−1 and then outputs Π(q). On a query
+(q, 1) it outputs Π−1(q).
+2.6 Depth Robust Graphs
+A directed acyclic graph (DAG) on n nodes with d-indegree is (n,α,β,d ) depth robust graph
+(DRG) if every subgraph of αn nodes contains a path of length at least βn.
+Depth robust graph constructions DRGs were ﬁrst noted by Erd˝ os, Graham, and Sze-
+meredi [32], who constructed a family of ( n,α,β,c logn)-depth robust graphs using extreme
+constant-degree bipartite expander graphs, for some constants α,β,c that satisfy speciﬁc con-
+straints. Mahmoody, Moran, and Vadhan [28] constructed a more ﬂexible family of DRGs that
+are (n,α,α −ϵ,c log2n) depth robust for all α< 1. Alwen et. al. [6] recently improved the EGS
+construction to obtain DRGs for arbitrary α,β as well and O(logn) degree (i.e. with asymptot-
+ically better degree than MMV). All these constructions still rely on extreme constant-degree
+expanders (also called local expanders). Explicit constructions of local expanders exist [30],
+however they are complicated to implement and their concrete practicality is hindered by very
+large hidden constants. The most eﬃcient way to instantiate these extreme expander graphs
+is probabilistically. We discuss probabilistic constructions of bipartite expander graphs in Sec-
+tion 2.7.
+A probabilistic DRG construction outputs a graph that is a DRG with overwhelming proba-
+bility. Instantiating any of the above DRG constructions with probabilistic bipartite expanders
+results in a probabilistic DRG. However, even probabilistic versions of the above constructions
+are still not concretely eﬃcient due to their use of local expanders. Alwen et. al. [5] proposed
+and analyzed the most eﬃcient probabilistic DRG construction to date. The analysis still leaves
+large gaps between security and eﬃciency although was shown to resist depth-reducing attacks
+empirically. Their construction is also locally navigatable, meaning that it comes with an eﬃcient
+parent function to derive the parents of any node in the graph using polylogarithmic time and
+space.
+Deﬁnition 4. An (n,α,β,d )-DRG sampling algorithm runs in time ˜O(n logn) and a function
+DRG.Sample(n,σ )→ G that takes an s-bit seed and outputs a graph on n nodes indexed in [n]
+such that G is (n,α,β,d ) depth robust graph with probability 1− negl(n) over σ←
+R
+{0, 1}s. The
+sampling algorithm is locally navigatable if there is an algorithm DRG.Parents(n,σ,i ) that runs
+in time O(polylogn) and outputs a list P⊆ [n] of the parents of the node at index i∈ [n] in the
+graphGσ←DRG.Sample(n,σ ).
+15
+
+2.7 Expander graphs
+The vertex expansion of a graph G on vertex set V characterizes the size of the boundary of
+vertex subsets S⊆ V (i.e. the number of vertices in V\S that are neighbors with vertices in
+S).
+Deﬁnition 5. LetG be an undirected graph on a vertex set V of size n∈ N and for any subset
+S⊆V deﬁne Γ(S) to be the set of vertices inV\S that have an edge to some vertex in S. For any
+constants 0<α<β < 1,G is an (n,α,β ) expander graph if and only if |Γ(S)∪S|≥ βn for all
+S of size|S|≥ αn. For any δ >0, the set S is called (1+δ)-expanding if|Γ(S)∪S|≥ (1+δ)|S|.
+In the case of directed bipartite graphs, vertex expansion is deﬁned by the minimum number
+of sources connected to any given number of sinks.
+Deﬁnition 6. For any constants α,β where 0 < α < β <1 and integer n∈ N, an (n,α,β )
+bipartite expander is a directed bipartite graph with n sources and n sinks such that any subset
+of αn sinks are connected to at least βn sources. For any δ >0, a subset S of sinks is called
+(1 +δ)-expanding if it is connected to at least (1 +δ)|S| sources.
+It is easy to construct an undirected expander graph given a bipartite expander as deﬁned
+above.
+Claim 1. LetH be a (n,α,β ) bipartite expander graph with bounded degreed, sources and sinks
+labeled by indices in [n] and edge set E⊆ [n]× [n]. Deﬁne the undirected graph G with vertices
+labeled in [n] and edge set E′ such that (i,j )∈ E′ (for i⁄= j) if and only if (i,j )∈ E or
+(j,i )∈E. Then G has bounded degree 2d and is an (n,α,β ) expander.
+Proof. Every vertex in G has at most degree 2 d becauseH has bounded degree d, and the
+number of edges added to any node indexed with label i inG is at most the sum of number of
+edges incident to the ith source and ith sink inH respectively. Now consider any subset S⊆ [n]
+of αn vertices in G. S also corresponds to a subset of the sources in H with the same index
+labels and is connected to at least βn sinksT⊆ [n]. For each s∈S andt∈T wheres⁄=t there
+is an edges (s,t ) inG. Therefore, Γ(S) =T\S and|Γ(S)|∪ S =|T|≥ βn.
+Given this equivalence, for the remainder of this section we focus on constructions of constant
+degree bipartite expanders.
+Constructing bipartite expanders There is a rich literature on constructions of bipartite
+expanders, and includes both explicit and randomized constructions of constant degree bipartite
+graphs with very good expansion properties. The randomized construction of Chung [15] simply
+deﬁnes the edges of a d-regular bipartite expander on 2n vertices by connecting thedn outgoing
+edges of the sources to the dn incoming edges of the sinks via a random permutation Π :
+[d]× [n]→ [d]× [n]. More precisely, the ith source is connected to the jth sink if there is some
+k1,k 2∈ [d] such that Π(k1,i ) = (k2,j ). A general relationship between the degree and expansion
+is known, which holds with overwhelming probability over the choice of the permutation. The
+following lemma was ﬁrst proven by Bassalygo [9] and Sch¨ oning [36], and a much simpler proof
+was given by Ren and Devadas.
+16
+
+Lemma 1 (RD [35]). The Chung random bipartite graph construction is a d-regular (n,α,β )
+expander with probability 1− negl(nHb(α)) for all d,α,β satisfying:
+Hb(α) +Hb(β) +d(βHb(α/β)−Hb(α))< 0 (2.1)
+whereHb(x) =−x log2x− (1−x) log2(1−x) is the binary entropy function.
+For example, the above formula shows that for α = 1/2 and β = 0.80 Chung’s construction
+gives an (n, 0.5, 0.80) expander for d≥ 8, meaning any subset of 50% of the sinks are connected
+to at least 80% of the sources when the degree is at least 8.
+Expansion vs subset size In general, the expansion factor (the ratio β/α) improves in
+smaller subsets: if a given expansion factor holds with overwhelming probability in large subsets
+then it also holds with overwhelming probability in smaller subsets. On the other hand, the
+absolute expansion β is monotonically non-decreasing as a function of α because the expansion
+of any set is at least the expansion of its subsets.
+Lemma 2. For any k > 1 and d > 2, if the output of Chung’s construction is a d-regular
+(n,α,kα ) bipartite expander for someα< d−k−1
+k(d−2) with probability 1−negl(nHb(α)) thenβG(α′)≥
+kα′ for every subset of size α′<α with probability 1− negl(nHb(α′)).
+Proof. For ﬁxedd andk deﬁneφ(α) =Hb(α) +Hb(kα) +dkαHb(1/k)−dHb(α). By Lemma 1,
+Chung’s construction outputs a graph that is a d-regular (n,α,kα ) bipartite expander with
+probability 1− negl(nHb(α)) as long as φ(α) < 0. We will show that if φ(α) < 0 for some
+α within the domain X = (0, d−k−1
+k(d−2)), then φ(α′) < 0 for all α′ < α. We will ﬁrst prove two
+subclaims:
+1. φ is smooth on α∈ (0, 1/k) (i.e. twice diﬀerentiable), and lim α→0φ = 0.
+2. φ is decreasing at α = 0 (i.e. increasing in the limit α→ 0) and convex on X.
+Together these imply that if φ(α) < 0 for α∈ X then φ(α′) < 0 for all α′ < α. Suppose
+not, then there exists some point α′ < α such that φ(α′)≥ 0 > φ(α). Since φ is continuous
+on X and initially negative and decreasing it must increase on some subinterval of (0 ,α′) and
+then decrease again on some subinterval of ( α′,α ). However, this contradicts the fact that φ is
+convex onX, and hence once it starts increasing at any point in X it will not decrease again in
+any higher interval.
+Proof of subclaim 1 : φ is a linear combination of Hb(α), Hb(kα), and α, which are all real
+and twice diﬀerentiable on (0, 1/k). In particular, H′(α) = log2(1−α)− log2(α) and H′′(α) =
+−1
+log2(e)α(1−α). Finally, lim α→0Hb(α) = limα→0Hb(kα) = 0, hence the limit α→ 0 of any linear
+combination of Hb(α), Hb(kα), and α is 0.
+Proof of subclaim 2 : We ﬁrst show that limα→0φ′ =−∞. Note that φ′(α) =H′
+b(α)+kH′
+b(αk)+
+dkHb(1/k)−dH′
+b(α). As α→ 0 the limit is determined by the terms involvingH′
+b(α) andH′(αk),
+which go to−∞ whiledkHb(1/k) is constant. Since kH′
+b(αk)− (d− 1)H′
+b(α) =k(log2(1−αk)−
+log2(αk))<−k log2(αk)− (d− 1)H′
+b(α) we get:
+lim
+α→0
+φ′< lim
+α→0
+−k log2(αk) + (d− 1) log2(α) = lim
+α→0
+(d−k− 1) log2(α) =−∞
+17
+
+Now looking at the second derivative, φ′′(α) =k2H′′
+b (αk)− (d− 1)H′′(α):
+φ′′(α) = −1
+log2(e)α
+( k
+1−αk + d− 1
+1−α
+)
+Hence φ′′ > 0 if and only if ( d− 1)(1−αk) > k(1−α). Rearranging the equation, we get
+α< d−k−1
+k(d−2).
+Corollary 1. For d = 8 Chung’s construction is an 8-regular bipartite graph such that every
+subset of at most 1/3 of the nodes is 2-expanding, i.e. it is an (n,α, 2α)-bipartite expander for
+every α≤ 1/3 with overwhelming probability.
+Proof. Pluggingα = 1/3 andβ = 2/3 into the formula for degree (Equation 2.1) givesd = 7.21<
+8. With d = 8 andk = 2 the condition in Lemma 2 is satisﬁed: α = 1/3< (d−k−1)/k(d−2) =
+5/12.
+For ﬁxed d the expansion improves further as α decreases. One can easily verify (by re-
+peated application of L’Hopital’s rule) that the limit as α → 0 of the expression ( Hb(α) +
+Hb(kα))/(Hb(α)−kαHb(1/k)) goes to k + 1. Of course, when α becomes too small the expan-
+sion no longer holds with overwhelming probability. Figure 2.2 provides a table of expansion
+factors over a range of α with ﬁxed degree d = 8. Figure 2.3 plots the expansion as a function
+of subset size.
+Expansion boundary In the analysis of our constructions we will also look at the boundary
+of subsets in an expander graph. In an undirected expander, this is simply Γ( S) as we deﬁned
+already. In the case of bipartite expanders, the analogous “boundary” of a set of sources is the
+set of sinks connected to these sources that have distinct index labels from the sources. We can
+lower bound the size of the boundary by β−α. Lemma 1 gives a smooth lower bound on β−α
+for Chung’s bipartite expander graphs that we can show has a unique local maximum in (0 , 1).
+Conveniently, this allows us to lower bound the value of α−β in any given range by examining
+just the end points. In particular, when d = 8 this achieves a local max at approximately
+α = 1/3 (where the expansion factor reaches 2), which can be seen in Figure 2.3. We prove the
+claim analytically for arbitrary d.
+To simplify the analysis, we look at the function deﬁned by the zeros ofφ(α,β ) =d(βHb(α/β)−
+Hb(α)) + 2 = 0. Any α,β satisfying this relation also satisﬁes the relation in Lemma 1 because
+Hb(α) + Hb(β) < 2 when β > α. (More generally we can substitute c if it is known that
+Hb(α) + Hb(β) < c). This implicitly deﬁnes β as a function of α, as well as the function
+ˆβ =β−α. More precisely, The implicit function ˆβ(α) deﬁned by pairs of points (α, ˆβ(α)) such
+that φ(α,α + ˆβ(α)) = 0 is a lower bound to the boundary of subsets of size α, which holds at
+any point α with probability at least 1− negl(nHb(α)).
+Lemma 3. Deﬁne φ(x,y ) =d(yHb(x/y)−Hb(x)) +c wherec is any constant and let ˆβ be the
+function on (0, 1) deﬁned by pairs of points (α,β−α) such that φ(α,β ) = 0 and 0<α<β < 1.
+The function ˆβ is continuously diﬀerentiable on (0, 1) and has a unique local maximum.
+Proof. Deﬁne a change of variablesz =x−y to getφ(x,z ) =d(x+z)Hb(x/(x+z))−Hb(x)) +c
+so that ˆβ is the function deﬁned implicitly by pairs of points satisfyingφ(α, ˆβ) = 0. The function
+18
+
+φ(x,z ) is continuously diﬀerentiable in both variables on the set (0 , 1)× (0, 1), i.e. its partial
+derivatesφz = ∂φ
+∂z and φx = ∂φ
+∂x are each continuous on (0, 1)× (0, 1). By the Implicit Function
+Theorem, ˆβ : (0, 1)→ R is continuously diﬀerentiable with derivative −φx/φz deﬁned in an
+open interval around every point α where φz ⁄= 0. Expanding the binary entropy function
+Hb(x) =−x log2(x)− (1−x) log2(1−x) simpliﬁes the inner expression:
+1
+d(φ(x,z )−c) = (z +x)Hb(x/(x +z))−Hb(x)
+=−x log2(x/(z +x))−z log2(z/(x +z)) +x log2(x)− (1−x) log2(1−x)
+= (x +z) log2(x +z)−z log2(z)− (1−x) log2(1−x)
+The partial derivatives are:
+φx = d
+ln(2)((x +z)/(x +z) + ln(x +z)− (1−α)/(1−α)− ln(1−α) =d log2
+(x +z
+1−α
+)
+φz = d
+ln(2)((x +z)(x +z) + ln(x +z)−z/z− ln(z) =d log2
+(x +z
+z
+)
+φz(α, ˆβ(α)) is always positive because ( x +z)/z > 1 for x,z ∈ (0, 1). On the other hand,
+φx(α, ˆβ(α) < 0 if and only if α + ˆβ(α) > 1−α. Setting ˆβ(α) = β−α this is the case when
+β +α >1. ˆβ(α) is increasing when α +β <1 and decreasing when α +β >1. It has a local
+maximum where α +β = 1. Since β = ˆβ(α)−α is a monotonically non-decreasing function of
+α it follows that if α +β <1 then α′ +β′ < 1 at every point α′ < α. Likewise, if α +β >1
+then α′ +β′ > 1 at every point α′ > α. We therefore conclude that ˆβ(α) is initially increasing
+and achieves a unique local maximum on (0 , 1).
+Corollary 2. With overwhelming probability in n, Chung’s construction (with d = 8 ) is an
+8-regular bipartite graph on n sinks and n sources each indexed in [n] such that for all α∈
+(0.10, 0.80) every αn sinks are connected to at least 0.12n sources with distinct indices.
+Proof. The function ˆβ(α) from Lemma 3 the implicit function ˆβc deﬁned by pairs of points
+(α,β−α) satisfying φc(α,β ) = d(βHb(α/β)−Hb(α)) +c = 0 is a smooth and has a unique
+maximum in any intervalL⊆ (0, 1). Furthermore, if the points α andβ satisfyHb(α)+Hb(β)<
+c≤ 2 then ˆβ(α) is a lower bound on the “boundary” of sinks of size αn in Chung’s construction
+with overwhelming probability (Lemma 1). We will split the interval (0.10, 0.80) into subintervals
+(0.10, 0.33] and [0.33, 0.80) and analyze them seperately.
+For allα∈ [0.33, 0.80) the formula in Lemma 1 shows that the expansion for each α is non-
+decreasing and is at least 0.80 (see Figure 2.3). Thus we can set c = 1.64>H b(0.33) +Hb(0.80)
+and examine the lower bound ˆβc. It has a unique local maximum in (0 .33, 0.80) therefore
+ˆβc≥ min( ˆβc(0.33), ˆβc(0.80))≥ 0.12. (Observe that φc(0.33, 0.45) < 0 and φc(0.80, 0.92) < 0
+with d = 8.)
+Forα∈ (0.10, 0.33] we lazily set c = 2. The implicit function ˆβ2 has a unique local max in
+(0.10, 0.33], so ˆβ2≥min( ˆβ2(0.33), ˆβ2(0.10))> 0.12.
+19
+
+Size (α) 0.01 0.10 0.20 0.30 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80
+Expansion (β) 0.04 0.33 0.53 0.65 0.75 0.78 0.81 0.84 0.88 0.89 0.91 0.93 0.94
+F actor(β/α) 4 3.3 2.65 2.1 1.8 1.73 1.62 1.53 1.47 1.37 1.3 1.24 1.17
+Figure 2.2: A table of the maximum expansion ( β) satisfying the condition from Lemma 1 for Chung’s con-
+struction with ﬁxed degree d = 8 over a range of subset sizes ( α).
+Figure 2.3: The graph on the left plots the lower bound from Lemma 1 on the expansion β as a function of the
+subset sizeα (in fractions of the sources/sinks) for Chung’s construction with ﬁxed d = 8. The graph on the right
+plots the corresponding lower bound on β−α, which is the analog of the subgraph boundary in non-bipartite
+expanders. Speciﬁcally, this is a lower bound on the fraction of sinks connected to an α fraction of sources that
+have distinct index labels from the sources.
+Expansion vs degree We can also characterize the expansion of subsets of the sinks more
+generally as a function of the graph’s degree. We can show that for any d≥ 4 Chung’s construc-
+tion yields ad-regular graph such that every subset of sinks of sizeαn is at least (d/3)-expanding
+for every α< 3
+2d.
+Lemma 4. For any d≥ 4, Chung’s construction yields a d-regular bipartite graph that is an
+(n,α, (d/3)α) bipartite expander for every α≤ 3
+2d with probability 1− negl(nHb(α)).
+Proof. First set α = 3/(2d) and β = 1/2. By Lemma 1, we obtain a graph G that is an
+(n,α,β ) expander with probability 1 − negl(nHb(α)) as long as d− d
+2Hb( 3
+d)−Hb( 3
+2d)− 1 > 0.
+Deﬁneg(x) = 1/x− 1
+2xHb(3x)−Hb(3x/2)− 1 so that the condition is equivalent to g(1/d)> 0.
+Hb(x) is real and continuous on (0 , 1). Its derivative is H′
+b(x) = log 2(1−x)− log2(x) which is
+positive on (0, 1/2). Diﬀerentiating g(x) with respect to x on (0, 1/3) gives g′(x) = −1/x2−
+3
+2xH′
+b(3x)+ 1
+2x2Hb(3x)− 3
+2H′
+b( 3x
+2 ). Observe that on (0, 1/3) bothH′
+b(3x)> 0 and 1
+2Hb(3x)−1< 0,
+therefore g′(x)< 0. This means that g(1/d) is increasing as d increases for d> 3. Furthermore
+limd→3g(1/d) = 3−Hb(1/2)− 1 = 1> 0.
+Finally, it follows as a special case of Lemma 2 that if G is a d-regular (n, 3
+2d, 1
+2) bipartite
+expander for some ﬁxedd then it is an (n,α, (d/3)α) bipartite expander for everyα≤ 3
+2d. Setting
+ϵ = 1/3, we see that 3
+2d < 2−1/d
+d−2 = 1/ϵ−1/d−1
+d−2 . The inequality holds because 4 d− 2> 3d− 6 for
+all d> 0.
+20
+
+Ramanujan graphs The explicit bipartite expander construction of Lubotzky, Phillips, and
+Sarnak [4] achieves similar expansion to Chung’s construction for similarly good parameters.
+It is more complicated to implement as it involves generating a certain Cayley graph of the
+group PGL (2, Fq), the 2-dimensional projective general linear group on Fq. This construction
+yields a bipartite exapnder of degree ( p + 1) on q(q2− 1) vertices for any primes p,q such that
+p,q ≡ 1 mod 4 and p is a quadratic non-residue modulo q. The resulting graph is called a
+Ramanujan graph because it is an optimal spectral expander, meaning the absolute value of all
+the non-trivial eigenvalues of its adjacency matrix (i.e. except the eigenvalue - d) are bounded
+by 2
+√
+d− 1. Other explicit Ramanujan graphs are known, for instance the isogeny graph of
+supersingular elliptic curves is also Ramanujan [34]. Due to a theorem of Tanner [38] relating
+spectral and vertex expansion, any d-regular bipartite Ramanujan graph on n vertices is an
+(n,α, d
+4(1−α)+αd) bipartite expander for all α < 1. In particular, for d≥ 4 every fraction of
+α< 1/d sinks is at least d/4-expanding.
+Lemma 5 (Tanner [38]). For any d≥ 4 and n∈ N a d-regular bipartite Ramanujan graph on
+n vertices is an (n,α, (d/4)α) bipartite expander for every α< 1/d.
+3 Stacked DRG Proof of Space
+In this section we show that stacking DRGs with bipartite expander edges between layers yields
+an arbitrarily tight proof of space with the number of layers increasing as O(log2(1/ϵ)) where ϵ
+is the desired space gap. Moreover, the proof size is also O(log2(1/ϵ)), which is asymptotically
+optimal. Our proofs attempt a tight analysis as well, e.g. showing that just 10 layers achieve a
+PoS with a 1% space gap, degree 8 +d graphs where d is the degree of the DRG, and relies only
+on a DRG that retains depth in 80% subgraphs.
+3.1 Review of the Stacked-Expander PoS
+In this section we review the PoS construction by Ren and Devadas [35] based on stacked
+bipartite expander graphs as it is a building block towards our Layered-DRG construction. Their
+construction uses a layered graph where each layer is a directed line onn nodes and the directed
+edges of a bipartite expander graph are placed between layers. This was shown to be an (ϵγn, (1−
+2ϵ)γn)-sound PoS for parameters ϵ< 1/2 and γ <1.3 (Achieving practical proof sizes actually
+requires γ to be rather small as otherwise the required degree of the expander graphs blows
+up, e.g. γ > 0.6 requires at least degree 40 graphs hence practically ϵ < 1/3). The PoS
+is not parallel sound (for meaningful s,t ) as a prover running in O(λ) parallel time can pass
+veriﬁcation using very little space. We will show that by replacing each line graph with a depth
+robust graph this results in a much tighter proof of space, as well as security against parallelism.
+Interestingly, the security against parallel attacks seems intimately connected to why the Ren-
+Devadas construction fails to be tight whereas ours succeeds. Furthermore, the Ren-Devadas
+security is only proven against an adversary who implements a pebbling attack and is not yet
+known to be secure more generally against graph labeling in the random oracle model. As our
+3Under a slightly diﬀerent deﬁnition of a PoS that assumes the prover uses less than (1−ϵ)γn additional space
+during execution, Ren and Devadas showed that the stacked-expander construction is an ( ϵγn, 2λ)-sound PoS
+where λ is a security parameter determining the number of layers in their construction.
+21
+
+construction is secure against parallel pebbling attacks it is also secure in the random oracle
+model.
+The graph GSE The stacked-expander PoS uses the same underlying graph as the Balloon
+Hash memory hard function [22]. The graph GSE consists of𝓁 =O(λ) layersV1,...,V 𝓁 consisting
+each ofn vertices indexed in each level by the integers [n], and where λ is a security parameter.
+First directed edges are placed from each kth vertex to the k + 1st vertex in each level, i.e.
+forming a directed line. Next directed edges are placed from Vi−1 to Vi according to the edges
+of an (n,α,β ) bipartite expander on (Vi−1,Vi). Finally a “localization” operation is applied so
+that each kth vertex uk in Vi−1 is connected to the kth vertex vk in Vi and any directed edge
+from the kth vertex of Vi−1 to some jth vertex of Vi where j > kis replaced with a directed
+edge from the kth vertex of Vi to the jth vertex of Vi.GSE can be pebbled in n𝓁 steps using a
+total of n pebbles.
+Stacked-expander PoS The PoS follows the generic PoS based on graph labeling. We remark
+only on several nuances. Due to the topology of GSE after localization, the prover only needs
+to use a buﬀer of size n and deletes the labels of Vi−1 as it derives the labels of Vi. After
+completing the labels Ci in the ith level it computes a vector commitment (e.g. Merkle) to the
+labels in Ci denoted comi. Once it has derived the labels C𝓁 of the ﬁnal level V𝓁 it computes
+com = Hid(com1||···|| com𝓁) and uses Hid(com||j) to derive λ non-interactive challenges for
+eachjth level.4
+Letγ =β−2α for constantsβ,α ∈ (0, 1) whereβ >2α. For the remainder of the analysis we
+assume the bipartite expander graph used in the stack-expander PoS construction is an (n,α,β )
+expander.
+Theorem 2 (RD [35]). Let𝓁 be the number of layers in GSE andα,β the expansion parameters.
+Letγ =β− 2α. Every αn subset of initially unpebbled sinks in the layer V𝓁 cannot be pebbled in
+less than 2𝓁αn moves from any initial conﬁguration of γn and using at most γn pebbles overall.
+Corollary 3 (RD [35]). For everyϵ< 1/2 and 0<δ <ϵγ arbitrarily small, the stacked-expander
+PoS construction is an ((ϵγ−δ)nm, (1− 2ϵ)γn)-sound PoS (against a pebbling adversary) with
+probability 1− negl(δλ).
+Space-hardness gap 1/2 The stacked-expander PoS leaves at least a 1
+2γ gap between the
+honest prover’s storage and the adversary’s storage. In fact, the space gap itself is actually what
+the analysis exploits in order to argue security: due to the fact that the adversary will need
+to reﬁll a large fraction of its deleted space in order to pass the veriﬁer’s challenges it will end
+up performing a signiﬁcant amount of computation as well to reﬁll that space. Furthermore,
+4This is a slight deviation from the protocol as described by Ren and Devadas, which sampled every label
+challenge randomly over all vertices in GSE rather than separately within each layer. The end result is the same
+because for security they set their parameters to ensure that if at least ϵn labels in any level are incorrect (which
+comprise an ϵ/𝓁 fraction of all the vertices) then the challenges will sample one of these incorrect labels with
+overwhelming probability. This requires sampling a factor 𝓁 more labels overall than the number of labels one
+would sample from a given level to achieve the same probability of detection within that speciﬁc layer, as for any
+λ it holds that (1 − ϵ
+𝓁)𝓁λ≈ e−λ/ϵ≈ (1−ϵ)λ. Since their protocol also require 𝓁 = O(λ) the number of queries
+is actually O(λ2). Sampling λ challenges within each layer, as we do, involves the same number of queries with
+even a slightly tighter guarantee of the desired property within each level.
+22
+
+Corollary 3 proves that nodes on the last level are hard to pebble individually by leveraging
+the fact that the adversary is storing less than half the pebbles required to pebble a subset of
+nodes (as required by Theorem 2) and derives a contradiction by considering a lazy adversarial
+strategy that keeps these pebbles ﬁxed on the initial set and still uses less space than needed.
+This analysis would be void if the adversary were storing more than half the required online
+pebbles.
+It seems implicitly that the reason this bound on additional online space used is so fun-
+damental to the analysis is that the protocol is not secure against parallel attacks. If instead
+pebbling any αn sinks was secure against parallel attacks (with no bound on the number of
+online pebbles used in parallel) then we immediately get that less than αn sinks can be pebbled
+eﬃciently individually as otherwise these could all be pebbled in parallel starting from the same
+initial conﬁguration.
+O(λ2) proof size The proof size in the stacked-expander PoS is quite large as it requires λ
+challenges in each of the λ levels for total complexity O(λ2). The number of levels needs to be
+λ as we are only able to prove that the complexity of pebbling a single node out of αn sinks is
+at least 1/(αn) the complexity of pebbling all αn, hence the complexity of pebbling αn nodes
+needs to be on the order of 2 λαn, i.e. much greater than O(n). If the complexity were only
+O(n) the adversary might be able to pebble each challenge in less that 1 /α moves. Again, this
+is connected to the lack of security against parallel attacks. If the protocol were secure against
+parallel attacks then individual nodes inherit the pebbling complexity of αn nodes without a
+factor αn loss.
+3.2 A tight PoS from stacked DRGs
+The new result that we will next show is that simply replacing each of the line graphs Vi in
+the stacked-expander PoS construction with a depth robust graph results in an arbitrarily tight
+PoS. Speciﬁcally, only O(log 1/ϵ) layers are needed to achieve a ((1 −ϵ)n, Ω(n))-parallel-sound
+PoS. We demand only very basic properties from the DRG, e.g. that any subgraph on 80% of
+the nodes contains a long path of Ω( n) length.
+Construction ofGSDR[𝓁] The graph GSDR[𝓁] will be exactly likeGSE only each of the𝓁 layers
+V1,...,V 𝓁 contains a copy of an ( n, 0.80n,βn )-depth-robust graph for some constant β. For
+concreteness, we deﬁne the directed edges between the layers using the degree 8 Chung random
+bipartite graph construction.
+For simplicity we will ﬁrst analyze the construction without applying localization to the
+expander edges between layers. Even without localization this is already a valid PoS, only the
+initialization requires a buﬀer of size 2 n rather than n. The PoS is still “tight” with respect to
+the persistent space storage.
+Vector commitment storage If the vector commitment storage overhead required for the
+PoS is signiﬁcant then this somewhat defeats the point of a tight PoS. Luckily this is not the
+case. Most vector commitment protocols, including the standard Merkle tree, oﬀer smooth
+time/space tradeoﬀs. With a Merkle tree the honest prover can delete the hashes on nodes on
+the ﬁrst k levels of the tree to save a factor 2 k space and re-derive all hashes along a Merkle
+path by reading at most 2k nodes and computing at most 2k hashes. If k = 7 this is less than a
+23
+
+1% overhead in space, and requires at most 128 additional hashes and reads. Furthermore, as
+remarked in [33] these 2k reads are sequential memory reads, which in practice are inexpensive
+compared to the random reads for challenge labels.
+Proof size We show that𝓁 =O(log( 1
+3(ϵ−2δ))) suﬃces to achieve negl(λ) soundness against any
+prover running in parallel time less than βn rounds of queries where Chal samples λ/δ nodes
+in each layer. This would result in a proof size of O((1/ϵ) log(1/ϵ)), which is already a major
+improvement on any PoS involving a graph of degree O(1/ϵ) (recall that the only previously
+known tight PoS construction relied on very special DRGs whose degree must scale with 1 /ϵ,
+which results in a total proof size of O(1/ϵ2)). However, we are able to improve the result
+even further and show that only O(1/δ) challenge queries are required overall, achieving proof
+complexity O(1/ϵ). This is the optimal proof complexity for the generic pebbling-based PoS
+with at most an ϵ space gap. If the prover claims to be storing n pebbles and the proof queries
+less than 1/ϵ then a random deletion of an ϵ fraction of these pebbles evades detection with
+probability at least (1−ϵ)1/ϵ≈ 1/e. The same applies if a random ϵ fraction of the pebbles the
+prover claims to be storing are red (i.e. errors).
+Analysis outline We prove the hardness of the game Red-Black-PebblesA(GSDR[𝓁],V𝓁, Chal)
+where Chal samples λi uniform challenges over Vi. We ﬁrst show that it suﬃces to consider the
+parallel complexity of pebbling the set U𝓁⊆ V𝓁 of all unpebbled nodes on V𝓁 from an initial
+conﬁguration of γn black pebbles overall and δin red pebbles in each layer where δ𝓁<ϵ/ 2. As a
+shorthand notation, we will say thatGSDR[𝓁] is (γ,⃗δ,t,µ )-hard ift rounds are required to pebble
+a µ fraction of V𝓁. When µ = 1 this is equivalent to pebbling all of U𝓁, the set of nodes with
+missing pebbles in the initial conﬁguration (since there is no constraint on number of pebbles
+used). This very similar to standard parallel pebbling complexity in black pebbling games as
+we deﬁned earlier, however, it takes into account the restriction to δi red pebbles on each layer
+that it counts separately 5 from black pebbles.
+In Claim 4 we show that if GSDR[𝓁− 1] is (1−ϵ + 2δ𝓁−1,⃗δ,t, 1)-hard thenGSDR[𝓁] is (1−
+ϵ,⃗δ∗,t, 1−ϵ/2)-hard where ⃗δ∗ is equal to ⃗δ on all common indices and δ𝓁 = δ𝓁−1. This in
+turn implies that with probability at least 1 −ϵ/2 a randomly sampled challenge node from V𝓁
+requires more thant rounds to pebble. Together with the random challenges boundingδi we show
+(Claim 2) that the labeling PoS onGSDR is (γn,t,max{p∗,µκ})-sound wherep∗ =maxi(1−δi)λi.
+Next we look at the complexity of pebbling all of V𝓁. We show in Claim 6 that when the
+adversary uses at most γ <1−ϵ black pebbles and δ red pebbles in each layer then pebbling all
+the unpebbled nodes in layer V𝓁 (for𝓁 dependent on ϵ andδ) requires pebbling 0.80n unpebbled
+nodes (including both red and black pebbles) in some layer Vi. Since the layer Vi contains a
+(n, 0.80,βn )-depth-robust graph, this takes at least βn rounds. We then generalize this analysis
+(Claim 7) to apply when δi is allowed to increase from level 𝓁 to 1 by a multiplicative factor
+such that∑
+iδi =O(δ𝓁).
+Theorem 3 ties everything together, taking into account the constraints of each claim to
+derive the PoS soundness of the labeling PoS on GSDR[𝓁].
+5In prior uses of the red-black pebbling game (e.g. to analyze the Ren and Devadas or Dziembowski et. al.
+proofs of space) it suﬃced to consider parallel black pebbling complexity as red pebbles were treated just like
+extra free black pebbles. However, that is not allowed here because the construction places diﬀerent constraints
+on red vs black pebbles that are allowed on each level by issuing separate challenge queries for each level.
+24
+
+Theorem 3. The labeling PoS on GSDR[𝓁] with Chal sampling λi challenges in each level Vi
+and κ online challenges in V𝓁 is ((1−ϵ−δ)n,βn− 1,e−λ)-sound with κ = 2λ/ϵ if either of the
+following conditions are met for ϵ≤ 0.24:
+(a) 𝓁 =max(8, log2( 1
+3(ϵ−2δ)) + 4) and each λi =λ/δ and δ <min(0.01,ϵ/ 3)
+(b) 𝓁 = max(14, log2( 1
+3(ϵ−3δ)) + 5) and each λi = λ/δi where δ𝓁 = δ < min(0.01,ϵ/ 2) and
+δi =min(0.05, 2
+3δi−1)
+Proof. For anyGSDR[𝓁], if the set of unpebbled nodes inV𝓁 are connected via unpebbled paths to
+at least 0.80n unpebbled nodes (including red and black) in some prior levelVi, then pebbling all
+ofV𝓁 requires pebbling all these 0.80n unpebbled nodes, which requires βn−1 rounds due to the
+fact thatVi is (n, 0.80n,βn ) depth robust. Claim 7 thus implies thatGSDR[𝓁] is (1−ϵ,⃗δ,βn−1, 1)-
+hard for ⃗δ such that δ𝓁 =δ <ϵ/3 and δi =min(0.05, 2
+3δi−1) for 𝓁 =max(13, log2( 1
+3(ϵ−3δ)) + 4).
+Claim 7 gives a diﬀerent tradeoﬀ between 𝓁 and⃗δ, and shows that this hardness holds for ⃗δ and
+𝓁 such that δi =δ <ϵ/2 for all i and 𝓁 =max(7, log2( 1
+3(ϵ−2δ) + 3)).
+Assuming ϵ≤ 0.24, Claim 4 implies that GSDR[𝓁 + 1] is (1−ϵ−δ,⃗δ,βn − 1, 1−ϵ/2)-hard
+extending ⃗δ so that δ𝓁+1 = δ𝓁 = δ. Finally, by Claim 2, the labeling PoS on GSDR[𝓁 + 1] with
+challenge setV𝓁 and Chal samplingλi in each levelVi is ((1−ϵ−δ)n,βn−1,max{p∗, (1−ϵ/2)κ})-
+sound wherep∗ =maxi(1−δi)λi. Setting λi =λ/δi andκ = 2λ/ϵ, the PoS is ((1−ϵ−δ)n,βn−
+1,e−λ)-sound.
+Notation 1 (Common analysis notations) . Let Ui denote the entire index set of nodes that
+are unpebbled in Vi and Pi the set that are pebbled. The total number of pebbles placed in the
+initial conﬁguration isγn. Each level initially has ρin black pebbles and δin red pebbles. Finally,
+γin =∑
+j<iρi is the number of black pebbles placed before level i.
+Claim 2. IfGSDR[𝓁] is (γ,⃗δ,t,µ )-hard then the labeling PoS on GSDR[𝓁] is (γn,t,max{p∗,µκ})-
+sound where p∗ =maxi(1−δi)λi.
+Proof. Fixγ = 1−ϵ andδi for eachi. The λi challenges during Initialization in each level ensure
+thatA wins with at most probability (1−δi)λi if it places more than δi red pebbles on Vi. IfA
+has exceeded the δi bound in more than one level this only increases its probability of failure.
+Thus, in case 1 (A places more than δi red pebbles on some level i),A’s success probability is
+bounded by maximum value of (1−δi)λi over alli. In case 2 (A places fewer thanδi on eachith
+level), the fact that GSDR[𝓁] is (γ,⃗δ,t,µ )-hard implies at most a µ fraction of the nodes on V𝓁
+can individually be pebbled from the starting conﬁguration int rounds (recall Fact 1), henceA’s
+success probability of answering κ independent challenges is µκ. Therefore, the overall success
+probability is the maximum of these two cases.
+The next claim is a very simple observation that the hardness of pebbling all the unpebbled
+nodes in V𝓁 with s initial pebbles overall can be equivalently stated as the hardness of peb-
+bling any set of u unpebbled nodes on V𝓁 with s−u initial pebbles placed on lower levels (i.e.
+V1,..,V 𝓁−1).
+25
+
+Claim 3 (trivial).GSDR[𝓁] is (γ,⃗δ,t, 1)-hard if and only if given any initial conﬁguration P0
+of γ𝓁n black pebbles placed on layers V1,...,V 𝓁−1 (i.e. excluding V𝓁), at most δin red pebbles in
+each layer, and any set U⊆ V𝓁 of αn unpebbled nodes in V𝓁 such that α−γ𝓁≥ 1−γ−δ, no
+adversary can pebble U in t or fewer rounds.
+Proof. Any placement of δin red pebbles on each level and γn black pebbles overall with γ𝓁
+pebbles on V1,...,V 𝓁−1 has ρ𝓁n = (γ−γ𝓁)n black pebbles on V𝓁 and exactly (1 −ρ𝓁−δ𝓁)n
+unpebbled nodes in V𝓁 (assuming without loss of generality that red and black pebbles never
+share the same node). If for any γ𝓁 pebbles placed on V1,...,V 𝓁−1 and any setU of (1−ρ𝓁−δ𝓁)n
+of unpebbled nodes in V𝓁 no adversary can pebble U int or fewer rounds, then no adversary can
+pebble the set of unpebbled nodes in V𝓁 (i.e. because U is precisely this set).
+Conversely, suppose thatGSDR[𝓁] is (γ,⃗δ,t, 1)-hard, i.e. pebbling the entire set of unpebbled
+nodes in V𝓁 requirest rounds if at most γn black pebbles are placed overall with at most δin red
+pebbles in each level. Then for any placement of γ𝓁 pebbles on V1,...,V 𝓁−1 with at most δin red
+in each level, and for any U⊆V𝓁 of sizeu≥ (1−ρ𝓁−δ𝓁)n, the remaining nodes in V𝓁\U can be
+pebbled with just (γ−γ𝓁 +δ𝓁)n pebbles. This means there exists a pebbling of the entire graph
+with γn pebbles overall and the same conﬁguration on the ﬁrst 𝓁− 1 levels that leaves only the
+set U unpebbled in V𝓁. Thus, by hypothesis, this unpebbled set U requires more than t rounds
+to pebble. Any other initial pebbling conﬁguration that has fewer pebbles on V𝓁\U would only
+make it harder to pebble U.
+Claim 4. For any ϵ≤ 0.24, if GSDR[𝓁− 1] is (1−ϵ +δ𝓁−1,⃗δ,t− 1, 1)-hard then GSDR[𝓁] is
+(1−ϵ,⃗δ∗,min (βn− 1,t ), 1−ϵ/2)-hard where ⃗δ∗ is identical to ⃗ von all common indices and
+δ𝓁 =δ𝓁−1≤ϵ/2.
+Proof. Refer to Notations 1. Consider the graph GSDR[𝓁] with γ = 1−ϵ black initially placed
+pebbled. Let δ =δ𝓁 =δ𝓁−1≤ϵ/2. Let α𝓁n denote the size of U𝓁, i.e. the number of unpebbled
+nodes in V𝓁. Every subset of V𝓁 of size (1−ϵ/2)n contains at least α∗n = (α𝓁−ϵ/2)n unpeb-
+bled nodes (otherwise there would be fewer than α𝓁n unpebbled nodes as there are only an ϵ/2
+fraction remaining outside the selected set). If α∗≥ 0.80n we are done because V𝓁 is a copy
+of a (n, 0.80n,βn )-depth robust graph and so pebbling all of α∗ requires at least βn rounds to
+pebble a path of length βn.
+Caseα∗< 1/3: Theα∗ unpebbled nodes have dependencies on at least a 2α∗≥ 2α𝓁−ϵ frac-
+tion of nodes in V𝓁−1 (Corollary 1). Of these at least α′n = (2α𝓁−ρ𝓁−1−ϵ−δ)n are unpebbled,
+and there areγ𝓁−1 =γ−ρ𝓁−1−ρ𝓁 pebbles placed on all prior levels. Substituting ρ𝓁 = 1−α𝓁−δ
+andγ = 1−ϵ shows thatα′−γ𝓁−1 = 2α𝓁−γ +ρ𝓁−ϵ−δ =α𝓁 + 1−γ−ϵ− 2δ =α𝓁− 2δ. Since
+α𝓁≥ 1−γ−δ, settingγ′ =δ+γ satisﬁes the relationα′−γ𝓁−1≥α𝓁−2δ≥ 1−γ−3δ = 1−γ′−δ.
+Noting that γ′ = 1−ϵ +δ, by the hypothesis that GSDR[𝓁− 1] is (1−ϵ +δ𝓁−1,⃗δ,t− 1, 1)-hard
+along with the bijection in Claim B this shows that the α′ pebbles in V𝓁−1 cannot be pebbled
+in t− 1 rounds. Thus, the α∗ unpebbled nodes in V𝓁 cannot be pebbled in t rounds.
+Case α∗≥ 1/3: In this case α∗∈ (0.33, 0.80). It is connected to β∗ nodes in V𝓁−1. Among
+these at least α′≥ β∗−ρ𝓁−1−δ of these are unpebbled. Since γ𝓁−1 = γ−ρ𝓁−ρ𝓁−1 we get
+α′−γ𝓁−1≥ β∗−γ +ρ𝓁−δ. Furthermore, ρ𝓁 = 1−α𝓁−δ≥ 1−α∗−ϵ/2−δ so α′−γ𝓁−1≥
+β∗−γ + 1−α∗−ϵ/2− 2δ =β∗−α∗ +ϵ/2− 2δ≥ 0.12 +ϵ/2− 2δ (from Corollary 2 we know that
+26
+
+β∗−α∗≥ 0.12). As in the previous case, the hypothesis thatGSDR[𝓁−1] is (1−ϵ+δ𝓁−1,⃗δ,t−1, 1)-
+hard and Claim B imply that the α′ pebbles cannot be pebbled in t− 1 rounds as long as
+0.12 +ϵ/2− 2δ≥ϵ− 2δ, which is true for ϵ≤ 0.24.
+Claim 5. IfGSDR initially has at most γn black pebbles for γ≤ 1−ϵ and at most δ <ϵ/2 red
+pebbles in each layer then for 𝓁 = log2( 1
+3(ϵ−2δ)) the unpebbled nodes in V𝓁 have unpebbled paths
+from at least n/3 unpebbled nodes in some layer Vi.
+Proof. Refer to Notations 1. Let αin denote the number of unpebbled dependencies of U𝓁 inVi,
+i.e. the number of nodes in Ui that have unpebbled paths to U𝓁. Suppose that αi is bounded by
+1/3 for all levels up to 𝓁−k, i.e. α𝓁< 1/3,...,α 𝓁−k < 1/3. We will prove the following bound:
+α𝓁−k≥ 2k(α𝓁−γ𝓁/2−δ)≥ 2k−1(α𝓁 +ϵ− 3δ)≥ 2k(ϵ− 2δ) (3.1)
+Fork = log2( 1
+3(ϵ−2δ)) this implies α𝓁−k≥ 1/3, which contradicts α𝓁−k < 1/3. Therefore, it
+follows that αi≥ 1/3 at some index i>𝓁 − log2( 1
+3(ϵ−2δ)). We conclude that if 𝓁≥ log2( 1
+3(ϵ−2δ))
+then there is some level Vi with at least n/3 unpebbled nodes that have unpebbled dependency
+paths to the set X𝓁 of unpebbled nodes in V𝓁.
+Let j =𝓁−i. From Corollary 1, as long as αj≤ 1/3 the set Xj is connected to at least 2αj
+nodes in Vj−1, and at most (ρj−1 +δ)n of these are pebbled. Therefore, αj−1≥ 2αj−ρj−1−δ.
+Now we show by induction that α𝓁−k≥ 2kα𝓁− 2k−1ρ𝓁−1− (2k− 1)δ. The base case k = 0 is
+trivial. Assuming this holds for k:
+α𝓁−k−1≥ 2α𝓁−k−ρ𝓁−k−1−δ≥ 2(2kα𝓁− 2k−1ρ𝓁−1− (2k− 1)δ)−ρ𝓁−k−1−δ
+≥ 2k+1α𝓁− 2kρ𝓁−1− (2k+1− 1)δ
+The last inequality used the fact that ∑k
+i=1ρ𝓁−i≤γ𝓁 and therefore∑k
+i=1 2k−iρ𝓁−i is maximized
+by setting ρ𝓁−1 =γ𝓁 and ρ𝓁−i = 0 for all i> 1.
+From the identitiesγ𝓁 =γ−ρ𝓁 andα𝓁 = 1−ρ𝓁−δ we deriveγ𝓁 =γ +α𝓁− 1 +δ≤α𝓁 +δ−ϵ.
+Finally, inserting this into the bound above and using the fact that α𝓁≥ϵ−δ gives:
+α𝓁−k≥ 2k−1(2α𝓁−γ𝓁− 2δ)≥ 2k−1(α𝓁 +ϵ− 3δ)≥ 2k(ϵ− 2δ)
+We could stop here as we have already shown unpebbled dependency paths from the un-
+pebbled sinks in V𝓁 to a 1 /3 fraction of nodes in some level for 𝓁 = O(log(1/(ϵ− 2δ)) and
+the remainder of our PoS analysis could rely on a graph that is ( n, 0.33n, Ω(n))-depth-robust.
+However, we can tighten the analysis further so that we only need to assume the graph is
+(n, 0.80, Ω(n))-depth robust.
+Claim 6. IfGSDR initially has at most γn black pebbles for γ≤ 1−ϵ and at most δ < ϵ/2
+red pebbles in each layer then for 𝓁 = max( 0.68−ϵ+δ
+0.12−δ , log2( 1
+3(ϵ−2δ)) + 3) the unpebbled nodes in
+V𝓁 have unpebbled paths to at least 0.80n unpebbled nodes in some layer Vi. In particular,
+𝓁 =max(7, log2( 1
+3(ϵ−2δ)) + 3) when δ≤ 0.01.
+27
+
+Proof. In Claim 5 we showed that for𝓁≥ log2( 2
+3(α𝓁+ϵ−3δ)) there exists an indexi whereαi≥ 1/3
+andα𝓁 +ϵ− 3δ≥ 2ϵ− 4δ (Equation 3.1). Picking up from here, we consider what happens once
+αi≥ 1/3. We break the analysis into two cases: in the ﬁrst case α𝓁 < 1/3 and in the second
+case α𝓁≥ 1/3.
+In both cases we will use a diﬀerent bound on αi−k because once αi > 1/3 the unpebbled
+sets may not be 2-expanding. Deﬁne the function β(α) to be the minimum bipartite expansion
+of a set of fractional size α, i.e. every set of αn nodes is connected to at least β(α)n nodes in
+the previous level. Let ˆβ(α) = β(α)−α. Using the relation αi−1≥β(αi)−ρi−1−δ we derive
+that αi−2≥ ˆβ(αi−1) +β(αi)−ρi−1−ρi−2− 2δ and more generally, since ∑k
+j=1ρi−j≤γi:
+αi−k≥
+k−1∑
+j=1
+ˆβ(αi−j) +β(αi)−kδ−
+k∑
+j=1
+ρi−j≥ (k− 1)(minj<k ˆβ(αi−j)−δ) +β(αi)−γi−δ
+The ﬁnal ingredient is the bound γi≤ αi−ϵ +δ for all i. To see this, ﬁrst observe that
+α𝓁−γ𝓁 = 1−ρ𝓁−δ− (γ−ρ𝓁) = ϵ−δ. If αi−γi≥ ϵ−δ and ϵ >2δ, then 0.80 > αi > δ,
+and so the αin dependencies are connected to β(αi)n> (αi +δ)n nodes in level Vi−1. Therefore
+αi−1≥αi−ρi−1 =αi− (γi−γi−1). In words, decreasing the number of dependencies requires
+using black pebbles 1-to-1, so αi−1−γi−1≥αi−γi.
+αi−k≥ (k− 1)(minj<k ˆβ(αi−j)−δ) + ˆβ(αi) +ϵ− 2δ (3.2)
+By Corollary 2 to Lemma 3, ˆβ(α)≥ 0.12 for α∈ (0.10, 0.80).
+Case α𝓁≥ 1/3: First we claim that α𝓁−i≥ 0.12 for all i. If αi≥ 0.12 then as shown above
+αi−1≥ ˆβ(αi) +ϵ− 2δ≥ 0.12 because ˆβ(α)≥ 0.12 for all α∈ (0.10, 0.80) and ϵ> 2δ. Our claim
+thus follows by induction. Therefore, for all j ≤ k we derive that minj≤k( ˆβ(α𝓁−j))≥ 0.12.
+Equation 3.2 then shows that α𝓁−k−1 ≥ k(0.12− δ) + 0.12 + ϵ− δ, or α𝓁−k−1 ≥ 0.80 at
+k≥ (0.68−ϵ +δ)/(0.12−δ) (e.g. k = 7 when δ≤ 0.01).
+Case α𝓁 < 1/3: From Equation 3.1, αi≥ 1/3 at some index i≥𝓁−k for k = log2( 2
+3(α𝓁+ϵ−3δ)).
+At this pointαi≥ 1/3 andγi<γ 𝓁≤α𝓁−ϵ+δ. Combining this with Equation 3.2, we can apply
+the same analysis as in the previous case to ﬁrst show by induction that αi−k′≥ 0.12 for all k′
+and then more generally: αi−k′≥ (k′− 1)(0.12−δ) +β(αi)−α𝓁 +ϵ− 2δ≥k′(0.12−δ) + 0.68−
+α𝓁 +ϵ− 2δ. We used the fact that β(αi)≥ β(0.33)≥ 0.68. Therefore, αi−k′−1≥ 0.80 when
+k′≥ (0.80− 0.68 +α𝓁)/(0.12−δ). This shows that the total number of levels where αi < 0.80
+is at most:
+𝓁 =k +k′ + 1≤ 1 + log2
+( 2
+3(α𝓁 +ϵ− 3δ)
+)
++ 0.12 +α𝓁
+0.12−δ
+The derivative of this expression with respect toα𝓁 is 1
+0.12−δ− 1
+ln(2)(α𝓁+ϵ−3δ), which is initially
+decreasing when ln(2)(α𝓁 +ϵ− 3δ)< 0.12−δ and then increasing for larger α𝓁. Therefore, the
+maxima are on the endpoints of the interval α𝓁∈ (ϵ−δ, 0.33). We already considered the case
+α𝓁 = 0.33. When α𝓁 =ϵ−δ then the number of levels is at most 1 − log2(3(ϵ− 2δ)) + 0.12
+0.12−δ.
+In conclusion, the total number of levels before αi≥ 0.80 is at most:
+𝓁≤max
+(
+(0.68−ϵ +δ)/(0.12−δ), 1− log2
+(
+3(ϵ− 2δ)
+)
++ 1/(1−δ/12)
+)
+In particular, when δ≤ 0.01 this becomes max(7,− log2(3(ϵ− 2δ)) + 3).
+28
+
+Relaxing δ Claim 6 improved on Claim 5 to show unpebbled dependency paths to 80% of the
+subgraph in some layer. The ﬁnal improvement is to redistribute the δi such that∑
+iδi =O(δ)
+but security is still maintained. Intuitively, ensuring δ <ϵ is necessary on level V𝓁 as otherwise
+γ +δ≥ 1 and there are no unpebbled nodes on level V𝓁 (all the missing black pebbles can be
+covered with red pebbles). However, as the dependencies expand between levels a larger δ can
+be tolerated as well. Although the number of black pebbles the prover will place on each level
+isn’t ﬁxed a priori, we show that if δ <ϵ/2 in level V𝓁 then we can tolerate a factor 3/2 increase
+between levels as long as δ≤ 0.05 in any layer. 6
+That is, if δi denotes the bound on the number of red pebbles in the ith layer then our new
+analysis requires δ𝓁 < ϵ/2 and δi =min(0.05, (3/2)δi+1). This means that the total number of
+queries in the PoS over all levels is O(1/ϵ) because ∑𝓁
+i=1 1/δi≤max(0.10𝓁, 3
+2δ𝓁
+).
+Claim 7. IfGSDR initially has at most γn black pebbles for γ≤ 1−ϵ, at most δ𝓁 = δ < ϵ/3
+red pebbles in layer V𝓁, and at most δi = min(0.05, (2/3)δi−1) red pebbles in layer Vi, then for
+𝓁 =max(13, log2( 1
+3(ϵ−3δ)) + 4) the unpebbled nodes in V𝓁 have unpebbled paths to at least 0.80n
+unpebbled nodes in some layer Vi.
+Proof. Modifying Equation 3.1 to account for the diﬀerent values of δi gives:
+α𝓁−k≥ 2kα𝓁− 2k−1γ𝓁− (2k−1δ𝓁−1 + 2k−2δ𝓁−2 +··· +δ𝓁−k)≥ 2kα𝓁− 2k−1γ𝓁−
+k∑
+i=1
+2k−i(3/2)i−1δ𝓁
+Let σk =∑k
+i=1 2k−i(3/2)i−1. Then (4 /3)σk = σk + 2k+1/3− (3/2)k−1. Therefore σk = 2k+1−
+3k/2k−1< 2k+1. Using γ𝓁≤α𝓁 +δ𝓁−ϵ and α𝓁≥ϵ−δ𝓁 we derive the new bound:
+α𝓁−k≥ 2kα𝓁− 2k−1γ𝓁− 2k+1δ𝓁≥ 2k−1(α𝓁 +ϵ− 5δ𝓁)≥ 2k(ϵ− 3δ) (3.3)
+This shows that if 𝓁≥ log2( 1
+3(ϵ−3δ)) then there is some level Vi where αi≥ 1/3.
+We must also modify Equation 3.2 using ∑k
+j=1ρi−j≤γi≤αi−ϵ +δi:
+αi−k≥ (k− 1)minj<k ˆβ(αi−j)−
+k∑
+j=0
+δi−j + ˆβ(αi) +ϵ (3.4)
+When i =𝓁 and k is small δ𝓁−k = (3/2)kδ𝓁 and δ𝓁≤ϵ/3 implies:
+α𝓁−k≥ (k− 1)minj<k ˆβ(αi−j) + ˆβ(α𝓁) + (2
+3− 3k
+2k+1 )ϵ
+Otherwise, we can use δi≤ 0.05.
+αi−k≥ (k− 1)(minj<k ˆβ(αi−j)− 0.05) + ˆβ(αi) +ϵ− 0.10
+Now we turn back to the two cases for αi≥ 1/3.
+6The 2/3 factor is somewhat arbitrary. In general we can choose any growth factor for δ that is smaller than
+the dependency expansion factor we use in our analysis, which for d = 8 is at least 2 in subsets smaller than n/3.
+The analysis could also be tightened to allow for a bound larger than 0 .05. The maximum allowable δ can also
+be increased if we decrease the target fraction of unpebbled dependencies, e.g. from 80% to 70%. Our analysis
+here does not yet optimize this tradeoﬀ.
+29
+
+Case α𝓁 ≥ 1/3: We claim that α𝓁−k ≥ 0.11 for all k. This is true for α𝓁 by hypothesis.
+From the equation above and the bound ˆβ(α)≥ 0.12 for all α∈ (0.10, 0.80) (Corollary 2),
+α𝓁−1≥ ˆβ(α𝓁)−ϵ/12 > 0.11. Therefore, α𝓁−2≥ (0.12− 0.05) + 0.12− (11/24)ϵ≥ 0.18. Now
+assume that α𝓁−2−j≥ 0.12 for all j < k, then α𝓁−2−j≥ (k− 1)0.07 + 0.12− (11/24)ϵ >0.11.
+The claim follows by induction. This also shows that α𝓁−k≥ (k− 3)0.07 + 0.11 > 0.80 when
+k = 13.
+Case α𝓁 < 1/3: From Equation 3.3, αi≥ 1/3 at some index i≥𝓁−k for k = log2( 2
+3(α𝓁+ϵ−5δ𝓁)).
+At this point αi≥ 1/3 and γi<γ 𝓁≤α𝓁−ϵ +δ𝓁. Combining this with Equation 3.4 gives:
+αi−k′≥ (k′− 1)(minj<k′ ˆβ(αi−j)− 0.05) +β(αi)−α𝓁 +ϵ− 0.05−δ𝓁
+We claim that αi−k′≥ 0.30 for all k′. Observe that αi− 1≥ β(αi)−α𝓁 +ϵ− 0.05−δ𝓁≥
+0.68− 0.38 +ϵ−δell≥ 0.30 for any value α𝓁< 0.33 because β(αi)≥β(0.33)≥ 0.68. Assuming
+this is true for all αi−j where 1 < j≤ k′ implies αi−k′≥ (k′− 1)0.07 + 0.30≥ 30. Therefore,
+we can state more generally that αi−k′ ≥ (k′− 1)0.07 + 0.68−α𝓁 and αi−k′−1≥ 0.80 when
+k′ = (0.12 +α𝓁)/0.07. The total number of levels where αi< 0.80 is thus at most:
+k +k′ + 1≤ 1− log2((3/2)(α𝓁 +ϵ− 5δ𝓁)) + 2 +α𝓁/0.07
+Diﬀerentiating this expression with respect to α𝓁 shows that the maxima over α𝓁∈ (ϵ−
+δ𝓁, 0.33) are on the endpoints. The endpoint α𝓁 = 0.33 coincides with the case above. At the
+endpoint ϵ−δ𝓁 the number of levels is bounded by 3 − log2(3(α𝓁 +ϵ− 5δ)) +ϵ/0.07.
+In conclusion, considering both cases, the total number of levels before αi≥ 0.80 is at most:
+𝓁≥max(13, 3− log2(3(ϵ− 3δ𝓁)) +ϵ/0.07)
+In particular, when ϵ≤ 0.07 and δ𝓁 =δ then 𝓁≤max(12, 4− log2(3(ϵ− 3δ)).
+4 “ZigZag” DRG Proof of Replication
+The Stacked-DRG PoS can be adapted into a PoRep. The replication algorithm on a data
+inputD with commitmentτD ﬁrst derives the labels on level V𝓁−1 and then uses these as “keys”
+to encode D on the last level V𝓁. Each ith label on the ﬁnal layer encodes di and uses a key
+ki = H(τD||cparents(i)) where cparents(i) are the labels on all the nodes with directed edges to
+the ith node in V𝓁, including within layer V𝓁 and layer V𝓁−1. The label ei then encodes di as
+Enc(ki⊕di) (where e.g. Enc is a veriﬁable delay encoding). The replica R consists of e1,...,e n.
+However, with this construction, decoding D from R (i.e. data extraction) is nearly as ex-
+pensive as data replication because it requires re-deriving the keys on levelV𝓁−1 in the same way.
+Once the labels on levelV𝓁−1 have been derived, then the data can be decoded asdi = Dec(ei⊕ki).
+Once all the labels required for each key derivation are stored in memory (requiring double the
+memory if done naively) then the last step of the decoding can be completely parallelized.
+The ZigZag PoRep construction ﬁxes this with a simple tweak.
+30
+
+4.1 ZigZag PoRep Construction
+The basic idea of ZigZag is to layer DRGs so that each layer “encodes” the previous layer. The
+critical desired property to achieve is: if all the labels on a given level are available in memory
+then the labels can decoded in parallel. To achieve this, instead of adding edge dependencies
+between the layers, we add the edges of a constant degree expander graph in each layer so that
+every layer is both depth-robust and has high “expansion”. Technically, the graph we construct
+in each layer is an expander as an undirected graph. As a DAG this means that the union of
+the dependencies and targets of any subset is large. By alternating the direction of the edges
+between layers, forming a “zig-zag”, we are able to show that the dependencies between layers
+expand. Now the only edges between layers are between nodes at the same index, and the
+label on each node encodes the label on the node at the same index in the previous level. The
+dependencies used for keys are all contained in the same layer. Thus, the labels in any layer are
+suﬃcient to recover the labels in the preceding layer. Moreover, the decoding step can be done
+in parallel.
+Without alternating the direction of the edges between layers this construction would fail to
+be a tight proof of space because the topologically last ϵn nodes in a layer would only depend
+on the topologically last ϵn nodes in the previous layer. Moreover, if the prover stores the labels
+on the topologically ﬁrst (1 −ϵ)n nodes it can quickly recover the labels on the topologically
+ﬁrst (1−ϵ)n nodes in the preceding level, allowing it to recover the missing ϵn labels as well in
+parallel-time O(ϵn).
+DAG encodings As a building block the ZigZag PoRep uses the follow DAG encodings
+scheme, which was used to construct PoReps based on depth robust graphs in [19, 20, 33].
+The DAG encoding scheme takes in a data ﬁle X on n blocks x1,...,x n and a d-inregular DAG
+on n nodes together with its parent function Parents(i) which outputs the parent nodes of the
+ith node. It also uses a randomized encoding scheme Enc, Dec. This may be as simple as the
+identity function, or could use VDE encoding for added delay. The beneﬁt of adding a delay is
+to increase the time required to regenerate replicas even when n is relatively small. The delay
+can be tuned appropriately for larger n. Finally, it takes in a seed σ which it uses as a salt for
+a collision-resistant hash function H :{0, 1}md→{ 0, 1}m.
+DAGEnc(⃗ x,m,n,σ){
+for i = 1 to n:
+(v1,...,v d)← Parents(i)
+ki←H(σ||cv1||···|| cvd)
+ci← Enc(ki⊕xi)
+e← (c1,...,c n)
+return e}
+Construction ofGZZ [𝓁] Similar to GSDE , the graphGZZ [𝓁] contains a copy of an (n, 0.80n,βn )-
+depth-robust graph for some constantβ in each of the𝓁 layersV1,...,V 𝓁. The nodes in each layer
+are indexed in [ n]. Every odd layer overlays the edges of the DRG in the forward direction
+(edges go from lower to higher indices) while every even layer the edges of the DRG in the re-
+verse direction (edges go from higher indices to lower indices). Note that the even layer graphs
+31
+
+are not necessarily the reverse 7 of the odd layer graphs. They are constructed by reversing the
+numbering of the nodes.
+Edges are added between same index nodes in adjacent layers (i.e. the ith node in layer Vk
+is connected to the ith node in layer Vk+1 for all i,k ). Next, the edges that were between layers
+inGSDE [𝓁] are projected into each layer of GZZ [𝓁] with the direction of each edge determined
+by the parity of the layer. We call these expander edges to distinguish8 them from other edges.
+More precisely, if GSDE [𝓁] has an edge from the ith node of a layer Vk to the jth node of layer
+Vk+1 then GZZ [𝓁] has an edge between the ith node of Vk+1 and the jth node of Vk+1. The
+direction of the edges added to Vk+1 is from lower indices to higher indices when k + 1 is odd,
+and from higher indices to lower indices when k + 1 is even. (For concreteness in the analysis,
+the edges between layers in the reference graph GSDE are assumed to be constructed using the
+degree 8 Chung random bipartite graph construction).
+PoRep Replicate The ZigZag PoRep construction uses GZZ [𝓁] to uniquely encode an input
+data ﬁle D. The PoRep.Replicate algorithm derives the replica encoding of D with data tag τD
+and unique identiﬁer id as a labeling of the ﬁnal layer V𝓁. PoRep construction iterates over all
+the layers from i = 1 to i = 𝓁. The labels on the ith layer re-encode the labels on the i− 1st
+layer using the basic DAGEncode scheme on the subgraph ( Vi,Ei) (where Ei are the edges of
+GZZ [𝓁] within the layer Vi). Each ith label e(j)
+i in layer Vj encodes the label e(j−1)
+i using key
+ki,j =H(τD||cparents(i,j )) where cparents(i,j ) are the labels on all the nodes with directed edges
+to the ith node in Vj. The encoding e(j)
+i is then Enc(ki,j⊕e(j−1)
+i ) (where e.g. Enc is a veriﬁable
+delay encoding). Note that the encoding of the next layer can be computed just using a buﬀer
+of size n blocks because the new encodings of the blocks are derived in reverse topological order
+(i.e. the topological order of the next layer) and once a label is replaced with its fresh encoding
+it is no longer needed. The ﬁnal replica R consists of the encodingse(𝓁)
+1 ,...,e (𝓁)
+n on the ﬁnal layer.
+PoRep “oﬄine” proof The compact output aux of PoRep.Replicate is nearly the same as
+the PoS oﬄine proof in the Initialization of the stacked DRG PoS. First a vector commitment
+Φ to all the labels in all layers is derived. Chal samples λi uniform random challenge labels in
+each layerVi and provides their parent labels and inclusion proofs of all these labels in a vector
+commitment Φ. However, the one diﬀerence is that aux also includes for each challenged label
+in Vi the inclusion proof of the label it encodes in Vi−1. The veriﬁcation of this proof obtains
+the decoded label in Vi−1 by ﬁrst deriving the keys from the parent labels provided and then
+using Dec to decode each challenge label. For the challenges on layer V1 the inclusion proofs of
+the encoded data inputs are with respect to τD.
+PoReP Prove and Verify Likewise, the basis for the online proofs output by PoRep.Proof in
+the challenge-response protocol is also the Execution challenge-response protocol of the stacked
+DRG PoS. There are two variants. The ﬁrst is exactly the same, containing the labels of κ
+7The reverse of a graph is a graph on the same nodes with the direction of all edges reversed. While this would
+still work conceptually for our construction it might not be locally navigatable. If the edges are sampled pseudo-
+randomly using a random oracle then evaluating the inverse DRG.Parents function would be a linear operation.
+For eﬃciency, it would be necessary to separately store a table deﬁning all the edges of the graph.
+8The distinction between expander edges and all other edges is important in the analysis. In particular, the
+expander edges are between the same index nodes in every layer and diﬀer only in their directionality.
+32
+
+randomly sampled nodes on the ﬁnal layerV𝓁 and their inclusion proofs in the vector commitment
+Φ in aux. The second variant includes in response to a challenge on the ith index of V𝓁 the ith
+keys in each layer for a total of κ𝓁 keys. This enables the PoRep.Verify to check that each
+challenged label correctly encodes a committed data input. It also requires the prover to run
+PoRep.Extract to generate each proof. The second variant is more expensive (larger proves and
+longer proving time), but achieves tighter security for the same parameters.
+PoRep Extraction PoRep.Extract does the reverse operation of PoRep.Replicate on the replica
+R, consisting of the n block labels in V𝓁. Once the labels on layer Vj have been computed and
+stored in memory, then each keyki,j =H(τD||cparents(i,j )) can be computed and then each label
+e(j)
+i is replaced with e(j−1)
+i = Dec(ki,j⊕e(j)
+i ). The keys ki,j can be computed in parallel. If they
+are stored in a buﬀer in memory then all the labels can be decoded in parallel as well. There is a
+smooth tradeoﬀ between the additional space required and the parallel time speedup. With an
+additional buﬀer of k blocks the labels can decoded in reverse topological order in parallelized
+groups ofk≤n blocks at a time achieving a factor k parallel speedup. Moreover, the extraction
+is already faster than replication due to asymmetry in the runtime of Dec vs Enc.
+PoRep Security A PoRep construction is secure if it satisﬁes ϵ-rational replication (Sec-
+tion 2.3). It was shown (Lemma 2, [19]) that this security deﬁnition is satisﬁed 9 if the PoRep
+is both a PoS and a PoRC. Roughly, the PoRep achieves ϵ-rational replication (with soundness
+error µ) if it is a PoS with a 1 −ϵ +δ space gap and it is a PoRC that a 1 −δ fraction of the
+committed data and corresponding replica blocks are retrievable (both with soundness error µ).
+While both variants can be tuned to a µ-sound (1−δ)-PoRC (Section ??) for any µ and δ,
+i.e. a 1−δ fraction of the committed data inputs are retrievable from any prover passing with
+probability µ, the second variant is tighter (i.e. achieves smaller δ keeping other parameters
+equal). In the ﬁrst variant there is a factor 𝓁 union bound loss because although the proof in
+aux ensures there are a bounded number of errors (i.e. incorrectly encoded labels) in each layer,
+if just one label on the ith index in one of the layers is incorrect the ith block of the replica
+may no longer encode di. Here we do not care about the correctness of the keys only how many
+blocks of D can be successfully decoded from R.
+Our analysis will focus on proving that the ZigZag PoRep, similar to the stacked DRG PoS,
+is an arbitrarily tight PoS with only 𝓁 =O(log(1/ϵ) layers.
+4.2 Invertible pebbling games
+The red-black pebbling game no longer entirely captures the PoS security of the ZigZag PoRep
+due to the involvement of the encoding scheme ( Enc, Dec) in the labeling rather than purely
+a collision-resistant hash function. Most signiﬁcantly, the labels are now invertible. In terms
+of the dependency graph of the labeling computation, the keys in each layer Vi still need to
+be computed in topological order, however the labels may either be derived by decoding labels
+in layer Vi+1 or encoding labels in layer Vi−1. We modify the black pebbling game to capture
+invertibility of labels by coloring edges.
+9Technically this security reduction requires a “knowledge of compression” assumption in order to remain true
+under composition with other storage protocols.
+33
+
+White & green colored edges White edges are “one-way streets” corresponding to edge
+dependencies involved in deriving keys via calls to the random oracle and are treated like normal
+pebbling game edges. Green edges are “two-way street”, but still have a direction and diﬀerent
+rules in either direction. If there is a directed green edge from u tov then a pebble can be placed
+on v if and only if u and all nodes with white edges to v have pebbles. A pebble can be placed
+on u if and only if v and all nodes with white edges to v have pebbles.
+PoS soundness We still analyze the soundness of a PoS with invertible labels through the
+game Red-Black-Pebbles as in Deﬁnition 1, however with the modiﬁcation that the adversary
+plays the black pebbling game with white/green edges as described above instead of the plain
+black pebbling game. Unfortunately, it is no longer clear that soundness under this security
+deﬁnition is equivalent to soundness of the underlying labeling game in the random oracle
+model. Pietrzak [33] proved this equivalence only for parallel soundness of the standard red-
+black pebbling game and the random-oracle labeling game. If Enc/Dec are modeled as random
+permutations then it seems reasonable that a similar equivalence could be proven in the ideal
+cipher model, where a prover who uses too little space could either compress a random ora-
+cle’s function table (used to derive keys) or a random permutation’s function table. However,
+exploring the details of this analysis further is beyond the scope of this paper.
+Labeling games with VDEs If Enc/Dec are instantiated with a VDE scheme in order to
+slow down the adversary on smaller graphs then this also subtly changes the pebbling analysis.
+Queries to the VDE are signiﬁcantly more expensive than queries to H so they cannot be
+treated equally as pebbling moves. However, as remarked in [19], without loss of generality one
+can assume a parallel adversary always queries the VDE to derive a label whenever both the
+data/label input and key are available. Therefore, we can model the VDE and hash function
+queries as a single pebbling move that can be made only when there are labels on all the
+dependencies, including the input label and all the labels required for the key derivation.
+4.3 PoS analysis of ZigZag PoRep
+Our analysis follows the same general outline as the PoS analysis for the stacked DRG PoS on
+GSDR[𝓁]. Here we analyze the hardness of the modiﬁed gameRed-Black-PebblesA(GZZ [𝓁],V𝓁, Chal)
+using green/white edges, or equivalently the soundness of the PoS in this model. The directed
+edges within every layerVi are white, whereas the directed edges between the same index nodes
+in adjacent layers are green. (There are no other directed edges between layers).
+As before, the bulk of the analysis involves showing that pebbling the entire last level V𝓁
+(i.e. all unpebbled nodes) from an initial conﬁguration of only (1−ϵ)n black pebbles overall and
+a bounded number δin of red pebbles in each level requires pebbling (in topological order) an
+entire 80% unpebbled subgraph in some layer. Pebbling 80% of this subgraph in topological order
+requires βn parallel rounds due to the depth robustness of each layer. Using the same notation
+as before, this means thatGZZ [𝓁] is (γn,⃗δ,βn−1, 1)-hard. The proof that this translates to PoS
+soundness needs to be updated as well because Claim 4 did a case-by-case analysis using the
+expansion properties ofGSDR[𝓁]. Claim 2 and Claim B are not aﬀected by the new white/green
+edge rules and the structural diﬀerences betweenGSDR[𝓁] andGZZ [𝓁] (the only relevant structural
+property used in these claims is that these graphs are layered).
+34
+
+Index sets and nodes We associate nodes in any layer with indices in [ n] and say that an
+index “is unpebbled in Vi” if the node at that index in Vi is initially unpebbled (including
+black and red pebbles). We use the same notations in Notation 1 (Section 3) to denote the Ui
+unpebbled index sets and Pi pebbled index sets in each layer, with ρi, δi, and γi deﬁned the
+same.
+Forward dependencies Bounding the parallel complexity of pebbling a set of nodes inGZZ [𝓁]
+is no longer as simple as tracing unpebbled directed paths in the graph due to the fact that
+pebbling moves can occur in either the “forward” or “reverse” directions. The direction in
+which a dependency is pebbled is important to pebbling complexity. For instance, suppose all
+nodes in V2 except the nth node (call it vn) were pebbled and no pebbles were placed in V1.
+The parallel complexity of completing V2 is just 3 rounds in this case: all the dependencies of
+the nth node un could be pebbled in the ﬁrst round, un could be pebbled in the second round,
+and ﬁnally vn in the third. On the other hand, if there were pebbles on the ﬁrst n− 1 nodes of
+V1 then the complexity would be n rounds because all the nodes in V2 must be pebbled in the
+forward direction before vn. Our analysis will focus on identifying dependencies that must be
+pebbled in the forward direction, which we call forward dependencies. The following claim gives
+a helpful strategy for tracing forward dependencies in GZZ [𝓁].
+Claim 8. LetX be a set of unpebbled nodes inV𝓁 ofGZZ [𝓁]. Form the set Y as follows. Initialize
+Y := X. Iterate over the layers starting from V𝓁−1. In each layer Vi add a node to Y if it is
+unpebbled and has a green edge to a node in Y∩Vi+1 (i.e the same index node in Vi+1 is in Y ).
+Additionally, add to Y any unpebbled node in Vi that has a two-hop directed path to Y∩Vi+1
+via an expander white edge followed by a green edge. All nodes in Y are unpebbled forward
+dependencies of X.
+Proof. The proof is by ﬁnite strong induction on the nodes added in levels 𝓁 to i. In the base
+case Y just consists of X in V𝓁 and the statement is vacuously true (all nodes in X must be
+pebbled in the forward direction). Now assume that all nodes added to Y in layers V𝓁,...,V i+1
+are forward dependencies of X. If an unpebbled node u∈ Vi has a green edge to a node v in
+Y then u must be pebbled before v because by hypothesis v must be pebbled in the forward
+direction. Clearly, u must also be pebbled in the forward direction (otherwisev must be pebbled
+before u). This makes u a forward dependency of X. Next consider any unpebbled u′∈Vi with
+a white directed expander edge to u. This is a dependency of u and therefore a dependency
+of X. The node u′ also has a green edge the same index node v′ in Vi+1. Since the expander
+edges are the same in each layer with alternating directions there is a directed white edge from
+v to v′ and so v must have a pebble before u′ can be pebbled in the reverse direction via v′.
+This cannot happen because u′ is a dependency of v. Hence, u′ must be pebbled in the forward
+direction. We have shown that both u′ and u are forward dependencies of X.
+The following lemma provides lower bounds on the dependency expansion of subsets in any
+given layer and is the main fact needed for the remaining analysis.
+Lemma 6. For any α∈ (0, 1) and i∈ [𝓁] and a set X of αn unpebbled nodes in layer Vi of
+GZZ [𝓁], if α−ρi−1−ρi−2≤ 1/3 then X has at least (2(α−ρi−1−ρi−2)−δi−1−δi−2)n forward
+dependencies in layer Vi−2. Otherwise, X has at least (0.12 +α−ρi−1−ρi−2−δi−1−δi−2)n
+forward dependencies in Vi−2.
+35
+
+Proof. Fixing any given subset S of Vi of size αn, we deﬁne the following index sets:
+• X =S∩Ui is the index set of the αn unpebbled nodes contained in this subset of Vi.
+• X′ =X∩Ui−1 is the index subset of X that is unpebbled in Vi−1
+• X′′ =X′∩Ui−2 is the index subset of X′ that is unpebbled in Vi−2.
+• Γout(X′) are the indices of nodes on the boundary of X′ in Vi with edges from X′. Γ out(X′)
+is disjoint from X′ as it does not include nodes in X′ with internal edges to X′. Γ out(X′′) is
+deﬁned the same way for the set X′′.
+• Γin(X′) are the indices of nodes on the boundary of X′′ in Vi with edges to X′. Γ in(X′′) is
+deﬁned the same.
+We partition the (ρi−1 +δ)n pebbles on Vi−1 as follows:
+pT
+i−1n =|Pi−1∩ Γin(X′)| pD
+i−1n =|Pi−1∩ Γout(X′)| pi−1n (the remaining pebbles)
+Likewise, we partion the (ρi−2 +δ)n pebbles on Vi−2 into:
+pD
+i−2n =|Pi−2∩ Γin(X′′)| pT
+i−2 =|Pi−2∩ Γout(X′′)| pi−2n (the remaining pebbles)
+Deﬁne the index setZ =X′′∪(Γout(X′)∩Ui−1∩Ui−2)∪(Γout(X′′)∩Ui−2). X′′ are unpebbled
+nodes connected to X via green edges. Γ out(X′)∩Ui−1 are unpebbled direct dependencies of
+X′ inVi−2 due to reversal of edges, and Γ out(X′)∩Ui−1∩Ui−1 are connected to these via green
+edges. Γ in(X′) are targets ofX′ inVi−2 and Γin(X′)∩Ui−2 are unpebbled direct dependencies of
+X′′. Thus, by Claim 8, all nodes at the indices Z inVi−2 are all unpebbled forward dependencies
+of X.
+Finally, recall from Claim that Γin(X′′)∪Γout(X′′)∪X′′ = Γ(X′′)∪X′′ inherits the expansion
+of the bipartite expander used in the construction. Since |X′′| = α′′≥ α−ρi−1−ρi−2, in the
+case that α−ρi−1−ρi−2≤ 1/3 then|Γout(X′′)∪X′′|≥ 2|α−ρi−1−ρi−2| with overwhelming
+probability, assuming the expander construction uses Chung’s degree 8 bipartite expanders (by
+Corollary 1, Section 2.7). Thus:
+|Z|≥| X′′| + (|Γout(X′)|− pD
+i−1n−pT
+i−2n) + (|Γin(X′′)|− pD
+i−2n
+≥|X′′| +|Γout(X′′)| +|Γin(X′′)|− pD
+i−1n−pT
+i−2n−pD
+i−2n
+≥ (2(α−pi−1−pi−2)−pD
+i−1−pT
+i−2−pD
+i−2)n
+≥ (2(α−ρi−1−ρi−2)−δi−1−δi−2)n
+In the case thatα−ρi−1−ρi−2≥ 1/3 then|X′′|∈ (0.33, 0.80) and Γ(X′′)≥ 0.12 (by Claim 2,
+Section 2.7).
+|Z|≥| X′′| +|Γ(X′′)|− (pD
+i−1 +pT
+i−2 +pD
+i−2)n
+≥ (0.12 +α−pi−1−pD
+i−1−pi−2−pT
+i−2−pD
+i−2)n
+≥ (0.12 +α−ρi−1−ρi−2−δi−1−δi−2)n
+36
+
+Theorem 4. The labeling PoS onGZZ [𝓁] with Chal samplingλ/δ challenges in each level Vi and
+κ online challenges in V𝓁 is ((1−ϵ−2δ)n,βn−1,e−λ)-sound with κ = 2λ/ϵ,δ <min(0.01,ϵ/ 3),
+ϵ + 2δ≤ 0.24, and 𝓁 = 2 log2( 1
+3(ϵ−3δ)) + 18.
+Proof. For anyGSDR[𝓁], if the set of unpebbled nodes in V𝓁 are connected via unpebbled paths
+to at least 0.80n unpebbled forward dependencies in some prior level Vi, then pebbling all of V𝓁
+requires pebbling all these 0 .80n unpebbled nodes in topological order, which requires βn− 1
+rounds due to the fact that Vi is (n, 0.80n,βn ) depth robust. Claim 11 thus implies that GZZ [𝓁]
+is (1−ϵ,⃗δ,βn−1, 1)-hard whereδi =δ <ϵ/3 for alli and𝓁 = 2 log2( 1
+3(ϵ−3δ))+16 when δ <0.01.
+Assumingϵ+ 2δ≤ 0.24, Claim 9 implies thatGZZ [𝓁+ 2] is (1−ϵ−2δ,⃗δ,βn−1, 1−ϵ/2)-hard
+extending ⃗δ so that δ𝓁+1 = δ𝓁 = δ. Finally, by Claim 2 the labeling PoS on GZZ [𝓁 + 1] with
+challenge setV𝓁 and Chal samplingλ in each levelVi is ((1−ϵ− 2δ)n,βn− 1,max{(1−δ)λ, (1−
+ϵ/2)κ})-sound. When λi =λ/δ and κ = 2λ/ϵ, the PoS is ((1−ϵ)n,βn− 1,e−λ)-sound.
+The next claim proves the same result as Claim 4 but for the graph GZZ [𝓁].
+Claim 9. For any ϵ + 2δ≤ 0.24, if GZZ [𝓁− 2] is (1−ϵ + 2δ,⃗δ,t− 2, 1)-hard then GZZ [𝓁] is
+(1−ϵ,⃗δ∗,min (βn− 1,t ), 1−ϵ/2)-hard where ⃗δ∗ is identical to ⃗ von all common indices and
+δ =δ𝓁 =δ𝓁−1 =δ𝓁−2≤ϵ/2.
+Proof. Letγ = 1−ϵ denote the black pebbled initially placed on GSDR[𝓁]. As noted in Claim 4,
+every subset of V𝓁 of size (1−ϵ/2)n contains at least (α𝓁−ϵ/2)n unpebbled nodes. Without
+loss of generality we assume α𝓁−ϵ/2≤ 0.80 (otherwise these nodes already require βn rounds
+to pebble).
+Fixing any given subset S ofV𝓁 of size (1−ϵ/2)n, let X =S∩U𝓁, the unpebbled set among
+the nodes at indices S in V𝓁. We will show that X requires more than min(βt,t ) rounds to
+pebble given the hypothesis that GZ[𝓁− 2] is (1−ϵ + 2δ,⃗δ,t− 2, 1)-hard. Since this holds for
+any choice of S this shows thatGZZ [𝓁] is (1−ϵ,⃗δ∗,min (βn− 1,t ), 1−ϵ/2)-hard.
+As noted,|X|≥ (α𝓁−ϵ/2)n. Let α∗ =α𝓁−ϵ/2−ρ𝓁−1−ρ𝓁−2. The proof is broken into two
+cases:
+Case α∗≤ 1/3: Let Z denote the unpebbled forward dependencies of X inside V𝓁−2. From
+Lemma 6 we know that |Z|≥ (2α∗−δ)n. Thus:
+|Z|≥ 2(α𝓁−ρ𝓁−1−ρ𝓁−2−δ)n−ϵn = (2(1−ρ𝓁−ρ𝓁−1−ρ𝓁−2− 2δ)−ϵ)n
+Let|Z|/n =α′. Using the identity γ𝓁−2 =γ−ρ𝓁−ρ𝓁−1−ρ𝓁−2 gives:
+α′−γ𝓁−2≥ 2(1− 2δ)−ρ𝓁−ρ𝓁−1−ρ𝓁−2−γ−ϵ≥ 2(1−γ− 2δ)−ϵ =ϵ− 4δ
+Settingγ′ = 1−ϵ + 2δ, the above relation shows that α′−γ𝓁−2≥ 1−γ′− 2δ. Thus, by Claim B,
+ifGZZ [𝓁− 2] is (γ′,⃗δ,t− 2, 1)-hard then no adversary can pebble Z in t− 2 or fewer rounds.
+Since these are forward dependencies of X at least t rounds are required to pebbled X.
+Case α∗ > 1/3 : In this case Lemma 6 showed that |Z|≥ (0.12− 2δ +α−ρ𝓁−1−ρ𝓁−2)n.
+Noting that α≥α𝓁−ϵ/2 and γ𝓁−2 =γ−ρ𝓁−ρ𝓁−1−ρ𝓁−2 and 1−ρ𝓁−δ =α𝓁 we derive:
+α′−γ𝓁−2≥ 0.12− 2δ +α𝓁−ϵ/2 +ρ𝓁−γ = 0.12− 2δ + 1−γ−δ−ϵ/2 = 0.12− 3δ +ϵ/2
+37
+
+Given thatGZZ [𝓁− 2] is (γ′,⃗δ,t− 2, 1)-hard with γ′ = 1−ϵ + 2δ no adversary can pebble Z
+in t− 2 rounds as long as 0.12 +ϵ/2− 3δ≥ϵ− 2δ, which is true for ϵ + 2δ≤ 0.24.
+The remaining claims complete the analysis by showing that GZZ [𝓁] is ( γn,⃗δ,βn − 1, 1)-
+hard. These claims follow Claim 5, Claim 6, and Claim 6 very closely, substituting the new
+dependency expansion relations proved in Lemma 6. We assume the reader is familiar with the
+proofs of these prior claims and we will not repeat all the details.
+Claim 10. IfGZZ [𝓁] for 𝓁 = log 2( 1
+3(ϵ−3δ)) initially has at most γn black pebbles for γ≤ 1−ϵ
+and at most δ <ϵ/3 red pebbles in each layer then the unpebbled nodes U𝓁 in V𝓁 have least n/3
+unpebbled forward dependencies in some layer Vi. Moreover, αi−ρi−1−ρi−2≥ 1/3.
+Proof. Letαi denote the fraction of nodes in Vi that are unpebbled forward dependencies of U𝓁
+with α𝓁n =|U𝓁|. Suppose α𝓁−i−ρ𝓁−i−1−ρ𝓁−i−2≤ 1/3 for i = 0 to 2k. By Lemma 6, αj−2≥
+2(αj−ρj−1−ρj−2−δ). We prove by induction thatα𝓁−2k≥ 2kα𝓁−2k(ρ𝓁−1 +ρ𝓁−2)−(2k+1−2)δ.
+The base case k = 0 is trivial. Assuming this holds for k, then:
+α𝓁−2(k+1)≥ 2(α𝓁−k−ρ𝓁−2k−1−ρ𝓁−2k−2−δ)
+≥ 2(2kα𝓁− 2k(ρ𝓁−1 +ρ𝓁−2)−ρ𝓁−2k−1−ρ𝓁−2k−2− (2k+1− 2)δ−δ
+≥ 2(2kα𝓁− 2k(ρ𝓁−1 +ρ𝓁−2)− (2k+1− 1)δ)≥ 2k+1α𝓁− 2k+1(ρ𝓁−1 +ρ𝓁−2)− (2k+2− 2)δ
+We used the fact that whenk> 0 the expression 2k(ρ𝓁−1+ρ𝓁−2)−ρ𝓁−2k−1−ρ𝓁−2k−2 is maximized
+when ρ𝓁−1 +ρ𝓁−2 =γ𝓁 and ρ𝓁−i = 0 for all i> 2.
+This shows that α𝓁−2k≥ 2kα𝓁− 2kγ𝓁− 2k+1δ. Substituting γ𝓁 =γ +α𝓁− 1 +δ≤α𝓁 +δ−ϵ
+gives:
+α𝓁−2k≥ 2kα𝓁− 2k(α𝓁 +δ−ϵ)− 2k+1δ = 2k(ϵ− 3δ)
+Therefore, αi−ρi−1−ρi−2≥ 1/3 at some index i>𝓁 − log2( 1
+3(ϵ−3δ)).
+Claim 11. IfGZZ [𝓁] with 𝓁 = 2 log2( 1
+3(ϵ−2δ)) + 20.80−ϵ+δ
+0.12−2δ initially has at most γn black pebbles
+for γ≤ 1−ϵ and at most δ <min(0.06,ϵ/ 3) red pebbles in each layer then the unpebbled nodes
+in V𝓁 have at least 0.80n unpebbled forward dependencies in some layer Vi.
+Proof. From Claim 10 there exists an index i where Vi contains more than n/3 forward depen-
+dencies of U𝓁. We break our analysis into two cases depending on the initial size of U𝓁. First,
+there are two important subclaims:
+Subclaim 1: αi−γi≥ϵ−δ for all i.
+This is true for the base case α𝓁−γ𝓁≥ 1−ρ𝓁−δ− (γ−ρ𝓁)≥ ϵ−δ. Now suppose that
+αi−γi≥ϵ−δ andϵ> 4δ. By the analysis in Lemma 6 and the identity γi−2 =γi−ρi−1−ρi−2
+we get that αi−2−γi−2≥| Γ(X′′)|− 2δ +αi−γi≥| Γ(X′′)| +ϵ− 3δ where X′′ was a set of size
+at least αi−γi− 2δ≥ ϵ− 3δ≥ δ. Thus, αi−2−γi−2≥ ϵ−δ as long as Γ(X′′)≥ 2δ. As long
+as δ <0.06, then either |X′′| < 0.10 and is at least 3-expanding (see Table 2.2, Lemma 2) so
+|Γ(X′′)|≥ 2|X′′|≥ 2δ, or otherwise|X′′|∈ (0.10, 0.80) and Γ(|X′′|)≥ 0.12 (Corollary 2).
+38
+
+Subclaim 2: If αi−ρi−1−ρi−2> 1/3 then αi−k−ρi−k−1−ρi−k−2≥ 0.12 for all k.
+This is true for the base case αi by hypothesis. For the inductive step, suppose that αi−k−
+ρi−k−1−ρi−k−2∈ (0.12, 0.80). By the analysis in Lemma 6 and Corollary 2, αi−k−2≥ 0.12−
+2δ +αi−γi. Putting this together with αi−k−γi−k >ϵ −δ from Subclaim 1 above shows:
+αi−k−2−ρi−k−3−ρi−k−4≥ 0.12− 2δ +αi−k−ρi−k−1−ρi−k−2−ρi−k−3−ρi−k−4
+≥ 0.12− 2δ +αi−k−γi−k≥ 0.12 +ϵ− 3δ
+Thus, the inductive step holds true as long as ϵ> 3δ.
+Now we proceed with the two cases. Let α∗ =α𝓁−ρ𝓁−1−ρ𝓁−2.
+Caseα∗≥ 1/3: It follows from Subclaim 1, Subclaim 2 and Lemma 6 that α𝓁−2k≥k(0.12−
+2δ) +α𝓁−γ𝓁≥ k(0.12− 2δ) +ϵ−δ. Therefore α𝓁−2k≥ 0.80 for k≥ 0.80−ϵ+δ
+0.12−2δ (e.g. k = 8 for
+δ≤ 0.01).
+Case α∗ < 1/3: By Claim 10 there exists an index i ≥ 𝓁− 2 log2( 1
+3(ϵ−3δ)) where αi−
+ρi−1−ρi−2≥ 1/3. Then just as in the previous case, Subclaim 1 and Subclaim 2 imply that
+αi−2k≥ 0.80 for k≥ 0.80/(0.12− 2δ). Therefore, setting:
+𝓁 = 2 log2( 1
+3(ϵ− 3δ)) + 20.80−ϵ +δ
+0.12− 2δ
+there is some index i whereαi≥ 0.80. In particular, for δ≤ 0.01, the number of required levels
+is at most 2 log 2( 1
+3(ϵ−3δ)) + 16.
+Acknowledgments
+Dan Boneh and Nicola Greco contributed to this work through helpful comments and conversa-
+tions. Nicola and Juan Benet came up with the name “ZigZag PoRep”.
+References
+[1] Proof of replication. Protocol Labs, 2017. https://filecoin.io/proof-of-replication.
+pdf.
+[2] Hamza Abusalah, Jo¨ el Alwen, Bram Cohen, Danylo Khilko, Krzysztof Pietrzak, and Leonid
+Reyzin. Beyond hellman’s time-memory trade-oﬀs with applications to proofs of space. In
+ASIACRYPT, 2017.
+[3] Martin R. Albrecht, Lorenzo Grassi, Christian Rechberger, Arnab Roy, and Tyge Tiessen.
+Mimc: Eﬃcient encryption and cryptographic hashing with minimal multiplicative com-
+plexity. In ASIACRYPT, pages 191–219, 2016.
+[4] Ralph Phillips Alexander Lubotzky and Peter Sarnak. Ramanujan graphs. In Combinator-
+ica, 1988.
+[5] Jo¨ el Alwen, Jeremiah Blocki, and Benjamin Harsha. Practical graphs for optimal side-
+channel resistant memory-hard functions. In CCS, 2017.
+[6] Jo¨ el Alwen, Jeremiah Blocki, and Krzysztof Pietrzak. Sustained space complexity. In
+EUROCRYPT, 2018.
+39
+
+[7] Giuseppe Ateniese, Ilario Bonacina, Antonio Faonio, and Nicola Galesi. Proofs of space:
+When space is of the essence. In SCN 2014, 2014.
+[8] Giuseppe Ateniese, Randal Burns, Reza Curtmola, Joseph Herring, Lea Kissner, Zachary
+Peterson, and Dawn Song. Provable data possession at untrusted stores. InACM Conference
+on Computer and Communications Security , 2007.
+[9] Leonid Alexandrovich Bassalygo. Asymptotically optimal switching circuits. In Problemy
+Peredachi Informatsii, 1981.
+[10] Eli Ben-Sasson, Alessandro Chiesa, and Nicholas Spooner. Interactive oracle proofs. In
+Theory of Cryptography, 2016.
+[11] Dan Boneh, Joseph Bonneau, Benedikt Bunz, and Ben Fisch. Veriﬁable delay functions.
+2018. To appear in CRYPTO 2018.
+[12] Kevin D. Bowers, Ari Juels, and Alina Oprea. Proofs of retrievability: theory and im-
+plementation. In CCSW’09 Proceedings of the 2009 ACM workshop on Cloud computing
+security), 2009.
+[13] Dario Catalano and Dario Fiore. Vector commitments and their applications. In PKC 2013,
+2013.
+[14] Ethan Cecchetti, Ian Miers, and Ari Juels. Pies: Public incompressible encodings for de-
+centralized storage. Cryptology ePrint Archive, Report 2018/684, 2018. https://eprint.
+iacr.org/2018/684.
+[15] F.R.K. Chung. On concentrators, superconcentrators, generalizers, and nonblocking net-
+works. In Bell System Technical Journal , 1979.
+[16] Moni Naor Cynthia Dwork and Hoeteck Wee. Pebbling and proofs of work. In CRYPTO,
+2005.
+[17] Yevgeniy Dodis, Salil Vadhan, and Daniel Wichs. Proofs of retrievability via hardness
+ampliﬁcation. In Theory of Cryptography Conference (TCC) , 2009.
+[18] Stefan Dziembowski, Sebastian Faust, Vladimir Kolmogorov, and Krzysztof Pietrzak.
+Proofs of space. In CRYPTO, 2015.
+[19] Ben Fisch. Poreps: Proofs of space on useful data. Cryptology ePrint Archive, Report
+2018/678, 2018. https://eprint.iacr.org/2018/678.
+[20] Ben Fisch, Joseph Bonneau, Juan Benet, and Nicola Greco. Proofs of replication using
+depth robust graphs. In Blockchain Protocol Analysis and Security Engineering 2018, 2018.
+https://cyber.stanford.edu/bpase2018.
+[21] Antonio Faonio Giuseppe Ateniese, Ilario Bonacina and Nicola Galesi. Proofs of space:
+when space is of the essence. In Security and Cryptography for Networks, 2014. , 2014.
+[22] Dan Boneh Henry Corrigan-Gibbs and Stuart Schechter. Balloon hashing: a provably
+memory-hard function with a data-independent access pattern. In Asiacrypt, 2016.
+[23] Ari Juels and Burton S Kaliski Jr. Pors: Proofs of retrievability for large ﬁles. In Proceedings
+of the 14th ACM conference on Computer and communications security , pages 584–597.
+Acm, 2007.
+[24] Arjen K Lenstra and Benjamin Wesolowski. A random zoo: sloth, unicorn, and trx. IACR
+Cryptology ePrint Archive, 2015, 2015.
+[25] Sergio Demian Lerner. Proof of unique blockchain storage, 2014. https://bitslog.
+wordpress.com/2014/11/03/proof-of-local-blockchain-storage/ .
+[26] Benoˆ ıt Libert, Somindu C. Ramanna, and Moti Yung. Functional commitment schemes:
+From polynomial commitments to pairing-based from simple assumptions. In ICALP, 2016.
+[27] Benoˆ ıt Libert and Moti Yung. Concise mercurial vector commitments and independent
+40
+
+zero-knowledge sets with short proofs. In TCC, 2010.
+[28] Mohammad Mahmoody, Tal Moran, and Salil P Vadhan. Time-lock puzzles in the random
+oracle model. In CRYPTO. Springer, 2011.
+[29] Silvio Micali. Computationally sound proofs. In SIAM Journal on Computing. , 2000.
+Preliminary version appeared in FOCS 1994.
+[30] Salil Vadhan Omer Reingold and Avi Wigderson. Entropy waves, the zig-zag graph product,
+and new constant-degree expanders and extractors. In FOCS, 2000.
+[31] Sunoo Park, Krzysztof Pietrzak, Albert Kwon, Jo¨ el Alwen, Georg Fuchsbauer, and Peter
+Gai. Spacemint: A cryptocurrency based on proofs of space. Cryptology ePrint Archive,
+Report 2015/528, 2015. http://eprint.iacr.org/2015/528.
+[32] Ronald L. Graham Paul Erd¨ os and Endre Szemeredi. On sparse graphs with dense long
+paths. In Computers & Mathematics with Applications , 1975.
+[33] Krzysztof Pietrzak. Proofs of Catalytic Space. Cryptology ePrint Archive # 2018/194,
+2018.
+[34] Arnold K. Pizer. Ramanujan graphs and hecke operators. In Bull. Amer. Math. Soc. , 1990.
+[35] Ling Ren and Srinivas Devadas. Proof of space from stacked expanders. In TCC, 2016.
+[36] Uwe Sch¨ oning. Better expanders and superconcentrators by kolmogorov complexity. In
+SIROCCO, 1997.
+[37] Hovav Shacham and Brent Waters. Compact proofs of retrievability. In Asiacrypt, 2008.
+[38] R. Michael Tanner. Explicit concentrators from generalized n-gons. In Siam Journal on
+Algebraic and Discrete Methods, 1984.
+[39] Martin Tompa. Time-space tradeoﬀs for computing functions, using connectivity properties
+of their circuits. In STOC, 1978.
+[40] Leslie G. Valiant. Graph-theoretic properties in computational complexity. In Journal of
+Computer and System Sciences , 1976.
+A Concurrent work: PIEs
+Independently and concurrently 10 to our work, Cecchetti et. al. [14] proposed a similar idea to
+our stacked DRGs (using butterﬂy networks instead of expander graphs) to construct what they
+called publicly incompressible encodings (PIEs).
+PIE vs tight PoS A PIE has a similar soundness security deﬁnition to a PoS (c.f. Deﬁnition
+1 in [14] and Page 7 [18] or Deﬁnition 9 [33]). An “ n-encoder” PIE is a special case of a graph
+labeling PoS. An additional correctness requirement of a PIE is that the labeling is decodable
+(exactly like PoReps based on graph labeling, see deﬁnitions in [19,33]). However, the soundness
+of a PIE is weaker than a PoS because the deﬁnition of a PIE assumes that the prover cannot
+cheat in the computation of the encoding. Equivalently, it assumes the veriﬁer knows the
+correct labeling of the graph. A PoS addresses the more general setting that the veriﬁer does
+not know the correct labeling. The authors of PIEs remark that proving to a weaker veriﬁer that
+the labeling was computed correctly is orthogonal, however this tends to be the most critical
+component aﬀecting proof size and thus practicality of the construction. (In fact, to convert
+10A preprint of their paper was ﬁrst made publicly available on same day as a technical report containing
+the constructions described in this work, https://web.stanford.edu/~bfisch/porep_short.pdf, and the full
+version of this paper was submitted to Cryptology ePrint Archive a week later.
+41
+
+the construction they propose using stacked Butterﬂy graphs into a PoS using interactive oracle
+proofs would result in approximately a factor log n larger proof size than the construction we
+propose using stacked expander graphs, or a factor log n larger SNARK proof complexity if
+using SNARKs to compress the proof size). Nonetheless, a PIE combined with a suitable proof
+of correct encoding would result in a tight PoS and PoRep.
+Proof size: Butterﬂy graphs vs expanders The speciﬁc construction of a PIE proposed
+in [14] uses stacked DRGs (exactly like our construction), but connects each adjacent layer
+with a Butterﬂy graph instead of expander edges. Each layer has an n-node (n,α,β )-DRG and
+layers are connected by a Butterﬂy graph, each consisting of (n/2) logn nodes andn logn edges.
+Instantiating the generic graph-labeling PoS or PoRep on this graph also gives a tight PoS
+or PoRep provided that the proof involves suﬃcient queries to bound the number of incorrect
+labels in each layer and Butterﬂy connector to δn. This requires the proof to query ( λ/δ) logn
+labels in each layer/connector, for a total of ( λ/δ)𝓁 logn overall. We prove in Appendix B that
+𝓁 = 1/(1−α) layers is suﬃcient. 11 For concrete comparison, when α = 0.80 and ϵ = 0.01 the
+number of proof queries required for the stacked DRGs with Butterﬂy graphs is proportional to
+5 lognλ/ϵ and with expander graphs it is proportional to 11λ/ϵ. The Butterﬂy graph proofs are
+already a 5× larger for kilobyte size data, and is 15 ×-20× larger for gigabyte or terabyte size
+data.
+Compression-robustness vs proof of space Cecchetti et. al. introduce a deﬁnition called
+compression-robustness and prove that the stacked DRGs with Butterﬂy graph connectors is
+compression-robust. A (1 ,δ )-compression-robust graph is a DAG with n sources, n sinks, bal-
+anced “data” input/output edges on each internal node, and all other edges treated as “key”
+edges such that after removal of fewer than n data edges and all key edges that share an origin
+node with one of these data edges there remains a path ending in a sink that includes at least
+δn key edges. Any DAG with n sources/sinks and balanced data input/output edges in which
+deletion of fewer than n nodes leaves a path of length at least δn (containing δn key edges)
+ending in a sink satisﬁes this property. This is because any path that remains after removing
+these nodes would also remain after removing only outgoing edges of these nodes. In fact, this
+covers many cases, except the case where a node in the path has multiple data outputs and does
+not contribute a key edge to the path.
+Compression-robustness of the underlying encoder graph does not in general imply that
+the graph encoding is a proof of space, or even a PIE, at least not with the same tightness.
+Namely, we can provide a simple counterexample of a (1,δ )-compression-robust graph for which
+the adversary can compress its storage to n− 1 data outputs and still recompute the nth
+data output with fewer than δn sequential rounds of KDF/PRP oracle queries. The reason
+this counterexample exists has to do with the fact that data labels can either be computed
+from upstream labels (predecessors) using KDF/PRP or also decoded from downstream labels
+(successors) using the inverse PRP. This means that a long path in the graph that remains after
+removing data edges (or equivalently unpebbled path after placing pebbles) does not necessarily
+need to be recomputed in topological order and therefore may not require sequential work.
+11While it was proved in [14] that removal of fewer than n edges from the entire graph with 1 /α + 1 layers
+leaves a path of length βn, it was not proven that this missing path is sequentially hard to pebble. Furthermore,
+the analysis did not show that this construction combined with an imperfect proof of correct encoding is a proof
+of space (i.e. when the prover is allowed up to δn errors per level).
+42
+
+Compression-robustness is insuﬃcient for PoS/PIE The counterexample graphG′ starts
+with any (1,δ )-compression-robust graph G on n− 1 sources U and n− 1 sinks V and builds a
+new graph G′ as follows. Add n− 1 new sources, connecting each source to a distinct node in
+U, and n− 1 new sinks, connecting each node of V to a distinct sink. Next add key edges to U
+and V turning each into a complete DAG. Finally, add an nth source u, an nth sink v, and a
+node w that connects u to v via single input/output “data” edges. Add key edges from every
+node inU andV tow. We claim this DAG is (1,min (δ, 1/2))-compression-robust. Consider any
+removal ofn− 1 data edges. If any of these edges include any edge incident on u, w, or v, then
+fewer than n− 1 data edges are removed from G. By construction, this means that G contains
+a path containing at least δn key edges and ending in a sink. Otherwise, no edges incident to
+u, w, or v are removed. Furthermore, fewer than n/2 edges have been removed from either U
+or V , thus one of U or V still contains a path of at least length n/2 (along key edges). The
+endpoint of this path connects via a non-removed key edge to w, which connects to the sink v.
+Therefore, the graph is (1,min (δ, 1/2))-compression-robust. On the other hand, if an adversary
+stores only the data outputs to the ﬁrst n− 1 sinks then it can decode all the labels of G in
+parallel. Once it has computed these labels it can recover the labels on the data outputs of w
+and v in two sequential steps.
+This ﬁrst counterexample showed there exists a (1 ,δ )-compression-robust graph encoding
+that the adversary can “compress” to n− 1 data outputs. We now give another counterexample
+for which the adversary achieves a larger compression factor. Consider two stacked copies of
+G′, a (1,δ )-compression-robust graph on n/2 nodes, connected such that the sinks of the ﬁrst
+copy G′
+1 are the sources of the second copy G′
+2. We then add n/2 new sinks V and sources
+U connected via an intermediary layer of n/2 nodes W so that each u∈ U is connected to
+a unique v ∈ V via a unique intermediary w∈ W . Finally, add key edges from every non
+sink/source nodes in G′′ =G′
+1∪G′
+2 to each node in W . Suppose that k data output edges from
+W to the sinks V are removed, and n−k− 1 data edges from G′′ are removed for a total of
+n− 1 removed edges. If k≥ n/2 then there are fewer than n/2− 1 edges removed from G′′,
+hence there is a path including δn/2 key edges ending in a sink of G′′. Otherwise, if e1 is the
+number of data edges removed from G′
+1 and e2 is the number of data edges removed from G′
+2
+then min(e1,e 2)≤ n/2−k− 1. If e2 is the smaller value then there is a path including δn/2
+key edges ending in a sink of G′′. If e1 is the smaller value, then there are at least k distinct
+paths including δn/2 key edges in G′
+1 ending in k distinct sinks of G′
+1. Although these are not
+sinks of G′′, at least one of these paths connect to a sink in V because every node in G′
+1 whose
+data output has not been removed still has key edges to every node in W . At least one data
+output from some w∈ W to some v∈ V has not been removed because k < n/2, hence the
+path in G′
+1 connects to v. Thus, this graph is (1 ,δ/ 2)-compression robust. On the other hand,
+if the adversary stores only the n/2 data outputs of G′′, then it can decode in 2 𝓁 rounds of
+parallel queries all the data labels in G′′, where 𝓁 is the number of layers inG′, and then recover
+the data outputs to the sinks V in a single additional round of parallel queries. In total this
+requires 2𝓁 + 1 parallel operations, (e.g. O(logn) when G′ is constructed with stacked DRGs
+and Butterﬂy graph connectors).
+In summary, this counterexample demonstrates the existence of ann-encoder graph in which
+removing fewer than n data edges leaves a path along at least δn/2 key edges, yet the PoS/PIE
+adversary can compress its storage of the encoding by at least a factor two (storing only n/2
+data labels) and can recover the entire encoding without doing signiﬁcant sequential work.
+In the following section, we provide a diﬀerent analysis of this construction, which is simpliﬁed
+43
+
+Figure A.1: Illustration of the counterexample graph built from two mock (1 ,δ )-“compression-
+robust” graphs G′
+1 and G′
+2 on n/2 nodes. The result is a (1 ,δ )-“compression-robust” whose
+labeling game is neither a tight PoS nor a PIE. Red edges are key edges and blue edges are data
+edges.
+by using the fact that Butterﬂy graphs are superconcentrators [39,40]. Superconcentrators with
+n nodes and n sinks have the property that any k sinks are connected to any k sources via k
+vertex disjoint paths. In this sense they have similar connectivity properties to extreme bipartite
+expanders. This analysis also accounts for the bounded number of deliberate errors the adversary
+can make in its computation of the graph labels (using a pebbling game analysis).
+B Stacked DRGs with Superconcentrators
+We show that instantiating the generic graph-labeling PoS on stacked DRGs connected between
+layers with superconcentrators instead of bipartite expanders (as in our construction) is also a
+tight PoS. This is a generalization of the construction described in [14]. Stacked superconcen-
+trators (speciﬁcally stacked Butterﬂy graphs) have also been used before in the literature on
+proofs of space [7], just like stacked bipartite expanders [35]. They were also used in the PoS
+construction by Dziembowski et. al. in combination with DRGs [18]. The main diﬀerence here
+is how the DRGs and superconcentrators are interleaved, achieving a tighter PoS, and also how
+they are used to encode data.
+The proof is quite straightforward and in particular much easier than analyzing the stacked
+DRGs with expanders. An n-superconcentrator is a graph with n sources andn nodes such that
+that any k≤ n sources and k nodes are connected via k vertex disjoint paths. The Butterﬂy
+graph is a special superconcentrator on n logn nodes where all nodes except the sources have
+in-degree two and all except the nodes have out-degree two [39, 40]. More generally, an n-
+superconcentrator is d-balanced if every non-source has in-degree d and every non-node has
+out-degreed. If Vi andVi+1 are connected via a superconcentrator with balanced in-degree and
+out-degree then the graph labeling on Vi+1 can encode the data labels on Vi (similar to the
+ZigZag PoRep). Each node assigns a unique component of its data label to each of its outgoing
+edges, and the label on each node is a PRP of the data inputs associated with each incoming
+44
+
+edge.
+Graph construction and labeling The graph GDRSuper consists of layers V1,...,V 𝓁 where
+eachVi containsn nodes and the edges of a depth robust graph. A layered set of nodes Gi and
+edges Ei connect Vi to Vi+1 such that (Vi∪Gi∪Vi+1,Ei) is a d-balanced n-superconcentrator
+with sources Vi and nodes Vi+1. Note that the edges Ei of the superconcentrator do not include
+any edges internal to Vi or Vi+1. A labeling is then computed such that the label on each node
+ofGi encodes components of the labels on each of its parent nodes and each node of Vi encodes
+components of the labels on each of its parent nodes inGi−1. Every label is broken into d blocks,
+represented as a length d vector. The jth component of a label c is denoted c[j]. Concretely, if
+a node v∈ Gi has d predecessors v1,...,v d and the edge (vj,v ) is the ejth outgoing edge from
+vj, then the label on cv is Enc(cv1[e1],...,c vd[ed]). The label on node v∈ Vi that has parents
+v1,...vd in Gi−1 and parents u1,..,u d′ in Vi is a keyed encoding Enc(kv,cv1[e1],...,c vd[ed]) where
+kv = H(cu1,...,c ud′). This is exactly like ZigZag PoRep which treats labels on parents in the
+previous level as data inputs and all other parent labels as key derivation inputs.
+Pebbling game vs labeling game Placing/storing a pebble on a node v corresponds to
+computing/storing its label cv. A green edge corresponds to a data input and a white edge
+corresponds to a key input. Recall that the rules of the pebble game with white/green edges are
+that a pebble can only be placed on v if there are pebbles on all its immediate parent nodes, or
+alternatively if for each of its children nodes u such that (v,u ) is a green edge there is a pebble
+on u and all nodes with white edges to u.
+When the key derivation uses a random oracle then intuitively the key derivation inputs,
+namely the labels on all the nodes with white edges to v, must be known before the key for v
+can be derived. As noted in our analysis of ZigZag PoRep, when Enc is a PRP (modeled as an
+ideal cipher) then intuitively all the components on the parent labels that are input to cv must
+be known, along with the key, before cv can be even partially computed from these inputs (in
+the forward direction). Additionally cv can be completely decoded only if all the labels on the
+nodes that encode components of cv are known (i.e. nodes with data edges from v). While each
+ith component of cv could be individually decoded from the label on the target of the ith edge
+from v, these components are not useful to derive any new labels that are known.
+This only provides heuristic intuition for why the pebbling game captures the security of the
+labeling game and is not a proof! A formal proof requires an adaptation of Pietrzak’s analysis
+of the random oracle labeling game and black pebbling game to show that any adversary who
+defeats the labeling game in some number of rounds with s bits of storage can be used to
+construct an adversary who defeats the pebbling game in the same number of rounds with
+≈ s/m initial pebbles (m is length of the label), as otherwise it could compress the function
+table of the random oracle and/or ideal cipher.
+Analysis Our ﬁrst two claims establish that for any pebbling strategy using fewer than n
+black pebbles and appropriately bounded red pebbles in each level, a constant fraction of the
+ﬁnal layer of nodes V𝓁 inGSuperDR[𝓁] are endpoints of long paths, i.e. of length at least βn,
+on unpebbled nodes. Furthermore, each node in this long path individually connects via an
+unpebbled path along green (data) edges to an unpebbled node in V𝓁. This detail is important
+for showing that the long path must be pebbled in topological order in the black pebbling game
+with white/green edges.
+45
+
+In rough comparison to the analysis of [14] for the special case of Butterﬂy graphs, our
+Claim 12 encompasses their Theorem 2. Claim 13 matches their Proposition 1, but also takes
+into account the additional red pebbled nodes (i.e corresponding to any incorrectly derived
+labels not caught by the probabilistic proof of correctness). Finally, Claim 14 shows that the
+unpebbled paths identiﬁed in Claim 13 require sequential work to pebble (i.e. they must be
+pebbled in topological order) in the game with white/green edges, where pebbling can occur in
+both forward/reverse directions along green edges (corresponding to encode/decode operations
+respectively). This was not shown in the previous analysis [14].
+Claim 12. LetGSuperDR[𝓁] be the graph described above with 𝓁 = 1
+1−α−δ layers of stacked DRGs
+where each layer is connected by a balancedn-superconcentrator and each DRG is (n,α,β ) depth
+robust. For any ϵ> 0, if (1−ϵ)n black pebbles are initially placed on GDRSuper[𝓁] with at most
+δn additional pebbles on each level Vi∪Gi whereδ <ϵ/2 then there exists an unpebbled path P
+of length at least βn ending in an unpebbled node of V𝓁. Moreover, every node in P individually
+connects via a path on green edges (i.e. data edges) to an unpebbled node in V𝓁.
+Proof. Let ρi denote the number of black pebbles placed on Vi∪Gi. Let Ui denote a set of
+unpebbled nodes in Vi of size ui. Let W be any subset of ui nodes in Vi−1. There are ui
+vertex disjoint paths starting from ui distinct nodes in W , passing through Gi−1, and ending
+in ui distinct nodes in Ui. Since there are at most ρi−1 +δn pebbles on Vi−1∪Gi−1 at least
+ui−ρi−1−δ of these paths do not contain any pebbles. Assuming ui−ρi−1−δ > 0, there
+exists at least one unpebbled path from W toUi starting at a node w∈W . All these paths are
+exclusively along green edges, they do not involve the edges internal to Vi−1 or Vi.
+Form a newW′⊆Vi−1 of the same size by removing w and adding a new w′ fromVi−1\W .
+Repeating the argument shows the existence of another unpebbled path from W′ toUi. Repeat
+the process of removing one of the starting nodes of an unpebbled path fromVi−1 toUi each time
+and adding a new node fromVi−1 that has not yet been included. This iterative process continues
+1−ui times until there are no more fresh nodes to be included, and removes in sequence 1 −ui
+starting nodes of unpebbled paths to Ui. The remaining nodes in the ﬁnal set W′′ contain an
+additionalui−ρi−δn unpebbled vertices with unpebbled paths toUi. Thus, the total number of
+distinct nodes inVi−1 with unpebbled paths toUi is at leastn−ui+ui−ρi−1−δn =n−ρi−1−δn.
+Denote this set by Ui−1 and ui−1 =|Ui−1|. We have shown that ui−1≥n−ρi−1−δn provided
+that ui≥ρi−1−δn.
+Consider U𝓁 to be the set of all unpebbled nodes in V𝓁. For each i < 𝓁, let Ui be the set of
+unpebbled nodes in Vi that are connected via unpebbled paths to the set Ui+1, or equivalently
+by induction they are the set of unpebbled nodes in Vi that are connected to U𝓁 via unpebbled
+paths. We now prove by induction that |Ui| =ui≥n−ρi−δn using the result of our analysis
+above. First, u𝓁 =n−ρ𝓁−δn andρ𝓁≤ (1−ϵ)n−ρ𝓁−1, so u𝓁≥ϵn +ρ𝓁−1−δn. Since ϵ> 2δ by
+hypothesis this also shows u𝓁 >ρ 𝓁−1 +δn. Next, assuming that ui+1≥ρi +δn, it follows that
+ui≥n−ρi−δn as shown above. Therefore ui−ρi−1−δn≥n−ρi−1−ρi− 2δn≥ (ϵ− 2δ)n> 0.
+By induction, every ui≥ρi−1 +δn and ui≥n−ρi−δn.
+Equivalently, we have shown that for all i, ρi≥ n−ui−δn. Suppose that u1,...,u 𝓁 < αn.
+Then∑𝓁
+i=1ρi> (1−α−δ)n𝓁> (1−ϵ)n. This contradicts the hypothesis that∑𝓁
+i=1ρi≤ (1−ϵ)n.
+Therefore, it must be the case that ui≥αn for some i≤𝓁. Each of these ui unpebbled nodes
+in Vi connects via a green edge unpebbled path to U𝓁. Furthermore, among these ui unpebbled
+nodes in Vi there is an unpebbled white edge path of length βn because Vi is (n,α,β ) depth
+46
+
+robust. The endpoint of this path is still in Ui and is thus connected via an unpebbled green
+edge path to U𝓁.
+Claim 13. For any ϵ >0, if (1−ϵ)n black pebbles are initially placed on GDRSuper[𝓁] with at
+most δn additional pebbles on each level Vi∪Gi where δ < ϵ/4, then there are at least ϵn/2
+unpebbled paths of length at least βn ending in ϵn/2 distinct nodes in V𝓁. All nodes along all of
+these paths individually connect via green edge paths to an unpebbled node of V𝓁.
+Proof. By the same reasoning as Claim (Section 3), if for any conﬁguration ofγn black pebbles on
+the graphGSuperDR[𝓁] with δn additional red pebbles in each Vi∪Gi there exists an unpebbled
+path of length t ending in an unpebbled node of V𝓁, then for any conﬁguration of γ′n black
+pebbles placed on nodes outside V𝓁 and δn red in each level, every set U of (1− (γ−γ′)−δ)n
+unpebbled nodes in V𝓁 contains at least one endpoint of a length t unpebbled path. This is
+simply because the remaining nodes in V𝓁\U can be entirely pebbled with (γ−γ′)n black and
+δn red pebbles for a total usage of γn black pebbles overall.
+If (1−ϵ)n black pebbles are placed overall then certainly at most (1−ϵ)n are placed outside
+ofV𝓁. Setting ϵ′ =ϵ/2, and further restrictingδ <ϵn/4, we have already shown in Claim 12 that
+for any conﬁguration of ϵ′n black pebbles with δn red in each level leaves an unpebbled path of
+lengthβn ending inV𝓁. Moreover, all nodes along this path are connected via an unpebbled path
+along green edges toV𝓁. Therefore, equating γ = 1−ϵ/2 andγ′ = 1−ϵ, every set of (1−ϵ/2−δ)n
+unpebbled nodes in V𝓁 contain an endpoint of an unpebbled path of length βn. There are at
+least (1−ϵ−δ)n unpebbled nodes U in V𝓁 for any conﬁguration of the (1 −ϵ)n black pebbles
+and red pebbles, therefore at least ϵn/2 nodes in U are the endpoints of length βn unpebbled
+paths. To see this, consider subsets of U of size (1−ϵ/2−δ)n. Each subset U′⊆ U contains
+the endpoint of a length βn unpebbled path. We iterate the following procedure. Remove one
+of these endpoints from U′ and place it in a list of used nodes, then form a new subset of the
+same size by adding a node in U\U′ that is not in the used list. After ϵ/2 iterations there are
+no more unused nodes and ϵ/2 distinct endpoints have been identiﬁed and added to the list.
+Finally we show that for any unpebbled directed path P inGSuperDR[𝓁] of length t consist-
+ing of nodes that all connect individually via an unpebbled green edge path to a node in V𝓁,
+any pebbling strategy requires at least t rounds to pebble P in the black pebbling game with
+white/green edges.
+Claim 14. Any unpebbled path P in GSuperDR[𝓁] consisting of nodes that each individually
+connect via unpebbled green edge paths to an unpebbled node in V𝓁 requirest rounds to pebble in
+the black pebbling game with white/green edges, where edges between two nodes in some Vi are
+white and all other edges are green.
+Proof. We can break up a pathP into green edge sections and white edge sections. A white edge
+section of a path is a directed path within some Vi, whereas green edge sections pass through
+someGi. We separately claim that white edge sections and green edge sections must be pebbled
+in topological order by any pebbling strategy. Furthermore, if a white edge section in some Vi
+precedes a green edge section that connects Vi and Vi+1 then the white edge section must be
+pebbled in topological order before the green edge section.
+First consider a green edge section Pg⊆ P . Pg is also a segment of an unpebbled green
+edge path to a node in V𝓁 because by hypothesis the endpoint of Pg connects via an unpebbled
+47
+
+green edge path to a node in V𝓁. We now prove by induction that any unpebbled green edge
+path ending in a node in V𝓁 must be pebbled in topological order. This implies that Pg must
+be pebbled in topological order. For the base case, there is only one node (a node in V𝓁), and
+the claim is trivial. Now suppose that any unpebbled directed path of length t− 1 along green
+edges ending in V𝓁 must be pebbled in topological order. Let P′ be a length t unpebbled green
+edge path to V𝓁 starting at a node u. P′ breaks into a path P′′ of length t− 1 starting at v and
+a node u with a directed green edge to v. The only way to pebble v is either by ﬁrst pebbling
+its parents (including u) or by ﬁrst pebbling the targets of all its green edges (assuming it has
+at least one green edge target). If v is in V𝓁 then it doesn’t have any green edge targets, and
+therefore can only be pebbled via its parents. If v is not in V𝓁 then it has a directed edge to
+another vertexw inP′′, hence by hypothesis any strategy must pebble v before w. This implies
+u must be pebbled before v, hence P′ must be be pebbled in topological order. We conclude
+that Pg must be pebbled in topological order.
+Second consider a white edge sectionPw⊆P in someVi that precedes a green edge sectionPg
+connecting Vi to Vi+1. By hypothesis all nodes in this path individually connect via unpebbled
+green edges paths to Vi+1. Consider any node u along the path. We claim that any pebbling
+strategy which pebbles this path does not pebble u via its green edge targets. Since u connects
+via an unpebbled green edge path to V𝓁, at least one of its green edge targets is unpebbled.
+Furthermore, these two nodes are along an unpebbled green edge path ending in V𝓁 and thus
+must be pebbled in topological sequence as already shown. Since each node of Pw cannot be
+pebbled via its green edge targets, they are each pebbled via their parent nodes, which include
+their predecessors in Pw. Therefore Pw must be pebbled in topological order. Finally, as both
+Pw and Pg must be pebbled in topological order and the starting node v of Pg is the ending
+node of Pw, it follows that Pw must be pebbled before Pg.
+C Mixing Data Labels in Stacked DRGs with Expanders
+Cecchetti et. al. introduced a very nice idea, which is to split data across over multiple output
+edges, eﬀectively mixing the data encoded by diﬀerent labels and not just the key derivation
+dependencies. This works as long as the non sink/source nodes have balanced in-degree and
+out-degree (for data edges). Our stacked construction with bipartite expanders naturally has
+balanced in-degree and out-degree for edges crossing between layers since Chung’s randomized
+construction is a d-regular bipartite expander. Thus, with degree 8 expanders we can break up
+the labels into 8 components on every node that are each propagated along a diﬀerent output
+edge, just as in the construction using d-balanced n-superconcentrator connectors. This turns
+the Stacked-DRG PoS into a PoRep that admits parallelized decoding. The advantage over
+ZigZag PoRep is the number of layers in the stacked DRGs with bipartite expanders, for which
+we were able to give a tighter bound (by roughly a factor of two). Even the buﬀer size used for
+the encoding need not exceed the ﬁle size. The data components along all input edges to a node
+on the next level are consumed all at once and space can be freed for the data components of the
+newly computed label. The locality of data writes is not preserved and tracking the locations of
+stored data label components is more complex, as they are no longer simply stored within the
+buﬀer at the node’s index.
+48

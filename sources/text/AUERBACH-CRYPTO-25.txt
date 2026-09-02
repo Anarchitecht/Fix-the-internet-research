@@ -1,17 +1,4096 @@
-Client Challenge 
- 
- 
- 
- 
- 
- 
- 
- JavaScript is disabled in your browser. 
- Please enable JavaScript to proceed. 
- 
- 
- 
- 
- A required part of this site couldn’t load. This may be due to a browser
- extension, network issues, or browser settings. Please check your
- connection, disable any ad blockers, or try using a different browser.
+Title: 1035.pdf
+
+URL Source: https://eprint.iacr.org/2025/1035.pdf
+
+Published Time: Tue, 03 Jun 2025 08:55:14 GMT
+
+Number of Pages: 51
+
+Markdown Content:
+# Continuous Group-Key Agreement: Concurrent Updates without Pruning 
+
+## Benedikt Auerbach ∗ 1, Miguel Cueto Noval 2, Boran Erol †3, and Krzysztof Pietrzak 21PQShield 
+
+## benedikt.auerbach@pqshield.com 
+
+2ISTA, Klosterneuburg, Austria 
+
+## {mcuetono, pietrzak }@ista.ac.at 
+
+3UCLA, Los Angeles, USA 
+
+## boranerol03@gmail.com 
+
+## June 3, 2025 
+
+Abstract 
+
+Continuous Group Key Agreement (CGKA) is the primitive underlying secure group messaging. It allows a large group of N users to maintain a shared secret key that is frequently rotated by the group members in order to achieve forward secrecy and post compromise security. The group messaging scheme Messaging Layer Security (MLS) standardized by the IETF makes use of a CGKA called TreeKEM which arranges the N group members in a binary tree. Here, each node is associated with a public-key, each user is assigned one of the leaves, and a user knows the corresponding secret keys from their leaf to the root. To update the key material known to them, a user must just replace keys at log( N ) nodes, which requires them to create and upload log( N ) ciphertexts. Such updates must be processed sequentially by all users, which for large groups is impractical. To allow for concurrent updates, TreeKEM uses the “propose and commit” paradigm, where multiple users can concurrently propose to update (by just sampling a fresh leaf key), and a single user can then commit to all proposals at once. Unfortunately, this process destroys the binary tree structure as the tree gets pruned and some nodes must be “blanked” at the cost of increasing the in-degree of others, which makes the commit operation, as well as, future commits more costly. In the worst case, the update cost (in terms of uploaded ciphertexts) per user can grow from log( N ) to Ω( N ). In this work we provide two main contributions. First, we show that MLS’ communication complexity is bad not only in the worst case but also if the proposers and committers are chosen at random: even if there’s just one update proposal for every commit the expected cost is already over √N , and it approaches 
+
+N as this ratio changes towards more proposals. Our second contribution is a new variant of propose and commit for TreeKEM which for moderate amounts of update proposals per commit provably achieves an update cost of Θ(log( N )) assuming the proposers and committers are chosen at random. 
+
+> ∗
+
+Benedikt Auerbach conducted part of this work at ISTA. 
+
+> †
+
+Boran Erol conducted part of this work at ISTA. 
+
+1Contents 
+
+1 Introduction 3
+
+1.1 Our Contributions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+
+2 Preliminaries 7
+
+2.1 Continuous Group-Key Agreement . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 72.2 Ratchet Trees . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 10 2.3 Auxiliary Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11 
+
+3 The Messaging Layer Security Protocol 11 4 The Communication Cost of MLS for Random Sequences of Operations 14 
+
+4.1 Considered Scenario . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14 4.2 Expected Number of Blanks . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15 4.3 Lower Bound on Sent Ciphertexts . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17 
+
+5 MLS-Cutoff : an Alternative Method for Update Proposals 22 
+
+5.1 Protocol Description . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 23 5.2 Security . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 23 5.3 Upper Bounds on the Update Cost . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 25 
+
+6 Acknowledgment 27 A Omitted Formal Security Definition 31 
+
+A.1 Public Key Encryption . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31 A.2 Digital Signatures . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31 A.3 PKI and CGKA . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32 
+
+B Omitted Formal Protocol Descriptions 32 
+
+B.1 Formal description of MLS . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32 B.2 Formal description of MLS-Cutoff . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 35 21 Introduction 
+
+Messaging layer security. In recent years asynchronous secure messaging applications like the What-sApp, Signal and iMessage have become an important part of every day life with user numbers ranging in the billions. While deployment of these applications has been a great success for practical cryptography, the used protocols do not scale well when used to secure the communication of large groups. For example, Signal limits the group size to 1000 users. Providing efficient secure messaging for large group sizes is the explicit goal of the IETF’s Messaging Layer Security (MLS) Standard [BBR +23] of 2023. The standard was developed in a joined effort of industry players and the scientific community and aims to enable asynchronous and end-to-end encrypted messaging via an untrusted server, admitting group sizes up to 50.000. TreeKEM [BBR18], the protocol at MLS core is a so called continuous group-key agreement [ACDT20] (CGKA). As a generalization of continuous key agreement [ACD19] to the group setting, it allows a group of users to agree on a shared, evolving secret that intuitively will be used to secure the communication within the group. CGKA is supposed to provide both forward secrecy (FS), meaning that compromising a user does not reveal past messages, and post-compromise security (PCS), i.e., that the group is able to recover from compromise by sampling new key material and exchanging protocol messages. MLS has been taken up with great interest by the community resulting in a vast amount of works analyzing its security [KPPW +21, ACJM20, CHK21, BCK21, AJM22, WPBB23, CGWZ25] or proving lower bounds on its communication complexity [BDR20, BDG +22, ANPPP23, AAB +24]. Further works develop protocol variants making use of an active server [HKP +21, AHKM22, AAN +22] (no longer simply forwarding protocol messages), being tailored to multiple overlapping groups [AAB +21], or enabling resilience against forking of users’ protocol views [AMT23]. Yet another line of works is concerned with the security of alternative, not TreeKEM based, group-messaging protocols [WKHB21, BCG23, CEST24] or analyzes additional properties of CGKA like secure administration [BCV23] or meta data protection [HKP22]. 
+
+Ratchet trees. While FS can be achieved essentially by means of symmetric cryptography, PCS requires the use of public key cryptography. TreeKEM makes use of so called ratchet trees, that can be seen as a public-key analog of logical key hierarchies [WHA99]. At a high level, a ratchet tree is a balanced binary tree in which each node has an associated public-key encryption (PKE) key-pair. Each group member is assigned to a leaf, the corresponding key-pair can be thought of as the user’s personal key, and the one of the root as the shared group secret. To enable PCS the users will periodically rotate the secret key material known to them by exchanging protocol messages. While all users have a complete view on all public keys, throughout the execution of the protocol TreeKEM enforces the so-called tree invariant stating that every user has access to exactly the secret keys of nodes lying on their update path, i.e., the path from their leaf to the root. To update their key material a user u replaces the keys of nodes on their update path by sampling a fresh key for their leaf, and deriving the remaining keys in a deterministic way from this key. Then every fresh secret key sk is encrypted under the public key of the node’s co-child, i.e., the child not being part of u’s update path. Now all users whose update path merges into u’s at the node in question are able to recover sk by decrypting the ciphertext. They can then derive the remaining secret keys up to the root in a deterministic way. Note that in total u has to generate only logarithmically many ciphertexts (in the group size N ), making the protocol particularly suited for large groups. 
+
+Proposals and Commits. TreeKEM, as described above, requires all updates to be executed in order (i.e., a user can only issue an update after it processed all previous updates), which might not be possible in a large group with frequent updates. To allow for concurrent issuing of protocol messages TreeKEM distinguishes between proposal messages and commit messages . In the former, a user issuing an update proposal indicates their goal of updating the key material known to them. However, the message only contains a new personal leaf public key and, in particular, does not establish a new shared group secret. Similarly, proposals of adding users to or removing users from the group are handled using proposal messages. To establish a new group secret and move the group’s state to the next epoch a user can issue a commit 3u1 u3 u8 u16 u1 u3 u8 u16 
+
+Figure 1: Working principle of update proposals and commits in MLS (left) and MLS-Cutoff (right). In both cases for a fully populated tree users u1, u 3, u 8 issue an update proposal (depicted in blue) followed by a commit by user u16 (depicted in orange). Nodes being blanked are depicted as (empty) squares, and ciphertexts created as part of the commit with orange edges. In the depiction of MLS-Cutoff the blue dashed line marks the cutoff bound. to a (potentially empty) set of proposal messages. Essentially, this implements all proposals and updates all keys on the committing user u’s update path. Note that to preserve the tree-invariant u cannot refresh the keys on a proposing users’ update paths unless they also lie on their own update path (as u must not learn the secret key of such nodes). Moreover, keys on u’s co-path might no longer be considered secure, since the corresponding secret key might lie on the update path of a user issuing a proposal. Thus, TreeKEM handles update proposal by means of blanking . I.e., the key-pairs of all (non-leaf) nodes on the update path of proposing users which do not lie on the update path of the committing user are deleted from the ratchet tree. This has the effect of increasing the indegree of some nodes, and thus the commit operation as well as future commits require additional ciphertexts, negatively affecting the protocol’s communication complexity. Removals of users from the group is also handled by means of blanking, while adding users employs the unmerged leaves technique. For a depiction of proposals and commits in MLS see Figure 1 (left). 
+
+Known results on the communication complexity of MLS. As discussed above, for a group of size N
+
+in the best case (in particular if no update proposals are issued at all) the size of a commit message is of or-der O(log( N )). It is easy to see that in the worst case essentially the whole ratchet tree can end up blank, lead-ing to a linear worst case communication complexity of order Ω( N ). Unfortunately, the latter turns out to be inherent for CGKA schemes built from ‘natural’ primitives achieving fast PCS [BDR20, BDG +22, ANPPP23] (i.e., within a single propose-commit round). Accordingly, while different methods of implementing update proposals have been explored, they either exhibit the same worst-case behavior [KPPW +21] or suffer from achieving PCS slower [Wei19, AAN +22, AACN +24]. While the worst case performance of TreeKEM is a far shot from the advertised log( N ), the known se-quences causing it are very artificial. Thus, one might still hope that TreeKEM and in turn MLS perform well for ‘natural’ random sequences of operations, which would be sufficient for practical applications. However, up to our knowledge there has been very little analysis in this setting so far. 
+
+## 1.1 Our Contributions 
+
+The contribution of this work is twofold. We initialize the formal study of MLS’s communication complexity for random sequences of operations, which models the lack of coordination between users given the asyn-chronous nature of CGKA schemes. To this end, we derive lower bounds on the size of its commit messages in an easy to understand model letting randomly chosen users issue update proposals and commits. Our results indicate that, unfortunately, even very small amounts of update proposals per commit operation have a substantial negative impact on MLS’s communication complexity. On the positive side, we propose an alternative way of handling update proposals that provably achieves a logarithmic communication complexity in our model. The changes required to handling proposals are not 4too complex, which in our view is a very positive feature, as our proposed method is compatible with the complex mechanisms employed by MLS to ensure authenticity and consistency. 
+
+Lower bounds on MLS’s Average Commit Size. Our main goal is to gain an understanding of the impact that blanking nodes in the ratchet tree due to update proposals has on the size of commit messages, for randomly generated sequences of operations. Ideally, one would analyze the communication complexity of MLS using real-world user data. As such data is unfortunately not available, we opt for a simple model of communication. The advantage of this being that it, on the one hand, makes the problem of deriving formal bounds approachable, and, on the other, leads to results that are understandable on an intuitive level. Our experiment first initializes a group of size N . Then it repeatedly starts issuing update proposals and commits for rounds t as follows. 1. A set UP consisting of P ∈ N group members is sampled uniformly at random. 2. All users in UP issue an update proposal. 3. A user sampled uniformly at random issues a commit to all update proposals. 4. The size Cost (t) of the commit is recorded. To also be able to handle the setting where update proposals are only issued every other round, the experiment is additionally parameterized by C ∈ N. In the case C > 1, the commit to the P proposals is followed by 
+
+C − 1 rounds of commits not implementing any proposals. We are interested in the expectation of Cost (t)after running the experiment for sufficiently many rounds. Informally, our main result regarding this is the following. 
+
+Theorem 4.2 (informal). Let P , C be constant. Then the expected size of a commit generated according to the sequence described above is of order 
+
+E[Cost (t)] ≥ Ω( N log 2(1+ PP +C )).
+
+Moreover, if P = 1 = C, it holds that 
+
+E[Cost (t)] ≥ log 2(N )/4 − log( N )/4,
+
+which is a more relevant bound for small values of N .We provide some approximate values of the exponent e = log 2(1 + PP +C ) in the table below. We use C = 1 for P ≥ 1 and for ease of notation write P = 1 /c in the case P = 1, C = c.
+
+P 1/5 1/2 1 2 5 10 50 
+
+e 0.22 0.42 0.58 0.74 0.87 0.93 0.99 Note that already if a single update proposal is issued per commit the MLS’s communication complexity devolves to about √N , a far shot from log( N ). Further, if the number of proposals increases the cost of commits approaches the worst case of a linear commit cost quite fast, with an exponent of 0 .99 for P = 50. This means that one either must perform almost all updates sequentially, or commits become almost linear in N . As MLS aims to support groups containing up to N = 50000 members, neither of these options is very appealing. Before turning to our alternative proposal of handling update proposals, we give a bit of intuition on the lower bound’s proof. As the cost of a commit is mainly determined by the blanks in the ratchet tree we first investigate the expected probability of a fixed node v being blank. We notice that the transition of v’s state between blank and populated forms a Markov chain, allowing us to determine its stationary distribution. We obtain that the probability of v being blank, assuming v is of sufficient depth in the tree, is roughly 
+
+P/ (P + C). In MLS if a user’s copath contains a node v, then how much v contributes to the communication com-plexity of a commit by that user depends on whether v is blank. If v is populated, then encrypting to it 5only requires one ciphertext. If it is blank, a commit in MLS would include ciphertexts encrypted under the keys of its children and, due to the way MLS works, at least one child must be blank as well meaning that those ciphertexts would have to be encrypted under some of v’s grandchildren and so on. Intuitively, this means that the number of ciphertexts needed to encrypt to a blank node v is 1 + P/ (P + C) times the number of ciphertexts needed to encrypt to a child of v provided that both v and its child are blank, where 1 corresponds to the child that must be blank and P/ (P + C) to the probability that the other child is blank. This argument assumes independence (between the events that the left child of v is blank and the right child of v is blank), which is not justified. However, we show that in expectation the number of ciphertexts does indeed increase by a factor of 1 + P/ (P + C). 
+
+An alternate way of performing update proposals. It is known that if too many users, say, for example, linearly many in the group size, issue concurrent update operations there is no possibility for efficient CGKA. In fact, Bienstock et al. [BDR20] prove that in this case the communication complexity must be linear in the group size. While the lower bound discussed above indicates that even a small number of update proposals per commit operation has a devastating effect on MLS’s communication complexity, it leaves open the possibility of an alternative CGKA being more viable in this setting. Recall that update proposals introduce blanks in the tree, as all keys on the updating users’ update paths are removed. A natural idea to prevent introducing blanks in the tree would be to not only have the user issuing a commit, but also updating users to re-key their complete update path. In fact this is the approach taken by the continuous group-key agreement scheme CoCoA [AAN +22] which in this setting has logarithmic communication complexity. However, proposals can be issued concurrently, meaning users make concurrent modifications to the ratchet tree. This leads to users encrypting new secrets to outdated keys, i.e., keys concurrently being replaced, and, as a second point, is not compatible with the mechanisms used by MLS to ensure integrity of the ratchet tree. As a consequence, CoCoA does achieve PCS slower than MLS, and does not achieve the same strong security notion of insider security. The second main contribution of this work is a CGKA we denote MLS-Cutoff with the following features. 
+
+• For a constant number P of update proposals per commit operation and random operations as described above, the size of its proposal and commit messages is bounded by O(log( N )) 
+
+• It achieves the same strong security notion as the MLS protocol, namely insider security [AJM22] for the same safety predicate. In a nutshell, the latter says that if all compromised parties issue update proposals that are in turn committed to the group achieves PCS. 
+
+• It requires only small modifications to the MLS design. More precisely, it only modifies how the ratchet tree’s nodes are blanked or populated by applying update proposals, but keeps other components required, for example, to ensure consistency and authenticity unchanged. We provide some intuition on our design. Our main observation is that if the number of update proposals is not too large and the updating users are randomly distributed, then updating users’ paths merge far up in the tree. Thus, while in MLS-Cutoff update proposals do rekey the issuing user’s path, we stop the re-key operation icut steps before reaching the root, where icut is the cutoff parameter of the scheme, that is chosen as log(log( N )). If no update paths collide before the cutoff point, no secrets are encrypted to keys that are concurrently being changed. This on one hand, implies PCS at the same speed as MLS, and on the other is compatible with the tree-integrity mechanisms of tree-hash and parent-hash. In the case that we are unlucky and two updating user’s paths collide before the cutoff point, the paths are blanked from (and including) the point where the paths meet. For a depiction on how MLS-Cutoff handles proposals and commits, see Figure 1 (right). We point out that the worst-case communication complexity of MLS-Cutoff is Ω( N ), as is the case for MLS. This, however, holds for any CGKA achieving fast PCS [BDR20] constructed from standard primitives. We consider MLS-Cutoff to be an attractive alternative to MLS in settings where while update proposals are required their number is not too large. This is a realistic scenario since MLS leaves the update policy to the implementation and, therefore, a rule which simply triggers an update with some probability for users that are online (or enforces it if too much time or communication happened since the last update) would 6lead to a fairly random update pattern if there is no user-to-user coordination and thus good performance of MLS-Cutoff. We consider it an interesting question for future work to analyze its performance in more involved settings. 
+
+# 2 Preliminaries 
+
+## 2.1 Continuous Group-Key Agreement 
+
+We recall continuous key-agreement schemes (CGKA). As we aim for the security notion of insider security our syntax follows [AJM22]. 
+
+Public-key infrastructure. We model the public-key infrastructure (PKI) as consisting of two services: an authentication service (AS) and a key service (KS). The former allows parties to register their signing keys and retrieve the signature verification keys of other users, while the latter allows users to register the key packages that are used by other users to add them to a group. The authentication service stores pairs of users and signing verification keys, ( u, svk ), if the key svk has been register under user identity u. Any user u can register a new key and request to receive the secret signing keys that correspond to verification keys registered under them. Moreover, a user can also check if a pair ( u, svk ) has already been registered and a user can also delete their secrets. We consider the AS as not trusted and therefore in our security model we will give the adversary the possibility of registering keys as well as exposing keys registered by the users (provided that they have not been deleted). The key service stores pairs of users and key packages, ( u, kp ), which are used by other parties to add them to a group. Similarly to the case of AS, users are able to register a new key package as well as retrieving the secret keys sk associated to their key packages and deleting their secret keys. A user can also request a key package for another party. In our model this is done by forwarding the request to the adversary which chooses the package received by the user. This reflects that our security model does not trust the KS. The adversary can also expose the secret keys of a user that have not been deleted. 
+
+Syntax. A CGKA scheme allows a group of users to agree on a shared secret evolving over epochs. To this end, the users exchange proposal messages, proposing changes to the group’s state (as for example adding or removing users to or from the group), and commit messages, which implement proposals and advance the group’s state to the next epoch by establishing a new shared secret. 
+
+Definition 2.1. An asynchronous continuous group-key agreement protocol consists of a tuple of algorithms 
+
+CGKA .Create , CGKA .Prop , CGKA .Com , CGKA .Proc ,
+
+CGKA .Join , CGKA .Key , which can interact with a PKI. Additionally, each user maintains an internal state which we denote by st and is assumed to be an implicit input of all algorithms. 
+
+CGKA .Create (svk u) is run by user u with signing verification key svk u and creates a group with u as its only member. 
+
+CGKA .Prop (op , ad ) → pmsg is run by a member who wants to propose an operation op , where op ∈{‘add’ , ‘rem’ , ‘upd’ }, ad is some additional data that may depend on the operation. It outputs a proposal message pmsg .
+
+CGKA .Com (PMSG , ad ) → (cmsg , wmsg ) is run by a member u to commit to a list of proposals PMSG =(pmsg i)i and it also takes as input some additional data ad . It outputs a commit message cmsg , and a (potentially empty) welcome message wmsg .
+
+CGKA .Proc (cmsg , PMSG ) → (PropSemantics , v ) is run by a client u to process a commit message cmsg and the corresponding proposal messages PMSG . It outputs some information about the proposals (which we denote PropSemantics ) and the party v that generated the commit c.
+
+7CGKA .Join (wmsg ) → (roster , v ) is run by user u to process a welcome message and join the respective group. It outputs the set of group members and their signing verification keys (which we refer to as roster )and the party that generated the commit c
+
+CGKA .Key → k is run by a member u to obtain the group key associated to their state. 
+
+Correctness and security in the UC framework. We follow the work of Alwen et al. ([AJM22] and [ACJM20]). They define a notion of security based on the UC (universal composability) framework, which was first introduced by Canetti in [Can01]. We defer the formal description of the ideal CGKA functionality and the PKI functionalities to Appendix A. In the UC framework one formalizes security of a protocol as the indistinguishability between the ‘real world’ and an ‘ideal world’. We will refer to the distinguisher as the environment. In the real world the environment Z gets to choose the inputs (e.g., an instruction to Alice to add Bob) of the machines (e.g., the parties in an execution of a CGKA protocol) of the protocol π and receives their intermediate subroutine-outputs (e.g., a commit generated by Alice). The environment also interacts freely with an adversary A. A also interacts with the machines of π and A has control over the network in the communication between the machines of π. The interaction between A and π also captures information leakage from the protocol execution (e.g., A may have the possibility of corrupting the parties). In the ideal world the protocol π is substituted by an ideal functionality F and a collection of dummy machines that relay their inputs to F and the outputs of F to the corresponding machines. The adversary in the ideal world is denoted by S because it plays the role of a simulator (of the interaction between A and 
+
+Z in the real world) and we refer to it as an ideal adversary. The adversary S now communicates with F
+
+and does not interact with the dummy machines. The environment Z interacts with the dummy machines and the adversary S just as in the real world. In the UC framework one says that a protocol π securely realizes a functionality F if for all efficient adversaries A there exists an efficient ideal adversary S such that the output distribution of any efficient environment Z after interacting with π and A is indistinguishable from the output distribution of Z after interacting with F and S. This can be understood as representing the idea that an adversary A attacking the protocol π does not learn more than the ideal adversary (sometimes called simulator) S learns from interacting with the ideal functionality. In the work of Alwen et al. [AJM22], whose security notion we use, one has to consider some additional notions since parties have access to a PKI and certain primitives are modeled as random oracles. We refer to these as setup functionalities. This is done by considering the so called hybrid models (first introduced in [CDPW07]). If G is a setup functionality, then the environment Z (as well as π, A and S) is allowed to interact with G. And one says that the a protocol π securely realizes a functionality F in the G-hybrid model if the real world and ideal world are indistinguishable even if Z is allowed to interact with G.
+
+Ideal functionality for CGKA. The definition of the ideal functionality FCGKA already takes correctness into account. In order to do this certain checks are included in FCGKA and the environment rather than the adversary is given control over the network. Now we focus our attention on defining security for CGKA fol-lowing [AJM22]. They consider two more constrains on the quantification of the notion of security described in the previous paragraph. We restrict ourselves to admissible environments, i.e., those that can only corrupt parties at certain times. This is defined as part of the ideal functionality which specifies some conditions that cannot be violated by the environment except with negligible probability. The second condition consists in not considering all possible adversaries but instead only corruption preserving adversaries, i.e., adversaries that trigger a corruption if and only if prompted by the environment. 1 This is done to prevent the ideal adversary from triggering a disallowed corruption since this would make security trivial in the sense that all environments would be disqualified. In order to define the ideal functionality FCGKA we consider the history graph which keeps track of the evolution of the group. Intuitively, the nodes of the graph correspond to the operations done by the users 
+
+> 1Recall that an arbitrary adversary can choose when to corrupt a party without this being determined by the environment.
+
+8and the edges capture the order in which they are issued. The history graph [ACDT21] is an acyclic directed graph which consists of two kinds of nodes, proposal nodes and commit nodes. The edges of the graph capture the notion of how new epochs are derived. Additionally, each node is associated with a collection of attributes ( Node [c] for commit nodes c and Prop [p] for proposal nodes p) related to the operations of a CGKA protocol. We list these attributes in the following table (divided into three groups: those that all nodes have, those that only proposal nodes have and those that only commit nodes have).                               
+
+> .orig the party that triggers the creation of the node
+> .par the parent commit node
+> .stat good for secure nodes, bad for nodes created with adversarially chosen randomness (the adversary knows the secrets associated to this node) or adv for nodes that correspond to messages injected by the adversary Prop[ p].act indicates the kind of action and some additional information (upd ,svk ) if it is an update performed by a party with key svk
+> (add , v, svk v) if party vwith key svk vis added (rem , v ) if party vis being removed
+> Node [c].pro the list of proposals associated to commit c
+> Node [c].mem list of pairs of members and their signing verification keys
+> Node [c].chall true if the corresponding application secret is chosen at random and false if chosen adversarially
+> Node [c].exp pairs ( u, true /false ) of corrupted parties uand a boolean value expressing whether the application secret also leaked to adversary
+
+The ideal functionality just keeps track of the evolution of the history graph. It starts building the history graph with just one node root 0 when the group is created. Additionally FCGKA stores a value called pointer 
+
+Ptr [u] for each party u that maps u to the last commit it processed. When a party u makes a proposal p,
+
+FCGKA creates a proposal node Prop [p] whose parent in the history graph is Node [Ptr [u]] and u is the origin of the proposal Prop [p].orig . The functionality also stores information about the kind of operation associated to p in Prop [p].act . If u makes a commit c to some proposals P , FCGKA creates a commit node Node [c] whose parent in the history graph is Node [Ptr [u]], Node [c].pro is set to P and Node [c].orig is set to u. And if a party 
+
+v processes c, the functionality just moves v’s pointer to c.As mentioned before, the ideal functionality imposes certain restrictions on the behaviour of the environ-ment. This is done by including two predicates, namely, safe (c) and inj -allowed (c, u ) that regulate when an adversary can corrupt a user and when it can inject a commit on behalf of a user, respectively. In order to guarantee that the only application secrets that can be learned by an adversary in the real world are the ones trivially derived from secrets of exposed users, we let the simulator choose these ‘unsafe’ secrets in the ideal world while the remaining ones are chosen at random by the ideal functionality. Thus, predicate safe (c) evaluates to false if and only if at least one of the following is true: (a) Node [c].exp ̸ = ∅ and the application secret has been leaked to the adversary, or (b) the adversary can process c using the secrets of exposed users and the exposed signing keys (in particular this captures the secret keys associated to key packages generated with exposed signing keys or corrupted randomness) of its ancestors. Analogously, predicate inj -allowed (c, u ) guarantees that in the real world authenticity is only broken when the adversary can trivially forge messages on behalf of a user by restricting when injections are possible in the ideal world. Predicate inj -allowed (c, u ) evaluates to true if and only if u’s signing key in Node [c] has been exposed (i.e., Node [c].mem [u] ∈ Exposed ) and at least one of the following two holds: (a) Node [c].exp ̸ = ∅,(b) the adversary can process c using the secrets of exposed users and the exposed signing keys (in particular this captures the secret keys associated to key packages generated with exposed signing keys or corrupted randomness) of its ancestors. The reader may find the precise definition of the predicates safe (c) and inj -allowed (c, u ) in Figure 17. 92.2 Ratchet Trees 
+
+We introduce some basic terminology. We use the word tree to refer to a directed acyclic graph T = ( V, E)with a root, i.e., a node r such that for every node v there exists a unique directed path between r and v. Said path is denoted by path (v). As in the MLS specification we use the convention that path = ( v1, . . . , v ℓ = r)is ordered ascending to the root, i.e., in reverse direction of the edges, and does not include v.Let u and v be two different nodes of some tree T = ( V, E). We say that u is a parent of v if there exists an edge ( u, v ) ∈ E. We say that u is a child of v if and only if v is a parent of u. We denote the set of children by child (v). We say that u is an ancestor of v if there exists a directed path from u to v. The set of ancestors is denoted by ancs (u). We say that v is an descendant of u if and only if u is an ancestor of v.We say that u and v are siblings if they are children of the same node. We say that a node is a leaf if it has no children. Thus we have three different kinds of nodes; the root, the leaves and the remaining elements in 
+
+V which we call intermediate nodes. In this work we consider complete binary trees with N = 2 n many nodes. Thus each non-leaf node v
+
+has exactly two children which we refer to as the left child, denoted by left (v), and the right child, right (v). Every node v other than the root has one parent, denoted by par (v), and a sibling, sib (v). The depth of a node v is the length of the path from the root to v and we denote it by depth (v). A notion closely related to how MLS re-keys users’ paths is that of co-path of a node. The co-path of a node v is defined as the set of children of the nodes in v’s path that do not belong to v’s path, namely, 
+
+co -path (v) = ∪u∈path (v){w | w ∈ { left (u), right (u)} \ (path (v) ∪ { v})}.
+
+Node states. CGKA schemes like MLS make use of a ratchet tree , i.e., a complete binary tree T = ( V, E)with each group member being associated to one of the tree’s leaves. Every node v ∈ E has as associated data a so called public and private state. Its public state contains 
+
+• a PKE public key v. pk ,
+
+• a list v. unm of so called unmerged leaves, 
+
+• a parent-hash value v. pHash ,
+
+• a signature verification key v. svk (only if the node is a leaf), and 
+
+• a credential v. cred (only if the node is a leaf). The private state of the node is v. sk the secret key associated to v. pk . MLS, as well as the variant defined in this work, enforce the so called tree-invariant stating that v. sk is known by exactly the user whose leaves have v as an ancestor. Further, a node can be blank , meaning that all associated values are empty. We use function blank (v) to blank a node, i.e., to set all its associated data to ⊥.
+
+Resolution and filtered path. The existence of blank nodes leads to the notion of resolution Res (v) of a node v which, intuitively, corresponds to the smallest covering of the set of descendants of v by non-blank nodes. We define it formally as follows; 
+
+• If v is a populated node, its resolution is Res (v) = {v}.
+
+• If v is a blank leaf, its resolution is Res (v) = ∅.
+
+• If v is a blank internal node, its resolution is defined recursively as 
+
+Res (v) = ∪u∈child (v)Res (u).
+
+If X is a set of nodes, we use the notation Res (X) to denote ∪v∈X Res (v). A leaf v’s filtered path fil -path is the update path after removing all nodes the co-child of which has an empty resolution (and unmerged leafs set). I.e., if path (v) = ( v1, . . . , v ℓ = r) then using the convention 
+
+v0 = v we define 
+
+fil -path (v) = ( vi, i ∈ { 1, . . . , ℓ } | (Res (sib (vi−1)) ∪ sib (vi−1).unm )̸ = ∅).
+
+10 Finally, we sometimes have to identify the node in which two leaves’ filtered paths meet. Consider leaves u, v ∈
+
+V of the same depth with filtered paths ( u1, . . . , u ℓ = r) ← fil -path (u) and ( v1, . . . , v ℓ′ = r) ← fil -path (v), respectively. We define their least common ancestor lca (u, v ) as the node ui in path (u) where i is minimal such that ui ∈ path (v). Counting from the root we define the index ind -lca of their least common ancestor as 
+
+ind -lca (u, v ) = max( a | uℓ−a = vℓ′−a, a ∈ 0, . . . , ℓ − 1) .
+
+## 2.3 Auxiliary Results 
+
+Lemma 2.2 (Bernoulli’s Inequality) . For all x ≥ − 1 and r ∈ R \ (0 , 1) it holds that 
+
+(1 + x)r ≥ 1 + rx. 
+
+# 3 The Messaging Layer Security Protocol 
+
+We defer the formal description of the MLS protocol 2 [BBR +23] to Appendix B.1. In this section we provide an overview on its working principle. As the goal of this work is to investigate the protocol’s communication complexity which is largely determined by the distribution of blank nodes in the underlying ratchet tree, our exposition mainly focuses on the mechanisms leading to the addition of blanks to the tree, or removal of blanks, respectively. For ease of exposition in this section we treat the key-packages kp (consisting of the corresponding user’s PKE pk , signature verification key svk , and leaf credential cred ) assigned to leaves in the ratchet tree as public key pk , and, similarly, assign the tree’s root a key pair which is not the case in the full protocol (see Figure 19). 
+
+Protocol state. The cryptographic state st each user of MLS keeps track of is conceptually divided as follows. The underlying ratchet tree T. In this simplified exposition we identify users u with their associated leaf, simply writing vu. As discussed in Section 2 every user u has a complete view of the tree’s public part, but only has access to the secret keys v. sk of nodes that lie on their update path vu. Sometimes when operating on ratchet trees we require the identity of the user running the algorithm, which we denote by u-own. The key schedule collects a number of secrets used for different purposes. These include, for example, the shared group secret referred to as the application secret, the initialization secret that is combined with the randomness obtained from re-keying a path to advance the key schedule to the next epoch, and a membership key used in combination with the user’s signature key to authenticate protocol messages. Further, the protocol employs consistency mechanism ensuring that all users have the same view of the protocol’s state. This includes the transcript hash that essentially encodes the complete history of the group including all operations processed so far, as well as so-called tree-hash and parent-hash values that ensure consistency of the ratchet tree. We will discuss the latter two in a bit more detail at the end of this section. 
+
+Generating proposal and commit messages. Users issue proposal messages to add or remove user to or from the group, respectively, as well as to update the personal key pair located at their leaf. In more detail, proposal messages 
+
+pmsg = ( ‘type’ , ad )consist of ‘type’ indicating the type of proposal, as well as some associated data. In case of an update proposal ‘upd’ the latter contains a new public key to be included at the issuing user’s leaf, in case of 
+
+> 2Formally, in this work we consider the CGKA underlying MLS. Thus, our exposition ignores the secret tree scheduling keys used to encrypt and authenticate payload messages.
+
+11 an addition ‘add’ the associated data ad = pk is the added party’s personal key, and finally in case of a removal ‘rem’ it indicates the removed user’s leaf. In case of an update proposal the issuing user stores the secret key sk corresponding to pk as a pending update in a list pendUpd .To prevent unauthorized parties from issuing proposals pmsg has to be framed . Essentially, this means the proposal message and group context are signed by the issuing user as well as MACed using a key only available to group members. When processing proposal messages users unframe the message by verifying the authenticity of pmsg before recovering (( ‘type’ , ad ), u -snd). Here u-snd denotes the user issuing the message. A user u can commit to a (potentially empty) list PMSG of proposals, implementing the proposed changes, advancing the group to the next epoch, and establishing a new application secret. This is done by executing the following steps. 1. Verify every proposal pmsg ∈ PMSG .2. Create a copy T′ of ratchet tree st .T and (a) call apply -props (PMSG ) to apply the proposed changes to T′,(b) call rekey -path (vu-own , 0) to rekey u-own’s update path in T′ and generate an UpdPath 
+
+object used to communicate the changes to the other group members. 3. Compute the new key schedule based on T′.4. Authenticate UpdPath and bind it to PMSG .5. Construct a welcome message if necessary. 6. Store the resulting state st ′ (containing T′) as a pending commit and return the correspond-ing, framed, commit message cmsg , which, in particular, contains UpdPath .The largest component of cmsg is UpdPath which itself is comprised of public keys and ciphertexts. The number of ciphertexts that have to be generated depends on the blanks present in T′.To process a commit message issued by u users essentially follow the same sequence of operations. More precisely, they recover T′ by first applying the proposals PMSG to their current view of the tree, and then recovering the new keys on the committing user’s update path from UpdPath . They update the key schedule and verify that all changes were properly authenticated. If the latter is the case, the new key schedule and ratchet tree replace the ones stored in the user’s state. If the processing user is the one issuing the commit operation, they can simply update their state to the one stored as a pending commit. 
+
+Applying proposals and path rekeying. When issuing (or processing) a commit operation, blanks are introduced in the ratchet tree by calling apply -props in step 2a and removed from it when calling rekey -path 
+
+(or applying the re-key operation) in step 2b. For an overview of the two functions see Figures 2 and 3. 
+
+apply -props on input a copy T′ of the current ratchet tree and list PMSG of proposals applies changes to the ratchet tree as follows. For pmsg ∈ PMSG of type ‘upd’ the issuing user u-snd’s leaf key is replaced by the one contained in pmsg . Then u-snd’s update path is blanked. If pmsg proposes removing user u-rem, leaf vu-rem as well as the removed user’s update path are blanked. If the removal results in the right half of the tree not having any populated leaves its size is halved using function truncate . If pmsg proposes adding user u-add to the group, they get assigned the leftmost unpopulated leaf in the tree, doubling the tree size in the process (by adding blank nodes) if no such leaf exists. The leaf is assigned the public key contained in ad , and added to the set of unmerged leaves for every node in its update path. To replace the keys on their path the committing user u calls rekey -path . It takes as input T′, u’s leaf vu,and, in our presentation, an additional index icut that allows stopping the rekeying icut steps early. While MLS uses icut = 0, looking ahead, it will be used in proposed alternative method of issuing update proposals. Denoting v0 = vu and ( v1, . . . , v ℓ) = fil -path (v0) the function samples seed s0 and iteratively generates seed 
+
+si using a key-derivation function, in our presentation written as hash function H1. It then generates key pairs ( pk i, sk i) ← Pke .Gen (H2(si)), H2 being another hash function, to replace the keys associated to vi.12 Algorithm apply -props (T′, PMSG ) 
+
+> 00
+
+for pmsg ∈ PMSG : 
+
+> 01
+
+parse (( ‘type’ , ad ), u -snd) ← pmsg  
+
+> 02
+
+if (‘type’ , ad ) = ( ‘upd’ , pk ): 
+
+> 03
+
+assign -kp (T′, v u-snd , pk ) \\ replace u-snd ’s leaf pk  
+
+> 04
+
+for v ∈ fil -path (vu-snd ) \\ blank u-snd ’s path  
+
+> 05
+
+blank (v) 
+
+> 06
+
+if u-own = u-snd \\ own update proposal  
+
+> 07
+
+fetch sk ← pendUpd (pmsg ) 
+
+> 08
+
+vu-own .sk ← sk  
+
+> 09
+
+else if (‘type’ , ad ) = ( ‘rem’ , u -rem) : 
+
+> 10
+
+blank -leaf (T′, v u-rem ) \\ blank u-rem ’s leaf  
+
+> 11
+
+for v ∈ path (vu-rem ) \\ blank u-rem ’s path  
+
+> 12
+
+blank (v) 
+
+> 13
+
+T′ ← truncate (T′) \\ truncate tree if necessary  
+
+> 14
+
+else if (‘type’ , ad ) = ( ‘add’ , (u-add , pk )) : 
+
+> 15
+
+add -leaf (T′, u -add , pk ) \\ assign u-add a leaf  
+
+> 16
+
+for v ∈ path (vu-add ) \\ set vu-add as unmerged  
+
+> 17
+
+v. unm ←∪ {vu-add } 
+
+> 18
+
+return T′
+
+Figure 2: High-level overview on function apply -props for MLS. The function’s formal description is in Figure 23. In order to enable the other group members to recover the secret keys they should have access to, for all 
+
+j ∈ { 1, . . . , ℓ } the co-child vsib with respect to vu’s update path is computed. Then the seed sj is encrypted under all public keys associated to nodes contained in Res (vsib ), as well as the ones of unmerged leaves resulting in a collection Cj of ciphertexts. The update path object consists of 
+
+UpdPath ← (pk 0, (pk 1, C 1), . . . , (pk ℓ, C ℓ)) .
+
+A user processing a commit message issued by u-snd replaces the public keys on u-snd’s path by the ones contained in UpdPath . Then, by computing where their own and u-snd’s update paths meet (say for index j)they are able to determine node vsib relevant to them, and using the secret key in Res (vsib ) ∪ vsib .unm they have access to decrypt one of the ciphertexts contained in Cj to recover sj . In turn they are able to recover the secret keys sk j , . . . , sk ℓ that they should have access to according to the tree invariant by applying H1,
+
+H2, and Pke .Gen .
+
+Consistency mechanisms w.r.t the ratchet tree. MLS employs tree-hashes and parent-hashes (see Figure 21) to ensure consistent views of the tree and provide improved security guarantees for users joining an existing group. The former essentially is a commitment to the entire public state of the ratchet tree, and is computed as a Merkle commitment. I.e., a node’s tree hash corresponds to a hash of the node’s public values and the tree-hashes of its children. The parent hash captures information on how the tree’s nodes were populated during the protocol exe-cution. Parent hash values are computed as part of a user’s commit, along the user’s update path, however in reverse order, i.e., from root to leaf. Essentially, a node’s parent hash attests to its parent’s public key, as well as the tree hash of the sub-tree rooted at its co-child. It plays an important role in preventing malicious insiders from being able to successfully invite users to malformed groups. 13 Algorithm rekey -path (vu, i cut ) 
+
+> 00
+
+v0 ← vu 
+
+> 01
+
+s0 ←$ {0, 1}λ \\ generate leaf seed  
+
+> 02
+
+(v0.pk , v 0.sk ) ← Pke .Gen (H2(s0)) \\ sample leaf key pair  
+
+> 03
+
+(v1, . . . , v ℓ) ← fil -path (vu) 
+
+> 04
+
+for j = 1 , . . . , ℓ − icut : 
+
+> 05
+
+sj ← H1(s j−1) \\ generate seed  
+
+> 06
+
+(vj .pk , v j .sk ) ← Pke .Gen (H2(s j )) \\ sample key pair  
+
+> 07
+
+Cj ← ()  
+
+> 08
+
+vsib ← sib (vj−1) \\ determine co-child  
+
+> 09
+
+for w ∈ Res (vsib ) ∪ vsib .unm : \\ encrypt seed  
+
+> 10
+
+Cj ←∪ Pke .Enc (w. pk , sj ) 
+
+> 11
+
+UpdPath ← (pk 0, (pk 1, C 1), . . . , (pk ℓ, C ℓ))  
+
+> 12
+
+for v ∈ path (vu) \\ merge leaves  
+
+> 13
+
+v. unm ← ∅  
+
+> 14
+
+return (T′, UpdPath )Figure 3: High-level overview on function rekey -path for MLS. The function’s formal description is in Fig-ure 22. 
+
+# 4 The Communication Cost of MLS for Random Sequences of Operations 
+
+We investigate the communication complexity of MLS. Section 4.1 defines a simple experiment used to generate random sequences of operations. We then proceed to compute bounds on the amount of blank nodes the MLS ratchet tree will have on average for such sequences (in Section 4.2) before computing a lower bound on the communication cost of commit operations (in Section 4.3). 
+
+## 4.1 Considered Scenario 
+
+As discussed in the introduction MLS exhibits a communication complexity that is logarithmic (in the number of users) in the best case, but can devolve to being linear in the worst case. In fact, the latter must be the case for any protocol that is built from standard primitives and achieves PCS as fast as MLS [BDR20, ANPPP23, BDG +22]. Beyond this, very little is known about MLS’s performance in practice. We initiate the study of MLS’s communication cost under randomized sequences of operations. While ideally, one would evaluate the performance for sequences of operations obtained from real-world user data, such data is unfortunately, up to our knowledge, not publicly available. As a consequence, in this work we take a pragmatic approach and consider sequences determined by a simple experiment. Essentially, we generate a fixed number of update proposals per commit operation, the users performing the operations being sampled uniformly at random. While we do not claim this realistically reflects user behavior, on the one hand, it makes the problem of computing lower bounds approachable, and, on the other, provides simple intuition on the impact that blanking has that is not obscured by technical details of a more complicated model. We define experiment Exp -Prop -Com in Figure 4. It is parameterized by the group size N = 2 n ∈ N,integers P, C , and the number of rounds t. Essentially, it initializes a group of N users and then for t rounds generates update-proposal and commit operations as follows. First, in every round P users UP are chosen uniformly at random from the group [ N ] and issue an update proposal. This is followed by an uniformly random user UC issuing a commit, which leads to the group moving to the next epoch and ends the round. To allow for the more general scenario that proposals are only issued every couple epochs, we allow for a number of epochs in between sending update proposal in which a commit, but no proposals, is issued. This is done by instead of sampling a single committer to end the round, to sample C committers uniformly at random. To analyze the communication cost of operation sequences generated in this way we record the size 14 Experiment Exp -Prop -Com (n, P, C, t ) 
+
+> 00
+
+N ← 2n 
+
+> 01
+
+CGKA .Create u1 (svk ) \\ initialize group  
+
+> 02
+
+PMSG ← ∅  
+
+> 03
+
+for u in {u2, . . . , u N }: 
+
+> 04
+
+pmsg ← CGKA .Prop u1 (‘add’ , u ) 
+
+> 05
+
+PMSG ←∪ pmsg  
+
+> 06
+
+(cmsg , wmsg ) ← CGKA .Com u1 (PMSG ) 
+
+> 07
+
+CGKA .Proc u1 (cmsg , PMSG ) 
+
+> 08
+
+for u in {u2, . . . , u N }: 
+
+> 09
+
+CGKA .Join u(wmsg ) 
+
+> 10
+
+initialize Cost = ()  
+
+> 11
+
+for i from 1 to t: \\ issue rounds  
+
+> 12
+
+UP ←$ {S ⊆ [N ] : |UP | = P } 
+
+> 13
+
+UC ←$ {S ⊆ [N ] : |UC | = C} 
+
+> 14
+
+Cost ←∪ Round (Up, U C ) 
+
+> 15
+
+return Cost Round (Up, U C ) 
+
+> 16
+
+cost ← ()  
+
+> 17
+
+PMSG ← ∅  
+
+> 18
+
+for k ∈ UP : 
+
+> 19
+
+pmsg ← CGKA .Prop uk (‘upd’ , ⊥) 
+
+> 20
+
+PMSG ←∪ pmsg  
+
+> 21
+
+for k ∈ UC : 
+
+> 22
+
+(cmsg , ·) ← CGKA .Com uk (PMSG ) 
+
+> 23
+
+cost ←∪ |cmsg | 
+
+> 24
+
+for m ∈ [N ]:  
+
+> 25
+
+CGKA .Proc um (cmsg , PMSG ) 
+
+> 26
+
+PMSG ← ∅  
+
+> 27
+
+return cost 
+
+Figure 4: Experiment Exp -Prop -Com with respect to group size N = 2 n and numbers of proposals P and commits C executed over t rounds. We use subscripts u to denote that an algorithm is executed by user u,and omit algorithm outputs not relevant to the experiment. of each commit message generated during the experiment in an array Cost .Our goal is to compute a lower bound on the expected value of Cost (t) after running the experiment for sufficiently many rounds. Recall that the amount of MACs, signatures, and public keys contained in commit messages is at most logarithmic in N . Thus, Cost (t) is dominated by the number of ciphertexts that have to be generated when calling rekey -path (see Figure 2) to communicate the new secret keys on the committer u-snd’s path to the other users. Accordingly, we can bound the communication cost from below by 
+
+Cost (t) ≥ X
+
+> vi∈co -path (vu-snd )
+
+|Res (vi)|,
+
+the sum of resolution sizes on the committer’s co-path, and in our analysis it suffices to derive a bound for this expression. 
+
+## 4.2 Expected Number of Blanks 
+
+Recall that the resolution of a node is determined by which of its descendants are blank. In this section we compute the expected probability of nodes at a certain depth being blank in the ratchet tree generated by experiment Exp -Prop -Com .
+
+Expressing blanks as a Markov chain. Consider the sequence ( Ti)ti=1 of ratchet trees generated by experiment Exp -Prop -Com , where Ti is the tree all users store as part of their state after the ith call to round function Round . For a fixed internal node v we can define a random variable ( Bi(v)) ti=0 taking values in 
+
+{0, 1} where 0 corresponds to being a populated node and 1 to v being blank. We write Bi instead of Bi(v)when there is no ambiguity. We observe that ( Bi)ti=0 forms a Markov chain. Indeed, v transitioning from blank to populated or vice versa only depends on the choice of the user UP and UC issuing proposals or commits in the current round. Since the chain is clearly irreducible, it has a unique stationary distribution. Denoting by pb→b′ the probability of the node switching from state Bi = b to Bi+1 = b′, the transition matrix of ( Bi)ti=0 with respect to state vector (0 , 1) ⊤ is given by 
+
+M =
+
+p0→0 p1→0
+
+p0→1 p1→1
+
+
+
+.
+
+15 The eigenvalues of M are given by p0→0 − p1→0 and 1 and an eigenvector of one-norm 1 with eigenvalue 1, corresponding to the stationary distribution, is given by 
+
+ p1→0
+
+p1→0 + p0→1
+
+, p0→1
+
+p1→0 + p0→1
+
+⊤
+
+. (1) 
+
+Analyzing the stationary distribution of (Bi)ti=0 . Consider the state Bi of node v at the end of round i. If Bi = 1 (i.e., v is blank at the end of round i), then after the proposals UP and commits UC of round i + 1 have happened Bi+1 will remain blank exactly if none of the users in UC have v as an ancestor. Further, if Bi = 0 (i.e., v is a populated node at the end of round i), then Bi+1 will remain non-blank unless at least one of the users in UP has v as an ancestor while none of the users in UC do. Thus, if we denote 
+
+pP := Pr[ v ∈ ancs (UP )] and pC := Pr[ v ∈ ancs (UC )] we have that p1→0 = pC and by independence of the choice of proposer and committer that p0→1 = (1 −pC )pP .By Equation 1 we obtain that the stationary distribution of a node being blank is given by blanks MLS := 
+
+ pC
+
+pC + pP (1 − pC ) , pP (1 − pC )
+
+pC + (1 − pC )pP
+
+⊤
+
+∈ [0 , 1] 2. (2) We now compute the probability of v being an ancestor of a proposing or committing leaf, respectively. Assume v is at depth depth (v) = d. Then T has N 2−d many leaves that are in ancs (v). Therefore there are 
+
+N (1 − 2−d) many leaves that are not in ancs (v) which implies that 
+
+pP = Pr[ v ∈ ancs (UP )] = 1 − Pr[ v / ∈ ancs (UP )] = 1 −
+
+ N (1 −2−d)
+
+> P
+
+ NP
+
+ .
+
+Analogously, 
+
+pC = Pr[ v ∈ ancs (UC )] = 1 − Pr[ v / ∈ ancs (UC )] = 1 −
+
+ N (1 −2−d)
+
+> C
+
+ NC
+
+ .
+
+Using Equation 2 we have shown the following. 
+
+Lemma 4.1. For an execution of experiment Exp -Prop -Com and internal node v of depth depth (v) = d let 
+
+(Bi)i = ( Bi(v)) i be defined as above. Then the probability that v is blank in the stationary distribution B =blanks MLS is 
+
+E[B(v) = 1] = 
+
+
+
+1 − (N (1 −2−d) 
+
+> P
+
+)(NP )
+
+ (N (1 −2−d) 
+
+> C
+
+)(NC )1 − (N (1 −2−d) 
+
+> C
+
+)(NC )(N (1 −2−d) 
+
+> P
+
+)(NP )
+
+. (3) Before turning to computing a lower bound on the expected commit size in experiment Exp -Prop -Com 
+
+we look at some simple cases: When P = 1 = C, we have that pP = 2 −d = pC . Therefore, 
+
+E[B(v) = 1] = (1 − 2−d)/(2 − 2−d) ≈ 1/2 for d large enough .
+
+If P + C = O(1), 
+
+E[B(v) = 1] ≈ (1 − (1 − 2−d)P )(1 − 2−d)C
+
+1 − (1 − 2−d)P (1 − 2−d)C
+
+≈ (1 − (1 − P 2−d))(1 − C2−d)1 − (1 − (P + C)2 −d)
+
+≈ PP + C for d large enough . (4) In both examples we see a constant probability that a node is blank which, intuitively, means that a commit should have a high upload cost. We formalize this in the next section. 16 4.3 Lower Bound on Sent Ciphertexts 
+
+In this section we prove a lower bound on MLS’s communication cost for sequences of operations generated by Exp -Prop -Com . As it turns out, already a constant number of proposals per commit leads to commits being exponential in n = log( N ), a far shot from the best case communication complexity. More precisely we will prove the following. 
+
+Theorem 4.2. If P +C = O(1) and t > 2N 2 log( N ), then there exists a constant ε > 0 such that the expected cost of a commit after Experiment Exp -Prop -Com (n, P, C, t ) (Figure 4) satisfies the following inequality: 
+
+E[Cost (t)] ≥ Ω( N log 2(1+(1 −ε) PP +C )).
+
+Before proving this result, we show a weaker result that already gives some of the main ideas used in the proof of Theorem 4.2. We start by studying the size of the resolution of a node vd at depth d ∈{1, . . . , log( N ) − 1}:
+
+E[|Res (vd)|] ≥ E[|Res (vd)| | B(vd) = 0] Pr[ B(vd) = 0] + E[|Res (vd)| | B(vd) = 1] Pr[ B(vd) = 1] = Pr[ B(vd) = 0] + E[|Res (right (vd)) | + |Res (left (vd)) | | B(vd) = 1] Pr[ B(vd) = 1] = Pr[ B(vd) = 0] + 2 E[|Res (left (vd)) | | B(vd) = 1] Pr[ B(vd) = 1] .
+
+One can show that 
+
+E[|Res (left (vd)) | | B(vd) = 1] ≥ E[|Res (left (vd)) |]. (5) This implies that for a node vd at depth d ∈ { 1, . . . , log( N ) − 1},
+
+E[|Res (vd)|] ≥ Pr[ B(vd) = 0] + 2 E[|Res (left (vd)) |] Pr[ B(vd) = 1] .
+
+A recursive application of this inequality yields 
+
+E[|Res (vd)|] ≥ 1 +  
+
+> log( N)−d−1
+
+X
+
+> i=0
+
+2iiY
+
+> j=0
+
+Pr[ B(vd+j ) = 1] .
+
+Now let’s assume that P = 1 = C. We know that for d ≥ 3, E[B(v) = 1] ≈ 1/2. Therefore we obtain that 
+
+E[Cost (t)] ≥ 
+
+> log( N)
+
+X
+
+> d=3
+
+(1 +  
+
+> log( N)−d−1
+
+X
+
+> i=0
+
+1/2) = log( N ) − 2 +  
+
+> log( N)
+
+X
+
+> d=3
+
+(log( N ) − d)/2= log( N ) − 2 + (log( N ) − 3)(log( N ) − 2) /4
+
+≊ log 2(N )/4 − log( N )/4.
+
+A similar computation when P + C = O(1) and P > C shows E[Cost (t)] = Ω( N log 2( 2PP +C )). The gap between these bounds and the one stated in Theorem 4.2 is due to Equation 5 being non-tight. This is solved by studying how the size of the resolution of a node grows when several of its ancestors are blank. 17 Proof of Theorem 4.2. In order to prove the theorem we first establish some helpful results. Let’s consider the random variable |Res (v)| that denotes the size of the resolution of a node v. This corresponds to the number of ciphertexts that have to be uploaded when a commit includes a fresh key for v’s parent. The central idea of the lower bound is to relate the expected resolution size of a node to the expected resolution size of its children, and iterate this expectation in order to get a lower bound that’s exponential in log( N ). In the proof, we keep conditioning on an increasingly complicated event, and only consider the probability of a node being blank conditioned on this event. This allows us to argue using a local property whereas the resolution size of a node depends on the entire subtree of the node. We now introduce some notation. Let Anc-bl t(d, v ) be the event that all ancestors of v up to depth d are blank after the experiment ends. We usually drop the subindex t as we do with the other random variables considered in this section. When the node v is clear from context, we write Anc-bl( d). Let va denote the ancestor of v such that depth (va) = d. We use Tsub to denote the full binary subtree with root va and leaves the nodes in T that have va as an ascendant and have the same depth as v. Let n′ be the number of leaves in Tsub . Notice that n′ = 2 depth (v)−d.
+
+Lemma 4.3. Let X ∼ Geo( q) be distributed according to the geometric distribution with q ∈ (0 , 1) and let 
+
+Z = X mod ( P + C). Let i, j ∈ { 1, 2, . . . , P + C}. Let s be an integer multiple of P + C, i.e. s = m(P + C)
+
+for some m > 0. Then, 
+
+Pr[ Z = i | X ≤ s] ≥ (1 − q)P +C−1 Pr[ Z = j | X ≤ s].
+
+Proof. This is an almost immediate consequence of some elementary computation with finite geometric series. Let i, j ∈ { 1, 2, . . . , P + C}. Notice that Pr[ Z = i | X ≤ s] = 11 − (1 − q)sm−1X
+
+> h=0
+
+(1 − q)(P +C)h+i−1q
+
+= 11 − (1 − q)s (1 − q)i−1q
+
+> m−1
+
+X
+
+> h=0
+
+(1 − q)(P +C)h.
+
+Now, notice that the only factor that depends on i is (1 − q)i. The result follows from the observation that (1 − q)i−j ≥ (1 − q)P +C−1.We now introduce the event All-act. Intuitively, All-act simply states that all users in Tsub acted relatively recently. We’ll later show that All-act happens with overwhelming probability. More precisely, All-act simply states that if we look at the last 2 N 2 log N actions in T, ordered from the most recent to the least recent, there’s a new user from Tsub in every at most 2 N log N steps. In other words, we’re conditioning on the following event: Let Xi be the random variable denoting how many actions it takes for the ith user to appear after the ( i − 1) previous users already did. All these users must be different. We’re assuming that Xi ≤ 2N log N for every i ∈ { 1, 2, . . . , n ′}. More formally, we’ll condition on Xi being less than some s ≥ 2N log N that is a multiple of P + C, but we omit this since it doesn’t affect the proof and introduces unnecessary notation. Now, we analyze that the probability of v being blank conditioned on all of its ancestors up to depth d
+
+being blank and All-act. 
+
+Lemma 4.4. Let ε > 0 and d ∈ N such that ε ≥ 2depth (v)−d+1 (P + C − 1) /N where v is a node at depth 
+
+depth (v) > d . Then, 
+
+Pr[ B(v) = 1 | All-act , Anc-bl( d)] ≥ 12 (1 + (1 − ε) PP + C ).
+
+Proof. We describe an experiment that will help us determine the probabilities of possible states of Tsub .For i ∈ [n′], let Xi ∼ Geo( qi) where qi = n′−i+1  
+
+> N
+
+≤ 2depth (v)−d/N . Intuitively, Xi corresponds to the number of actions that occurred after the action corresponding to Xi−1 until a “new” member acted on the tree. 18 Define Yi := Pik=1 Xk mod ( P +C). By linearity, we have that Yi = Xi +Yi−1 mod ( P +C). Intuitively, the Yi’s help us track whether this action was a commit or a proposal. More formally, notice that if Yi ≤ C,then the user that acted ith from last committed, and if C + 1 ≤ Yi ≤ P + C the user proposed. We also have that the Yi’s form a Markov chain, i.e. Yi conditioned on Yi−1 is independent of the previous Yk’s. Moreover, we sample a uniformly random string of length n′ elements in order to assign each leaf node to a position. For example, σ = 312 ( σ(1) = 3 , σ (2) = 1 , σ (3) = 2) would mean that the leftmost user was the first to act, the ‘central’ user was last to act and the third user acted second. Notice that σ(1) tells us the position in which v acted and σ(2) tells us the position in which sib (v) acted. For example, σ(1) = 2 would imply that the action on node v was second to last on Tsub . Notice that σ cannot repeat elements. Now we study the probability that v is blank conditioned on the events All-act and Anc-bl( d): Pr[ B(v) = 1 | All-act , Anc-bl( d)] = Pr[ B(v) = 1 | All-act , Anc-bl( d), σ (1) < σ (2)] Pr[ σ(1) < σ (2) | All-act , Anc-bl( d)] + Pr[ B(v) = 1 | All-act , Anc-bl( d), σ (1) > σ (2)] Pr[ σ(1) > σ (2) | All-act , Anc-bl( d)] .
+
+We have that Pr[ σ(1) < σ (2) | All-act , Anc-bl( d)] = 12 , as which node comes later is clearly independent of All-act , Anc-bl( d) due to symmetry. Moreover, if σ(1) < σ (2), i.e. v acts later than sib (v), we have that v is blank since p(v) is blank as we’re conditioning on Anc-bl( d). Thus, we have that Pr[ B(v) = 1 | All-act , Anc-bl( d)] = 12 (1 + Pr[ B(v) = 1 | All-act , Anc-bl( d), σ (1) > σ (2)]) .
+
+For the rest of the proof, we’ll prove that Pr[ B(v) = 1 | All-act , Anc-bl( d), σ (1) > σ (2)] ≥ (1 − ε) PP + C
+
+Before we get into the details, let’s explain the intuition behind the proof. The proof rests on the observation that if Xk ∼ Geo( q) for small q, Xk mod ( P + C) is close to a uniform random variable. Moreover, Xk and 
+
+Yk−1 are independent, so Yk = Xk + Yk−1 mod ( P + C) is also close to being a uniform distribution. Thus, no matter what complicated event we’re conditioning on, the probability that 1 + C ≤ Y ≤ P + C will be approximately PP +C .Let f (y1, y 2, . . . , y n′ , σ ) be a predicate that returns 1 if the assignment is compatible with Anc-bl( d), σ (1) >σ(2) and 0 otherwise. Let Z = Pr[All-act , Anc-bl( d), σ (1) > σ (2)]. For notational simplicity, we’ll write P
+
+instead of n′
+
+X
+
+> k=1
+
+X 
+
+> σ∈Sn′
+> σ(1)= kP+C
+
+X 
+
+> y1=1
+> P+C
+
+X
+
+> y2=1
+
+. . .  
+
+> P+C
+
+X 
+
+> yk−1=1
+> P+C
+
+X
+
+> yk+1 =1
+
+. . .  
+
+> P+C
+
+X 
+
+> yn′=1
+
+in what follows. Also for notational convenience, we omit the conditioning on All-act, even though it’s implicit in every probability we write. Then, we have that Pr[ B(v) = 1 | All-act , Anc-bl( d), σ (1) > σ (2)] is equal to 1
+
+Z
+
+X P +CX 
+
+> yk=1+ C
+
+f (y1, y 2, . . . , y n′ , σ ) 1(n − 1)! Pr[ Y1 = y1]
+
+> n′
+
+Y
+
+> l=2
+
+Pr[ Yl = yl | Yl−1 = yl−1], (6) where we used the Markov property of the Yk’s. Also notice that since we’re interested in the probability of v being blank, we’re only summing up the values in the support of Yk that start from C + 1, so we are ignoring the first C values. Again, for notation simplicity, we introduce a new variable 
+
+ρ := Pr[ Y1 = y1] Y  
+
+> l> 1,l ̸=k,l ̸=k+1
+
+Pr[ Yl = yl | Yl−1 = yl−1].
+
+19 Rearranging Equation 6, we get 1
+
+Z
+
+X 1(n − 1)! ρf (y1, y 2, . . . , y n′ , σ )
+
+·
+
+> C+P
+
+X 
+
+> yk=1+ C
+
+Pr[ Yk+1 = yk+1 | Yk = yk] Pr[ Yk = yk | Yk−1 = yk−1]Let’s now argue why it was possible to take f (y1, y 2, . . . , y n′ , σ ) out of the sum, i.e. why it’s independent of 
+
+Yσ(1) . If σ(1) < σ (2), f (y1, y 2, . . . , y n′ , σ ) = 0 no matter what Yk is. If σ(1) > σ (2), σ(1) has no effect on its ancestors, so Yk doesn’t matter for Anc-bl( d). Now, notice that if we instead sum all values in the support of Yk, we have by the law of total probability that 1 = 1
+
+Z
+
+X 1(n − 1)! ρf (y1, y 2, . . . , y n′ , σ )
+
+· 
+
+> P+C
+
+X 
+
+> yk=1
+
+Pr[ Yk+1 = yk+1 | Yk = yk] Pr[ Yk = yk | Yk−1 = yk−1]Moreover, using the Markov property of the Yi, we have that Pr[ Yk+1 = yk+1 | Yk−1 = yk−1]= 
+
+> P+C
+
+X 
+
+> yk=1
+
+Pr[ Yk+1 = yk+1 | Yk = yk, Y k−1 = yk−1] Pr[ Yk = yk | Yk−1 = yk−1]= 
+
+> P+C
+
+X 
+
+> yk=1
+
+Pr[ Yk+1 = yk+1 | Yk = yk] Pr[ Yk = yk | Yk−1 = yk−1] (7) Thus, it suffices to show that  
+
+> P+C
+
+X 
+
+> yk=1+ C
+
+Pr[ Yk+1 = yk+1 | Yk = yk] Pr[ Yk = yk | Yk−1 = yk−1]
+
+≥ (1 − ε) PP + C Pr[ Yk+1 = yk+1 | Yk−1 = yk−1].
+
+Let tmax := arg max t Pr[ Yk+1 = yk+1 | Yk = t] Pr[ Yk = t | Yk−1 = yk−1]. Notice that Pr[ Yk+1 = yk+1 | Yk = tmax ] Pr[ Yk = tmax | Yk−1 = yk−1]
+
+≥ 1
+
+P + C Pr[ Yk+1 = yk+1 | Yk−1 = yk−1] (8) which follows from Equation 7. Then, by Lemma 4.3 (observe that Xk is bounded because of the event All-act), for any 1 + C ≤ t ≤ P + C, we have that Pr[ Yk+1 = yk+1 | Yk = t] Pr[ Yk = t | Yk−1 = yk−1]
+
+≥ Pr[ Yk+1 = yk+1 | Yk = tmax ] Pr[ Yk = tmax | Yk−1 = yk−1](1 − q)2( P +C−1) 
+
+≥ (1 − 2q(P + C − 1)) 1
+
+P + C Pr[ Yk+1 = yk+1 | Yk−1 = yk−1]
+
+≥ (1 − ε) 1
+
+P + C Pr[ Yk+1 = yk+1 | Yk−1 = yk−1]20 where the second inequality follows from Lemma 2.2 and Equation 8. The last inequality follows from the assumption that ε ≥ 2depth (v)−d+1 (P + C − 1) /N and the fact that q ≤ 2depth (v)−d/N . Thus,  
+
+> P+C
+
+X
+
+> t=1+ C
+
+Pr[ Yk+1 = yk+1 | Yk = t] Pr[ Yk = t | Yk−1 = yk−1]
+
+≥ (1 − ε) PP + C Pr[ Yk+1 = yk+1 | Yk−1 = yk−1].
+
+We thus conclude the proof. We have two more lemmata left to prove before moving onto combining our results. 
+
+Lemma 4.5. Assuming at least 2N 2 log( N ) actions took place, Pr[All-act] ≥ 1 − 1 
+
+> N
+
+.Proof. Notice that for any i ∈ { 1, . . . , N },Pr[ Xi > 2N log N ] ≤ (1 − 1
+
+N )2N log N ≤ exp( −2 log( N )) = N −2.
+
+Then, Pr[All-act] ≥ 1 − 1 
+
+> N
+
+by the union bound over all the Xi .
+
+Lemma 4.6. Let ε > 0 and d ∈ N such that ε ≥ 2−d(P + C − 1) and consider a node v such that 
+
+log( N ) − 1 ≥ depth (v) > d . Then, we have that 
+
+E[|Res (v)| | All-act , Anc-bl( d)] 
+
+≥ (1 + (1 − ε) PP + C )E[|Res (left (v)) | | All-act , Anc-bl( d, left (v))] .
+
+Proof. Observe that ε ≥ 2depth (v)−d+1 (P + C − 1) /N since log( N ) − 1 ≥ depth (v). By Lemma 4.4, we have that 
+
+E[|Res (v)| | All-act , Anc-bl( d, v )] 
+
+≥ E[|Res (v)| | All-act , Anc-bl( d, v ), B (v) = 1] ·· Pr[ B(v) = 1 | All-act , Anc-bl( d, v )] 
+
+≥ E[|Res (v)| | All-act , Anc-bl( d, v ), B (v) = 1] 12 (1 + (1 − ε) PP + C )= 2 E[|Res (left (v)) | | All-act , Anc-bl( d, v ), B (v) = 1] 12 (1 + (1 − ε) PP + C )= E[|Res (left (v)) | | All-act , Anc-bl( d, left (v))](1 + (1 − ε) PP + C ).
+
+We are now ready to prove the section’s main theorem. 
+
+Proof of Theorem 4.2. Let v be any node at depth d(v) = d and let ε > 0 be a small constant such that 
+
+ε ≥ 2−d(P + C − 1). The fact that such d and ε exist follows from the assumption that P + C = O(1). We show that the expected resolution size of v is Ω( N log 2(1+(1 −ε) PP +C )). Since any commit will have a node of said depth in its copath, this is sufficient for the proof. We start with the simple observation that 
+
+E[|Res (v)|] ≥ E[|Res (v)| | All-act , B (v) = 1] Pr[All-act , B (v) = 1] = 2 E[|Res (left (v)) | | All-act , Anc-bl( d, left (v))] Pr[All-act , B (v) = 1] .
+
+21 We use Lemma 4.5 in order to obtain that Pr[All-act , B (v) = 1] ≥ Pr[ B(v) = 1] − Pr[ ¬All-act] 
+
+≥ Pr[ B(v) = 1] − 1
+
+N .
+
+It follows from repeatedly applying Lemmata 4.6 and 4.1 that 
+
+E[|Res (v)|]
+
+≥ 2(Pr[ B(v) = 1] − 1
+
+N )E[|Res (left (v)) | | All-act , Anc-bl( d, left (v))] 
+
+≥ 2(Pr[ B(v) = 1] − 1
+
+N )(1 + (1 − ε) PP + C )log 2 N −d(left (v)) 
+
+≥ Ω
+
+
+
+1 − (N (1 −2−d) 
+
+> P
+
+)(NP )
+
+ (N (1 −2−d) 
+
+> C
+
+)(NC )1 − (N (1 −2−d) 
+
+> C
+
+)(NC )(N (1 −2−d) 
+
+> P
+
+)(NP )
+
+− 1
+
+N
+
+
+
+1 + (1 − ε) PP + C
+
+log 2 N −d
+
+.
+
+We make use of Equation 4 and the expression above simplifies to E[Cost (t)] ≥ Ω( N log 2(1+(1 −ε) PP +C )), as desired. The proof above does not explicitly state the constant that appears in the lower bound of E[Cost (t)] = Ω( N log 2(1+(1 −ε) PP +C )). However, one can obtain an explicit constant from the proof. For instance if P = 1 = 
+
+C, one can take ε = 1 /8 and then for a node v3 at depth 3 and a node v4 at depth 4, the proof shows that 
+
+E[|Res (v3)|] ≥ 2 · 1/2 · (1 + (1 − 1/8) · 1/2) log 2 N −3−1
+
+E[|Res (v4)|] ≥ 2 · 1/2 · (1 + (1 − 1/8) · 1/2) log 2 N −4−1.
+
+This implies that 
+
+E[Cost (t)] ≥ E[|Res (v3)|] + E[|Res (v4)|]
+
+≊ 0.39 · N 0.52 .
+
+For small values of N the previously shown bound of log 2(N )/4 − log( N )/4 is more relevant. 
+
+# 5 MLS-Cutoff : an Alternative Method for Update Proposals 
+
+We introduce MLS-Cutoff a protocol variant of MLS that achieves better communication complexity under random sequences of operations as defined in experiment Exp -Prop -Com . As discussed in the previous section, blanking the path of users issuing an update proposals already for a small constant number of proposals leads to a constant fraction of the tree’s node being blank on expectation, which in turn substantially negatively impacts the size of commit messages. To prevent introducing blanks in the tree, one could have users perform a rekey -path operation with every update proposal. In fact, this is the approach taken by the continuous group-key agreement scheme Co-CoA [AAN +22]. However, taking this approach has two downsides, both due to the fact that proposals can be issued concurrently, meaning users make concurrent modifications to the ratchet tree. 1. If two users u1, u2 rekey their path concurrently, u1 will encrypt a path secret sj under a public known to u2 that is supposed to be replaced by u2’s rekey operation. As a consequence CoCoA suffers from slower PCS. In MLS, if every compromised user issues an update proposal and another user commits to the proposals, then the new application secret will be secure. In CocoA, on the other hand, it can take up to depth (T) rounds to recover from compromise. 22 2. Concurrently rekeying paths prevents users to compute and sign parent hashes, as they cannot an-ticipate which keys will be placed in the sub-trees rooted at their co-path nodes. (Recall that the parent-hash value of node v is computed with respect to the tree-hash of its sibling sib (v).) As a con-sequence, CoCoA only achieves semi-active but neither active [ACJM20] nor insider security [AJM22]. We observe that the issues above only occur from the point on where u1 and u2’s update paths meet. Further, if the number of issued update proposals is small, with high probability the users’ update paths merge high up in the tree. Our protocol MLS-Cutoff makes use of this observation by having update proposals only re-key the path up to a certain point. Looking ahead, proposals do not affect the log( depth (T)) topmost levels of the tree. Still, when applying the proposals it can be the case that a node is affected by more than one rekey operation if the issuing users are situated close enough in the tree. In this case we have to resort to blanking the node. This turns out to be sufficient to prevent the two issues outlined above. 
+
+## 5.1 Protocol Description 
+
+In this section we discuss the modifications MLS-Cutoff makes to the MLS protocol and defer its formal description to Appendix B.2. MLS-Cutoff differs in two aspects from MLS, namely how update proposal messages pmsg are generated, and how proposals are applied to the ratchet tree using apply -props .The protocol is parameterized by a cutoff parameter icut . CGKA .Prop works the same as before for removals or additions of users. When issuing an update, however, the user creates a copy T′ of the ratchet tree and calls the path rekeying function (see Figure 3) to obtain (T′, UpdPath ) ← rekey -path (vu, i cut ).
+
+The proposal message pmsg = ( ‘upd’ , UpdPath ) is framed and communicated to the rest of the group, and 
+
+T′ stored as a pending update. Commit operations work in the same way as in MLS, except for using a modified subroutine apply -props in step 2a. For an overview on apply -props see Figure 5). The function modifies the copied tree T′ and processes removals and additions in the same way as MLS, i.e., by blanking the leaf and path of removed users and adding added users as unmerged leaves. Update proposals ( ‘upd’ , UpdPath ) from issuing user u-snd are processed by first updating the keys of affected nodes. More precisely, the public keys pk 0, . . . , pk ℓ−icut 
+
+contained in UpdPath are used to replace the ones on u-snd’s update path ( v1, . . . , v ℓ) = path (v0), where 
+
+v0 = vu-snd . Further, the processing user u recovers all secret keys they should have access to, i.e., the ones from the least common ancestor vj of vu and vu-snd up to vℓ−icut (if the vj is above vℓ−icut no secret keys are recovered), and assigns them to the corresponding nodes. This is abstracted as helper function recover -sks 
+
+in Figure 5 that takes as input T′ and ciphertext collection Cj and returns the updated view of T′ with replaced secret keys. After the keys of nodes affected by pmsg have been updated, apply -props blanks nodes if necessary. I.e., all nodes ( vℓ−icut +1 , . . . , v ℓ) on u-snd’s update path after the cutoff point are blanked. Further, nodes affected by at least two update proposals are blanked as well. To this end the function keeps track of a set Vcol 
+
+containing all nodes the keys of which have been replaced so far, that is updated at the end of processing 
+
+pmsg .After having executed the alternative version of apply -props in step 2a the commit algorithm CGKA .Com 
+
+proceeds in the same way as MLS. In particular, in step 2b the committing user issues a full path rekey operation rekey -path (u, 0), which establishes a new root secret. Commits to a collection of proposals are processed in the analog way to MLS,i.e, the only difference being the use of the modified apply -props function. 
+
+## 5.2 Security 
+
+MLS-Cutoff achieves the same level of security as MLS. More formally in Appendix B.2 we prove the following theorem 23 Algorithm apply -props (T′, PMSG ) 
+
+> 00
+
+if exists (( ‘upd’ , ad ), u -own) = pmsg ∈ PMSG \\ own proposal  
+
+> 01
+
+T′ ← pendUpd (pmsg ) \\ recover corresponding tree  
+
+> 02
+
+Vcol ← ∅ \\ set collecting potential collisions  
+
+> 03
+
+for pmsg ∈ PMSG : 
+
+> 04
+
+parse (( ‘type’ , ad ), u -snd) ← pmsg  
+
+> 05
+
+if (‘type’ , ad ) = ( ‘upd’ , UpdPath ) 
+
+> 06
+
+if u-snd = u-own \\ own proposal already handled  
+
+> 07
+
+skip to next pmsg  
+
+> 08
+
+\\ rekey nodes  
+
+> 09
+
+parse (pk 0, (pk 1, C 1), . . . , (pk ℓ−icut , C ℓ−icut ) ← UpdPath  
+
+> 10
+
+v0 ← vu-snd  
+
+> 11
+
+(v1, . . . , v ℓ) ← path (v0) 
+
+> 12
+
+for j = 0 , . . . , ℓ − icut  
+
+> 13
+
+vj .pk ← pk j 
+
+> 14
+
+if vj = lca (vu-own , v u-snd ) \\ least common ancestor  
+
+> 15
+
+T′ ← recover -sks (T′, C j ) \\ recover secret keys  
+
+> 16
+
+\\ blank nodes  
+
+> 17
+
+for j ∈ { 1, . . . , ℓ − icut } 
+
+> 18
+
+if vj ∈ Vcol \\ blank collisions  
+
+> 19
+
+blank (vj ) 
+
+> 20
+
+for j ∈ { ℓ − icut + 1 , . . . , ℓ } \\ blank remainder of path  
+
+> 21
+
+blank (vj ) 
+
+> 22
+
+Vcol ← { v1, . . . , v ℓ} \\ update collision set  
+
+> 23
+
+\\ process removes, adds as before  
+
+> 24
+
+else if (‘type’ , ad ) = ( ‘rem’ , u -rem) : 
+
+> 25
+
+blank -leaf (T′, v u-rem ) \\ blank u-rem ’s leaf  
+
+> 26
+
+for v ∈ path (vu-rem ) \\ blank u-rem ’s path  
+
+> 27
+
+blank (v) 
+
+> 28
+
+T′ ← truncate (T′) \\ truncate tree if necessary  
+
+> 29
+
+else if (‘type’ , ad ) = ( ‘add’ , (u-add , pk )) : 
+
+> 30
+
+add -leaf (T′, u -add , pk ) \\ assign u-rem leaf  
+
+> 31
+
+for v ∈ path (vu-add ) \\ set vu-add as unmerged  
+
+> 32
+
+v. unm ←∪ {vu-add } 
+
+> 33
+
+return T′
+
+Figure 5: Applying proposal messages in MLS-Cutoff. The function’s formal description is in Figures 23. We assume PMSG is ordered with update proposals followed by removals, followed by adds. 
+
+Theorem 5.1. If Pke is IND-CCA2 secure, Sig is SEUF-CMA secure and calls to H1, H2, H and Mac 
+
+are replaced by calls to a random oracle G, then MLS-Cutoff securely realizes (FIAS , FIKS , FCGKA ) in the 
+
+(FAS , FKS , G)-hybrid model. 
+
+We provide some intuition on why the result holds. As MLS-Cutoff closely resembles MLS we are able to largely rely of the security proof of [AJM22]. The recent work of Cremers et al. [CGWZ25] shows that the signature scheme used must be SEUF-CMA secure rather than just EUF-CMA secure as originally stated in [AJM22], though their security proof already made use of SEUF-CMA security implicitly. We note that while in MLS-Cutoff update proposals lead to modifications to ratchet tree nodes beyond users’ personal leaves, it preserves the following property. For an update issuing user u denote their leaf by v0,consider their update path ( v1, . . . , v ℓ), and assume that the keys of nodes v1, . . . , v k have been replaced after processing a commit to the update proposal and vk+1 , . . . , v ℓ have been blanked. Then all sub-trees rooted at the nodes sib (v0), ..., sib (vk) must be in the same state as they were when the update proposal was issued. Indeed, would this not be the case for one of the nodes, then it would have caused a collision of update proposals and been blanked. This has the consequence that, on the one hand, keys being added to the tree cannot be encrypted under a public key that was concurrently being replaced, and, on the other hand, that the added nodes are compatible with the parent hash mechanism. 24 5.3 Upper Bounds on the Update Cost 
+
+We compute an upper bound on the communication complexity of MLS-Cutoff for sequences of operations as produces in experiment Exp -Prop -Com . We focus on the case C = 1, as the performance for C ≥ 1 is even better. 
+
+Expected number of blanks in MLS-Cutoff ’s ratchet tree. Let N = 2 n, t ∈ N, C = 1, and let P ∈ N be constant. Consider an execution of Exp -Prop -Com (n, P, C, t ) with respect to CGKA MLS-Cutoff. As in Sec-tion 4.2 consider the sequence ( Ti)ti=1 of ratchet trees generated after the ith application of Exp -Prop -Com ’s round function. For a fixed internal node v we can define a random variable ( Bi(v)) ti=0 taking values in 
+
+{0, 1} where 0 corresponds to being a populated node and 1 to v being blank. We write Bi instead of Bi(v)when there is no ambiguity. We note that all users have filtered paths of length n.Now consider a node v below the cutoff bound icut , meaning that v’s dept d = depth (v) ≥ icut , which implies that v is re-keyed if one of its descendant leaves issues an update proposal. We observe that, again, (Bi)i forms a Markov chain, since the node switching from blank or vice versa only depends on the question, whether it is affected by update proposals and/or commits. More precisely v moves from blank to populated if it is affected by the commit or by exactly one update proposal, and from populated to blank if it is not affected by the commit and at least two update proposals. 
+
+p1→0 = Pr[ v ∈ ancs (UC ) ∨ |{ u ∈ UP : v ∈ ancs (vu)}| = 1] 
+
+p0→1 = Pr[ v / ∈ ancs (UC ) ∧ |{ u ∈ UP : v ∈ ancs (vu)}| ≥ 2] .
+
+Thus, we have 
+
+p1→0 = Pr[ v ∈ ancs (UC )] + Pr[ |{ u ∈ UP : v ∈ ancs (vu)}| = 1] 
+
+− Pr[ v ∈ ancs (UC ) ∧ |{ u ∈ UP : v ∈ ancs (vu)}| = 1] = 1 −
+
+ N (1 −2−d)
+
+> C
+
+ NC
+
+ + P (1 − 2−d)P −12−d − (1 −
+
+ N (1 −2−d)
+
+> C
+
+ NC
+
+ )P (1 − 2−d)P −12−d
+
+= 1 + ( P (1 − 2−d)P −12−d − 1) 
+
+ N (1 −2−d)
+
+> C
+
+ NC
+
+ ,
+
+and 
+
+p0→1 = Pr[ v / ∈ ancs (UC )] Pr[ |{ u ∈ UP : v ∈ ancs (vu)}| ≥ 2] =
+
+ N (1 −2−d)
+
+> C
+
+ NC
+
+ (1 − (1 − 2−d)P − P 2−d(1 − 2−d)P −1).
+
+Observe that for C = 1 and d sufficiently large this simplifies to 
+
+p1→0 ≊ 1 − (1 − 2−d) = 2 −d
+
+and 
+
+p0→1 ≊ 1 − (1 − 2−d)P − P 2−d(1 − 2−d)P −1 ≊ P (P − 1)2 −2d
+
+By Equation 1 we obtain that the probability of v being blank in the stationary distribution (when 
+
+d = depth (v) ≥ icut ) is given by 
+
+E[B(v) = 1] = p0→1
+
+p1→0 + p0→1
+
+≊ P 22−2d
+
+2−d + P 22−2d ≊ P 22−d
+
+1 + P 22−d ∈ O
+
+ P 2
+
+2d
+
+
+
+. (9) 25 As a consequence, the ratchet tree exhibits on expectation a constant amount of about P 2 blank nodes on level d.Now consider a node v above the cutoff bound icut , i.e., d = depth (v) < i cut This implies that v changes from populated to blank if and only if (at least) one of its descendant leaves issues an update proposal and none of them issue a commit, whereas v changes from populated to blank if and only if at least one of them issues a commit. Using similar arguments to previous ones, we obtain that 
+
+p1→0 = Pr[ v ∈ ancs (UC )] = 1 −
+
+ N (1 −2−d)
+
+> C
+
+ NC
+
+
+
+and 
+
+p0→1 = Pr[ v / ∈ ancs (UC ) ∧ v ∈ ancs (UP )] = 
+
+ N (1 −2−d)
+
+> C
+
+ NC
+
+ 1 −
+
+ N (1 −2−d)
+
+> P
+
+ NP
+
+!
+
+.
+
+If C = 1 this simplifies to 
+
+p1→0 = 2 −d,p0→1 ≊ (1 − 2−d)(1 − (1 − 2−d)P ) ≊ (1 − 2−d)P 2−d.
+
+By Equation 1 we obtain that the probability of v being blank in the stationary distribution (when d =
+
+depth (v) < i cut ) is given by 
+
+E[B(v) = 1] = p0→1
+
+p1→0 + p0→1
+
+≊ (1 − 2−d)P 2−d
+
+2−d + (1 − 2−d)P 2−d ∈
+
+
+
+0, P
+
+1 + P
+
+
+
+. (10) 
+
+Bounding |Res (v)|. The size of the resolution of a node v can be bounded by the number of blank nodes in the subtree rooted at v plus one. If C = 1, we use this simple fact and Equations 9 and 10 in order to obtain that for nodes of d = depth (v) ≥ icut 
+
+E[|Res (v)|] ≤ 1 + 
+
+> d+1
+
+X 
+
+> d′=log( N)
+
+2d′−d P (P − 1)2 −d′
+
+1 + P (P − 1)2 −d′
+
+≤ 1 + P (P − 1)2 −d(log( N ) − d)and for nodes of d = depth (v) < i cut 
+
+E[|Res (v)|] ≤ 1 + 
+
+> icut
+
+X 
+
+> d′=log( N)
+
+2d′−d P (P − 1)2 −d′
+
+1 + P (P − 1)2 −d′ +
+
+> d+1
+
+X
+
+> d′=icut −1
+
+2d′−d P
+
+1 + P
+
+≤ 1 + P (P − 1)2 −d(log( N ) − icut ) + 2 −d 2d − 2icut 
+
+1 − 2
+
+≤ P (P − 1)2 −d(log( N ) − icut ) + 2 icut −d
+
+Bounding |pmsg | and |cmsg |. To compute a bound on the communication complexity of MLS-Cutoff for random sequences of operations, recall that by definition of rekey -path (T′, id , i ), if the v0 = vid and (v1, . . . , v ℓ) = path (v0), the amount of ciphertexts is given by 
+
+|CTXT | =
+
+> ℓ−icut −1
+
+X
+
+> j=0
+
+|Res (sib (vi)) |.
+
+26 We make use the previous bounds on the size of the resolution of a node and obtain that 
+
+E[|CTXT |] =  
+
+> log( N)
+
+X
+
+> d=1
+
+E[|Res (vd)|]
+
+≤
+
+> icut −1
+
+X
+
+> d=1
+
+(P (P − 1)2 −d(log( N ) − icut ) + 2 icut −d)+ 
+
+> log( N)
+
+X
+
+> d=icut
+
+(1 + P (P − 1)2 −d(log( N ) − d)) 
+
+≤ P (P − 1)(log( N ) − icut ) + 2 icut + log( N ) − icut + 1 .
+
+If we set icut = log( n) = log(log( N )), we obtain that 
+
+E[|CTXT |] ≤ log( N ) + ( P (P − 1) + 1) log( N/ log( N )) + 1 .
+
+We have shown the following. 
+
+Lemma 5.2. Let C = 1 , and let P ∈ N be constant. Let t be sufficiently large. For N = 2 n set icut =log( n). Then, on expectation, proposal messages pmsg and commit messages cmsg output by MLS-Cutoff 
+
+for sequences of operations as defined by Exp -Prop -Com satisfy 
+
+E[|pmsg |] ≤ E[|cmsg |] ∈ O(log( N )) .
+
+We point out that the amount of proposals per commit needs to be small compared to the group size N
+
+in order to guarantee a logarithmic communication complexity. Observe that Lemma 5.2 gives a bound that is asymptotic in N while P is assumed to be constant. If P becomes too large compared to the group size, the probability of blanks being introduced in the ratchet tree grows. In the extreme case of all users issuing update proposals, for example, the whole tree is blanked just as in MLS. We point out, that a linear communication complexity is, however, inherent for this type of ‘massive’ concurrency (Compare, e.g., the lower bounds of [BDR20]). As a second point, experiment Exp -Prop -Com does not remove users from the group, which would introduce blanks as well. However, observe that these blanks would be removed at a faster pace in MLS-Cutoff compared to MLS due to the additional path rekeying in update proposals. Summing up, we see MLS-Cutoff as an attractive alternative to how update proposals are handled in MLS, that provides the same security properties, but has an improved communication complexity for moderate numbers of concurrent update proposals. We consider it an interesting open question to evaluate its performance in more realistic models. 
+
+# 6 Acknowledgment 
+
+We are very grateful to Guillermo Pascual Perez for the helpful conversations on MLS, its different versions and its consistency mechanisms. 27 References 
+
+[AAB +21] Jo¨ el Alwen, Benedikt Auerbach, Mirza Ahad Baig, Miguel Cueto Noval, Karen Klein, Guillermo Pascual-Perez, Krzysztof Pietrzak, and Michael Walter. Grafting key trees: Efficient key man-agement for overlapping groups. In Kobbi Nissim and Brent Waters, editors, TCC 2021, Part III , volume 13044 of LNCS , pages 222–253. Springer, Cham, November 2021. [AAB +24] Michael Anastos, Benedikt Auerbach, Mirza Ahad Baig, Miguel Cueto Noval, Matthew Kwan, Guillermo Pascual-Perez, and Krzysztof Pietrzak. The cost of maintaining keys in dynamic groups with applications to multicast encryption and group messaging. In Elette Boyle and Mohammad Mahmoody, editors, TCC 2024, Part I , volume 15364 of LNCS , pages 413–443. Springer, Cham, December 2024. [AACN +24] Jo¨ el Alwen, Benedikt Auerbach, Miguel Cueto Noval, Karen Klein, Guillermo Pascual-Perez, and Krzyzstof Pietrzak. Decaf: Decentralizable cgka with fast healing. In Clemente Galdi and Duong Hieu Phan, editors, Security and Cryptography for Networks , pages 294–313, Cham, 2024. Springer Nature Switzerland. [AAN +22] Jo¨ el Alwen, Benedikt Auerbach, Miguel Cueto Noval, Karen Klein, Guillermo Pascual-Perez, Krzysztof Pietrzak, and Michael Walter. CoCoA: Concurrent continuous group key agreement. In Orr Dunkelman and Stefan Dziembowski, editors, EUROCRYPT 2022, Part II , volume 13276 of LNCS , pages 815–844. Springer, Cham, May / June 2022. [ACD19] Jo¨ el Alwen, Sandro Coretti, and Yevgeniy Dodis. The double ratchet: Security notions, proofs, and modularization for the Signal protocol. In Yuval Ishai and Vincent Rijmen, editors, EU-ROCRYPT 2019, Part I , volume 11476 of LNCS , pages 129–158. Springer, Cham, May 2019. [ACDT20] Jo¨ el Alwen, Sandro Coretti, Yevgeniy Dodis, and Yiannis Tselekounis. Security analysis and improvements for the IETF MLS standard for group messaging. In Daniele Micciancio and Thomas Ristenpart, editors, CRYPTO 2020, Part I , volume 12170 of LNCS , pages 248–277. Springer, Cham, August 2020. [ACDT21] Jo¨ el Alwen, Sandro Coretti, Yevgeniy Dodis, and Yiannis Tselekounis. Modular design of secure group messaging protocols and the security of MLS. In Giovanni Vigna and Elaine Shi, editors, ACM CCS 2021 , pages 1463–1483. ACM Press, November 2021. [ACJM20] Jo¨ el Alwen, Sandro Coretti, Daniel Jost, and Marta Mularczyk. Continuous group key agree-ment with active security. In Rafael Pass and Krzysztof Pietrzak, editors, TCC 2020, Part II ,volume 12551 of LNCS , pages 261–290. Springer, Cham, November 2020. [AHKM22] Jo¨ el Alwen, Dominik Hartmann, Eike Kiltz, and Marta Mularczyk. Server-aided continuous group key agreement. In Heng Yin, Angelos Stavrou, Cas Cremers, and Elaine Shi, editors, 
+
+ACM CCS 2022 , pages 69–82. ACM Press, November 2022. [AJM22] Jo¨ el Alwen, Daniel Jost, and Marta Mularczyk. On the insider security of MLS. In Yevgeniy Dodis and Thomas Shrimpton, editors, CRYPTO 2022, Part II , volume 13508 of LNCS , pages 34–68. Springer, Cham, August 2022. [AMT23] Jo¨ el Alwen, Marta Mularczyk, and Yiannis Tselekounis. Fork-resilient continuous group key agreement. In Helena Handschuh and Anna Lysyanskaya, editors, CRYPTO 2023, Part IV ,volume 14084 of LNCS , pages 396–429. Springer, Cham, August 2023. [ANPPP23] Benedikt Auerbach, Miguel Cueto Noval, Guillermo Pascual-Perez, and Krzysztof Pietrzak. On the cost of post-compromise security in concurrent continuous group-key agreement. In Guy N. Rothblum and Hoeteck Wee, editors, TCC 2023, Part III , volume 14371 of LNCS ,pages 271–300. Springer, Cham, November / December 2023. 28 [BBR18] Karthikeyan Bhargavan, Richard Barnes, and Eric Rescorla. TreeKEM: Asynchronous De-centralized Key Management for Large Dynamic Groups. https://mailarchive.ietf.org/ arch/attach/mls/pdf1XUH6o.pdf , May 2018. [BBR +23] Richard Barnes, Benjamin Beurdouche, Raphael Robert, Jon Millican, Emad Omara, and Katriel Cohn-Gordon. The Messaging Layer Security (MLS) Protocol. RFC 9420, July 2023. [BCG23] David Balb´ as, Daniel Collins, and Phillip Gajland. WhatsUpp with sender keys? Analysis, improvements and security proofs. In Jian Guo and Ron Steinfeld, editors, ASIACRYPT 2023, Part V , volume 14442 of LNCS , pages 307–341. Springer, Singapore, December 2023. [BCK21] Chris Brzuska, Eric Cornelissen, and Konrad Kohbrok. Cryptographic security of the MLS RFC, draft 11. Cryptology ePrint Archive, Report 2021/137, 2021. [BCV23] David Balb´ as, Daniel Collins, and Serge Vaudenay. Cryptographic administration for secure group messaging. In Joseph A. Calandrino and Carmela Troncoso, editors, USENIX Security 2023 , pages 1253–1270. USENIX Association, August 2023. [BDG +22] Alexander Bienstock, Yevgeniy Dodis, Sanjam Garg, Garrison Grogan, Mohammad Hajiabadi, and Paul R¨ osler. On the worst-case inefficiency of CGKA. In Eike Kiltz and Vinod Vaikun-tanathan, editors, TCC 2022, Part II , volume 13748 of LNCS , pages 213–243. Springer, Cham, November 2022. [BDR20] Alexander Bienstock, Yevgeniy Dodis, and Paul R¨ osler. On the price of concurrency in group ratcheting protocols. In Rafael Pass and Krzysztof Pietrzak, editors, TCC 2020, Part II , volume 12551 of LNCS , pages 198–228. Springer, Cham, November 2020. [Can01] Ran Canetti. Universally composable security: A new paradigm for cryptographic protocols. In 42nd FOCS , pages 136–145. IEEE Computer Society Press, October 2001. [CDPW07] Ran Canetti, Yevgeniy Dodis, Rafael Pass, and Shabsi Walfish. Universally composable security with global setup. In Salil P. Vadhan, editor, TCC 2007 , volume 4392 of LNCS , pages 61–85. Springer, Berlin, Heidelberg, February 2007. [CEST24] Kelong Cong, Karim Eldefrawy, Nigel P. Smart, and Ben Terner. The key lattice framework for concurrent group messaging. In Christina P¨ opper and Lejla Batina, editors, ACNS 24In-ternational Conference on Applied Cryptography and Network Security, Part II , volume 14584 of LNCS , pages 133–162. Springer, Cham, March 2024. [CGWZ25] Cas Cremers, Esra G¨ unsay, Vera Wesselkamp, and Mang Zhao. ETK: External-operations TreeKEM and the security of MLS in RFC 9420. Cryptology ePrint Archive, Paper 2025/229, 2025. [CHK21] Cas Cremers, Britta Hale, and Konrad Kohbrok. The complexities of healing in secure group messaging: Why cross-group effects matter. In Michael Bailey and Rachel Greenstadt, editors, 
+
+USENIX Security 2021 , pages 1847–1864. USENIX Association, August 2021. [HKP +21] Keitaro Hashimoto, Shuichi Katsumata, Eamonn Postlethwaite, Thomas Prest, and Bas West-erbaan. A concrete treatment of efficient continuous group key agreement via multi-recipient PKEs. In Giovanni Vigna and Elaine Shi, editors, ACM CCS 2021 , pages 1441–1462. ACM Press, November 2021. [HKP22] Keitaro Hashimoto, Shuichi Katsumata, and Thomas Prest. How to hide metadata in mls-like secure group messaging: Simple, modular, and post-quantum. In Proceedings of the 2022 ACM SIGSAC Conference on Computer and Communications Security , CCS ’22, page 1399–1412, New York, NY, USA, 2022. Association for Computing Machinery. 29 [KPPW +21] K. Klein, G. Pascual-Perez, M. Walter, C. Kamath, M. Capretto, M. Cueto, I. Markov, M. Yeo, J. Alwen, and K. Pietrzak. Keep the Dirt: Tainted TreeKEM, Adaptively and Actively Secure Continuous Group Key Agreement. In 2021 IEEE Symposium on Security and Privacy (SP) ,pages 268–284, Los Alamitos, CA, USA, may 2021. IEEE Computer Society. [Wei19] Matthew A. Weidner. Group Messaging for Secure Asynchronous Collaboration. Master’s thesis, University of Cambridge, June 2019. [WHA99] D. Wallner, E. Harder, and R. Agee. Key management for multicast: Issues and architectures. Request for Comments: 2627, Internet Engineering Task Force, 1999. [WKHB21] Matthew Weidner, Martin Kleppmann, Daniel Hugenroth, and Alastair R. Beresford. Key agreement for decentralized secure group messaging with strong security guarantees. In Gio-vanni Vigna and Elaine Shi, editors, ACM CCS 2021 , pages 2024–2045. ACM Press, November 2021. [WPBB23] Th´ eophile Wallez, Jonathan Protzenko, Benjamin Beurdouche, and Karthikeyan Bhargavan. TreeSync: Authenticated group management for messaging layer security. In Joseph A. Ca-landrino and Carmela Troncoso, editors, USENIX Security 2023 , pages 1217–1233. USENIX Association, August 2023. 30 Supplementary material 
+
+# A Omitted Formal Security Definition 
+
+## A.1 Public Key Encryption 
+
+Definition A.1. A public-key encryption (PKE) scheme is a tuple of efficient algorithms Pke = ( Pke .Gen ,
+
+Pke .Enc , Pke .Dec ) formed by 
+
+• a probabilistic key generation algorithm (pk , sk ) ← Pke .Gen () that outputs a pair formed by a public key and a secret key, 
+
+• a probabilistic encryption algorithm that on input a public key pk and a message m outputs a ciphertext 
+
+c ← Pke .Enc (pk , m ),
+
+• a deterministic decryption algorithm that on input a ciphertext c and a secret key sk outputs a message 
+
+m ← Pke .Dec (sk , c ) or an error value ⊥.We say it is correct if for all (pk , sk ) ← Pke .Gen () and all messages m it holds that 
+
+Pke .Dec (sk , Pke .Enc (pk , m )) = m. 
+
+Now we proceed to define security. For an adversary A and a PKE scheme Pke we consider the following experiment Exp A
+
+> Pke
+
+:1. sample b ∈← $ {0, 1},2. sample ( pk , sk ) ←$ Pke .Gen () and give pk to A,3. A is allowed to make decryption queries in which it sends a ciphertext c and receives Pke .Dec (sk , c ), 4. A sends a pair of messages ( m0, m 1) and receives a challenge ciphertext c∗ ← Pke .Enc (pk , m b)5. A is allowed to make decryption queries in which it sends a ciphertext c with the condition that c̸ = c∗
+
+and receives Pke .Dec (sk , c ), 6. A outputs a bit b′,7. the output of the experiment Exp A 
+
+> PKE
+
+is 1 if b = b′ and 0 otherwise. 
+
+Definition A.2. We say that a PKE scheme Pke is IND-CCA2 secure if for all efficient adversaries A|Pr[ Exp A 
+
+> Pke
+
+= 1] − 12 |
+
+is negligible. 
+
+## A.2 Digital Signatures 
+
+Definition A.3. A digital signature is a tuple of efficient algorithms Sig = ( GenS , Sign , Vrfy ) formed by 
+
+• a probabilistic key generation algorithm (svk , ssk ) ← GenS () that outputs a pair formed by a public verification key and a secret signing key, 
+
+• a probabilistic encryption algorithm that on input a secret signing key ssk and a message m outputs a signature σ ← Sign (ssk , m ),
+
+• a deterministic verification algorithm that on input a message signature pair (m, σ ) and a verification key svk outputs a boolean value b ← Vrfy (svk , m, σ ).
+
+31 We say it is correct if for all (svk , ssk ) ← GenS () and all messages m it holds that 
+
+Vrfy (svk , Sign (ssk , m )) = 1 .
+
+For an adversary A and a signature scheme Sig we consider the following experiment Exp A
+
+> Sig
+
+:1. sample ( svk , ssk ) ← GenS () and give svk to A,2. A is allowed to make signing queries in which it sends a message mi and receives σi ← Sign (ssk , m i), 3. A outputs a message-signature pair ( m∗, σ ∗), 4. the output of Exp A 
+
+> Sig
+
+is 1 if for all queries i it holds that ( m∗, σ ∗)̸ = ( mi, σ i) and Vrfy (svk , m ∗, σ ∗) = 1. Otherwise the output is 0. 
+
+Definition A.4. We say that a signature scheme Sig is SEUF-CMA secure if for all efficient adversaries A|Pr[ Exp A 
+
+> Sig
+
+= 1] − 12 |
+
+is negligible. 
+
+## A.3 PKI and CGKA 
+
+For the definition of the PKI functionalities see Figures 6 and 7. The reader may find a pseudo-code description of the ideal functionality FCGKA in Figures 8, 9, 10 and 11. The helpers used to describe 
+
+FCGKA can be found in Figures 12, 13, 14, 15 and 16. The reader may find the definition of the predicates safe (c) and inj -allowed (c, u ) in Figure 17. 
+
+# B Omitted Formal Protocol Descriptions 
+
+## B.1 Formal description of MLS 
+
+In this section we provide pseudocode for the CGKA underlying MLS. Our protocol description closely follows the one of [AJM22], more precisely the one of protocol ITK, a CGKA introducing fixes to a prior draft of the MLS protocol that were later adapted into the standard. As the focus on this work is on the impact of blanking on the protocol’s communication complexity, makes the same simplifying assumptions. I.e., we focus on the CGKA part of the protocol and do not include its secure messaging layer, assume a fixed protocol version and cipher suite, and omit features like meta data protection and the additional proposal types PreSharedKey, ReInit, ExternalInit, GroupContextExtensions and external proposals. As a minor difference we use the parent hash mechanism as defined in the IETF standard [BBR +23] that slightly differs from the one used by ITK. The protocol is defined with respect to public-key encryption scheme Pke = ( Gen , Enc , Dec ) with key pairs ( pk , sk ), signature scheme Sig = ( GenS , Sign , Vrfy ) with key pairs ( svk , ssk ), MAC Mac = ( Mac .Tag , Mac .Ver ), key-derivation function the use of which is modeled as hash functions H1, H2, and hash function H.
+
+Protocol state. We list the content of users’ states, as well as the intuition behind additional values computed throughout the protocol execution in Table 1. 
+
+Interaction with KS and AS. Users interact with the key service and authentication service via the following. 
+
+fetch -ssk -if -nec is used to retrieve (and potentially update) a user’s secret signing key (see Figure 18). 
+
+get -sks is used to fetch the secret keys of key packages when joining a group (see Figure 7). 
+
+fetch -kp : fetches a user’s key package from the KS (See Figure 7). 
+
+validate -kp is used to validate key packages (See Figure 18). 
+
+Gen -kp generates a key package (Figure 18). 32 state 
+
+st .groupID the group identifier 
+
+st .ep the current epoch 
+
+st .id the user’s leaf identifier 
+
+st .T the user’s view of the ratchet tree 
+
+st .tHash tree hash of st .Tst .ssk the user’s current secret signing key 
+
+st .cert -SPks the signature verification keys associated to each user’s id 
+
+st .pendUpd a list of pending updates 
+
+st .pendComm a list of pending commits key schedule stored in state 
+
+st .appSec the current epoch’s CGKA group key 
+
+st .interim -tranHash the interim transcript hash for the following epoch 
+
+st .memKey membership key used to frame protocol messages 
+
+st .initSec the next epoch’s initialization secret additional values 
+
+comSec commit secret generated by rekey -path joinerSec secret for added group members, derived from initSec , comSec confKey key to tag confirmed transcript hash 
+
+conf -TransHash hash encoding operations performed so far Table 1: Users’ state in MLS. 
+
+Ratchet tree state and modifications. The state of nodes in the protocol’s underlying ratchet tree is listed in Table 2. The table further list functions returning particular properties of the tree, as well as functions implementing changes to the ratchet tree. 
+
+Protocol algorithms. The group creation, commit, process, join and key-recovery algorithms of MLS can be found in Figure 19. Its proposal algorithm, contrasted against the one of MLS-Cutoff, is in Figure 20. The algorithms make use of helper functionalities rekey -path , apply -rekey (both in Figure 22), and apply -props .The latter is in Figure 23, contrasted against its MLS-Cutoff variant. Further, the protocol employs several additional helper functionalities. While these play an important role in deriving the key schedule and ensuring consistency and authenticity of protocol messages, they do not play a role in modifications to ratchet tree’s state, which is the main focus of this work. Thus for formal definitions of these functions we refer to [AJM22], providing only an overview on their roles below. 
+
+init -epoch on input a user’s state st returns a copy st ′ of the state with incremented epoch st ′.ep = st .ep + 1 and empty list of pending updates and commits. 
+
+derive -keys on input state st , pending state st ′ and commit secret comSec first computes the joiner se-cret joinerSec from comSec and initSec . From this it computes confirmation key confKey , application secret appSec , membership key memKey , and updated initialization secret initSec . The latter three are stored in st ′, and the function’s output is ( st ′, confKey ). 
+
+derive -epochKeys on input pending state st ′ and joiner secret joinerSec computes confKey , appSec , memKey ,and initSec in the same way as derive -keys and returns ( st ′, confKey , joinerSec ). 
+
+sign -commit receives as input the state st and value C that contains hashes of the applied commits and the 
+
+UpdPath object. It returns a signature σ on the concatenation of C with the group context, id, epoch, committer leaf id. 33 public state of node vv. index index of the node 
+
+v. pk public PKE key 
+
+v. pHash parent hash value 
+
+v. unm unmerged leaves 
+
+v. svk signature verification key (if v is leaf) 
+
+v. cred credential (if v is leaf) 
+
+v. kp key package v. kp = ( v. pk , v. svk , v. cred ) (if v is leaf) private state of node vv. sk secret PKE key tree state 
+
+root (T) root of the tree 
+
+leaves (T) returns the leaves of TT.public public part of the ratchet tree 
+
+vid leaf associated to leaf identity id id (v) leaf identity of node v
+
+path (v) direct path from v to the root 
+
+fil -path (v) filtered direct path from v0 to the root 
+
+lca (u, v ) least common ancestor w.r.t filtered paths of leaves u, v 
+
+ind -lca (u, v ) index (from root) of the least common ancestor w.r.t filtered paths of leaves u, v 
+
+Res (v) resolution of node v
+
+roster (T) returns list of leaf IDs modifications to tree 
+
+init -tree creates ratchet tree of size 1 
+
+assign -kp (T, id , kp ) assigns leaf associated to id key package kp add -leaf (T, id ) assign id leftmost free leaf, doubles size of T if necessary 
+
+truncate (T) removes right half of T if it contains no populated leaves 
+
+blank -leaf (T, v ) sets blank (v) for leaf v
+
+blank -path (T, v, i ) calls blank (vj ) for vj ∈ path (v) with j ≥ i
+
+set -as -unmerged (T, v 0) sets v. unm ←∪ {v0} for all v ∈ path (v0)
+
+merge -leaves (T, v 0) sets v. unm ← ∅ for all v ∈ path (v0)Table 2: Ratchet tree state and functions modifying the ratchet tree. 34 set -int -transHash on input pending state st ′ and confirmation tag confTag computes the interim transcript hash interim -tranHash as a hash of the confirmed transcript hash stored in st ′ and confTag . It stores the resulting value in st ′.
+
+set -conf -trans -hash on input state st , pending state st ′, sender id id -snd , C, and signature σ as above computes the confirmed transcript hash conf -TransHash as a hash of the latter three values and the interim transcript hash stored in st ′. The confirmed transcript hash conf -TransHash is stored in st ′.
+
+compute -confTag on input pending state st ′ and confirmation key confKey returns a MAC confTag of the confirmed transcript hash conf -TransHash contained in st ′.
+
+verify -confTag on input pending state st ′, confirmation key confKey , and confirmation tag confTag verifies the tag. 
+
+frame -prop frames proposal P = ( ‘type’ , ad ) by signing and MACing (under the membership key memKey )
+
+P together with group context, group id, epoch, leaf id of the sender. 
+
+unframe -prop on input state st and framed proposal pmsg , verifies signature and MAC tag and returns P
+
+as well as the sender id. 
+
+frame -comm on input state st , confirmation tag confTag , signature σ (as in sign -commit ), and membership tag memTag frames the commit by appending group id, epoch, and id of the committer. 
+
+unframe -comm on input state st and framed commit cmsg , verifies the contained signature and MAC tag. If both verify it returns the sender’s id, C, the confirmation tag, signature, and the membership tag. 
+
+## B.2 Formal description of MLS-Cutoff 
+
+We provide a formal description of protocol MLS-Cutoff. It is defined with respect to public key encryption scheme Pke , Signature scheme Sign , message authentication code Mac , hash function H, and a key-derivation function the use of which is denoted by H1 and H2. The protocol is parameterized by cutoff parameter icut .The protocol shares most algorithms with MLS differing only in two aspects: MLS-Cutoff generates proposal messages in a different way. Its proposal algorithm CGKA .Prop can be found in Figure 20 (right). MLS-Cutoff uses a different method of applying proposals to the ratchet tree. I.e., algorithms CGKA .Com 
+
+and CGKA .Proc make use of the subroutine apply -props of Figure 23 (right). All remaining aspects are handled as in MLS. I.e., the protocol has the same user state (except for storing the cutoff bound in st .i cut that remains unchanged throughout the protocol execution), uses CGKA .Create ,
+
+CGKA .Com , CGKA .Proc , CGKA .Join , and CGKA .Key as defined in Figure 19, and makes use of the subroutines listed in Appendix B.1 and Figures 22 and 18. Note that when rekeying paths while applying updates MLS-Cutoff calls apply -rekey with option copySt = True . This means the parent hashes contained in each update proposal are verified with respect to a tree resulting from applying the modifications to st .T instead of the pending tree T′. Thus, the contained key package verifies if the update message was honestly generated, which implies the parent hash was computed with respect to such a tree. 
+
+Security of MLS-Cutoff .
+
+Proof of Theorem 5.1. We are able to closely follow the security proof for ITK in [AJM22]. The proof is divided into two parts. First a sequence of hybrids shows that a version of the MLS protocol (MLS ∗) that has a different parent hash securely realizes FCGKA with a slightly different version of the safe predicate denoted 
+
+safe ∗. The second step consists in showing that using the actual parent hash guarantees and the actual safe 
+
+predicate satisfy the following property: if safe (c) = true , then no node in the ratchet tree of the epoch that corresponds to c contains an exposed key pk .We argue that both steps can be adapted to the case of MLS-Cutoff. We consider the following hybrids: 35 • Hybrid H0: Real world. 
+
+• Hybrid H1: Instead of the protocol as in the real world, now we consider a dummy functionality FDummy 
+
+that simply routs its inputs and outputs through a simulator S1 that executes the protocol. 
+
+• Hybrid H2: FDummy is substituted by the ideal functionalities FAS , FKS and FCGKA with the only change that FCGKA uses as predicates safe (c) = false and inj -allowed (c, id ) = true . The simulator S2 still executes the actual protocol. 
+
+• Hybrid H3: now FCGKA uses the actual predicate safe ∗. The simulator S3 proceeds as before except that it only sets applications secrets when safe ∗(c) = false .
+
+• Hybrid H4: Ideal world. The difference with the previous hybrid consists in also using the actual predicate inj -allowed . The simulator S4 is the same as S3.Clearly the first two hybrids are indistinguishable. Let’s argue that H1 and H2 are indistinguishable. Despite the fact that in MLS-Cutoff update proposals are created differently, we still frame the proposals in the same way and this guarantees consistency by the same argument as in the proof for MLS. Concerning H2 and H3 the only change in the argument that has to be made corresponds to the fact that 
+
+rekey -path is also used in proposals. Therefore the GSD graph also contains nodes and edges corresponding to these new keys just as is the case for commits in [AJM22]. The indistinguishability of hybrids H3 and H4 follows from the argument made in [AJM22]. Therefore it just remains to show that: if safe (c) = true , then no node in the ratchet tree of the epoch that corresponds to c contains an exposed key pk . Here we make use of the fact that keys ending up in the ratchet tree after processing commits to update proposals were never encrypted under keys being concurrently updated. In the inductive step we have to consider an additional case, namely, that in which the node v for which v. pk 
+
+has been exposed is set as part of proposal that is included in some commit c and the user who generated the commit is a user outsider v’s subtree (in the ratchet tree T that corresponds to that commit). We denote by id c the leaf of the party that generated the commit c.It may be the case that the parent hash of v, pHash v , cannot be verified by using the parent hash of its parent v. par in T as it would be the case when v. par is blanked. However, all nodes contained in the ratchet tree are parent hash valid, as defined in the MLS standard, which uses a slightly modified parent hash definition compared to ITK. However the node at which the path of v to the root and the path of id c to the root merge contains a commitment to the value of pHash v (by definition of par -hash -cochild ) which can be verified and this is done by verify -treeState .36 Initialization  
+
+> 00
+
+Registered , Exposed ← ∅ , SSK [∗, ∗] ← ⊥ , RndCor [∗] ← good 
+
+Input register -spk from a party u 
+
+> 01
+
+if RndCor [u] = good then (svk , ssk ) ←$ GenS ()  
+
+> 02
+
+else  
+
+> 03
+
+send rnd to the adversary and receive r 
+
+> 04
+
+(svk , ssk ) ← GenS (r) 
+
+> 05
+
+send (sample -ssk , u ) to the adversary and receive (svk , ssk ) 
+
+> 06
+
+if RndCor [u]̸ = good then Exposed ←∪ {svk } 
+
+> 07
+
+SSK [u, svk ] ← ssk  
+
+> 08
+
+Registered ←∪ {(u, svk )} 
+
+> 09
+
+send (register -spk , u, svk ) to the adversary  
+
+> 10
+
+send svk to u
+
+Input (verify -cert , v, svk ) from a party u 
+
+> 11
+
+Send (v, svk ) ∈ Registered to u
+
+Input (get -ssk , svk ) from a party u 
+
+> 12
+
+Send SSK [u, svk ] to u
+
+Input (delete -ssk , svk ) from a party u 
+
+> 13
+
+SSK [u, svk ] ← ⊥ 
+
+Input (register -spk , u, svk ) from the adversary  
+
+> 14
+
+if (∗, svk ) /∈ Registered then Exposed ←∪ {svk } 
+
+> 15
+
+Registered ←∪ {(u, svk )}
+
+Input (expose , u ) from the adversary  
+
+> 16
+
+Exposed ←∪ {svk | SSK [u, svk ]̸ = ⊥}  
+
+> 17
+
+Send SSK [u, ∗] to the adversary Input (CorrRand , u, b ) from the adversary where b ∈ { good , bad } 
+
+> 18
+
+RndCor [u] ← b
+
+Input (exposed , u, svk ) from FKS  
+
+> 19
+
+Exposed ←∪ {svk } 
+
+> 20
+
+Send SSK [u, svk ] to the adversary Input (has -ssk , svk , u ) from FCGKA  
+
+> 21
+
+Send SSK [u, svk ]̸ = ⊥ to FCGKA 
+
+Figure 6: Functionality FAS (parametrized by a key generation algorithm for a signature scheme GenS ) and the ideal functionality FIAS . Yellow lines ( •) are only executed by FAS while cyan lines ( •) are only executed by FIAS .37 Initialization  
+
+> 00
+
+SK [∗, ∗], SVK ← ⊥ , RndCor [∗] ← good 
+
+Input (register -kp , svk , ssk ) from a party u 
+
+> 01
+
+if RndCor [u] = good then (kp , sk ) ←$ Gen -kp ()  
+
+> 02
+
+if kp ̸ = ⊥ then return  
+
+> 03
+
+else  
+
+> 04
+
+send rnd to the adversary and receive r 
+
+> 05
+
+(kp , sk ) ← Gen -kp (r) 
+
+> 06
+
+if kp ̸ = ⊥ then return  
+
+> 07
+
+send (exposed , u, svk ) to FAS  
+
+> 08
+
+send ssk to the adversary  
+
+> 09
+
+send (sample -sk , u, svk , ssk ) to the adversary and receive (kp , sk , ack ) 
+
+> 10
+
+if ¬ack then return  
+
+> 11
+
+if RndCor [u]̸ = good then  
+
+> 12
+
+send (exposed , u, svk ) to FAS  
+
+> 13
+
+SK [u, kp ] ← sk , SVK [u, kp ] ← svk  
+
+> 14
+
+send (register -kp , u, svk , kp ) to the adversary  
+
+> 15
+
+send kp to u
+
+Input get -sks from a party u 
+
+> 16
+
+Send {(kp , SK [u, kp ]) | SK [u, kp ]̸ = ⊥} to u
+
+Input (fetch -kp , v ) from a party u 
+
+> 17
+
+send (fetch -kp , u, v ) to the adversary and receive kp  
+
+> 18
+
+send kp to u
+
+Input (delete -sk , svk ) from a party u 
+
+> 19
+
+SK [u, kp ] ← ⊥ 
+
+Input (expose , u ) from the adversary  
+
+> 20
+
+Send SK [u, ∗] to the adversary Input (CorrRand , u, b ) from the adversary where b ∈ { good , bad } 
+
+> 21
+
+RndCor [u] ← b
+
+Figure 7: Functionality FKS (parametrized by a key generation algorithm for key packages Gen -kp ) and the ideal functionality FIKS . Yellow lines ( •) are only executed by FKS while cyan lines ( •) are only executed by 
+
+FIKS .38 Initialization  
+
+> 00
+
+Ptr [∗], Node [∗], Prop [∗], Wel [∗] ← ⊥  
+
+> 01
+
+RndCor [∗] ← good  
+
+> 02
+
+HasKey [∗] ← false  
+
+> 03
+
+rootCtr ← 0
+
+Input (create , svk ) from ucreator \\ Used only once  
+
+> 04
+
+req Node [root 0] = ⊥ 
+
+> 05
+
+req valid -vsk (ucreator , svk ) 
+
+> 06
+
+orig ← ucreator  
+
+> 07
+
+mem ← { (ucreator , svk )} 
+
+> 08
+
+Node [root 0] ← create -root (orig , mem , RndCor [orig ])  
+
+> 09
+
+HasKey [ucreator ] ← true  
+
+> 10
+
+Ptr [ucreator ] ← root 0
+
+Figure 8: Initialization of FCGKA .39 Input (propose , act ) from u 
+
+> 00
+
+req Ptr [u]̸ = ⊥ 
+
+> 01
+
+send (propose , u, act ) to the adversary and receive (p, svk v , ack ) 
+
+> 02
+
+if ¬req -correct -prop (u, act ) then req ack  
+
+> 03
+
+if act = ( upd , svk ) then assert valid -vsk (u, svk ) 
+
+> 04
+
+if act = ( add , v ) then act ← (add , v, svk v ) 
+
+> 05
+
+if Prop [p] = ⊥ then  
+
+> 06
+
+Prop [p] ← create -prop (Ptr [u], u, act , RndCor [u])  
+
+> 07
+
+else consistent -prop (p, u, act , RndCor [u])  
+
+> 08
+
+if RndCor [u] = bad then send (exposed , u, svk ) to FAS  
+
+> 09
+
+return p
+
+Input (commit , P, svk ) from u 
+
+> 10
+
+req Ptr [u]̸ = ⊥ 
+
+> 11
+
+send (commit , u, P, svk ) to the adversary and receive (c, w, ack, rt ) 
+
+> 12
+
+if ¬req -correct -commit (u, P, svk ) then req ack  
+
+> 13
+
+fill -props (u, P ) 
+
+> 14
+
+assert valid -vsk (u, svk ) 
+
+> 15
+
+mem ← members (c, u, P, svk ) 
+
+> 16
+
+assert mem ̸ = ⊥ ∧ (u, svk ) ∈ mem  
+
+> 17
+
+if Node [c] = ⊥ ∧ rt = ⊥ then  
+
+> 18
+
+Node [c] ← create -child (Ptr [u], u, P, mem , RndCor [u])  
+
+> 19
+
+else  
+
+> 20
+
+if Node [c] = ⊥ then c′ ← root rt  
+
+> 21
+
+else c′ ← c 
+
+> 22
+
+consistent -commit (c′, u, P, mem ) 
+
+> 23
+
+if c̸ = c′ then attach (c, c ′, u, P ) 
+
+> 24
+
+assert w̸ = ⊥ if and only if ∃p ∈ P : Node [p].act = ( add , ∗) 
+
+> 25
+
+if w̸ = ⊥ then  
+
+> 26
+
+assert Wel [w] ∈ {⊥ , c } 
+
+> 27
+
+Wel [w] ← c 
+
+> 28
+
+assert cons -invariant ∧ auth -invariant  
+
+> 29
+
+if RndCor [u] = bad then send (exposed , u, Node [u].mem [u]) to FAS  
+
+> 30
+
+return (c, w )Figure 9: Proposals, commits and process of FCGKA .40 Input (process , c, P ) from u 
+
+> 00
+
+send (process , u, c, P ) to the adversary and receive (rt, orig ′, svk ′, ack ) 
+
+> 01
+
+if ¬req -correct -proc (u, c, P ) then req ack  
+
+> 02
+
+fill -props (u, P ) 
+
+> 03
+
+if Node [c] = ⊥ ∧ rt = ⊥ then  
+
+> 04
+
+mem ← members (Ptr [u], orig ′, P, svk ′) 
+
+> 05
+
+assert mem ̸ = ⊥ ∧ inj -allowed (Ptr [u], u ) 
+
+> 06
+
+else  
+
+> 07
+
+if Node [c] = ⊥ then c′ ← root rt  
+
+> 08
+
+else c′ ← c 
+
+> 09
+
+v ← Node [c′].orig  
+
+> 10
+
+svk v ← Node [c′].mem [v] 
+
+> 11
+
+mem ← members (Ptr [u], v, P, svk v ) 
+
+> 12
+
+assert mem ̸ = ⊥ 
+
+> 13
+
+valid -succesor (c′, u, P, mem ) 
+
+> 14
+
+if c̸ = c′ then attach (c, c ′, u, P ) 
+
+> 15
+
+if ∃p ∈ P : Prop [p].act = ( rem , u ) then Ptr [u] ← ⊥  
+
+> 16
+
+else  
+
+> 17
+
+assert u ∈ Node [c].mem  
+
+> 18
+
+Ptr [u] ← c 
+
+> 19
+
+HasKey [u] ← true  
+
+> 20
+
+assert cons -invariant ∧ auth -invariant  
+
+> 21
+
+(∗, PropSemantics ) ← apply -props (c, Node [c].pro ) 
+
+> 22
+
+return (Node [c].orig , PropSemantics )
+
+Input (join , w ) from u 
+
+> 23
+
+send (join , u, w ) to the adversary and receive (c′, orig ′, mem ′, ack ) 
+
+> 24
+
+req ack  
+
+> 25
+
+c ← Wel [w] 
+
+> 26
+
+if c = ⊥ then  
+
+> 27
+
+if Node [c′]̸ = ⊥ then c ← c′ 
+
+> 28
+
+else  
+
+> 29
+
+rootCtr ← rootCtr + 1  
+
+> 30
+
+c ← root rootCtr  
+
+> 31
+
+Node [c] ← create -root (orig ′, mem ′, adv ) 
+
+> 32
+
+Wel [w] ← c 
+
+> 33
+
+Ptr [u] ← c 
+
+> 34
+
+HasKey [u] ← true  
+
+> 35
+
+assert u ∈ Node [c].mem ∧ cons -invariant ∧ auth -invariant  
+
+> 36
+
+return (Node [c].mem , Node [c].orig )
+
+Input key from u 
+
+> 37
+
+req Ptr [u]̸ = ⊥ ∧ HasKey [u] 
+
+> 38
+
+if Node [u].key = ⊥ then set -key (Ptr [u])  
+
+> 39
+
+HasKey [u] ← false  
+
+> 40
+
+return Node [Ptr [u]] .key 
+
+Figure 10: Process, join and key in FCGKA .41 Input (expose , u ) from the adversary  
+
+> 00
+
+This input is not allowed if ∃c such that Node [c].chall ∧ ¬safe (c) 
+
+> 01
+
+if Ptr [u]̸ = ⊥ then  
+
+> 02
+
+Node [Ptr [u]] .exp ←∪ {(u, HasKey [u]) } 
+
+> 03
+
+update -stat -after -exp (u) 
+
+> 04
+
+send (exposed , u, Node [u].mem [u]) to FAS  
+
+> 05
+
+send get -sks to FKS and receive SK and SVK . 
+
+> 06
+
+for each kp such that SK [u, kp ]̸ = ⊥ ∧ SVK [u, kp ] = svk do  
+
+> 07
+
+for each c such that ∃p ∈ Node [c].pro : Prop [p].act = ( add , u, svk ) do  
+
+> 08
+
+Node [c].exp ←∪ {(u, true )}
+
+Input (CorrRand , u, b ) from the adversary where b ∈ { good , bad } 
+
+> 09
+
+RndCor [u] ← b
+
+Figure 11: Corruptions in FCGKA .
+
+Helper create -root (u, mem , stat ) 
+
+> 00
+
+return new node with par ← ⊥ , orig ← u, pro ← ⊥ , mem ← mem , stat ← stat 
+
+Helper create -prop (c, u, act , stat ) 
+
+> 01
+
+return new proposal node with par ← c, orig ← u, act ← act , stat ← stat 
+
+Helper create -child (c, u, P, mem , stat ) 
+
+> 02
+
+return new node with par ← c, orig ← u, pro ← P, mem ← mem , stat ← stat 
+
+Helper fill -props (u, P ) 
+
+> 03
+
+for p ∈ P such that Prop [p] = ⊥ do  
+
+> 04
+
+send (propose , p ) to the adversary and receive (orig , act ) 
+
+> 05
+
+Prop [p] ← create -prop (Ptr [u], orig , act , adv )Figure 12: Helpers for creating new nodes in FCGKA .42 Helper valid -vsk (u, svk ′) 
+
+> 00
+
+svk ← Node [Ptr [u]] .mem [u] 
+
+> 01
+
+if svk ̸ = ⊥ ∧ svk = svk ′ then return true  
+
+> 02
+
+send (has -ssk , svk ′, u ) to FAS and receive ack  
+
+> 03
+
+return ack 
+
+Helper set -key (c) 
+
+> 04
+
+if ¬safe (c) then  
+
+> 05
+
+send (key , u ) to the adversary and receive K 
+
+> 06
+
+Node [c].key ← K, Node [c].chall ← false  
+
+> 07
+
+else Node [c].key ←$ K, Node [c].chall ← true 
+
+Helper update -stat -after -exp (u) 
+
+> 08
+
+for each p such that Prop [p]̸ = ⊥ and  
+
+> 09
+
+Prop [p].par = Ptr [u] and  
+
+> 10
+
+Prop [p].orig = u and  
+
+> 11
+
+Prop [p].act = upd  
+
+> 12
+
+do Prop [p].stat ← bad  
+
+> 13
+
+for each c such that Node [c]̸ = ⊥ and  
+
+> 14
+
+Node [c].par = Ptr [u] and  
+
+> 15
+
+Node [c].orig = u 
+
+> 16
+
+do Node [c].stat ← bad 
+
+Helper members (c, u, P, svk ) 
+
+> 17
+
+(G, ∗) ← apply -props (c, u, P, svk ) 
+
+> 18
+
+if (G, ∗) = ⊥ then return ⊥ 
+
+> 19
+
+else return G
+
+Helper apply -props (c, u, P, svk ) 
+
+> 20
+
+req Node [c]̸ = ⊥ ∧ (u, ∗) ∈ Node [c].mem  
+
+> 21
+
+req ∀p ∈ P : Prop [p]̸ = ⊥ ∧ Prop [p].par = c 
+
+> 22
+
+G ← Node [c].mem  
+
+> 23
+
+G ← G \ { (u, ∗)} 
+
+> 24
+
+G ←∪ {(u, svk )} 
+
+> 25
+
+L ← { u} 
+
+> 26
+
+for each p ∈ P such that Prop [p].act = ( upd , ∗) do  
+
+> 27
+
+(v, (upd , svk ′)) ← (Prop [p].orig , Prop [p].act ) 
+
+> 28
+
+req v ∈ G \ L 
+
+> 29
+
+G ← G \ { (v, ∗)} 
+
+> 30
+
+G ←∪ {(v, svk ′)} 
+
+> 31
+
+L ←∪ {v} 
+
+> 32
+
+for each p ∈ P such that Prop [p].act = ( rem , ∗) do  
+
+> 33
+
+(v, (rem , v ′)) ← (Prop [p].orig , Prop [p].act ) 
+
+> 34
+
+req v ∈ G ∧ v′ ∈ G \ L 
+
+> 35
+
+G ← G \ { (v′, ∗)} 
+
+> 36
+
+for each p ∈ P such that Prop [p].act = ( add , ∗) do  
+
+> 37
+
+(v, (add , v ′, svk v′ )) ← (Prop [p].orig , Prop [p].act ) 
+
+> 38
+
+req v ∈ G ∧ v′ /∈ G 
+
+> 39
+
+G ←∪ {(v′, svk v′ )} 
+
+> 40
+
+PropSemantics ← (( Prop [p].orig , Prop [p].act ) : p ∈ P ) 
+
+> 41
+
+return ( G, PropSemantics )Figure 13: Other helpers for FCGKA .
+
+Helper consistent -prop (p, u, act , stat ) 
+
+> 00
+
+assert Prop [p].orig = u ∧ Prop [p].act = act ∧ Prop [p].par = Ptr [u]
+
+Helper valid -succesor (c, u, P, mem ) 
+
+> 01
+
+Node [c]̸ = ⊥ ∧ Node [c].mem = mem ∧ Node [c].pro ∈ {⊥ , P } ∧ Node [c].par ∈ {⊥ , Ptr [u]}
+
+Helper consistent -commit (c, u, P, mem ) 
+
+> 02
+
+assert valid -succesor (c, u, P, mem ) 
+
+> 03
+
+assert RndCor [u]̸ = good ∧ Node [c].orig = u
+
+Helper attach (c, c ′, u, P ) 
+
+> 04
+
+assert c′̸ = root 0 
+
+> 05
+
+Node [c′].par ← Ptr [u], Node [c′].pro ← P, Node [c] ← Node [c′], Node [c′] ← ⊥  
+
+> 06
+
+for each w such that Wel [w] = c′ do Wel [c] ← c
+
+Figure 14: Consistency helpers for FCGKA .43 Helper req -correct -prop (u, act ) 
+
+> 00
+
+if act = ( rem , v ) then  
+
+> 01
+
+return v ∈ Node [Ptr [u]] .mem  
+
+> 02
+
+else if act = ( upd , svk ) then  
+
+> 03
+
+return valid -vsk (u, svk ) 
+
+> 04
+
+else return false 
+
+Helper req -correct -commit (u, P, svk ) 
+
+> 05
+
+return apply -props (u, P, svk )̸ = ⊥ ∧ valid -vsk (u, svk )
+
+Helper req -correct -proc (u, c, P ) 
+
+> 06
+
+return Node [c]̸ = ⊥ ∧ Node [c].par = Ptr [u] ∧ Node [c].pro = P ∧ 
+
+> 07
+
+Node [c].stat ̸ = adv ∧ ∀p ∈ P : Prop [p].stat ̸ = adv 
+
+Figure 15: Correctness helpers for FCGKA .
+
+Helper auth -invariant  
+
+> 00
+
+return true iff  
+
+> 01
+
+∀c if Node [c].stat = adv then inj -allowed (Node [c].par , Node [c].orig ) and  
+
+> 02
+
+∀p if Prop [p].stat = adv then inj -allowed (Prop [p].par , Prop [p].orig )
+
+Helper cons -invariant  
+
+> 03
+
+return true iff  
+
+> 04
+
+∀c such that Node [c].par ̸ = ⊥ it holds that  
+
+> 05
+
+Node [c].pro ̸ = ⊥ and ∀p ∈ Node [c].pro : Prop [p].par = Node [c].par  
+
+> 06
+
+and ∀u such that Ptr [u]̸ = ⊥ : u ∈ Node [Ptr [u]] .mem  
+
+> 07
+
+and the history graph contains no cycles 
+
+Figure 16: Invariant helpers for FCGKA .44 safe (c) 
+
+> 00
+
+safe (c) = true if and only if ¬(( ∗, true ) ∈ Node [c].exp ∨ can -traverse (c)) 
+
+inj -allowed (c, u ) 
+
+> 01
+
+safe (c) = true if and only if Node [c].exp ∈ Exposed ∧ know (c, ‘ep ′)) 
+
+know (c, u ) = true if and only if  
+
+> 02
+
+1) state -directly -leaks (c, u ) ∨ 
+
+> 03
+
+2) ( Node [c].par ̸ = ⊥ ∧ ¬ secrets -replaced (c, u ) ∧ know (Node [c].par , u )) ∨ 
+
+> 04
+
+3) ∃c′ : ( Node [c′].par = c ∧ ¬ secrets -replaced (c′, u ) ∧ know (c′, u )) 
+
+state -directly -leaks (c, u ) = true if and only if  
+
+> 05
+
+1) ( u, ∗) ∈ Node [c].exp ∨ 
+
+> 06
+
+2) ∃rootCtr : ( root rootCtr is ancestor of c ∧ ∃ svk ∈ Exposed : ( u, svk ) ∈ Node [c].mem ) ∨ 
+
+> 07
+
+3) ( u, ∗) ∈ Node [c].mem ∧ secrets -injected (c, u )
+
+secrets -injected (c, u ) = true if and only if  
+
+> 08
+
+1) ( Node [c].orig = u ∧ Node [c].stat ̸ = good ) ∨ 
+
+> 09
+
+2) ∃p ∈ Node [c].pro : ( Prop [p].act = ( add , u, svk ) ∧ svk ∈ Exposed ) ∨ 
+
+> 10
+
+3) ∃p ∈ Node [c].pro : ( Prop [p].act = ( upd , ∗) ∧ Prop [p].orig = u ∧ Prop [p].stat ̸ = good )
+
+secrets -replaced (c, u ) = true if and only if  
+
+> 11
+
+Node [c].orig = u ∨ (∃p ∈ Node [c].pro : 
+
+> 12
+
+Prop [p].act ∈ { (add , u ), (rem , u )} ∨ (Prop [p].act = ( upd , ∗) ∧ Prop [p].orig = u)) 
+
+know (c, ‘ep ′) = true if and only if  
+
+> 13
+
+Node [c].exp ̸ = ∅ ∨ can -traverse (c)
+
+can -traverse (c) = true if and only if  
+
+> 14
+
+1) ( Node [c].par = ⊥ ∧ ∃ svk ∈ Exposed : ( ∗, svk ) ∈ Node [c].mem ) ∨ 
+
+> 15
+
+2) ∃p ∈ Node [c].pro : ( Prop [p].act = ( add , u, svk ) ∧ svk ∈ Exposed ) ∨ 
+
+> 16
+
+3) leaf -welcome -key -reuse (c) ∨ 
+
+> 17
+
+4) ( know (c, ∗) ∧ (c = root ∗ ∨ know (Node [c].par , ‘ep ′))) 
+
+leaf -welcome -key -reuse (c) = true if and only if  
+
+> 18
+
+∃u ∃p ∈ Node [c].pro : 
+
+> 19
+
+1) Prop [p].act = ( add , u ) ∧ 
+
+> 20
+
+2) ∃c′ : c is ancestor of c′ ∧ (u, ∗) ∈ Node [c′].exp ∧ 
+
+> 21
+
+(∄c′′ in the path between c and c′ such that secrets -replaced (c′′ , u )) Figure 17: Predicates safe (c) and inj -allowed (c, u ). 45 Helper fetch -ssk -if -nec (st , svk ) 
+
+> 00
+
+if vst .id .svk ̸ = svk then  
+
+> 01
+
+send (get -ssk , svk ) to FAS and receive ssk  
+
+> 02
+
+else ssk ← st .ssk  
+
+> 03
+
+return ssk 
+
+Helper validate -kp (st , kp , id , pHash ) 
+
+> 04
+
+parse (id ′, pk , svk , pHash ′, σ ) ← kp  
+
+> 05
+
+req id = id ′ ∧ pHash = pHash ′ 
+
+> 06
+
+if svk /∈ st .cert -SPks [id ] then  
+
+> 07
+
+send (verify -cert , id , svk ) to FAS and receive b 
+
+> 08
+
+req b 
+
+> 09
+
+st .cert -SPks [id ] ←∪ {svk } 
+
+> 10
+
+req Vrfy (svk , σ, (id ′, pk , svk , pHash ′, σ ))  
+
+> 11
+
+return st 
+
+Helper Gen -kp (id , svk , ssk ) 
+
+> 12
+
+(pk , sk ) ←$ Pke .Gen ()  
+
+> 13
+
+σ ← Sign (ssk , (id , pk , svk , pHash ))  
+
+> 14
+
+kp ← (id , pk , svk , pHash , σ ) 
+
+> 15
+
+return ( kp , sk )Figure 18: Helper functions for the interaction with KS and AS. 46 Algorithm CGKA .Create (svk ) 
+
+> 00
+
+require st = ⊥ ∧ u = ucreator  
+
+> 01
+
+st .T ← init -tree  
+
+> 02
+
+st .groupID ←$ {0, 1}κ 
+
+> 03
+
+st .appSec ←$ {0, 1}κ 
+
+> 04
+
+st .ep ← 0 
+
+> 05
+
+st .interim -tranHash ← ε 
+
+> 06
+
+try st .ssk ← fetch -ssk -if -nec (st , svk ) 
+
+> 07
+
+(kp , sk ) ← Gen -kp (svk , ssk ) 
+
+> 08
+
+id (leaves (T)) ← H(pk ) 
+
+> 09
+
+assign -kp (T, v id , kp ) 
+
+> 10
+
+vid .sk ← sk 
+
+Algorithm CGKA .Com (st , PMSG ) 
+
+> 11
+
+st ′ ← init -epoch (st ) 
+
+> 12
+
+T′ ← st ′.T 
+
+> 13
+
+try (st ′, upd , rem , add) ← apply -props (st , PMSG ) 
+
+> 14
+
+require (st .id , ·, ·) /∈ rem ∧ (st .id , ·, ·) /∈ upd  
+
+> 15
+
+try (st ′, comSec , UpdPath , pathSec )
+
+← rekey -path (st ′, st .id , v id .svk , 0)  
+
+> 16
+
+propIds ← ()  
+
+> 17
+
+for pmsg ∈ PMSG : 
+
+> 18
+
+propIds ←∪ H(pmsg ) 
+
+> 19
+
+C ← (propIds , UpdPath ) 
+
+> 20
+
+σ ← sign -commit (st , C ) 
+
+> 21
+
+st ′ ← set -conf -trans -hash (st , st ′, st .id , C, σ ) 
+
+> 22
+
+(st ′, confKey , joinerSec ) ← derive -keys (st , st ′, comSec ) 
+
+> 23
+
+confTag ← compute -confTag (st ′, confKey ) 
+
+> 24
+
+if rem ̸ = ()  
+
+> 25
+
+memTag ← Mac .Tag (st .memKey , C ) 
+
+> 26
+
+else memTag ← ⊥  
+
+> 27
+
+cmsg ← frame -comm (st , confTag , σ, memTag ) 
+
+> 28
+
+if add ̸ = ()  
+
+> 29
+
+(st ′, wmsg ) ← comp -wmsg (st ′,, add , joinerSec , pathSec , confTag ) 
+
+> 30
+
+else wmsg ← ⊥  
+
+> 31
+
+st ′ ← set -int -transHash (st ′, confTag ) 
+
+> 32
+
+st .pendComm (cmsg ) ← (st ′, PMSG , upd , rem , add)  
+
+> 33
+
+return (cmsg , wmsg )
+
+Algorithm CGKA .Key  
+
+> 34
+
+(k, st .appSec ) ← (st .appSec , ⊥) 
+
+> 35
+
+return k
+
+Algorithm CGKA .Proc (cmsg , PMSG ) 
+
+> 36
+
+(id -snd , C, confTag , σ, memTag ) ← unframe -comm (st , cmsg ) 
+
+> 37
+
+if id -com = st .id  
+
+> 38
+
+(st ′, PMSG ′, upd , rem , add) ← st .pendComm (cmsg ) 
+
+> 39
+
+require PMSG ′ = PMSG  
+
+> 40
+
+st ← st ′ 
+
+> 41
+
+return  
+
+> 42
+
+parse (propIds , UpdPath ) ← C 
+
+> 43
+
+require propIds (i) = H(PMSG (i)) for all i 
+
+> 44
+
+st ′ ← init -epoch (st ) 
+
+> 45
+
+try (st ′, upd , rem , add) ← apply -props (st , PMSG ) 
+
+> 46
+
+require id -com /∈ rem ∧ id -com /∈ upd  
+
+> 47
+
+if st .id ∈ rem  
+
+> 48
+
+require Mac .Ver (st .memKey , memTag ) 
+
+> 49
+
+st ← ⊥  
+
+> 50
+
+else  
+
+> 51
+
+(st ′, comSec ) ← apply -rekey (st , st ′, id -com , UpdPath , 0, False ) 
+
+> 52
+
+st ′ ← set -conf -trans -hash (st , st ′, id -com , C, σ ) 
+
+> 53
+
+(st ′, confKey , joinerSec ) ← derive -keys (st , st ′, comSec ) 
+
+> 54
+
+require verify -confTag (st ′, confKey , confTag ) 
+
+> 55
+
+st ′ ← set -int -transHash (st ′, confTag ) 
+
+> 56
+
+st ← st ′ 
+
+> 57
+
+return ((upd , rem , add) , id -snd )
+
+Algorithm CGKA .Join (wmsg ) 
+
+> 58
+
+parse (encGrpSec , GrpInfo ) ← wmsg  
+
+> 59
+
+parse (GrpInfoTBS , σ ) ← GrpInfo  
+
+> 60
+
+parse (st .groupID , st .ep , st .tHash , st .conf -TransHash ,
+
+st .interim -tranHash , st .confTag , id -com ) ← GrpInfoTBS  
+
+> 61
+
+require Sig .Vrfy (vid -com .svk , σ, GrpInfoTBS ) 
+
+> 62
+
+try verify -treeState (st ) 
+
+> 63
+
+try fetch -ssk -if -nec (st , v st .id .svk ) 
+
+> 64
+
+kbs ← get -sks  
+
+> 65
+
+(joinerSec , pathSec ) ← (⊥, ⊥) 
+
+> 66
+
+for e ∈ encGrpSec  
+
+> 67
+
+parse (h, c ) ← e 
+
+> 68
+
+for (kp , sk ) ∈ kbs  
+
+> 69
+
+if h = H(kp ) 
+
+> 70
+
+v. sk ← sk  
+
+> 71
+
+require vst .id .kp = kp  
+
+> 72
+
+parse (joinerSec , pathSec ) ← Pke .Dec (sk , c ) 
+
+> 73
+
+if sj = pathSec ̸ = ⊥ 
+
+> 74
+
+a ← st .T.ind -lca (vst .id , v id -com ) 
+
+> 75
+
+(v1, . . . , v ℓ) ← fil -path (v) 
+
+> 76
+
+for i ∈ { ℓ − a, . . . , ℓ − 1} 
+
+> 77
+
+(pk , v i.sk ) ← Pke .Gen (H2(si))  
+
+> 78
+
+require pk = vi.pk  
+
+> 79
+
+si+1 ← H1(si) 
+
+> 80
+
+(st , confKey ) ← derive -epochKeys (st , joinerSec ) 
+
+> 81
+
+require verify -confTag (st , confKey , confTag ) 
+
+> 82
+
+return (roster (T), st .id )Figure 19: Algorithms CGKA .Create , CGKA .Com , CGKA .Proc , CGKA .Join , CGKA .Key shared between MLS and MLS-Cutoff. For subroutines rekey -path , apply -props , comp -wmsg , see Figure 22, 23, 18, respectively. 47 Algorithm CGKA .Prop (op , ad ) (used in MLS ) 
+
+> 00
+
+T ← st .T 
+
+> 01
+
+if op = ‘upd’ : 
+
+> 02
+
+try st .ssk ← fetch -ssk -if -nec (st , svk ) 
+
+> 03 04
+
+(kp , sk ) ← Gen -kp (svk , ssk ) 
+
+> 05
+
+pmsg ← frame -prop (st , (‘upd’ , kp ))  
+
+> 06
+
+st .pendUpd (pmsg ) ← (ssk , sk ) 
+
+> 07
+
+if op = ( ‘add’ ): 
+
+> 08
+
+parse u ← ad  
+
+> 09
+
+require u / ∈ roster (T) 
+
+> 10
+
+send (fetch -kp , u ) to FKS and get kp a 
+
+> 11
+
+try validate -kp (kp a) 
+
+> 12
+
+pmsg ← frame -prop (st , (‘add’ , kp a))  
+
+> 13
+
+if op = ‘rem’ : 
+
+> 14
+
+parse u ← ad  
+
+> 15
+
+require u ∈ roster (T) 
+
+> 16
+
+pmsg ← frame -prop (st , (‘rem’ , id -rem ))  
+
+> 17
+
+return pmsg 
+
+Algorithm CGKA .Prop (op , ad ) (used in MLS-Cutoff ) 
+
+> 18
+
+T ← st .T 
+
+> 19
+
+if op = ‘upd’ : 
+
+> 20
+
+try st .ssk ← fetch -ssk -if -nec (st , svk ) 
+
+> 21
+
+st ′ ← init -epoch (st ) 
+
+> 22
+
+(id -own , svk ) ← (st ′.id -own , v id -own .svk ) 
+
+> 23
+
+try (st ′, ·, UpdPath , pathSec ) ← rekey -path (st ′, id -own , svk , st .i cut ) 
+
+> 24
+
+pmsg ← frame -prop (st , (‘upd’ , UpdPath ))  
+
+> 25
+
+st .pendUpd (pmsg ) ← (ssk , v ′
+
+> id -own
+
+.sk , pathSec ) 
+
+> 26
+
+if op = ( ‘add’ ): 
+
+> 27
+
+parse u ← ad  
+
+> 28
+
+require u / ∈ roster (T) 
+
+> 29
+
+send (fetch -kp , u ) to FKS and get kp a 
+
+> 30
+
+try validate -kp (kp a) 
+
+> 31
+
+pmsg ← frame -prop (st , (‘add’ , kp a))  
+
+> 32
+
+if op = ‘rem’ : 
+
+> 33
+
+parse u ← ad  
+
+> 34
+
+require u ∈ roster (T) 
+
+> 35
+
+pmsg ← frame -prop (st , (‘rem’ , id -rem ))  
+
+> 36
+
+return pmsg 
+
+Figure 20: Generating proposals in MLS (left) and protocol variant MLS-Cutoff (right). Differences between the protocols are marked in yellow ( •) and cyan ( •). In line 25 v′ 
+
+> id -own
+
+is to be understood as the issuing user’s leaf with respect to st ′.48 Algorithm set -tHash (st ′) 
+
+> 00
+
+T′ ← st ′.T 
+
+> 01
+
+st ′.tHash ← tree -hash (T′, root (T′)) 
+
+Algorithm tree -hash (T′, v ) 
+
+> 02
+
+if v is leaf  
+
+> 03
+
+return H(v. index , v. kp ) 
+
+> 04
+
+else  
+
+> 05
+
+lHash ← tree -hash (T′, left (v))  
+
+> 06
+
+rHash ← tree -hash (T′, right (v))  
+
+> 07
+
+return H(v. index , v. pk ,v. unm , v. pHash , lHash , rHash )
+
+Algorithm set -pHash (st ′, id ) 
+
+> 08
+
+T′ ← st .T 
+
+> 09
+
+v0 ← vid  
+
+> 10
+
+parse (v1, . . . , v ℓ) ← fil -path (v0) 
+
+> 11
+
+vℓ.pHash ← ε 
+
+> 12
+
+for j = ℓ − 1, . . . , 0 
+
+> 13
+
+vj .pHash ← par -hash -cochild (vj+1 , sib (vj ))  
+
+> 14
+
+return st ′
+
+Algorithm par -hash -cochild (T′, v, u ) 
+
+> 15
+
+oriRes ← Res (u) ∪ (u. unm \ v. unm ) 
+
+> 16
+
+copy T′ to T′′  
+
+> 17
+
+for v′′ ∈ v. unm  
+
+> 18
+
+blank -path (T′′ , v ′′ ) 
+
+> 19
+
+for w ∈ path (v′′ ) 
+
+> 20
+
+w. unm ← w. unm \ { v′′ } 
+
+> 21
+
+origSibTreeHash ← tree -hash (T′′ , u ) 
+
+> 22
+
+return H(v. pk , v. pHash , origSibTreeHash )
+
+Algorithm verify -treeState (st ′) 
+
+> 23
+
+T′ ← st ′.T 
+
+> 24
+
+require st ′.tHash = tree -hash (T′, root (T′))  
+
+> 25
+
+for v ∈ T′.V 
+
+> 26
+
+if v not blank ∧ v not leaf  
+
+> 27
+
+l ← par -hash -cochild (v, left (v))  
+
+> 28
+
+r ← par -hash -cochild (v, right (v))  
+
+> 29
+
+require (left (v) not blank ∧ left (v).pHash = r) ∨ . . . 
+
+· · · ∨ (right (v) not blank ∧ right (v).pHash = l) 
+
+> 30
+
+M ← ()  
+
+> 31
+
+for v ∈ T′.V 
+
+> 32
+
+if v not blank ∧ v is leaf  
+
+> 33
+
+require id (v) /∈ M 
+
+> 34
+
+M ←∪ {id (V )} 
+
+> 35
+
+try st ′ ← validate -kp (st ′, v. kp , id (v), v. pHash ) 
+
+> 36
+
+return st ′
+
+Figure 21: Helper functions set -tHash , set -pHash , and verify -treeState , used authenticate the ratchet tree’s state. 49 Algorithm rekey -path (st ′, id , svk , i ) 
+
+> 00
+
+T′ ← st ′.T 
+
+> 01
+
+UpdPathNodes ← ()  
+
+> 02
+
+pathSec ← ()  
+
+> 03
+
+(v1, . . . , v ℓ) ← fil -path (vid ) 
+
+> 04
+
+s0 ←$ {0, 1}λ 
+
+> 05
+
+for j = 1 , . . . , ℓ − i: 
+
+> 06
+
+sj ← H1(s j−1) 
+
+> 07
+
+if j < ℓ : 
+
+> 08
+
+(vj .pk , v j .sk j ) ← Gen (H2(s j ))  
+
+> 09
+
+C ← ()  
+
+> 10
+
+vsib ← sib (vj−1) 
+
+> 11
+
+for w ∈ Res (vsib ) ∪ vsib .unm : 
+
+> 12
+
+C ←∪ cw := Pke .Enc (w. pk , sj ) 
+
+> 13
+
+UpdPathNodes ←∪ (vj .pk , C ) 
+
+> 14
+
+pathSec ←∪ (sj ) 
+
+> 15
+
+if i = 0  
+
+> 16
+
+comSec ← sℓ 
+
+> 17
+
+else comSec = ⊥ 
+
+> 18
+
+merge -leaves (T′, v id ) 
+
+> 19
+
+set -pHash (T′, v id ) 
+
+> 20
+
+try fetch -ssk -if -nec (T′, svk ) 
+
+> 21
+
+(kp , sk ) ← Gen -kp (id , svk , ssk , v. pHash ; s0) 
+
+> 22
+
+require vH(kp ) = ⊥ 
+
+> 23
+
+id (vid ) ← H(kp ) 
+
+> 24
+
+assign -kp (T′, H(kp ), kp ) 
+
+> 25
+
+vid .sk ← sk  
+
+> 26
+
+set -tHash (T′) 
+
+> 27
+
+UpdPath ← (UpdPathNodes , kp ) 
+
+> 28
+
+return (T′, comSec , UpdPath , pathSec )
+
+Algorithm comp -wmsg (st ′, add , joinerSec , pathSec , confTag ) 
+
+> 29
+
+tbs ← (st ′.groupID , st ′.ep , st ′.tHash ,
+
+st .conf -TransHash , st ′.interim -tranHash ,
+
+st ′.T.public , st ′.confTag , st ′.id ) 
+
+> 30
+
+σ ← Sign (st ′.ssk , tbs ) 
+
+> 31
+
+GrpInfo ← (tbs , σ ))  
+
+> 32
+
+encGrpSec ← ()  
+
+> 33
+
+for (·, id -add , svk ) ∈ add  
+
+> 34
+
+a ← ind -lca (vst ′.id , v id -add ) 
+
+> 35
+
+c ← Pke .Enc (vid -add .pk , (joinerSec , pathSec (ℓ − a)))  
+
+> 36
+
+encGrpSec ←∪ (H(vid -add .kp ), c ) 
+
+> 37
+
+return (st ′, wmsg )
+
+Algorithm apply -rekey (st , st ′, id -snd , UpdPath , i, copySt ) 
+
+> 38
+
+T′ ← st ′.T 
+
+> 39
+
+parse (UpdPathNodes , kp ) ← UpdPath  
+
+> 40
+
+(v1, . . . , v ℓ) ← fil -path (T′, v st .id ) 
+
+> 41
+
+(v′
+
+> 1
+
+, . . . , v ′ 
+
+> ℓ′
+
+) ← fil -path (T′, v id -snd ) 
+
+> 42
+
+parse (( pk 1, C 1), . . . , (pk m, C m)) ← UpdPathNodes  
+
+> 43
+
+for i ∈ { 1, . . . , m } 
+
+> 44
+
+v′
+
+> i
+
+.pk ← pk i 
+
+> 45
+
+a ← ind -lca (vst .id , v id -snd ) 
+
+> 46
+
+if i > a : 
+
+> 47
+
+comSec ← ⊥  
+
+> 48
+
+else  
+
+> 49
+
+parse (cw)w ← Cℓ−a 
+
+> 50
+
+if v′ 
+
+> 0
+
+∈ v′
+
+> ℓ′−a−1
+
+.unm : 
+
+> 51
+
+w ← v′ 
+
+> 0
+> 52
+
+else:  
+
+> 53
+
+m ← max( m′ ∈ { 0, . . . , ℓ ′ − a} | v′ 
+
+> m′
+
+not blank)  
+
+> 54
+
+w ← v′ 
+
+> m
+> 55
+
+sℓ−a ← Pke .Dec (sk w, cw) 
+
+> 56
+
+for j = ℓ′ − a + 1 , . . . , ℓ ′ − i: 
+
+> 57
+
+sj ← H1(s j−1) 
+
+> 58
+
+if j < ℓ  
+
+> 59
+
+(pk j , sk j ) ← Gen (H2(s j ))  
+
+> 60
+
+v′ 
+
+> j
+
+.sk ← sk j 
+
+> 61
+
+require v′ 
+
+> j
+
+.pk = pk j 
+
+> 62
+
+if i = 0  
+
+> 63
+
+comSec ← sℓ 
+
+> 64
+
+else comSec = ⊥ 
+
+> 65
+
+merge -leaves (T′, v id ) 
+
+> 66
+
+st ′ ← set -pHash (T′, v id ) 
+
+> 67
+
+if copySt = False  
+
+> 68
+
+try validate -kp (st ′′ , kp , id -snd , st ′′ .pHash ) 
+
+> 69
+
+else  
+
+> 70
+
+st ′′ ← init -epoch (st ) 
+
+> 71
+
+T′′ ← st ′′ .T 
+
+> 72
+
+(v′′  
+
+> 1
+
+, . . . , v ′′  
+
+> ℓ′
+
+) ← fil -path (T′′ , v id -snd ) 
+
+> 73
+
+for i ∈ { 1, . . . , m } 
+
+> 74
+
+v′′  
+
+> i
+
+.pk ← pk i 
+
+> 75
+
+merge -leaves (T′′ , v id ) 
+
+> 76
+
+st ′′ ← set -pHash (T′′ , v id ) 
+
+> 77
+
+try validate -kp (st ′′ , kp , id -snd , st ′′ .pHash ) 
+
+> 78
+
+require vH(kp ) = ⊥ 
+
+> 79
+
+id (vid -snd ) ← H(kp ) 
+
+> 80
+
+assign -kp (T′, H(kp ), kp ) 
+
+> 81
+
+set -tHash (T′) 
+
+> 82
+
+return (st ′, comSec )Figure 22: Helper functions rekey -path and apply -rekey used to rekey users’ paths. 50 Algorithm apply -props (st , st ′, PMSG ) (used in MLS ) 
+
+> 00
+
+(upd , rem , add) ← (() , () , ())  
+
+> 01
+
+fetch T′ ← st ′.T 
+
+> 02
+
+for pmsg ∈ PMSG : 
+
+> 03
+
+(( ‘type’ , ad ), id -snd ) ← unframe -prop (st , pmsg ) 
+
+> 04
+
+if ‘type’ = ‘upd’ : 
+
+> 05
+
+require (id -snd , ·) /∈ upd ∧ rem = () ∧ add = ()  
+
+> 06
+
+try validate -kp (st ′, ad , id -snd , ε ) 
+
+> 07
+
+assign -kp (T′, v id -snd , ad ) 
+
+> 08
+
+if st ′.id = id -snd  
+
+> 09
+
+parse (ssk , sk ) ← pendUpd (pmsg ) 
+
+> 10
+
+vid -snd .sk ← sk  
+
+> 11
+
+st ′.ssk ← ssk  
+
+> 12
+
+blank -path (T′, v id -snd , 1)  
+
+> 13
+
+svk ← leaf (T′, id -snd ).svk  
+
+> 14
+
+require vH(kp ) = ⊥ 
+
+> 15
+
+id (vid -snd ) ← H(kp ) 
+
+> 16
+
+upd ←∪ (id -snd , ‘upd’ , svk ) 
+
+> 17
+
+else if ‘type’ = ‘rem’ : 
+
+> 18
+
+require id -rem := ad ̸ = id -snd ∧ vid -rem ̸ = ⊥ 
+
+> 19
+
+require (ad , ·) /∈ upd ∧ add = ()  
+
+> 20
+
+blank -leaf (T′, v id -rem ) 
+
+> 21
+
+blank -path (T′, v id -rem , 1)  
+
+> 22
+
+T′ ← truncate (T′) 
+
+> 23
+
+rem ←∪ (id -snd , ‘rem’ , id -rem ) 
+
+> 24
+
+else if ‘type’ = ‘add’ : 
+
+> 25
+
+try st ′ ← validate -kp (st ′, ad , u new , ε ) 
+
+> 26
+
+id -add ← H(ad ) 
+
+> 27
+
+add -leaf (T′, id -add ) 
+
+> 28
+
+set -as -unmerged (T′, id -add ) 
+
+> 29
+
+add ←∪ (id -snd , ‘add’ , v id -add .svk ) 
+
+> 30
+
+else return ⊥ 
+
+> 31
+
+return (st ′, upd , rem , add) 
+
+Algorithm apply -props (st , st ′, PMSG ) (used in MLS-Cutoff ) 
+
+> 32
+
+(upd , rem , add) ← (() , () , ())  
+
+> 33
+
+fetch T′ ← st ′.T 
+
+> 34
+
+for pmsg ∈ PMSG : 
+
+> 35
+
+(( ‘type’ , ad ), id -snd ) ← unframe -prop (st , pmsg ) 
+
+> 36
+
+if ‘type’ = ‘upd’ : 
+
+> 37
+
+require (id -snd , ·) /∈ upd ∧ rem = () ∧ add = ()  
+
+> 38
+
+if st ′.id ̸ = id -snd  
+
+> 39
+
+(st ′, ·) ← apply -rekey (st , st ′, id -snd , ad , st .i cut , True ) 
+
+> 40
+
+if st ′.id = id -snd  
+
+> 41
+
+parse (( pk 1, ·), . . . , (pk ℓ−icut , ·), kp ) ← ad  
+
+> 42
+
+assign -kp (T′, v id -snd , kp ) 
+
+> 43
+
+parse (ssk , sk , pathSec ) ← pendUpd (pmsg ) 
+
+> 44
+
+vid -snd .sk ← sk  
+
+> 45
+
+st ′.ssk ← ssk  
+
+> 46
+
+parse (v1, . . . , v ℓ) ← path (id -snd ) 
+
+> 47
+
+for j = 1 , . . . , ℓ − st .i cut  
+
+> 48
+
+(vj .pk , v j .sk ) ← (pk j , pathSec (j))  
+
+> 49
+
+blank -path (T′, v id -snd , ℓ − st .i cut + 1)  
+
+> 50
+
+parse (v1, . . . , v ℓ) ← path (vid -snd ) 
+
+> 51
+
+for j = 1 , . . . , ℓ − st .i cut  
+
+> 52
+
+if vj ∈ Vcol  
+
+> 53
+
+blank (vj ) 
+
+> 54
+
+Vcol ←∪ {vj } 
+
+> 55
+
+svk ← leaf (T′, id -snd ).svk  
+
+> 56
+
+require vH(kp ) = ⊥ 
+
+> 57
+
+id (vid -snd ) ← H(kp ) 
+
+> 58
+
+upd ←∪ (id -snd , ‘upd’ , svk ) 
+
+> 59
+
+else if ‘type’ = ‘rem’ : 
+
+> 60
+
+require id -rem := ad ̸ = id -snd ∧ vid -rem ̸ = ⊥ 
+
+> 61
+
+require (ad , ·) /∈ upd ∧ add = ()  
+
+> 62
+
+blank -leaf (T′, v id -rem ) 
+
+> 63
+
+blank -path (T′, v id -rem , 1 
+
+> 64
+
+T′ ← truncate (T′) 
+
+> 65
+
+rem ←∪ (id -snd , ‘rem’ , id -rem ) 
+
+> 66
+
+else if ‘type’ = ‘add’ : 
+
+> 67
+
+try st ′ ← validate -kp (st ′, ad , u new , ε ) 
+
+> 68
+
+id -add ← H(ad ) 
+
+> 69
+
+add -leaf (T′, id -add ) 
+
+> 70
+
+set -as -unmerged (T′, id -add ) 
+
+> 71
+
+add ←∪ (id -snd , ‘add’ , v id -add .svk ) 
+
+> 72
+
+else return ⊥ 
+
+> 73
+
+return (st ′, upd , rem , add) Figure 23: Helper function apply -props for MLS (left) and MLS-Cutoff (right). Differences between the protocols are marked in yellow ( •) and cyan ( •). 51
