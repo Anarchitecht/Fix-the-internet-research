@@ -4,13 +4,18 @@ One entry per paper, in the schema of `BRIEF.md` §6. Append-only: an entry is n
 superseded by a later entry that says so.
 
 An entry exists only for a paper whose full text was retrieved and whose first page was checked
-against the citation before extraction. That check rejected 23 documents across the extraction pass —
-roughly 6% of everything retrieved — including a doctoral dissertation standing in for the paper it
-expands, a conference talk slide deck, a preliminary draft whose published version carries the result
-being cited, and one file that was binary image data. Every one would have produced measurements
-attributed to a paper that does not contain them.
+against the citation before extraction. That check rejected 32 documents across the pass, roughly 7%
+of everything retrieved. The rejections were not of one kind: a doctoral dissertation standing in for
+the paper it expands, a USENIX talk slide deck, a preliminary draft that defers the proof its
+published version carries, a materials-science paper on silicate liquidus temperatures, and one file
+that was binary image data.
 
-**Entries: 332.** Assembled from `registry/evidence/`, one file per key.
+Two retrievals were kept deliberately as documented precursors rather than rejected: a dissertation
+chapter that was later extended into the target paper, and an arXiv preprint by six of a paper's
+seven authors. Each entry states the discrepancy at its head, so a reader knows which document the
+measurements come from.
+
+**Entries: 392.**
 
 ---
 
@@ -2013,6 +2018,143 @@ None found; this paper reports no experiment whose numeric result could disagree
 
 ---
 
+## [BALBAS-ASIACRYPT-23] WhatsUpp with Sender Keys? Analysis, Improvements and Security Proofs
+**Citation:** David Balbás, Daniel Collins, Phillip Gajland. "WhatsUpp with Sender Keys? Analysis, Improvements and Security Proofs." ASIACRYPT 2023. DOI 10.1007/978-981-99-8733-7_10.
+**Retrieved:** full text via https://eprint.iacr.org/2023/1385.pdf
+**Source URL:** https://eprint.iacr.org/2023/1385.pdf
+**Domain:** H
+
+### What it does
+Sender Keys distributes group messages so each sender encrypts once with a symmetric key it alone controls, instead of every pair of members running a separate ratchet. Each group member generates one symmetric chain key and one signature key pair (a sender key), and pushes that sender key to every other member over a pairwise two-party channel (in deployment, Signal's Double Ratchet). To send a group message, a member encrypts with its own current chain key, hashes the chain key forward, and signs the ciphertext with its own signature key; other members decrypt by holding a copy of that sender's chain key and verify with the sender's signature public key. The protocol is deployed in WhatsApp and Signal for groups up to 1,024 members. The paper builds the first formal security model for Sender Keys (extending an M-IND group-messaging game with cleanness predicates for challenge, injection, and concurrency) and proves the deployed protocol meets a weak security notion. It then proposes Sender Keys+, a modified protocol that changes two things: an update operation that refreshes every member's chain key in one round, and revised cleanness predicates that permit control-message injection and out-of-order challenges after a channel has healed.
+
+The Sender Keys+ update mechanism works by having the updating member generate a fresh randomness value r and distribute (new chain key, new signature public key, r) over the two-party channels to all other members; every member then re-derives every other member's chain key by applying a keyed hash function to it with r. Because members can be out of sync (some may have sent further messages before receiving the update), each member's chain key is instead advanced by a fixed number of forward-hash steps set by a constant concurrency bound N (the paper suggests N = 100), minus the number of messages ℓ that member is known to have sent out of sync, so all members reach a common chain-key state without transmitting message contents.
+
+### Measured results
+None. This is a theoretical cryptographic paper: it presents a security model, security proofs (Theorem 1 for Sender Keys, Theorem 2 for Sender Keys+), and asymptotic communication-complexity statements. No implementation, benchmark, or empirical measurement is reported.
+
+### Parameters
+| Parameter | Value | Source |
+|---|---|---|
+| Deployed group size | up to 1,024 parties (WhatsApp, Signal) | stated, not measured by this paper |
+| Concurrency bound N (forward-hash steps per update) | example value 100 | authors' example; stated as "cost of executing 100 hash function calls sequentially is negligible," not a measured latency figure |
+| Add operation communication complexity (original Sender Keys) | O(n) for a group of n users | derived, stated in Section 1 |
+| Remove operation communication complexity (original Sender Keys) | O(n²) for a group of n users | derived, stated in Section 1 |
+| Update/PCS-refresh complexity, naive Signal-style mechanism | O(n²) | derived |
+| Update/PCS-refresh complexity, Sender Keys+ mechanism | O(n) | derived, Section 6.2 |
+| Remove complexity if the paper's separate (excluded) tweak were used | O(n²) → O(n) | derived, but this tweak is explicitly not incorporated into Sender Keys+ |
+
+### Stated limitations
+Sender Keys' control messages carry no per-message authentication of their own; the paper shows a malicious server can mount a censorship attack (make a removed member appear self-removed to others while that member believes someone else removed them) and a "burgle into the group" attack (RMS18) adding arbitrary members, because the server distributes unauthenticated control messages. Post-compromise security (PCS) is weak: a member recovers from state exposure only when another member is removed or when it triggers an on-demand update, and the naive way to extend an update to the whole group costs O(n²) communication, which is why Sender Keys+ exists. PCS is further weakened because Sender Keys relies on pairwise two-party channels for key distribution; if a two-party channel between two members has not "healed" (a paper-defined round-trip parameter, refresh∆) since a prior exposure, key material sent over it remains compromised even after a group-level update or removal. In practice not all member pairs exchange private two-party messages regularly, so those channels stay unhealed, meaning even a manually triggered group update does not necessarily heal the group. Sender Keys also provides only sub-optimal forward security for authentication: an attacker can construct a scenario (Figure 9 in the paper) where a message signed before a state exposure is still successfully injected after it, when the receiving member was offline at the time. The paper's Efficient Remove Operations extension (which would lower removal from O(n²) to O(n)) is deliberately excluded from Sender Keys+ because it does not refresh signature keys, an explicit design tradeoff the authors decline to make. Ratcheting signature keys on every send would strengthen forward security for authentication but is excluded from Sender Keys+ for its added overhead. The authors state as future work: extending the model to randomness manipulation, insider threats, and successful-injection scenarios; benchmarking both protocols (no benchmark exists in this paper); and designing a mechanism to resolve ties among concurrently sent control messages under partial ordering.
+
+### Requirements it places on the rest of the system
+Requires authenticated, secure two-party channels between every pair of group members (instantiated with the Double Ratchet in deployment) — every member must independently maintain n−1 such channels. Requires a central server (or equivalent delivery service) that provides total ordering of control messages to all parties; total ordering is not required for application messages. The Sender Keys+ update mechanism additionally requires the assumption of total ordering of control messages specifically to avoid overlapping/conflicting updates. Group membership integrity depends entirely on the server behaving honestly toward control messages, since those messages carry no independent authentication in the base protocol; a malicious server can add or reassign blame for removals undetected. PCS recovery depends on the two-party channel layer actually healing (via round-trip exchange) after any exposure — a mechanism this paper does not supply and states must happen "by default" for the PCS guarantee to hold in practice.
+
+### Contradicts
+The commonly assumed folklore that Sender Keys, once updated or after a member removal, restores post-compromise security is explicitly shown false by this paper's channel-healing analysis: PCS is not restored unless the underlying two-party channels have separately healed. No other paper in this corpus's evidence file directly measures Sender Keys, so no cross-paper numeric contradiction is recorded; None found beyond this internal folklore correction.
+
+### References worth retrieving
+- foundational: Bhargavan, Barnes, Rescorla. "TreeKEM: Asynchronous Decentralized Key Management for Large Dynamic Groups." Inria research report, 2018.
+- foundational: Barnes, Beurdouche, Robert, Millican, Omara, Cohn-Gordon. "The Messaging Layer Security (MLS) Protocol." RFC 9420, IETF, 2023.
+- foundational: Alwen, Coretti, Dodis, Tselekounis. "Security analysis and improvements for the IETF MLS standard for group messaging." CRYPTO 2020.
+- foundational: Alwen, Coretti, Dodis, Tselekounis. "Modular design of secure group messaging protocols and the security of MLS." ACM CCS 2021.
+- competing: Hashimoto, Katsumata, Postlethwaite, Prest, Westerbaan. "A concrete treatment of efficient continuous group key agreement via multi-recipient PKEs." ACM CCS 2021 (HKP+21 — O(n)-sized ciphertexts in all cases, directly compared against Sender Keys+ in Section 6.4 of this paper).
+- competing: Weidner, Kleppmann, Hugenroth, Beresford. Decentralised CGKA (WKHB21) — Sender-Keys-like decentralized construction, no group-messaging capture, no message-injection security model (already in corpus context as DCGKA).
+- competing: Cong, Eldefrawy, Smart, Terner. "The key lattice framework for concurrent group messaging." IACR ePrint 2022/1531 — builds group messaging from two-party channels, achieves O(n) key-update complexity.
+- attack: Rösler, Mainka, Schwenk. "More is less: On the end-to-end security of group chats in Signal, WhatsApp, and Threema." IEEE EuroS&P 2018 (burgle-into-the-group attack, source of the server-injection attack this paper formalizes against).
+- attack: Cremers, Hale, Kohbrok. "The complexities of healing in secure group messaging: Why cross-group effects matter." USENIX Security 2021.
+- foundational: Balbás, Collins, Vaudenay. "Cryptographic Administration for Secure Group Messaging." USENIX Security 2023 (already in this corpus as BALBAS-USENIXSEC-23).
+- foundational: Bienstock, Dodis, Rösler. "On the price of concurrency in group ratcheting protocols." TCC 2020 (already in this corpus as BIENSTOCK-TCC-20).
+
+### Verbatim extracts
+- "bringing down the total communication complexity from quadratic to linear in the group size."
+- "adding and removing users) respectively have O(n) and O(n²) total communication complexity"
+- "even after updates or removals, contradicting folklore assumptions."
+- "this mechanism requires the assumption of total ordering of control messages"
+- "Thus, we do not include this tweak in Sender Keys+."
+- "successful adoption for groups of up to 1024 parties in WhatsApp and Signal"
+
+---
+
+## [BALBAS-USENIXSEC-23] Cryptographic Administration for Secure Group Messaging
+**Citation:** David Balbás, Daniel Collins, Serge Vaudenay. "Cryptographic Administration for Secure Group Messaging." USENIX Security Symposium, 2023.
+**Retrieved:** full text via https://eprint.iacr.org/2022/1411.pdf (full version, August 7 2023)
+**Source URL:** https://eprint.iacr.org/2022/1411.pdf
+**Domain:** H
+
+### What it does
+The mechanism enforces group-membership control cryptographically so a subset of members, the administrators, are the only parties who can add or remove members or change the administrator set, instead of that policy being enforced only at the application level or trusted to the delivery server. It defines administrated continuous group key agreement (A-CGKA), an extension of continuous group key agreement (CGKA, the primitive underlying MLS/TreeKEM in which a group derives one shared secret that it updates as membership changes) that adds a correctness notion for group evolution and a security game in which even a fully corrupted non-administrator member cannot forge a message that adds a new user. Two constructions realize A-CGKA on top of any CGKA:
+
+Individual Admin Signatures (IAS): every administrator holds its own signature key pair, registered with a public-key infrastructure (PKI). Every proposal or commit that changes membership must carry the issuing administrator's signature; other members verify against the PKI-registered public key before accepting the change. Administrators may hold optimal forward secrecy by using forward-secure signatures instead of static ones, at no added asymptotic cost.
+
+Dynamic Group Signature (DGS): the administrator set runs a second, separate CGKA instance (CGKA*) among only its own members, and that instance's group secret is used to derive a single shared signing key for the current administrator set. Standard (non-admin) members receive only the resulting admin public key, not the second CGKA's traffic, so administrator turnover costs standard members nothing beyond receiving one new public key.
+
+Both constructions were integrated as an extension to an open-source MLS implementation (adding an administrator-signature proposal type and validation step to the standard MLS commit/process pipeline) and benchmarked.
+
+### Measured results
+Benchmarked by modifying the Cisco Go implementation of MLS (github.com/cisco/go-mls) to add the IAS extension, run on a laptop with a 4-core 11th Gen Intel i5-1135G7 processor and 16 GB RAM, using Go's testing package, HPKE with DHKEM(P-256, HKDF-SHA256)/HKDF-SHA256/AES-128-GCM from Go standard libraries. Each data point is the average over 100 iterations that randomized which group members and administrators performed the operation (position in the MLS TreeKEM tree affects cost).
+
+| Measurement | Condition | Result |
+|---|---|---|
+| Commit-algorithm running time overhead vs. baseline MLS | up to |G|/8 members carrying out admin updates simultaneously (admin update ⊇ standard update) | under 20% overhead |
+| Proc-algorithm (commit-processing) running time | admin vs. standard updates, same scenarios as commit benchmark | very similar between admin and standard, increases linearly in number of updates |
+| Commit message size, baseline MLS | \|G\|=8, t=2 update proposals | 1.49 KB |
+| Commit message size, baseline MLS | \|G\|=128, t=32 update proposals | 17.11 KB |
+| Commit message size, IAS-extended MLS | \|G\|=8, t=2 update proposals | 1.56 KB |
+| Commit message size, IAS-extended MLS | \|G\|=128, t=32 update proposals | 17.17 KB |
+| Commit message size, IAS-extended MLS with t/2 admin updates added | \|G\|=8 case (1 admin update) | 1.60 KB |
+| Commit message size, IAS-extended MLS with t/2 admin updates added | \|G\|=128 case (16 admin updates) | 17.65 KB |
+| Proposal size, both implementations | standard proposals | 364–366 bytes |
+| Proposal size, both implementations | admin proposals | 364–368 bytes |
+
+Two experiment axes: (1) group size |G| swept over {8, 16, 32, 64, 128} at fixed member/admin ratio |G|/|G*|=4 and t=|G*| updaters (t/2 admin-updaters); (2) fixed |G|=64, |G*|=16, number of updates t swept over {0,4,8,...,28} (t/2 admin updates). Four commit scenarios compared in each: standard commit only; standard commit with t update proposals; admin commit with t/2 admin-update proposals only; admin commit with both t update and t/2 admin-update proposals. Absolute running times for commit ranged roughly 0–35 ms and for proc roughly 0–20 ms across the full |G| sweep (read from Figures 12–13; exact per-point values are not tabulated in the text, only plotted).
+
+Asymptotic per-operation additional cost of the two constructions over a plain CGKA (Table 1 of the paper), where t is the number of admin proposals in a commit, s is the cost of one signature or verification (O(λ) for security parameter λ), k is the cost of one signature key-pair generation (O(λ)), and C is the cost of running CGKA*:
+
+| Construction | Message length (admins) | Message length (all members) | Time (admins) | Time (all members) |
+|---|---|---|---|---|
+| IAS | ts + tk | ts + tk | O(ts + k) | O(ts) |
+| DGS | C + s + k | s + k | O(C + s + k) | O(s + k) |
+
+### Parameters
+- Group size |G|: swept {8, 16, 32, 64, 128} in benchmarks.
+- Administrator-set size |G*|: fixed ratio |G|/|G*| = 4 in the group-size sweep; fixed |G*| = 16 with |G| = 64 in the update-count sweep.
+- Number of updating members t: swept {0, 4, 8, 12, 16, 20, 24, 28} with t/2 concurrent admin updates.
+- Ciphersuite: HPKE DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-128-GCM.
+- Benchmark repetitions: 100 iterations per data point, randomizing member/admin position in the tree.
+- DGS admin-CGKA cost C: paper cites an optimistic estimate of O(log m) for m administrators (from prior CGKA constructions) but states it can be O(m) in the worst case.
+
+### Stated limitations
+The security definition does not model arbitrary message injection against robustness attacks: if non-administrators are still permitted to commit, a malicious non-admin can send a malformed commit that only some members can process, denying service (not confidentiality) to a subset of members — this can be fixed with the addition of non-interactive zero-knowledge proofs inside TreeKEM, which the paper does not implement. If only administrators are allowed to commit, the schemes are safe from this attack for non-strongly-robust TreeKEM variants such as MLS's, and standard members retain forward secrecy and post-compromise security when their update proposals are committed. The security model does not capture authentication (an incorruptible PKI is assumed throughout) and does not model randomness manipulation or parties that fail to delete state as instructed (no "no-deletion oracle"); the authors state these are left for future work. Multi-group security is not included in the proofs, though the authors state the extension is straightforward. For DGS specifically: enforcing different levels of administration is not straightforward; administrators may lack a reliable view of the current administrator set if the internal CGKA* is vulnerable to insider robustness attacks (mitigated only by deploying a heavier active-security CGKA variant, not evaluated here); and an administrator cannot immediately give up its status — it must send a removal proposal, erase its state, and wait for another administrator to commit, mirroring an existing limitation in ordinary CGKA member removal.
+
+### Requirements it places on the rest of the system
+Requires an incorruptible PKI: every party, and separately every administrator, must have a registered, authenticated public key that other parties can retrieve (getSpk/registerKeys), and both IAS and DGS assume this PKI functions correctly throughout — the paper does not model PKI corruption. Requires an underlying CGKA (e.g., MLS/TreeKEM) to already supply forward secrecy and post-compromise security for the shared group secret; A-CGKA is a layer added on top of that primitive, not a replacement for it. DGS specifically requires running a second, independent CGKA instance among only the administrator subset, so the rest of the system must support concurrent membership in two overlapping group-key-agreement sessions per user (main group and admin group) and must track two epoch/generation identifiers (gid and gid*) consistently. The MLS integration in Section 4.3 requires the delivery service to support MLS's extension mechanism (additional proposal types), and requires control-message processing order to follow MLS's existing propose-and-commit ordering.
+
+### Contradicts
+None found — no other paper in this corpus's evidence file yet reports comparable A-CGKA benchmark figures. The Tainted TreeKEM comparison (Section 6.1.2) is noted as difficult because Tainted TreeKEM is not formalized in the propose-and-commit paradigm this paper uses, so no numeric comparison is drawn, and the paper does not claim one.
+
+### References worth retrieving
+- foundational: Bhargavan, Barnes, Rescorla. "TreeKEM: Asynchronous Decentralized Key Management for Large Dynamic Groups." Inria research report, 2018.
+- foundational: Barnes, Beurdouche, Robert, Millican, Omara, Cohn-Gordon. "The Messaging Layer Security (MLS) Protocol." RFC 9420, 2023.
+- foundational: Alwen, Coretti, Dodis, Tselekounis. "Security analysis and improvements for the IETF MLS standard for group messaging." CRYPTO 2020.
+- foundational: Alwen, Coretti, Jost, Mularczyk. "Continuous group key agreement with active security." TCC 2020.
+- foundational: Klein, Pascual-Perez, Walter, et al. "Keep the dirt: Tainted TreeKEM, adaptively and actively secure continuous group key agreement." IEEE S&P 2021 (Tainted TreeKEM, discussed but not numerically compared).
+- competing: Weidner, Kleppmann, Hugenroth, Beresford. Decentralised CGKA (WKHB21) — cited as reducing concurrency issues by restricting who can commit, the same motivation as this paper's administrator restriction.
+- attack: Rösler, Mainka, Schwenk. "More is less: On the end-to-end security of group chats in Signal, WhatsApp, and Threema." IEEE EuroS&P 2018 (burgle-into-a-group attack this paper's model prevents).
+- attack: Albrecht, Celi, Dowling, Jones. "Practically-exploitable Cryptographic Vulnerabilities in Matrix." IEEE S&P 2023 (server takeover of Matrix groups via similar control-message vulnerabilities).
+- attack: Katz, Shin. "Modeling insider attacks on group key-exchange protocols." ACM CCS 2005 (insider-attack model this paper's admin restriction mitigates).
+- foundational: Devigne, Duguey, Fouque. "MLS: how zero-knowledge can secure updates." ESORICS 2021 (the NIZK-in-TreeKEM fix for the robustness gap this paper leaves open).
+- foundational: Bellare, Miner. "A forward-secure digital signature scheme." CRYPTO 1999 (forward-secure signature construction used for optimal-security IAS).
+
+### Verbatim extracts
+- "commit algorithm involves less than a 20% overhead when up to |G|/8 members carry out admin updates"
+- "proposals used 364 to 366 bytes, and admin proposals used 364 to 368 bytes"
+- "we do not model authentication (we implicitly assume an incorruptible PKI)"
+- "admins cannot give up their admin status immediately"
+- "confidentiality is not compromised under this family of attacks"
+- "DGS introduces basically no cost for standard users"
+
+---
+
 ## [BALDUF-IMC-23] The Cloud Strikes Back: Investigating the Decentralization of IPFS
 **Citation:** Leonhard Balduf, Maciej Korczyński, Onur Ascigil, Navin V. Keizer, George Pavlou, Björn Scheuermann, Michał Król. "The Cloud Strikes Back: Investigating the Decentralization of IPFS." ACM Internet Measurement Conference (IMC), 2023. DOI 10.1145/3618257.3624797.
 **Retrieved:** full text via https://arxiv.org/abs/2309.16203
@@ -2846,6 +2988,60 @@ None found against another corpus entry's measurement. This is the original, pre
 
 ---
 
+## [BIENSTOCK-TCC-20] On the Price of Concurrency in Group Ratcheting Protocols
+**Citation:** Alexander Bienstock, Yevgeniy Dodis, Paul Rösler. "On the Price of Concurrency in Group Ratcheting Protocols." Theory of Cryptography Conference (TCC), 2020. DOI 10.1007/978-3-030-64378-2_8. Full version: IACR ePrint 2020/1171.
+**Retrieved:** full text via https://eprint.iacr.org/2020/1171.pdf
+**Source URL:** https://eprint.iacr.org/2020/1171.pdf
+**Domain:** H
+
+### What it does
+The paper proves a lower bound on the communication a group encryption-key-refresh protocol ("group ratcheting") must transmit to recover post-compromise security (PCS, the ability to restore secrecy after a state exposure through normal protocol operation) once more than one member sends an update concurrently in the same round. It defines a round-based model: a static group of n members shares a symmetric group key, updated every round from an arbitrary subset of up to t members chosen by the adversary as senders; each sender broadcasts a ciphertext without knowing who else is sending, and every member folds all t ciphertexts into a new group key. Security additionally allows the adversary to expose any member's local state at the end of any round. A key that survives a round counts as secure only if no member holding it is later exposed, every user has sent at least one update since its last exposure, and — permitting a one-round delay — one further member sends after every exposed member has sent once.
+
+Within a symbolic execution model in which the only allowed primitives are pseudorandom functions, dual PRFs, key-updatable public-key encryption (at least as strong as hierarchical identity-based encryption), and broadcast encryption — a class the paper states covers every primitive used in prior group-ratcheting constructions — the paper proves that each of the t senders active in round i must transmit at least |sender set of round i−1| − 1 fresh ciphertexts, for a total per-round communication of at least |U_S^i| · (|U_S^{i-1}| − 1) symbols, i.e., Ω(t) overhead. It complements this with a construction achieving O(t·(1 + log(n/t))) overhead: a binary tree with one leaf per member and a key-updatable public-key-encryption key pair at every node (the Complete Subtree broadcast-encryption method), in which each of the t concurrent senders taints and re-encrypts along the minimal subtree connecting the previous round's senders' leaves to the root.
+
+### Measured results
+None. This is a theoretical paper: every quantitative claim is an asymptotic bound (Ω(t) lower bound, O(t·(1 + log(n/t))) upper-bound construction) proved in a symbolic and a computational model, not measured by implementation or simulation. No node counts, runtimes, or message-size benchmarks appear.
+
+### Parameters
+| Parameter | Value / role |
+|---|---|
+| n | total (static) group size |
+| t | number of concurrent senders permitted per round; t=1 reproduces the MLS/TreeKEM "no concurrency" restriction, t=n reproduces unrestricted parallel pairwise Signal |
+| Lower bound (per-round communication) | |U_S^i| · (|U_S^{i-1}| − 1), stated in the paper as effectively t − 1 |
+| Upper-bound construction overhead | O(t · (1 + log(n/t))) |
+| PCS delay condition (c) | one round of slack permitted after all previously exposed members have sent once |
+
+### Stated limitations
+The model restricts itself to: round-based synchronous communication; static groups (no adds or removes modeled); every member receives every round; only passive adversaries (the adversary cannot alter broadcast ciphertexts); adversaries can expose a member's state only after that round's messages are received; and the adversary cannot attack the randomness senders use. The authors state these restrictions are deliberate, to make the lower bound as strong (best-case) as possible, not to describe a deployable protocol. For dynamic groups, the paper's own construction has an unresolved "double-join" problem: a removed member who retained secrets observed while a member can still derive later group secrets, unless every sibling of removed members' tree positions is separately made to issue an update — the paper states this restriction may be insignificant in practice because membership change is rare in the applications it has in mind, but does not solve the problem. The construction's security model does not give the adversary access to a sender's unused random coins and does not allow the adversary to tamper with broadcast messages; the authors list resilience to weak randomness as an explicit open problem left for future research. The one-round PCS delay (condition (c)) is stated as necessary to avoid requiring multiparty non-interactive key exchange, which the authors describe as requiring cryptographic assumptions not otherwise needed (multilinear maps) and therefore avoided; removing this delay is not achieved. The authors state it is not established whether the lower bound, the upper bound, or both are loose, and suggest more sophisticated broadcast-encryption methods (Layered Subset Difference, or a cited optimal broadcast-encryption scheme) as an unexplored way to tighten the upper bound; they also note that permitting a longer PCS delay Δ>1 (rather than 1 round) could reduce communication further, which they do not construct.
+
+### Requirements it places on the rest of the system
+Requires a synchronous, authenticated broadcast channel on which every member receives every sender's ciphertext in the same round — the model gives no mechanism for asynchronous or partial delivery. Requires an honest-but-curious external mechanism that clocks rounds consistently for all members; the authors state this clock synchronization can be coarse without undermining the result. The upper-bound construction requires every member to process every ciphertext broadcast in a round before it can itself send in a later round (stated as usually unproblematic because sending requires the member to be online regardless). Achieving the stated PCS bound requires accepting a one-round delay after an exposed member's first post-exposure send, rather than immediate recovery. The construction as presented supports only static groups; using it for a dynamic group requires importing membership-change handling (the paper names MLS and Tainted TreeKEM's approach) from elsewhere, and without that addition, correctness requires that siblings of every removed member's former tree position separately issue a state update before that removed member becomes unable to derive further secrets.
+
+### Contradicts
+Table 1 in this paper directly gives the concurrency and communication-overhead classification for the WhatsApp/Signal Sender Key mechanism (no PCS, no concurrency restriction, O(1) per-message overhead) side by side with parallel pairwise Signal (PCS, full concurrency, O(n) overhead), Asynchronous Ratcheting Trees, Causal TreeKEM, the TreeKEM family, MLS Draft-09, and Optimally Secure Tainted TreeKEM (all O(log n) overhead but requiring non-concurrent updates for PCS). This paper describes the Sender Key mechanism as providing no PCS at all under exposure, since exposing one state reveals all of that member's future keys by deterministic hash chaining — a stronger negative claim about Sender Keys than BALBAS-ASIACRYPT-23, which finds Sender Keys achieves a (weak) form of PCS through on-demand or removal-triggered updates. The two papers are not measuring the same protocol version: this paper's Table 1 describes the base mechanism with no update operation modeled, while BALBAS-ASIACRYPT-23 formally models the update operation Sender Keys does support. Flagged for cross-check against BALBAS-ASIACRYPT-23 in synthesis.
+
+### References worth retrieving
+- foundational: Micciancio, Panjwani. "Optimal communication complexity of generic multicast key distribution." EUROCRYPT 2004 (source of the symbolic-model lower-bound technique this paper adapts, and of the amortized log(n) forward-secrecy lower bound the paper compares against).
+- foundational: Naor, Naor, Lotspiech. "Revocation and tracing schemes for stateless receivers." CRYPTO 2001 (Complete Subtree broadcast-encryption method used in the upper-bound construction).
+- foundational: Alwen, Coretti, Dodis, Tselekounis. "Security analysis and improvements for the IETF MLS standard for group messaging." CRYPTO 2020.
+- foundational: Alwen, Capretto, Cueto, Kamath, Klein, Pascual-Perez, Pietrzak, Walter. "Keep the dirt: Tainted TreeKEM." IACR ePrint 2019/1489 (source of the tainting mechanism this paper's construction is later shown equivalent to a variant of).
+- competing: Cohn-Gordon, Cremers, Garratt, Millican, Milner. "On ends-to-ends encryption: Asynchronous group messaging with strong security guarantees." ACM CCS 2018 (Asynchronous Ratcheting Trees, one of the seven compared protocols in Table 1).
+- competing: Weidner. "Group messaging for secure asynchronous collaboration." MPhil dissertation, 2019 (Causal TreeKEM, compared in Table 1).
+- competing: Barnes, Beurdouche, Millican, Omara, Cohn-Gordon, Robert. "The Messaging Layer Security (MLS) protocol," draft-ietf-mls-protocol-09, IETF, 2020 (MLS Draft-09, compared in Table 1, the O(n) worst-case entry attributed to giving up PCS under concurrency).
+- attack: Rösler, Mainka, Schwenk. "More is less: on the end-to-end security of group chats in Signal, WhatsApp, and Threema." IEEE EuroS&P 2018 (source of the Sender Key mechanism description used in Table 1 and Section 4).
+- competing: Agrawal, Yamada. "Optimal broadcast encryption from pairings and LWE." EUROCRYPT 2020 (cited as an unexplored route to a tighter upper bound).
+- foundational: Boneh, Silverberg. "Applications of multilinear forms to cryptography." IACR ePrint 2002/080 (the "exotic" multiparty non-interactive key exchange assumption the paper's model deliberately avoids).
+
+### Verbatim extracts
+- "PCS requires Ω(t) communication overhead per message"
+- "an almost matching upper bound of O(t · (1 + log(n/t)))"
+- "reveal of all future sender keys as soon as a member state is exposed (breaking post-compromise security)"
+- "delays reaching PCS up to n communication time slots"
+- "it is not ultimately clear whether our lower bound or upper bound is loose"
+- "resilience against weak randomness" left as "an open question"
+
+---
+
 ## [BIENSTOCK-TCC-22] On the Worst-Case Inefficiency of CGKA
 
 **Citation:** Alexander Bienstock, Yevgeniy Dodis, Sanjam Garg, Garrison Grogan, Mohammad Hajiabadi, Paul Rösler. "On the Worst-Case Inefficiency of CGKA." Theory of Cryptography Conference (TCC), 2022. DOI 10.1007/978-3-031-22365-5_8.
@@ -3226,6 +3422,63 @@ None found against other entries in this corpus. Within its own related-work dis
 - "We conjecture that the chosen-target CDH problem is hard for all groups where the CDH problem is hard."
 - "the proof is in the random oracle model only because the latter is used in the proof of security of the base signature scheme"
 - "we do not focus on the robustness property in this work"
+
+---
+
+## [BONEH-ASIACRYPT-01] Short Signatures from the Weil Pairing
+**Citation:** Dan Boneh, Ben Lynn, Hovav Shacham. "Short Signatures from the Weil Pairing." ASIACRYPT 2001 (journal version: Journal of Cryptology, 2004). DOI 10.1007/3-540-45682-1_30.
+**Retrieved:** full text via https://crypto.stanford.edu/~dabo/pubs/papers/BLSsignatures.ps (converted, matches published pages 514-532 numbering visible in the text)
+**Source URL:** https://crypto.stanford.edu/~dabo/pubs/papers/BLSsignatures.ps
+**Domain:** E
+
+### What it does
+The scheme (later called BLS, after the authors' initials) produces a digital signature roughly half the bit length of a Digital Signature Algorithm (DSA) signature offering comparable security, so a signature can be typed in by a person or sent over a low-bandwidth channel. It works over a Gap Diffie-Hellman (GDH) group: a group in which the Computational Diffie-Hellman problem (recovering g^(ab) from g, g^a, g^b) is hard, but the Decisional Diffie-Hellman problem (deciding whether a given tuple g, g^a, g^b, g^c satisfies c=ab) is easy. The paper instantiates a GDH group using a bilinear pairing (the Weil pairing) on certain supersingular elliptic curves over fields of characteristic three, which supplies an efficient decision procedure for Diffie-Hellman tuples while leaving the computational problem hard.
+
+Key generation picks a base point P of prime order q on the curve, samples a private key x uniformly from Z_q, and sets the public key to R = xP. Signing a message M applies a hash-to-curve function (MapToGroup, built from a conventional hash function h′ into the field plus an extra bit that selects one of two curve points sharing an x-coordinate) to obtain a curve point P_M, computes S_M = xP_M, and outputs the x-coordinate of S_M as the signature — a single field element rather than the pair of elements standard discrete-log signatures require. Verification recomputes P_M from M, uses the Weil pairing e to test whether e(P, S) equals e(R, P_M) or its inverse (since either sign of the y-coordinate could have produced the signature), and accepts if either equality holds; this pairing check substitutes for direct recomputation of xP_M, which the verifier cannot do without the private key. The paper proves that if a Gap Diffie-Hellman group is (τ,t,ε)-secure (no algorithm running in time t and using at most τ decision-oracle calls solves CDH with the given group with probability above ε) and MapToGroup is modeled as a random oracle, an adversary that can forge a signature after qH hash queries and qS signature queries can be turned into an algorithm solving Computational Diffie-Hellman in that group with related running time and success probability.
+
+### Measured results
+| Curve field size l | Signature length (bits) | Discrete-log security (bits) | MOV-reduction field-size security (bits) | Verification time (seconds, one signature) |
+|---|---|---|---|---|
+| 79 (curve E−) | 126 | 126 | 752 | 1.6 |
+| 97 (curve E+) | 154 | 151 | 923 | 2.9 |
+| 149 (curve E+) | 237 | 220 | 1417 | 9.6 |
+| 163 (curve E+) | 259 | 256 | 1551 | 13.3 |
+| 163 (curve E−) | 259 | 259 | 1551 | 13.4 |
+| 167 (curve E+) | 265 | 262 | 1589 | 14.0 |
+
+Verification times measured on a single machine: a 1 GHz Pentium III running GNU/Linux, one run per data point (no repetition count or variance stated). Signing time is stated only qualitatively as much cheaper than verification, since verification computes two pairings and signing computes one scalar multiplication; no signing-time figures are given. At l=97 (154-bit signature, 923-bit discrete-log security), the paper reports this as under half the length of a standard 320-bit DSA signature at 1024-bit-modulus discrete-log security — a length comparison, not an equal-security comparison, since 923-bit and 1024-bit security levels differ.
+
+### Parameters
+- Curve family: E: y² = x³ + 2x ± 1 over F_(3^l), supersingular, restricted to prime l to avoid Weil-descent attacks.
+- Security multiplier α (also called the MOV-reduction embedding degree): fixed at α=6 for this curve family under the security parameters used, stated as the maximum achievable for these particular curves; the field size the MOV attack reduces to is 6·l bits.
+- l (base-field exponent): the tested values are 79, 97, 149, 163, 167, each yielding one row of the results table above; no continuous range is stated, only these specific instantiated curves.
+- Random-oracle hash function h′ (part of MapToGroup): mapped to F_(3^l) × {0,1}, instantiated but no concrete hash function or benchmark for it is given separately from the whole-scheme verification timings.
+
+### Stated limitations
+The scheme is proved secure only in the random oracle model, an idealization of the hash function used inside MapToGroup; the paper does not provide a proof in the standard model. Security depends on the specific supersingular curve family used being a Gap Diffie-Hellman group with security multiplier at most α=6 for currently known constructions; the paper poses as an explicit open problem building an elliptic- or hyper-elliptic-curve family with security multiplier higher than 6 (the paper suggests α≈10 as a target) while keeping signatures the same short length — solving this would raise achievable security without lengthening signatures, and the paper states this is unsolved. A second explicit open problem, also unsolved in the paper, asks whether a family of genus-3 hyperelliptic curves exists with the needed properties. Signing requires only one scalar multiplication, but verification requires two pairing computations, which the measured running times show scale from 1.6 to 14.0 seconds on 2001-era hardware as the security level rises — the paper states these times could potentially be reduced by using higher-genus curves over characteristic-two fields or techniques from a cited prior work, but does not implement or measure either improvement.
+
+### Requirements it places on the rest of the system
+Requires a source of a Gap Diffie-Hellman group: a group with an efficient algorithm for deciding Diffie-Hellman tuples but no known efficient algorithm for computing them, which in this paper is supplied only by the Weil-pairing-equipped supersingular elliptic curves described, not by an arbitrary discrete-log group. Requires a hash function that can be treated as a random oracle for the MapToGroup construction (mapping arbitrary message strings onto curve points of the correct order); the security proof does not carry through for an arbitrary non-random-oracle hash function. Requires the verifier to have access to the signer's public key R = xP and to be able to compute the Weil pairing efficiently, which the paper's own benchmark shows costing seconds per verification at 2001 hardware speeds and security levels in the hundred-bit range — any system embedding this scheme must budget verification latency accordingly rather than treat it as free.
+
+### Contradicts
+This paper does not define, construct, or prove anything about aggregating multiple signatures into one constant-size value; it presents a single-signer, single-message scheme only. Any claim that this specific paper establishes signature aggregation is not supported by its text — that property was introduced in a later paper by an overlapping set of authors (Boneh, Gentry, Lynn, Shacham, EUROCRYPT 2003), not this one, and any evidence-file entry using this KEY as the citation for aggregate-signature results would misattribute it. No other paper in this corpus's evidence file yet measures this scheme's parameters directly, so no cross-paper numeric contradiction is recorded.
+
+### References worth retrieving
+- foundational: Boneh, Franklin. "Identity-Based Encryption from the Weil Pairing." CRYPTO 2001 (companion pairing-based construction from the same period, source of related pairing-based cryptographic techniques).
+- foundational: Joux. "A One Round Protocol for Tripartite Diffie-Hellman." ANTS IV, 2000 (the pairing-based key-exchange construction whose gap-group idea this signature scheme's security model builds on).
+- competing: Mironov. "A Short Signature as Secure as DSA." Preprint, 2001 (a contemporaneous alternative short-signature construction cited as related work).
+- attack: Galbraith, Smart. "A Cryptographic Application of Weil Descent." Cryptology and Coding, 1999 (the Weil-descent attack this paper's restriction to prime l is designed to avoid).
+- attack: Gaudry, Hess, Smart. "Constructive and Destructive Facets of Weil Descent on Elliptic Curves." University of Bristol Technical Report CSTR-00-016, 2000 (further Weil-descent attack analysis motivating the same restriction).
+- foundational: Menezes, Okamoto, Vanstone. "Reducing Elliptic Curve Logarithms to Logarithms in a Finite Field." IEEE Transactions on Information Theory, 1993 (the MOV reduction whose resulting field-size security this paper's Table 1 reports).
+- foundational: Frey, Muller, Ruck. "The Tate Pairing and the Discrete Logarithm Applied to Elliptic Curve Cryptosystems." IEEE Transactions on Information Theory, 1999 (Tate-pairing computation technique used for verification).
+
+### Verbatim extracts
+- "The signature length is half the size of a DSA signature for a similar level of security."
+- "a level of security similar to 320-bit DSA signatures"
+- "It is an open problem to build elliptic curves" with security multiplier above 6.
+- "This is under half the size of the standard 320-bit DSS signature"
+- "verification is much more expensive than signature generation because it requires computing two pairings"
+- "open problem whether one can build a family of hyper-elliptic curves of genus 3"
 
 ---
 
@@ -3624,6 +3877,66 @@ None found.
 - "the average in-degree of Mastodon instances, i.e., the number of received bans, ranges between 3 and 4"
 - "most instances yielding pairwise distances close to one ... signaling very diverse blocklists"
 - "starting from August we spotted the division of the network in at least two connected components"
+
+---
+
+## [BORMANN-SSR-25] SoK: Anonymous Credentials for Digital Identity Wallets
+**Citation:** Christian Bormann, Anja Lehmann. "SoK: Anonymous Credentials for Digital Identity Wallets." Security Standardisation Research (SSR) 2025. DOI 10.1007/978-3-032-19567-8_1.
+**Retrieved:** full text (source matches DBLP citation; specific hosting URL not recorded in the retrieved copy's header)
+**Source URL:** https://doi.org/10.1007/978-3-032-19567-8_1
+**Domain:** E
+
+### What it does
+Anonymous credentials let a trusted issuer attest a set of a user's attributes once, after which the user creates repeated presentations to relying parties (RPs) that reveal only a chosen subset of those attributes and cannot be linked to each other or back to the issuance event. This paper is a systematization of knowledge (SoK), not a new construction: it surveys the two architectural approaches under active standardization consideration for government-issued digital identity wallets, most concretely the European Digital Identity (EUDI) Wallet with a planned 2026 rollout, and reports each approach's maturity, deployment status, and open engineering problems.
+
+Approach one, dedicated multi-message signatures, uses a signature scheme built so that (a) it signs several attributes as separate messages under one signature, giving selective disclosure natively, and (b) its algebraic structure lets a holder prove knowledge of a valid signature over a chosen subset of those messages via a zero-knowledge proof (ZKP) without hashing the messages first, keeping the proof cheap. BBS signatures (Boneh-Boyen-Shacham, extended by later work) are the concrete instance the paper treats as most mature: presentation is essentially a non-interactive Schnorr proof of the discrete-logarithm relations the signature implies. Approach two, general-purpose ZKPs over legacy signatures, keeps the existing signature scheme (ECDSA, as already used in the EUDI reference architecture) unchanged and instead builds a ZKP circuit — zkSNARK or a dedicated protocol — that proves the holder possesses a valid ECDSA signature over the disclosed attributes without revealing the signature itself, so issuer infrastructure need not change.
+
+The paper further explains device binding: an anonymous credential should be non-transferable, so a presentation must additionally prove possession of a device-held secret key, ideally without letting the device's Secure Element (SE) perform the credential scheme's own (pairing-based) cryptography, since deployed phone SEs typically support only the P-256 curve with ECDSA. Three device-binding strategies are surveyed: native binding via a Direct Anonymous Attestation (DAA)-style protocol requiring the SE to compute one Schnorr signature in the pairing-friendly curve's G1 group; a hybrid BBS+ECDSA scheme in which the credential embeds an ECDSA public key as one of its attributes and a separate ZKP (built with a dedicated protocol such as CDLS or a zkSNARK such as Crescent or Longfellow) proves possession of a matching ECDSA proof-of-possession signature without revealing it; and BBS♯, a variant requiring only a single SE call without a shared secret, whose formal security analysis the paper states does not yet exist.
+
+### Measured results
+| Measurement | Condition | Value |
+|---|---|---|
+| BBS presentation proof generation and verification time | native BBS with Schnorr-style ZKP, DAA-based device binding PoP part on the Secure Element | "a few milliseconds" (qualitative, no exact figure or hardware given) |
+| BBS presentation proof size | native BBS, Schnorr-based ZKP | "several hundred bytes" (qualitative range, no exact figure) |
+| BBS-ECDSA hybrid device-binding proof generation time | Ubique implementation, ZKAttest/CDLS-based, built for a German EUDI innovation-challenge prototype | approximately 800 ms |
+| BBS-ECDSA hybrid device-binding proof size | same Ubique implementation | 150 KB |
+| Generic zkSNARK circuits vs. the BBS-ECDSA hybrid | comparison against generic (non-hardcoded) zkSNARK approaches for the same proof-of-possession task | "at least 1-2 magnitudes slower" (qualitative order-of-magnitude comparison, no absolute figures for the generic approach given) |
+
+No node counts, network topology, or multi-run statistics apply — these are single-implementation cryptographic-operation timings and sizes as reported by the cited prototype (Ubique's implementation, itself an external artifact this SoK reports rather than measures independently), not a benchmark run by this paper's own authors.
+
+### Parameters
+- Curve requirement for BBS and other pairing-based multi-show unlinkable schemes: a pairing-friendly curve with a type-3 pairing (e.g., BN254, cited as already ISO- and TCG-standardized, though not yet standardized for this specific identity-wallet use case at the time of writing).
+- Device-binding SE call count: DAA-based native binding requires two SE calls; the scheme by Hesse et al. reduces this to one call using a key shared between SE and host; BBS♯ reduces it to one call without a shared secret; the most recent work cited (reference 48) requires one call to a plain BLS-signature interface with no additional state held by the SE.
+- BBS-ECDSA hybrid proof-of-possession scheme options: CDLS/ZKAttest (classical Schnorr-proof-based) or a zkSNARK (Google Longfellow, Microsoft Crescent, or the Woo et al. protocol).
+- Standardization status parameters (not numeric, but load-bearing for deployment): BBS signatures ISO-standardized in ISO/IEC 20008-2:2013, amended 2023 to include PS signatures; BBS variant standardization ongoing in the IRTF CFRG at time of writing; DAA protocol ISO-standardized in 2013 and supported by the TPM2.0 standard and Intel SGX attestation.
+
+### Stated limitations
+The EUDI reference architecture's currently proposed alternative — batch-issued one-time ECDSA credentials with salted-hash selective disclosure — is stated by the paper to be unable to achieve unlinkability when the issuer and a relying party collude, and achieving unlinkability across different malicious relying parties requires issuing a fresh one-time credential per presentation, which the paper states creates significant load on issuer infrastructure and complicates user key management. Native BBS device binding requires the phone's Secure Element to perform computation in the pairing-friendly curve's G1 or G2 group, which current commercial Secure Elements do not support (they support only P-256/ECDSA), so this approach requires hardware and certification changes and, per the paper, "does not work for immediate deployment." The BBS♯ protocol for device binding has no formal security analysis at the time of writing. Switching to a pairing-free variant of BBS to work around the pairing-curve requirement inherently adds complexity in the form of batch issuance, because pairing-free constructions are inherently single-show credentials. General-purpose ZKP systems over legacy ECDSA are described as significantly more complex and less efficient than BBS-based systems, are of much more recent development, and consequently have not received the same level of security scrutiny; efficiency in these systems is typically achieved by hardcoding the circuit to one specific proof statement, so extending the feature set requires significant additional engineering and expert cryptographic knowledge. None of the surveyed constructions is fully quantum-safe: the most widely deployed zkSNARK systems (Groth16, Plonk, Bulletproofs) rely on discrete-logarithm-based assumptions and are not quantum-safe, and the paper states that even where a proof system offers quantum-safe soundness, this does not extend to an anonymous-credential scheme built on a classical (non-quantum-safe) signature such as ECDSA — the optimized circuits used for efficiency are scheme-specific and would need substantial new research to adapt to post-quantum signature schemes such as ML-DSA.
+
+### Requirements it places on the rest of the system
+BBS-based deployment requires all issuers, holders, and verifiers currently using ECDSA-based attribute credentials to change their software, since BBS is a different signature scheme entirely — this is stated explicitly as a migration cost distinguishing it from the general-purpose-ZKP approach. It requires either approval and deployment of a pairing-friendly elliptic curve across the ecosystem, or acceptance of the added issuer-communication overhead of BBS♯/server-aided or batch-issued credentials as a substitute. Device binding via native SE computation requires Secure Element hardware capable of G1/G2 pairing-curve operations and requires re-certification of that hardware; where this is infeasible, the system must instead route the device-binding proof-of-possession through an external cloud hardware security module (HSM), which several countries — Germany, the Netherlands, and Sweden are cited — plan to use for high-assurance credentials, at the cost of relying on that external service's availability. General-purpose-ZKP deployment requires changing holder and verifier software to run the ZKP circuit, but can leave issuer infrastructure unchanged only if the credential format issuers already produce (e.g., mdoc, standard ECDSA-signed attribute certificates) is kept unchanged; adopting a specialized credential format for better performance forfeits that issuer-side compatibility. Any system offering multi-show unlinkability through anonymous credentials as opposed to batch-issued one-time tokens requires a mechanism for the issuer to certify a single per-user secret key from which many unlinkable pseudonyms can be verifiably derived, rather than requiring per-presentation fresh issuance.
+
+### Contradicts
+None found in this corpus. This paper does not itself measure a novel construction; every quantitative figure it reports (the 800 ms / 150 KB BBS-ECDSA hybrid figures) is attributed to an external prototype (Ubique's implementation for a German EUDI innovation challenge) rather than independently reproduced by this paper's authors, and the paper does not claim to have verified those figures itself — a synthesis citing this KEY for BBS-ECDSA hybrid performance should note the figure is once-removed from this paper's own measurement.
+
+### References worth retrieving
+- foundational: Boneh, Boyen, Shacham. "Short group signatures." CRYPTO 2004 (the BBS group-signature construction this paper's core recommended scheme derives its name and structure from).
+- foundational: Boneh, Lynn, Shacham. "Short signatures from the Weil pairing." Journal of Cryptology, 2004 (already in this corpus as BONEH-ASIACRYPT-01 — cited here as reference 18, confirming the pairing-based signature lineage BBS builds on).
+- foundational: Camenisch, Drijvers, Lehmann. "Universally composable direct anonymous attestation." PKC 2016 (DAA protocol formal treatment, the device-binding baseline this paper compares alternatives against).
+- foundational: Bootle, Lyubashevsky, Nguyen, Sorniotti. "A framework for practical anonymous credentials from lattices." CRYPTO 2023 (post-quantum anonymous-credential candidate, relevant to the quantum-safeness limitation this paper states is unresolved).
+- competing: Baldimtsi, Lysyanskaya. "Anonymous credentials light." ACM CCS 2013 (an alternative lightweight anonymous-credential construction, comparison point for BBS's efficiency claims).
+- competing: Desmoulins, Dumanois, Kane, Traoré. "Making BBS anonymous credentials..." (BBS♯ protocol source, cited as lacking formal security analysis — worth retrieving to verify that specific gap).
+- foundational: Bünz, Bootle, Boneh, Poelstra, Wuille, Maxwell. "Bulletproofs: Short proofs for confidential transactions and more." IEEE S&P 2018 (cited as one of the widely deployed non-quantum-safe zkSNARK systems the paper's quantum-safeness discussion is built on).
+- foundational: Bichsel, Camenisch, Dubovitskaya, et al. "D2.2 architecture for attribute-based credential technologies — final version." ABC4Trust project deliverable, 2014 (the prior comprehensive technical SoK this paper explicitly positions itself as an updated, wallet-centric successor to).
+- competing: Kakvi et al. — the "more general SoK on anonymous credentials" the paper explicitly distinguishes itself from by scope (not cited with full detail in the excerpted bibliography section; needs a DBLP lookup to retrieve the exact citation).
+
+### Verbatim extracts
+- "it is more costly than native device binding, it is practical enough for online authentication"
+- "does not work for immediate deployment"
+- "The protocol has no formal security analysis yet"
+- "does not extend to the anonymous credentials scheme when it is build on top of classic signatures"
+- "signiﬁcant load on the issuer's infrastructure"
+- "Generic approaches are at least 1-2 magnitudes slower"
 
 ---
 
@@ -4630,6 +4943,85 @@ None found — no other entry in this corpus reports a conflicting recall, laten
 - "the statistical average latency of results is significantly reduced by 26 percent."
 - "the average query traffic is decreased by 40 percent."
 - "the statistical average search efficiency is increased by 61 percent."
+
+---
+
+## [CHENG-ACSAC-20] Talek: Private Group Messaging with Hidden Access Patterns
+**Citation:** Raymond Cheng, William Scott, Elisaweta Masserova, Irene Zhang, Vipul Goyal, Thomas E. Anderson, Arvind Krishnamurthy, Bryan Parno. "Talek: Private Group Messaging with Hidden Access Patterns." ACSAC 2020, 16 pages. DOI 10.1145/3427228.3427231.
+**Retrieved:** full text via https://eprint.iacr.org/2020/1149.pdf (also arXiv:2001.08250v3)
+**Source URL:** https://eprint.iacr.org/2020/1149.pdf
+**Domain:** G
+
+### What it does
+Talek hides which log a client reads or writes on untrusted servers, so an adversary controlling the servers and the network cannot learn who is communicating with whom, without relying on a differential-privacy noise tradeoff. It targets small groups of mutually trusting users (e.g., a group chat) and gives every group a private log: a single writer produces messages, and any group member holding a shared log secret can independently derive the pseudorandom, deterministic sequence of database storage locations that log's messages occupy, then retrieve new messages by that sequence.
+
+Reads use information-theoretic private information retrieval (IT-PIR): each of l servers holds a full replica of the shared message database, and a client's read request is a fixed-size vector sent identically in form to every server, such that no single server can determine which database record the client wants — recovering that record requires collusion of every server (the anytrust assumption: at least one of the l servers is honest, unknown to the adversary in advance). Talek stores messages in a blocked cuckoo hash table on the server: a write hashes the message to one of several candidate table buckets using a pseudorandom function keyed by the log secret, and a read retrieves an entire bucket (a fixed number of messages, the "bucket depth," together) via one IT-PIR query rather than one message at a time, amortizing the read cost. A separate mechanism, private notifications, lets a client that follows several logs learn — again via a privacy-preserving encoding, not by directly polling each log — which of its subscribed logs currently hold new messages, so it can prioritize which logs to read next instead of polling every log every round. To hide the difference between real activity and idleness, every client issues fixed-size, uniformly-shaped read and write requests on a fixed schedule regardless of whether it has real application data to send, substituting "dummy" requests when it does not (cover traffic).
+
+### Measured results
+All experiments run on Amazon EC2 P2 instances: 4 cores of an Intel Xeon E5-2686v4, 61 GB RAM, one NVIDIA K80 GPU (2496 cores, 12 GB memory) per instance; a 3-server deployment (one leader, two followers) plus 2 client VMs, all within a single data center. Workload: Ubuntu IRC logs from 2016 (1,554,790 messages, 32,834 unique usernames), one Talek log created per IRC channel writer, 1 KB fixed message size, cuckoo-table bucket depth 4 (95% max load factor), global interest vector configured for 0.02 false-positive rate with a 100-write-interval time-to-live.
+
+Per-operation cost (Section 9.2), each value averaged over 200 runs, varying n (number of 1 KB messages stored on the server) over {10K, 100K, 1M}:
+
+| Operation | n=10K | n=100K | n=1M |
+|---|---|---|---|
+| Client: generate new log handle | 7753 μs | 7753 μs | 7753 μs |
+| Client: write | 67 μs | 67 μs | 67 μs |
+| Client: issue PIR query | 65 μs | 574 μs | 6888 μs |
+| Client: process PIR response | 146 μs | 146 μs | 146 μs |
+| Server: PIR read, CPU implementation | 1.34 ms | 11.10 ms | 88.10 ms |
+| Server: PIR read, GPU implementation | 0.07 ms | 0.54 ms | 4.36 ms |
+| Server: write | 0.02 ms | 0.02 ms | 0.02 ms |
+| Server storage (1 KB messages) | 24 MB | 241 MB | 2410 MB |
+| Network: GetUpdates | 0.21 KB | 1.40 KB | 14.00 KB |
+| Network: read request | 0.96 KB | 9.39 KB | 93.72 KB |
+| Network: read response | 4.16 KB | 4.16 KB | 4.16 KB |
+| Network: write request | 1.08 KB | 1.08 KB | 1.08 KB |
+
+The GPU IT-PIR implementation is 1-2 orders of magnitude faster than the CPU implementation across these sizes; batch coding/preprocessing is estimated (not measured) to improve GPU throughput a further 3×, at the cost of added write-to-visible-read latency.
+
+Cover-traffic/read-interval tradeoff (Section 9.3), replaying the Ubuntu IRC logs with servers configured to store 524,000 messages and clients modeled as mobile devices online only when reading: at a 1-second read interval, average end-to-end message latency is 1.71 seconds and each client uses ~148 MB of bandwidth per day. At a 5-second read interval (the value fixed for later experiments), end-to-end latency rises to 10.7 seconds, roughly half of read requests are dummy (FakeRead), and daily client bandwidth falls to ~49.4 MB; at 32,000 active users this requires a server network connection of at least 18.3 MB/s.
+
+Throughput scaling (Section 9.4): each client sends and receives one message per 5 seconds; measured over a 5-minute steady-state window per data point; three values of n tested (32K, 131K, 524K messages stored). At n=32K messages and the maximum client count tested (near 32,000 clients), peak throughput is stated in the abstract as 9,433 messages/second (equivalently reported as up to ~566K messages/minute in the throughput figure) with average end-to-end latency 1.7 seconds — note this abstract figure corresponds to the 1-second-read-interval configuration of Section 9.3, not the 5-second-interval configuration used for the later comparison experiments. Throughput grows linearly with client count until bottlenecked by GPU PIR computation; larger n (larger cuckoo table) lowers throughput at fixed client count.
+
+Comparison against prior systems using their public implementations, single-threaded, common security parameter of 3 servers for anytrust-based systems (Section 9.5, Figure 10): Pung++'s read throughput lags Talek's CPU implementation by up to two orders of magnitude; Talek's CPU implementation in turn lags Vuvuzela's read throughput by 1-3 orders of magnitude; Talek's GPU implementation improves read performance roughly 20× over its own CPU implementation. Riposte's evaluated implementation has no read operation (broadcast-only focus), so no read comparison exists for it; write performance is similar between Talek, Pung++, and Vuvuzela, all of which outperform Riposte because of Riposte's O(√n) write cost. Vuvuzela (differential-privacy-based, weaker security goal) is cited as scaling to millions of users with peak throughput nearly 4M messages/minute using the same server count as Talek.
+
+### Parameters
+- Number of servers l: fixed at 3 in all reported experiments (anytrust threshold t = l−1 = 2, meaning up to 2 of 3 servers may be adversarial).
+- Message size z: fixed at 1 KB.
+- Number of messages on server n: varied over {10K, 100K, 1M} for per-operation costs; {32K, 131K, 524K} for throughput scaling; 524,000 for the cover-traffic experiment.
+- Cuckoo table bucket depth: 4 messages per bucket, chosen to support a 95% maximum load factor.
+- Global interest vector false-positive rate: 0.02, with a time-to-live of 100 write intervals.
+- Client read interval: swept 1-20 seconds in Section 9.3; fixed at 5 seconds for Sections 9.4-9.5.
+- Access sequence indistinguishability security parameter λ: defined formally (Definition 3.1) as the parameter bounding an adversary's distinguishing advantage to a negligible function of λ; no concrete numeric value of λ is reported as used in experiments.
+
+### Stated limitations
+Talek does not guarantee liveness: any member of a trusted group can block writes to that group's log, and a faulty server can degrade availability; clients can detect such faults but cannot attribute them to a specific party. The paper states this means service providers should be chosen for reputations of high availability, and that Byzantine-fault-tolerant PIR variants could improve this at higher overhead — explicitly deferred to future work, not built or measured here. Talek does not hide when users are online, since clients connect directly to Talek servers; the authors state that an orthogonal system such as Tor could address this, but it is not integrated or evaluated. Talek is explicitly scoped to small groups of mutually trusting users who protect a shared per-log secret; if that secret leaks to an adversary, the compromised log's writer anonymity is lost (though reader anonymity and other logs' writer anonymity are preserved) — applications needing broadcast to many untrusted receivers are stated as better served by anonymous-broadcast systems instead. Talek achieves access sequence indistinguishability only among the set of users active (online) at the same time as the target user; because it permits users to go offline for practical reasons, an active user's effective anonymity set shrinks to other simultaneously-active users, leaving it subject in principle to intersection attacks that narrow a user's anonymity set by observing it over multiple time periods — the paper states Talek's guarantee is nonetheless stronger than k-anonymity-based systems because the offline-inclusive anonymity set is not artificially fixed to a small k. The theoretical lower bound that any PIR scheme's collective server work must scale at least linearly with database size applies to Talek, and the paper states known techniques to circumvent this bound (database preprocessing, or an offline/online split) cannot be used here because Talek's database changes continuously as messages are written. Improving server throughput further by splitting each logical "server" across multiple physical machines, each holding a portion of the PIR database, is explicitly deferred to future work and not implemented.
+
+### Requirements it places on the rest of the system
+Requires an anytrust deployment: at least one of the l participating servers, chosen from among mutually distrusting operators, must actually be honest, though the protocol does not require knowing in advance which one. Requires server storage capacity that scales with the number of clients, since every server holds a full copy of the shared message database. Requires that communicating clients already possess each other's long-term public keys before using Talek — the paper states this key distribution is orthogonal to Talek's own properties and can be satisfied externally (e.g., bootstrapped from another application, or via identity-based encryption), but Talek supplies no mechanism for it itself. Requires every server to have a known public-private key pair with all public keys known to all users; establishing this is likewise treated as an external prerequisite. Requires an out-of-band, secure channel for group members to share the per-log secret that determines their shared pseudorandom sequence of database locations, since Talek's own security proof assumes this secret is already distributed to a trusted group and does not defend a log whose secret has already leaked. Requires clients to issue traffic (real or dummy) on a fixed schedule independent of actual application activity; any component layered on top of Talek that changes a client's request timing based on real events would break the access-sequence indistinguishability guarantee. Requires the group of communicating clients to already be composed only of honest members for the formal security game to apply — Talek's proof restricts group creation to honest clients and does not model an adversarial group member who has legitimately joined.
+
+### Contradicts
+None found as an internal contradiction. Cross-reference for synthesis: the paper's own Section 9.5 places Vuvuzela's measured throughput (millions of users, nearly 4M messages/minute on 3 servers) 1-3 orders of magnitude above Talek's CPU-implementation read throughput, and attributes the gap to Vuvuzela's weaker (differential-privacy) security goal rather than to an implementation difference — any synthesis comparing PIR-based and differential-privacy-based private messaging by throughput alone, without stating this security-goal gap, would misrepresent this paper's own comparison. The abstract's headline throughput figure (9,433 messages/second, 1.7-second latency) corresponds to the 1-second read-interval configuration of Section 9.3's cover-traffic experiment, while the later comparison figures (Section 9.5) use a 5-second read interval with 10.7-second latency; citing the abstract figure as the system's cost under the parameters used for the prior-work comparison would conflate two different operating points within this same paper.
+
+### References worth retrieving
+- competing: Angel, Chen, Laine, Setty. "PIR with compressed queries and amortized query processing." IEEE S&P 2018 (Pung++, the refined C-PIR system directly benchmarked against Talek in Section 9.5).
+- competing: Angel, Setty. "Unobservable Communication over Fully Untrusted Infrastructure." OSDI 2016 (Pung, the original C-PIR system with a stronger threat model, compared throughout).
+- competing: Corrigan-Gibbs, Boneh, Mazières. "Riposte: An Anonymous Messaging System Handling Millions of Users." IEEE S&P 2015 (Riposte, "reverse" IT-PIR anonymous-broadcast system, compared in Section 9.5, Figure 9's O(√n) write-cost entry).
+- competing: van den Hooff, Lazar, Zaharia, Zeldovich. "Vuvuzela: Scalable Private Messaging Resistant to Traffic Analysis." (differential-privacy noise system, cited throughput ~4M messages/min, the strongest performance comparator in this paper).
+- competing: Stadium (reference 87 in this paper's bibliography — needs exact citation from DBLP) — extends Vuvuzela's security goal with better performance at the cost of assuming 50-75% honest servers.
+- competing: Karaoke (reference 61) — extends Vuvuzela with a noise-verification technique and an "optimistic indistinguishability" security goal, assumes 60-80% honest servers.
+- competing: XRD (reference 59) — mix-net system offering cryptographic privacy similar to Talek's while requiring a large honest-server fraction, supports square-root horizontal throughput scaling with added servers.
+- foundational: Chor, Kushilevitz, Goldreich, Sudan. "Private Information Retrieval." Journal of the ACM, 1998 (foundational IT-PIR construction Talek's read protocol builds on).
+- foundational: Beimel, Ishai, Malkin. "Reducing the servers' computation in private information retrieval: PIR with preprocessing." CRYPTO 2000 (source of the linear-server-work PIR lower bound this paper states Talek cannot circumvent because its database changes continuously).
+- attack: Danezis, Serjantov. "Statistical Disclosure or Intersection Attacks on Anonymity Systems." Information Hiding, 2004 (the intersection-attack literature this paper's own limitations discussion cites against its offline-tolerant anonymity-set design).
+
+### Verbatim extracts
+- "peak throughput of 9,433 messages per second, orders of magnitude better performance"
+- "any user in a trusted group can block writes to that group's log"
+- "we do not hide when users are online"
+- "Talek's GPU implementation improves read performance by ∼20×"
+- "Pung++'s throughput lags Talek's CPU implementation by up to two orders of magnitude"
+- "collective work required by the servers ... scales at least linearly with the size of the database"
 
 ---
 
@@ -8231,6 +8623,72 @@ None found.
 
 ---
 
+## [GOEL-CORNELLTR-03] Herbivore: A Scalable and Efficient Protocol for Anonymous Communication
+**Citation:** Sharad Goel, Mark Robson, Milo Polte, Emin Gün Sirer. "Herbivore: A Scalable and Efficient Protocol for Anonymous Communication." Cornell University Computer Science Technical Report 2003-1890, 2003.
+**Retrieved:** full text via https://ecommons.cornell.edu/handle/1813/5606
+**Source URL:** https://ecommons.cornell.edu/handle/1813/5606
+**Domain:** G
+
+### What it does
+Herbivore provides sender and receiver anonymity for peer-to-peer communication with information-theoretic guarantees, at scale, while keeping bandwidth and latency practical. It achieves this by partitioning a large network into fixed-membership anonymizing cliques and running a dining-cryptographers network (DC-net) inside each clique rather than across the whole network.
+
+A DC-net conceals which member of a group sent a message: every pair of members shares a secret key bit stream, each member broadcasts the exclusive-or (XOR) of its own message bit (if any) with all its shared key bits, and the XOR of all broadcasts cancels the key material and reveals only the transmitted message, not its origin. Identifying the sender requires collusion by all other clique members simultaneously (k − 1 colluders for a clique of size k). Herbivore arranges the physical transmission topology within a clique as a star: every node sends the XOR of its key streams and message to a rotating center node, which broadcasts the deciphered result to the other k − 1 nodes. The paper proves the star topology is the bandwidth-optimal physical topology for a DC-net: at least 2(k − 1) bits must be sent over the network to anonymously broadcast one message bit, and the star achieves this bound while the logical key-sharing graph remains fully connected so anonymity is preserved.
+
+Each round within a clique has three phases. In the reservation phase, a node wanting to transmit picks a slot number uniformly at random from {1, ..., m_r} and anonymously broadcasts a one-hot vector of that length; collisions from an even number of colliding nodes are visible and those nodes wait a round, collisions from an odd number surface later as garbled data. In the transmission phase, nodes with a reserved slot send their packet XORed with key material in that slot; every node also monitors the broadcast result against what it intended to send, so it can detect tampering, and packet integrity is additionally checked with an MD5 checksum. In the exit phase, a node in the middle of a long transaction anonymously casts a random m_v-bit vote; the round's departure decision proceeds only when the combined broadcast is exactly zero, which happens with probability 1 − 2^(−m_v) whenever at least one veto was cast, so departures during active long transactions are suppressed without revealing how many nodes vetoed.
+
+Network-wide topology control assigns nodes to cliques and rebalances clique sizes. A joining node cannot choose its clique: it generates a public/private key pair, searches for a value y whose one-way-function output f(y) matches the low m_k bits of f(K_public), derives a node key g(K_public, y), and joins whichever clique's key (in a Chord-based ring of clique keys) is numerically closest to its node key. The clique verifies the derivation, rejects a (K_public, y) pair already presented by another member (blocking invited colluders), and issues a random challenge the joining node must answer with its private key before granting admission. Cliques split into two roughly equal successor cliques (by lexicographic midpoint keys on the Chord ring) once membership reaches 3k, and disband — sending every member back through entry control — once membership drops below k.
+
+### Measured results
+
+| Measurement | Conditions |
+|---|---|
+| Median anonymous bandwidth roughly 250 Kb/s at clique size 10 with 1 active sender, degrading toward roughly 50-100 Kb/s at clique size 40 with 4 active senders | PlanetLab deployment, ~100 nodes across 50 academic/industrial sites, each node a 2 GHz Pentium IV with 128 KB cache and 2 GB RAM, over the public Internet; clique sizes restricted to 10-40 by PlanetLab's size; 45 runs in November 2002; medians with interquartile-range error bars |
+| Median round-trip latency roughly 0.2 s at clique size 10 with 1 sender, rising toward roughly 1.2-1.6 s at clique size 40 with 4 senders | Same deployment and run set as above |
+| Effective bandwidth utilization (anonymous bits sent / total bits sent over the wire) roughly 0.5-0.6 at low simultaneous-sender counts, falling as simultaneous senders increase, largely independent of clique size | Same deployment; plotted against clique size for 1-4 simultaneous senders |
+| Total bits sent to transmit 600 fixed 4 Kb anonymous packets scales linearly with the number of simultaneous senders and is largely independent of clique size, with a slight efficiency improvement at small clique sizes attributed to the star topology | Same deployment and packet count |
+| Probability an attacker controlling 90% of all Herbivore nodes takes over one specific 128-node clique: 0.9^127 ≈ 1.5 × 10^-6 | Derived analytically from the random-entry admission protocol, not measured experimentally; clique size 128, attacker fraction 90% |
+| With mean per-node lifetime 10 hours, a member of a 128-node clique can run an anonymous stream for 1 hour with high confidence that no more than 25 of the 128 nodes fail during that hour, leaving the sender's identity concealed among at least 103 nodes | Derived from a Poisson fail-stop node-failure model with rate parameter set to 1 failure per mean lifetime; not an empirical failure measurement |
+| A network of 10^6 cliques transmitting at 100 Kb/s each is reduced by at most 10% in aggregate capacity by a denial-of-service attacker transmitting 10 Gb/s | Illustrative arithmetic in the paper's discussion of denial-of-service resilience, not a measured deployment result |
+
+### Parameters
+- Clique size k: minimum clique size in the deployed implementation set to 64; clique size is bounded between k and approximately 3k by automatic clique splitting and fusing; the choice of k is stated by the authors as "essentially arbitrary," trading anonymity for bandwidth.
+- Reservation vector size m_r: derived analytically as m_r ≈ k_r · sqrt(p), where p is the packet size in bits and k_r is the expected (exponentially-weighted running average) number of nodes transmitting per round; this minimizes the expected number of bits a node sends before successfully transmitting a packet anonymously.
+- Exit-phase vote vector size m_v: a constant number of bits, independent of clique size, giving veto-detection probability 1 − 2^(−m_v) whenever at least one veto occurs.
+- Intersection-attack self-termination threshold: implementation sets the anonymity-set threshold at which a node aborts a long-running transaction to k, the minimum clique size (64 in the prototype).
+- Physical star-topology bit cost: proven lower bound of 2(k − 1) bits sent over the network per anonymously broadcast bit; the star topology achieves this bound.
+- Test clique-size range in the PlanetLab evaluation: 10 to 40, restricted by the size of the PlanetLab testbed (approximately 100 nodes), not by any protocol limit.
+
+### Stated limitations
+The paper states that very long-lived transactions are susceptible to statistical analysis: an attacker who observes that one node is disproportionately often present in a clique contacting a particular network service has statistical grounds to conclude that node is the source, and Herbivore does not protect against this once a transaction significantly outlasts clique membership lifetimes; the authors call this "a fundamental limitation of any scheme that provides anonymity in a crowd." The star-topology center node is a single point that can drop, insert, or modify packets during the round it serves as center; the paper states Herbivore relies on higher-level protocols such as SSL and TCP/IP to detect or recover from this, and does not itself provide integrity against a malicious center beyond checksum-based tamper detection. Sybil attacks are stated as "theoretically impossible to prohibit without external measures," addressed only by rate-limiting entry via a computational admission challenge, not by any identity-verification mechanism. When Herbivore is used to reach legacy Internet services, only the client-side Herbivore endpoint's identity is protected; the identity of the external service is exposed, and the paper notes applications must independently avoid leaking identity through content (for example, cookies). The security of the underlying Chord-based clique-location layer is explicitly treated as a separable, unanalyzed problem: "We treat the security of Chord as a separable problem and do not analyze its resilience against attacks."
+
+### Requirements it places on the rest of the system
+Herbivore requires a distributed hash table (the paper uses Chord) to map clique keys to clique locations and to maintain predecessor/successor links between cliques during splits; the anonymity of the clique-assignment step assumes this lookup layer is not itself subverted, which the paper explicitly declines to analyze. It requires every pair of nodes within a clique to have securely exchanged a shared secret key stream at clique-entry time (via Diffie-Hellman), so a secure pairwise key-exchange primitive must be available and executed before a node can participate in a round. It requires an out-of-band, secure channel for distributing recipient public keys when used for messaging between two Herbivore endpoints ("we assume that keys are distributed through external, secure channels"). It requires applications layered on top to supply their own confidentiality and integrity end-to-end, since DC-nets provide sender/receiver anonymity, not message secrecy from other clique members, and since a malicious center node can tamper with a round's data. It requires an admission-control mechanism external to Herbivore if Sybil resistance beyond rate-limited entry is needed, since the paper states Sybil attacks cannot be fully prevented internally.
+
+### Contradicts
+None found. No other paper in this corpus is cited by or measures Herbivore.
+
+### References worth retrieving
+- foundational: D. Chaum, "The Dining Cryptographers Problem," Journal of Cryptology 1(1), 1988 — defines DC-nets, the primitive Herbivore builds on.
+- foundational: W. Diffie, M. E. Hellman, "New Directions in Cryptography," IEEE Transactions on Information Theory 22(6), 1976 — the pairwise key-exchange primitive Herbivore uses for clique key streams.
+- foundational: I. Stoica, R. Morris, D. Karger, F. Kaashoek, H. Balakrishnan, "Chord: A Peer-to-Peer Lookup Service for Internet Applications," ACM SIGCOMM 2001 — the DHT Herbivore uses for clique location.
+- competing: R. Sherwood, B. Bhattacharjee, A. Srinivasan, "P5: A Protocol for Scalable Anonymous Communication," Oakland Security Conference 2001 — the constant-bit-rate broadcast-partitioning system Herbivore compares against for the anonymity/scalability/efficiency tradeoff.
+- competing: M. J. Freedman, R. Morris, "Tarzan: A Peer-to-Peer Anonymizing Network Layer," ACM CCS 2002 — decentralized mix-network alternative Herbivore compares against.
+- competing: P. F. Syverson, D. M. Goldschlag, M. G. Reed, "Anonymous Connections and Onion Routing," IEEE Symposium on Security and Privacy, 1997 — source-rewriting alternative compared against.
+- competing: M. K. Reiter, A. D. Rubin, "Crowds: Anonymity for Web Transactions," ACM TISSEC 1(1), 1998 — source-rewriting alternative compared against.
+- competing: I. Clarke, O. Sandberg, B. Wiley, T. W. Hong, "Freenet: A Distributed Anonymous Information Storage and Retrieval System," LNCS 2009, 2001 — Herbivore's anonymous-publishing application is explicitly modeled on Freenet, and the paper states it improves on Freenet's publisher-anonymity guarantee.
+- attack: J. Douceur, "The Sybil Attack," 1st Workshop on Peer-to-Peer Systems (IPTPS), 2002 — cited as the source of the impossibility result Herbivore's rate-limited entry is a response to.
+- foundational: M. Waidner, B. Pfitzmann, "The Dining Cryptographers in the Disco: Unconditional Sender and Recipient Untraceability with Computationally Secure Serviceability," EUROCRYPT 1989, LNCS 434, 1990 — prior DC-net disruption-detection ("trap") scheme Herbivore's reservation phase is compared against and improves on.
+
+### Verbatim extracts
+- "the network sends at least 2(k − 1) bits to propagate 1 bit anonymously."
+- "an attacker that has compromised 90% of the total nodes participating in Herbivore has only a 0.9^127 ≈ 1.5 × 10^-6 chance of taking over a clique of size 128."
+- "Sybil attacks are theoretically impossible to prohibit without external measures."
+- "We treat the security of Chord as a separable problem and do not analyze its resilience against attacks."
+- "This is a fundamental limitation of any scheme that provides anonymity in a crowd."
+- "the choice of k, which in our current implementation is set to 64, is essentially arbitrary."
+
+---
+
 ## [GOLD-ARXIV-23] G-Rank: Unsupervised Continuous Learn-to-Rank for Edge Devices in a P2P Network
 
 **Citation:** Andrew Gold, Johan Pouwelse. "G-Rank: Unsupervised Continuous Learn-to-Rank for Edge Devices in a P2P Network." arXiv preprint, 2023. DOI 10.48550/ARXIV.2301.12530.
@@ -11129,6 +11587,54 @@ None found within this corpus batch.
 
 ---
 
+## [ISMAIL-BLED-02] The Beta Reputation System
+**Citation:** Audun Jøsang, Roslan Ismail. "The Beta Reputation System." 15th Bled Electronic Commerce Conference (e-Reality: Constructing the e-Economy), Bled, Slovenia, June 17-19, 2002.
+**Retrieved:** full text via https://folk.universitetetioslo.no/josang/papers/IJ2002-Bled.pdf
+**Source URL:** https://folk.universitetetioslo.no/josang/papers/IJ2002-Bled.pdf
+**Domain:** F
+
+### What it does
+The beta reputation system produces a single numeric rating of one participant's expected future good behavior, computed from the accumulated count of positive and negative feedback that participant has received, without any pairwise-graph computation or network-wide aggregation. The mechanism rests on the beta probability distribution, the standard statistical distribution for the unknown probability of a binary outcome (success or failure) given a count of past successes and failures. For an entity with r units of accumulated positive feedback and s units of accumulated negative feedback, the paper sets the beta distribution's two shape parameters to alpha = r+1 and beta = s+1 (the +1 in each term is the distribution's non-informative prior, giving a neutral rating of 0.5 before any feedback exists) and defines the reputation rating as the distribution's expectation value, E(p) = alpha/(alpha+beta) = (r+1)/(r+s+2). This value lies in [0,1] and the paper describes linearly rescaling it to a range such as [-1,1] for display, with the midpoint of the range representing a neutral rating. Feedback about one target from several different feedback providers is combined by simple addition: a combined reputation function's positive count is the sum of each provider's positive count, and its negative count is the sum of each provider's negative count; the paper proves this combination operator is commutative and associative, so the order feedback arrives in does not change the result, and states each independent unit of feedback must be counted only once (the same underlying observation must not be summed twice). Two extensions are defined. Discounting weights an agent's feedback by the reputation of the agent who supplied it, using Jøsang's separately published belief-model discounting operator (an opinion is a triple of belief, disbelief and uncertainty mass that sums to 1); a low-reputation feedback provider's report is discounted before being added into the target's totals, so the discount operator is proved associative but not commutative — order along a discounting chain matters. Forgetting reduces the weight of old feedback by applying a forgetting factor lambda between 0 and 1: each past feedback tuble indexed k periods before the present is scaled by lambda^k before being summed, so lambda=1 reproduces the undiscounted sum (nothing forgotten) and lambda=0 keeps only the single most recent feedback tuple. The paper gives a recursive reformulation of the forgetting sum so that only the current running totals need be stored, not the full feedback history, avoiding unbounded per-target storage growth.
+
+### Measured results
+This paper reports no experimental measurements, no simulation, and no deployment data. All quantitative content is analytic: closed-form derivations of the reputation-rating formula and five worked numeric examples (Sections 3.1-3.5) plotting the reputation rating as a function of the feedback counts r and s under varying weight, varying feedback values, varying discounting rate, and varying forgetting factor lambda, to illustrate the shape of each mechanism rather than to measure a system.
+
+### Parameters
+- Beta-distribution shape parameters: alpha = r+1, beta = s+1, where r and s are the accumulated positive and negative feedback amounts (continuous, not necessarily integer, since the paper generalizes from binary event counts to continuous degrees of satisfaction/dissatisfaction)
+- Reputation rating: E(p) = (r+1)/(r+s+2), in [0,1]; the paper states this can be linearly rescaled to any target display range, giving [-1,1] as one example
+- Forgetting factor lambda: range 0 to 1 (paper states 0 <= lambda <= 1); lambda=1 is no forgetting, lambda=0 keeps only the single most recent feedback tuple; no default value is recommended, the paper states lambda "can be adjusted according to the expected rapidity of change in the observed entity"
+- Discounting: opinion triple (belief, disbelief, uncertainty) constrained to sum to 1, taken from the author's separately published subjective-logic belief model; no default parameter values are given, only the operator definition
+
+### Stated limitations
+The paper states directly, in its conclusion, that it has not addressed resistance to an agent changing its identity to shed accumulated negative feedback, beyond assuming "some authentication mechanism is in place" elsewhere in the system. It states the presented design is centralized — feedback is accumulated and reputation computed at a central point — while stating that adapting the mechanism to a decentralized setting is possible but not worked out in this paper. The paper's own worked example of eBay describes two colluding parties building mutually favorable ratings through genuine prior transactions before conducting a fraudulent high-value sale, illustrating that accumulated positive feedback does not itself distinguish honest history from feedback manufactured through collusion; the beta reputation system as defined provides no mechanism against this, since combination by simple addition treats every unit of feedback as equally trustworthy once received (before any discounting is applied). Discounting depends on already having a reputation rating for the feedback provider, so a newly encountered feedback provider with no prior reputation has no basis for the discount weight to be computed from within this mechanism alone.
+
+### Requirements it places on the rest of the system
+Requires an external identity/authentication mechanism binding accumulated feedback to a persistent identity, because the reputation function's counts (r, s) are keyed to whatever identifier the rest of the system supplies, and the paper explicitly declines to defend against identity change. Requires an external feedback-collection and delivery channel that gets each transaction's positive/negative outcome report to whichever party computes the target's reputation function (the paper's own diagram places this at a central "reputation centre" that all agents send feedback to and query, though it states a decentralized arrangement is possible without specifying one). Requires whoever combines multiple feedback providers' reports to be able to detect and exclude duplicate counting of the same underlying transaction, since the combination operator's correctness (each unit of feedback counted once) is stated as an assumption, not something the addition operator itself enforces. The discounting extension requires a reputation rating for the feedback provider to already exist before that provider's feedback can be weighted, creating an ordering dependency between when a provider's own reputation is established and when its feedback about a third party can be discounted.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- A. Jøsang, "A Logic for Uncertain Probabilities," International Journal of Uncertainty, Fuzziness and Knowledge-Based Systems 9(3):279-311, June 2001 — foundational (defines the discounting/opinion belief model this paper's Section 2.5 discounting operator is taken from)
+- A. Jøsang, "Modelling Trust in Information Security," PhD thesis, Norwegian University of Science and Technology, 1998 — foundational (source of the forgetting scheme used in Section 2.6)
+- P. Resnick, R. Zeckhauser, E. Friedman, K. Kuwabara, "Reputation systems," Communications of the ACM 43(12):45-48, December 2000 — foundational (general survey this paper's introduction cites for the incentive/decision-support framing of reputation mechanisms)
+- J. Sabater, C. Sierra, "REGRET: A reputation model for gregarious societies," Workshop on Deception, Fraud and Trust in Agent Societies, AGENTS 2001 — competing (an alternative multi-factor reputation engine, listed among the "advanced mechanisms" the beta system is contrasted against)
+- B. Yu, M. P. Singh, "A Social Mechanism of Reputation Management in Electronic Communities," 4th International Workshop on Cooperative Information Agents, 2000 — competing (a graph/social-network-based reputation propagation mechanism, one of the decentralized-propagation examples this paper cites without adopting)
+- G. Zacharia, A. Moukas, P. Maes, "Collaborative Reputation Mechanisms in Electronic Marketplaces," 32nd Hawaii International Conference on System Science, IEEE, 1999 — competing (another specific reputation-engine mechanism listed as an alternative to the simple-addition eBay-style engine)
+- L. Mui, P. Szolovits, C. Ang, "Collaborative sanctioning: applications in restaurant recommendations based on reputation," 5th International Conference on Autonomous Agents (poster), 2001 — competing
+- B. Padovan, S. Sackmann, T. Eymann, I. Pippow, "A Prototype for an Agent based Secure Electronic Marketplace Including Reputation Tracking Mechanisms," HICSS-34, 2001 — competing/foundational (a deployed prototype reputation-tracking system cited for comparison)
+- E. Young, "Not a pretty picture," The Industry Standard, March 26 2001 — attack/critique (source of the eBay fraudulent-painting-sale example illustrating collusion-built reputation)
+
+### Verbatim extracts
+- "the beta reputation system has a sound theoretical basis in statistics"
+- "we have not tried to address the problem of immunity against agents changing identities"
+- "We have also assumed a centralised approach, although it is possible to adapt"
+- "having lambda = 1 is equivalent to not having a forgetting factor"
+- "It is easy to prove that (the combination operator) is both commutative and associative"
+- "two of the fraudsters actually had good Feedback Forum ratings, developed through rating each other favourably"
+
+---
+
 ## [JACOB-JACM-14] SKIP+: A Self-Stabilizing Skip Graph
 
 **Citation:** Riko Jacob, Andrea W. Richa, Christian Scheideler, Stefan Schmid, Hanjo Täubig. "SKIP+: A Self-Stabilizing Skip Graph." Journal of the ACM, 2014. DOI 10.1145/2629695.
@@ -11242,6 +11748,109 @@ None found.
 - "moving from a centralized network to a more decentralized one will not improve the load distribution, but can actually make it worse"
 - "load balancing can not be achieved by moving users away from busy servers as with non-federated middlewares"
 - "all private, invite-only rooms are missing in the data"
+
+---
+
+## [JACOB-SACMAT-20] Matrix Decomposition: Analysis of an Access Control Approach on Transaction-based DAGs without Finality
+**Citation:** Florian Jacob, Luca Becker, Jan Grashöfer, Hannes Hartenstein. "Matrix Decomposition: Analysis of an Access Control Approach on Transaction-based DAGs without Finality." ACM Symposium on Access Control Models and Technologies (SACMAT), 2020. DOI 10.1145/3381991.3395399.
+**Retrieved:** full text via https://doi.org/10.1145/3381991.3395399
+**Source URL:** https://doi.org/10.1145/3381991.3395399
+**Domain:** J
+
+### What it does
+The paper analyzes whether access control (deciding which participant may perform which action) can be enforced correctly on a Transaction-based Directed Acyclic Graph (TDAG) — a distributed data structure, exemplified by the Matrix messaging protocol, that links individual transactions into a directed acyclic graph (DAG) rather than grouping them into blocks, and that provides only causal order (a transaction referencing an earlier one is guaranteed to be applied after it) and eventual consistency, with no finality (no point at which a transaction is guaranteed never to be superseded) and no system-wide consensus vote. Each participating server runs its own independent reference monitor: it intercepts every incoming and outgoing transaction, computes an access decision from its own local view of the DAG, and enforces that decision without waiting for or counting the decisions of any other server — no voting, no quorum, no majority rule. The paper decomposes the mechanism into three layers: a Transaction Store holding the DAG itself; a Conflict Resolution layer that reduces the partial order given by the DAG's causal edges into a single deterministic total order of "attribute transactions" (transactions that set or change permission-relevant state, as distinct from ordinary message transactions); and a Reference Monitor layer that evaluates authorization policy against the attribute state that Conflict Resolution produces. The paper's example instantiation, Level-based Access Control (LeBAC), assigns every subscriber a totally-ordered permission level and maps each transaction type to the minimum level required to publish it, with each level inheriting all permissions of every lower level; a topic's creator transaction grants that creator universal permission until it delegates specific permissions via further attribute transactions, so every later permission traces back to the creator. The Conflict Resolution mechanism, generalized from Matrix's published state-resolution algorithm, works in two passes over the transactions that are not already identical across all causally independent chains: pass one topologically sorts and applies every transaction that could withdraw a permission, breaking ties between causally-concurrent transactions first by which sender held the higher permission level at that point, then by an attacker-settable sender timestamp, then by transaction hash; pass two applies the remaining (non-withdrawal) transactions, breaking ties by timestamp then hash only, on the reasoning that once withdrawals are already applied, level-based tie-breaking is no longer needed for security. Each transaction carries references to every policy and permission transaction required to authorize it (a "proof of permission"), so state resolution runs over this smaller "Authorization DAG" rather than the full causal DAG, bounding how much transaction history a server must retain. Because there is no finality, an attacker can always attach a new transaction to an old point in the DAG and exercise whatever permissions were valid at that point; Matrix's mitigation is "soft failure" — a transaction that passes authorization against the state at its attachment point but would fail against the topic's current hypothetical state is kept in the DAG (so it still participates in state resolution and future ordering) but is never relayed to clients and is excluded from other transactions' causal-order references, so it neither reaches users nor extends the graph other nodes build on.
+
+### Measured results
+This is an analytical security-assessment paper: it derives properties of the conflict-resolution mechanism by formal argument and by manual code/specification audit, and reports concrete implementation vulnerabilities it found, rather than running a quantitative evaluation with node counts, latency, or throughput figures. Four concrete issues in the Matrix specification and its reference server implementation (Synapse) are reported, each independently disclosed to the Matrix core team:
+- The specification restricts wire-format integers to the range [-2^53+1, 2^53-1], but Synapse enforced only the wider 64-bit signed integer range; a level-attribute transaction using a value inside the 64-bit range but outside the specified range is accepted by Synapse and rejected by a specification-compliant server, producing divergent policy state between implementations. (Planned fix: room specification v7.)
+- The authorization rule for the "highlighting notification" permission omitted the general requirement that a sender cannot set a required level higher than their own current level, letting a sender at a given level revoke that same permission from other subscribers at the same level; Synapse implemented an extra check the specification did not require and rejected such transactions, so a specification-compliant server accepting them would diverge from Synapse. (Planned fix: room specification v6.)
+- The specification places no limit on the number of "happened before" parent transactions a single transaction may cite, but Synapse rejects any transaction citing more than 20 parents; an attacker who keeps the DAG's leaf-transaction count above 20 (by sending enough concurrent transactions) can make Synapse reject transactions that specification-compliant servers accept, producing a denial-of-service divergence between implementations rather than an in-itself-malicious transaction. (Planned fix: room specification v7, applied retroactively to older versions.)
+- Server access-control-list transactions allow a publishing subject to ban an entire server (and all its users) from a topic, but the specification does not require the banning subject to hold a higher level than every user on the banned server, letting a low-level subject ban a higher-level user; Synapse implemented this inconsistency as specified, so alternative implementations that fixed it locally would themselves diverge from Synapse. (Mitigation shipped in Synapse: restricting server-ACL modification to administrators by default.)
+
+### Parameters
+No numeric performance or tuning parameters are reported (this is a specification/security analysis, not a system with measured configuration knobs). The mechanism-level parameters it defines are structural: the total order on permission levels (application-defined, e.g. an integer range or a clearance-level set); the tie-break precedence order for concurrent attribute transactions (level, then sender timestamp, then transaction hash, for withdrawal transactions; timestamp then hash only, for non-withdrawal transactions); and the maximum-parent-count limit (20 in Synapse, unspecified/unbounded in the room specification at the time of writing — this asymmetry is itself one of the four reported vulnerabilities).
+
+### Stated limitations
+The paper states its security assessment "found no inherent flaws in the decentralized implementation of the reference monitor and policy information data structure," but did find exploitable divergence in concrete implementations of the specification. It states two structurally distinct threat classes remain: incorrect policy specification (present even in a trusted-third-party, non-decentralized version of the same access-control model) and implementation non-equivalence (arising only because the reference monitor is distributed across independently-coded servers that must reach the same decision from the same data, a property the specification does not formally guarantee). The paper states the attacker-controllable sender_timestamp field can be set arbitrarily high to make a faulty subject's transaction appear most recent, though it states this advantage is void as soon as an honest higher-level subject's transaction causally follows it, since causal order is checked before timestamp in the tie-break. It states soft failure disincentivizes malicious late-attachment transactions by suppressing their delivery and their use as causal-order anchors, but does not claim soft failure prevents such transactions from being sent or from participating in state resolution. It states the Authorization-DAG optimization ("proof of permission") introduces a new class of correctness risk not present in the unoptimized algorithm — non-conflicting transactions can be overwritten by mistake because the optimization does not walk the full causal "happened before" relation — and requires an additional re-application step of all non-conflicting transactions to correct for this. The paper explicitly recommends, rather than claims to have delivered, a formal calculus for the conflict-resolution algorithm and authorization policies, to enable code generation from a single specification (removing the implementation-divergence threat class) and formal proof of security properties (removing the specification-error threat class); this recommendation is presented as future work, not a completed contribution of this paper.
+
+### Requirements it places on the rest of the system
+States four properties that any authorization-policy set and conflict-resolution mechanism on a TDAG must satisfy to be secure under this analysis: the algorithms must be deterministic and depend only on data already present in the DAG, so that every consistent replica computes the same decision from the same data; a subject must be unable to acquire a permission it was not granted by another subject who already held that permission (no permission may originate from nowhere); when two transactions conflict, the one from the higher-level subject must be preferred; and a permission withdrawal must always be preferred over a concurrent use of the withdrawn permission at the lower level. It requires every honest server to implement authorization-policy checks and the conflict-resolution algorithm identically bit-for-bit, since any behavioral divergence between two honest implementations — not just attacker action — is sufficient to break eventual consistency, as the four found vulnerabilities demonstrate; the paper's remedy is generating every implementation from one formal specification rather than trusting independent re-implementation. It requires the causal "happened before" relation among transactions to be tamper-evident and verifiable by every server independently (no server is assumed to trust another server's account of the DAG), since the entire ordering mechanism operates on locally-observed DAG structure with no external consensus input. It requires whatever transport or federation layer delivers transactions between servers to preserve causal order (a transaction must not become visible to a server before every transaction it lists as "happened before"), since the state-resolution algorithm's correctness depends on being able to topologically sort by that causal relation. It requires that no finality guarantee is assumed by anything built on top of this access-control layer: any transaction, however old, can still be causally extended and have its era's permissions exercised, so a system consuming Matrix-style access control must tolerate soft-failed and superseded transactions rather than treating any state as permanently settled.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- Erik Johnston, "State Resolution: Reloaded," 2018, matrix-org GitHub — foundational (the actual Matrix state resolution algorithm specification this paper's Section 3.2.1-3.2.3 generalizes and analyzes)
+- Travis Ralston et al., "Room version 2," Matrix specification, 2019 — foundational (the room-specification document defining the wire format and transaction rules the found vulnerabilities are located in)
+- Florian Jacob, Jan Grashöfer, Hannes Hartenstein, "A Glimpse of the Matrix: Scalability issues of a new message-oriented data synchronization middleware," ACM 20th International Middleware Conference Demos and Posters, 2019 — foundational (the authors' own prior measurement study of Matrix that this SACMAT paper traces resource-consumption behavior back to; already targeted in this corpus per the target registry's own description of JACOB-SACMAT-20's why_needed field)
+- Serguei Popov, Olivia Saa, Paulo Finardi, "Equilibria in the Tangle," Computers & Industrial Engineering 136, 2019 — competing (a different TDAG-style distributed ledger, IOTA's Tangle, cited as a related no-finality DAG design)
+- Eric Brewer, "CAP Twelve Years Later: How the 'Rules' Have Changed," Computer, 2012 — foundational (the consistency/availability/partition-tolerance framing this paper's eventual-consistency discussion draws on)
+- Xin Jin, Ram Krishnan, Ravi Sandhu, "A unified attribute-based access control model covering DAC, MAC and RBAC," IFIP DBSec, 2012 — foundational (the access-control model family LeBAC/LeABAC is positioned against)
+- Lauri I. W. Pesonen, David M. Eyers, Jean Bacon, "Access Control in Decentralised Publish/Subscribe Systems," Journal of Networks 2(2), 2007 — competing (a prior decentralized publish/subscribe access-control mechanism)
+- Ravi S. Sandhu, "Lattice-based access control models," Computer 26(11), 1993 — foundational (the Biba-derived lattice/level model LeBAC is stated to be a variant of)
+
+### Verbatim extracts
+- "Servers do not vote or announce some form of consensus, there is no quorum, and majority does not win."
+- "we discovered security issues in popular implementations and emphasize the need for a formal verification"
+- "Our security analysis found no inherent flaws in the decentralized implementation"
+- "any action for which they are not satisfied is a potential security vulnerability"
+- "All issues were responsibly disclosed to the Matrix core team."
+- "this optimization has the potential for new security issues that are not apparent in the base idea"
+
+---
+
+## [JAEGER-EUROCRYPT-25] Analyzing Group Chat Encryption in MLS, Session, Signal, and Matrix
+**Citation:** Joseph Jaeger, Akshaya Kumar. "Analyzing Group Chat Encryption in MLS, Session, Signal, and Matrix." EUROCRYPT, 2025. DOI 10.1007/978-3-031-91101-9_10.
+**Retrieved:** full text via https://eprint.iacr.org/2025/554.pdf
+**Source URL:** https://eprint.iacr.org/2025/554.pdf
+**Domain:** H
+
+### What it does
+The paper determines whether four deployed group-messaging protocols correctly compose symmetric encryption with digital signatures for chat encryption — the step that turns a group's shared symmetric key into confidentiality, integrity, and per-sender authenticity for each message — using one formal model applied uniformly to all four, so that a security gap in one protocol is stated in terms directly comparable to the others rather than in each protocol's own bespoke proof. The model, symmetric signcryption (from prior work by Jaeger, Kumar, and Stepanovs, EUROCRYPT 2024), separates a group-message-encryption call, SigEnc, and its corresponding verify-decrypt call, VerDec, into explicit inputs: a group (key) identifier g, a sender identifier u, a nonce n, a message m, and associated data ad, in addition to the symmetric key and the sender's signing key. It defines two security notions. In-group Unforgeability (IUF) requires that no adversary can forge a ciphertext attributed to a specific honest sender even while holding every other group member's signing key and even while allowed to assign arbitrary symmetric keys to groups — this is the property that stops one group member from impersonating another. Out-group Authenticated Encryption (OAE) requires confidentiality and integrity of ciphertexts against an adversary who does not hold the group's symmetric key, even if that adversary is allowed to choose every user's signing keys maliciously — this is the property that stops an outsider from forging or reading group messages. The paper's central mechanism for explaining why a construction is or is not secure is binding: a signature is said to implicitly bind to a value (the group identifier g, the nonce n, or the associated data ad) if that value can be uniquely recovered from the data the signature was computed over, even when it is not separately and explicitly included in the signed bytes; a ciphertext is said to implicitly bind to the sender identifier u under the same condition. The paper's proof method is to first show a purely theoretical attack exploiting each missing binding against the abstract construction, then examine each protocol's actual surrounding code and key-derivation structure to determine whether that missing binding is compensated for elsewhere (an implicit binding), which converts the theoretical attack into either a practically exploitable one or a mitigated one. Each of the four protocols' chat-encryption step is modeled as one of two orderings of the same two primitives: MLS and Session use Sign-then-Encrypt (the sender signs the plaintext together with metadata, then symmetrically encrypts the signed bundle); Signal (via its Sender Keys construction, Megolm-derived, called Sig-EtS in the paper) and Matrix (via its own Megolm implementation, called Mat-EtS) use Encrypt-then-Sign (the sender symmetrically encrypts first, then signs the resulting ciphertext together with metadata).
+
+### Measured results
+This is a cryptographic analysis paper: results are theorems (security reductions to a signature scheme's or an encryption scheme's underlying security, stated as advantage-bound inequalities) and named, worked attacks against specific protocol code, not runtime, latency, or throughput measurements.
+
+| Protocol | IUF finding | OAE finding | Practically exploitable |
+|---|---|---|---|
+| MLS | Weak IUF only, because the signature does not bind to the nonce or associated data (both explicit in the wire format but not enforced in the signed input) | Full OAE holds, ciphertext implicitly binds to sender via the identifier already used to derive the key, so the theoretical unbound-ciphertext attack does not translate to a real exploit | Yes — insider replay/reordering within one MLS epoch (a period between group-membership or key-update events), by a malicious group member re-encrypting a captured (message, signature) pair under a different generation counter |
+| Session | Weak IUF, signature does not bind to the group identifier | Weak OAE, ciphertext does not explicitly bind to the sender, though the default case (Account ID equal to the verification key) implicitly does | Yes, three distinct attacks: (1) insider replay within Legacy Groups, decrypting a captured ciphertext and re-encrypting it under a different key/nonce pair to impersonate the original sender indefinitely; (2) outsider replay via an unauthenticated timestamp field used only for client-side replay detection, which an outsider can alter and resend; (3) a partial outsider forgery when an attacker holds an exposed signing key and the group's public key, exploiting Session's use of public keys directly as group identifiers |
+| Signal | Strong (full) IUF holds — the signature implicitly binds to the nonce because the group key identifier deterministically derives the nonce in Signal's key-derivation scheme | Weak OAE, ciphertext does not explicitly bind to sender (implicit binding via the chain identifier mitigates this one), but the underlying symmetric scheme (CBC-mode AES-256) provides no ciphertext integrity of its own | Yes — an attacker who has compromised one group member's signing key can flip bits in that member's ciphertext (bit-flipping malleability against CBC mode) and re-sign the modified ciphertext with the compromised key, producing a forged message the group accepts; this is the same attack class previously published independently by Balbás, Collins, and Gajland (Asiacrypt 2023) |
+| Matrix | Weak IUF, signature does not bind to the group identifier or the nonce | Weak OAE, ciphertext does not explicitly bind to sender (mitigated implicitly, same mechanism as Signal) | No — Matrix issues each user a distinct signing key pair per group (removing the group-identifier-binding gap) and a unique per-user identity key (removing exploitability of the missing sender binding), and Matrix's protocol guarantees at most one nonce is ever used per key group (removing the nonce-binding gap), so all three gaps are closed by properties of the surrounding protocol rather than by the signcryption construction itself |
+
+Total count across all four protocols: fourteen theoretical attacks identified from missing bindings; six of the fourteen are stated to be practically exploitable (against MLS, Session — three of the six — and Signal); the remaining eight are mitigated by implicit binding or by properties of the surrounding protocol. All four constructions are proved to meet a relaxed (weakened) version of IUF and/or OAE security that excludes exactly the attack the construction is vulnerable to — the relaxation is stated as a modified "ciphertext-triviality predicate" in the security game, and the proof reduces the relaxed game's advantage to the SUFCMA (strong existential unforgeability under chosen-message attack) security of the underlying digital signature scheme, the IND-CPA (indistinguishability under chosen-plaintext attack) security of the underlying symmetric encryption scheme, or both, depending on the theorem.
+
+### Parameters
+No tunable numeric parameters are reported; the "parameters" of this analysis are the specific primitive instantiations each protocol substitutes into the shared Sign-then-Encrypt or Encrypt-then-Sign construction. Matrix's Megolm chat-encryption subroutine: HKDF (a key-derivation function) expands a 640-bit derived key from the sender's current ratchet chain key, split into a 256-bit AES encryption key, a 256-bit HMAC-SHA-256 MAC key, and a 128-bit initialization vector; message encryption uses AES-256 in CBC mode; the MAC tag is truncated to the first 64 bits of the HMAC-SHA-256 output; signatures use Ed25519. Signal's Sender Keys chat encryption (Sig-EtS) is stated to use the same CBC[AES-256]-HMAC-SHA-256 authenticated-encryption composition and Ed25519 signatures as Matrix's Megolm, since both are Megolm-derived implementations of the Sender Keys pattern. Session's Legacy Groups chat encryption is instantiated with the XSalsa20-Poly1305 authenticated encryption scheme, with nonces derived by applying the Blake2b hash function to the concatenation of an ephemeral public key and the group public key; the paper notes this construction is insecure under nonce reuse with a fixed symmetric key, but states its security game already disallows an adversary from winning purely by nonce repetition, and that Blake2b-derived nonces make collisions unlikely given sufficiently random ephemeral key generation. Session's message-deduplication retention window in its decentralized storage network (referred to as the "swarm") is stated by Session's own team, in the paper's disclosure correspondence, to be approximately 14 days, after which a previously-deduplicated message becomes replayable again by an attacker who scraped it earlier.
+
+### Stated limitations
+The paper states its own scope is narrower than a full end-to-end protocol analysis: it isolates the chat-encryption primitive from the group's key-agreement primitive (the mechanism, separate from this paper's scope, that establishes and rotates the shared symmetric key group members use), and states that a comprehensive security analysis of a group-messaging protocol requires analyzing both components individually and their composition, plus the public-key infrastructure managing user identities, none of which this paper undertakes beyond what is needed to establish or rule out binding. For Session, the paper states it analyzed the Legacy Groups protocol, which it states was deployed at the time of writing but has since been replaced by Session's GroupsV2 protocol; the paper explicitly states it did not analyze GroupsV2 and did not verify Session's own claim (given in the authors' disclosure correspondence) that GroupsV2 resolves the insider-replay attack (Session-Attack-1) by including a sender-generated timestamp in the signed input. For Session's outsider-forgery attack path via the Oxen Name System (a username-to-Account-ID mapping stored on the Arbitrum blockchain), the paper states its exploitability "depends on the implementation of ONS, which we did not analyze." The paper states that Signal's OAE attack scenario it constructs (an attacker who has compromised a user's signing key, after which that user joins a group) is narrow, writing "we admit that the setting we describe is narrow," while still classifying the resulting malleability exploit as practically exploitable given the stated compromise. For MLS, the paper states a straightforward mitigation exists — including the message generation counter as part of the signed associated data — and that the current MLS specification already permits this because associated-data contents are left to implementation discretion, so an implementation can adopt the fix without deviating from the protocol specification; the paper does not claim any deployed MLS implementation has adopted it. The paper states that prior formal analyses of MLS by other authors (citing Alwen, Coretti, Dodis, Tselekounis, CCS 2021, and Klimovic 2021) did not identify the MLS insider-replay attack this paper reports, and argues, rather than merely asserts, that their formalism could not have identified it even if applied to the exact MLS specification, because those definitions do not model insider security — an adversary that is active in injecting messages after compromising or joining the group — and instead require the attacker to remain passive after any secret compromise until the next key update.
+
+### Requirements it places on the rest of the system
+For a symmetric-signcryption-based chat-encryption construction of the kind analyzed here to achieve full IUF and OAE security (not merely the weakened, attack-excepted versions each of the four deployed protocols is proved to meet), the paper's own two secure reference constructions (from the underlying JKS24 work) require the signature to explicitly bind the group (key) identifier, the nonce, and the associated data, and require the symmetric ciphertext to explicitly bind the sender identifier; any group-messaging protocol composing symmetric encryption with signatures for chat encryption that omits one of these four bindings needs a separately argued implicit-binding property from its surrounding key-derivation or identity structure, or it inherits the corresponding attack (replay, reordering, or forgery) at the strength demonstrated here. A protocol relying on implicit binding through nonce determinism (as Signal and Session both do, deriving the nonce deterministically from the group/key identifier) requires that determinism to hold with overwhelming probability against collisions — Session's own construction is noted to depend on ephemeral-key randomness quality for this guarantee to hold at all. A protocol relying on implicit sender binding through a symmetric key's own derivation path (as Matrix and Signal both do) requires that key-derivation path to uniquely determine the sender's identity up to a stated collision probability; the paper qualifies its binding claims in Matrix and Signal with "up to collisions in EK and vk," meaning any component elsewhere in the system that assumes stronger uniqueness than that collision bound is not supported by this analysis. Any component intending to rely on Session's public-group-identifier design for confidentiality against an insider who also holds one member's signing key needs the group's public key gpk kept secret from non-members, which the paper states is an assumption "that doesn't currently hold in Session" — so a design composing Session-style chat encryption elsewhere must either add that secrecy requirement externally or accept the corresponding forgery exposure. The paper's insider-security results assume, and the analysis is meaningful only insofar as, a protocol actually intends to resist a malicious group member — for protocols or deployments that treat any admitted group member as fully trusted, the IUF property and its associated attacks are not relevant; the paper explicitly ties the practical stakes of insider security to large groups an adversary can plausibly infiltrate, citing protest-organizing use as the motivating scenario.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- M. R. Albrecht, S. Celi, B. Dowling, D. Jones, "Practically-exploitable cryptographic vulnerabilities in Matrix," IEEE S&P 2023 — competing/attack (prior independent formal cryptographic vulnerability analysis of Matrix; already in this corpus if the target registry contains an ALBRECHT-SP-23 entry)
+- M. R. Albrecht, B. Dowling, D. Jones, "Device-oriented group messaging: A formal cryptographic analysis of Matrix' core," IEEE S&P 2024 — competing (a separate, later formal analysis of Matrix's core protocol, not chat encryption specifically)
+- J. Alwen, S. Coretti, Y. Dodis, Y. Tselekounis, "Modular design of secure group messaging protocols and the security of MLS," ACM CCS 2021 — competing (prior formal security analysis of MLS that the paper states did not and could not have identified the insider-replay attack this paper reports)
+- D. Balbás, D. Collins, P. Gajland, "WhatsUpp with sender keys? Analysis, improvements and security proofs," Asiacrypt 2023 — competing/attack (the paper that first identified the Signal outsider-forgery attack this paper independently reproduces with narrower scope)
+- J. Alwen, D. Jost, M. Mularczyk, "On the insider security of MLS," CRYPTO 2022 — foundational (the first insider-security definitions for the key-agreement primitive underlying MLS, which this paper states its own work extends to the chat-encryption primitive)
+- Jaeger, Kumar, Stepanovs, "Symmetric Signcryption" (JKS24), EUROCRYPT 2024 — foundational (the security-model paper this entire analysis is built on)
+- J. H. An, Y. Dodis, T. Rabin, "On the security of joint signature and encryption," EUROCRYPT 2002 — foundational (source of the original asymmetric signcryption binding concept this paper's symmetric analogue is built from)
+- M. R. Albrecht, K. G. Paterson, "Analysing cryptography in the wild — a retrospective," IACR ePrint 2024/532 — foundational (cited for the argument that formal security proofs do not guarantee absolute security against threat models outside their stated assumptions, the framing motivating this paper's approach)
+- R. Barnes, B. Beurdouche, R. Robert, J. Millican, E. Omara, K. Cohn-Gordon, "The Messaging Layer Security (MLS) Protocol," RFC 9420, 2023 — foundational (the normative MLS specification analyzed)
+
+### Verbatim extracts
+- "we discover novel flaws in these constructions"
+- "we are the first to formalize and analyze Session's group chat encryption"
+- "we identify a total of fourteen theoretical attacks against these applications"
+- "six of these attacks... are practically exploitable by a sufficiently motivated attacker"
+- "physical access is total access" (quoted from Session's public blog post, not the paper's own claim)
+- "we admit that the setting we describe is narrow"
+- "an assumption that doesn't currently hold in Session"
 
 ---
 
@@ -11610,6 +12219,180 @@ This paper's measured attack against TorFlow (177x bandwidth inflation factor, T
 
 ---
 
+## [JUAREZ-ESORICS-16] Toward an Efficient Website Fingerprinting Defense
+**Citation:** Marc Juarez, Mohsen Imani, Mike Perry, Claudia Diaz, Matthew Wright. "Toward an Efficient Website Fingerprinting Defense." ESORICS, 2016. DOI 10.1007/978-3-319-45744-4_2.
+**Retrieved:** full text via https://petsymposium.org/popets/2016/popets-2016-0009.pdf
+**Source URL:** https://petsymposium.org/popets/2016/popets-2016-0009.pdf
+**Domain:** G
+
+### What it does
+WTF-PAD (Website Traffic Fingerprinting Protection with Adaptive Defense) prevents a passive eavesdropper positioned between a Tor client and its guard/bridge from identifying which website the client visits by matching the timing and size pattern of the client's traffic against a database of prerecorded per-site templates (a website fingerprinting attack). It defends by injecting dummy packets so that the timing pattern of the padded connection no longer distinguishes one site's traffic shape from another, without adding delay to the real data packets and without a fixed total-transmission-time target. The mechanism generalizes Adaptive Padding (AP), a two-state (burst/gap) finite-state machine run independently at each endpoint of a Tor pluggable-transport (PT) connection. In burst mode, the state machine samples a delay from a histogram HB (built from real inter-arrival times inside typical traffic bursts); if real data arrives before the sampled delay expires, it is forwarded immediately and a new delay is sampled (staying in burst mode); if the delay expires first, a dummy packet is sent and the machine switches to gap mode. In gap mode, delays are sampled from a second histogram HG (built from inter-arrival times between bursts); each expiry sends another dummy packet, continuing until either a real packet arrives (switching back to burst mode) or a token from a designated "infinity bin" is drawn (returning to idle). WTF-PAD extends base AP with four mechanisms for Tor deployment: receive histograms, a second AP state machine per endpoint that reacts to messages received from the other side (rather than only to locally pushed application data), letting padding encode incoming/outgoing burst dependencies and simulate request-response HTTP exchanges; control messages, sent from the PT client to the PT server to specify which histogram distributions the server should pad with, keeping the client in sole control of the padding scheme and able to detect unscheduled padding from relays; a beginning-of-transmission signal, so the very first request-response exchange (otherwise uncovered, revealing the size of the initial page) is flagged to the server before padding starts; and a soft stopping condition, in which padding ends naturally when the state machine draws the infinity-bin token in gap mode followed by the infinity-bin token in burst mode, removing the need for an explicit stop-of-transmission signal that other link-padding defenses require.
+
+### Measured results
+
+| Result | Conditions |
+|---|---|
+| Closed-world k-NN attack accuracy drops from 91% (unprotected) to 20% with WTF-PAD; zero latency overhead; bandwidth overhead below 60% | Dataset described below; state-of-the-art k-NN classifier (k=5, Wang et al. feature set of >4,000 features) |
+| Open-world: attack precision (PPV) falls to 1% and continues to fall as world size grows | Open-world evaluation, dataset extended with instances from Alexa top-35,000 sites |
+| Closed-world defense comparison table (Table 1): BuFLO (tau=10s, rho=20ms, d=1500B) — kNN 14.9%, Pa-SVM 14.1%, DL-SVM 18.75%, latency overhead 145%, bandwidth overhead 348%. CS-BuFLO (rho=[20,200]ms, d=1500B, CPSP) — Pa-SVM 30.6%, DL-SVM 40.5%, VNG++ 22.5%, latency overhead 173%, bandwidth overhead 130%. Tamaraw (rho_out=0.053, rho_in=0.138, d=1500B) — kNN 13.6%, Pa-SVM 10.59%, DL-SVM 18.60%, VNG++ 12.1%, latency overhead 200%, bandwidth overhead 38%. WTF-PAD (normal fit, p=0.4, d=1500B) — kNN 17.25%, Pa-SVM 15.33%, DL-SVM 23%, VNG++ 26%, latency overhead 0%, bandwidth overhead 54% | Same closed-world dataset, four attacks (kNN, Pa-SVM, DL-SVM, VNG++) against four defenses; N/A cells indicate an attack/defense combination not evaluated |
+| Trade-off curve: accuracy decreases as the WTF-PAD tuning percentile lowers (0.5 percentile = low protection to 0.01 = high protection); beyond about 0.1 percentile the tuning mechanism saturates and accuracy stops decreasing (floors at 15% for both a normal-distribution fit and a log-normal fit), while bandwidth overhead continues to grow with lower percentiles | Same closed-world dataset and k-NN attack, percentile parameter swept from 0.5 to 0.01, bandwidth cost stated to grow with protection level (growth rate qualitatively "exponential" in the authors' words, not quantified as a fitted exponent) |
+| ROC AUC for k-NN in the closed world: 0.95 unprotected vs. 0.66 with WTF-PAD | 10-fold cross-validated, k=5 neighbors, closed world of 100 pages, binarized into 50 monitored/50 non-monitored classes |
+| Open-world k-NN: accuracy rises with world size and saturates near 95% at the largest world tested, while F1-score falls and levels off near 50%, because false-positive rate drops toward zero as true-positive rate falls below 40% | k=4 neighbors, world size swept up to 15,000 pages (unprotected traces; figure is a re-plot from Wang's methodology, cited to Wang's PhD thesis) |
+| Precision-Recall ROC (P-ROC) AUC for k-NN: 0.79 unprotected vs. 0.27 with WTF-PAD at a fixed world size | World size 5,000 pages |
+| P-ROC AUC across varying world size: unprotected k-NN levels off near AUC 0.74 as world size grows; WTF-PAD keeps AUC close to random guessing at every world size tested, up to the largest (15,000 pages) | Same open-world dataset, world size swept, first data point is the closed-world case where all classifiers reach AUC=1 |
+| Multi-tab Scenario 1 (k-NN trained on single-tab traces, tested on a mix of single-tab and 2-tab traces): TPR 14% unprotected vs. 8% with WTF-PAD | Second tab opened 0.5-5 seconds after the first, both tabs' pages drawn from Alexa top-100, sequential first tab |
+| Multi-tab Scenario 2 (k-NN trained and tested on a dataset including both single-tab and multi-tab traces): TPR 68% unprotected vs. 22% with WTF-PAD | Same multi-tab generation methodology as Scenario 1 |
+| Table 3 detection counts by traffic type: Scenario 1 unprotected — single-tab TP/total 233/300, multi-tab 901/8100, background(first tab) 544/901; Scenario 1 WTF-PAD — 95/300, 598/8100, 333/598. Scenario 2 unprotected — 263/300, 482/810, 449/482; Scenario 2 WTF-PAD — 108/300, 137/810, 103/137. Single-tab accuracy under k-NN: 87% unprotected, drops to 36% with WTF-PAD | Same two multi-tab scenarios and dataset as above |
+
+### Parameters
+- Dataset: 40 instances per homepage (10 batches of 4 visits) for the closed-world evaluation, drawn from the top-100 Alexa sites; open-world evaluation adds one instance per site for the Alexa top-35,000 sites; dataset originally collected for an earlier realistic-WF-attack study (Juarez et al., CCS 2014).
+- Attack classifier: k-NN with k=5 (closed-world defense comparison and ROC), or k=4 (open-world Figure 7, reproducing Wang's methodology); Wang et al.'s feature set, over 4,000 features including burst-derived features.
+- WTF-PAD tuning parameter: percentile p, controlling how far into the tail of the histogram distributions padding is drawn from; swept 0.5 (low protection) to 0.01 (high protection); Table 1's headline WTF-PAD result uses a normal-distribution fit with p=0.4 and cell/dummy-packet size d=1500 bytes.
+- Comparison defenses' own parameters, as configured for Table 1: BuFLO tau=10s (max transmission time), rho=20ms (packet interval), d=1500B; CS-BuFLO rho in [20,200]ms, d=1500B, with congestion-sensitive padding stop (CPSP); Tamaraw rho_out=0.053, rho_in=0.138, d=1500B.
+- Histograms HB (burst-mode delay) and HG (gap-mode delay): built empirically from a crawl of the top 35,000 Alexa pages, sampling inter-arrival times from about 4,000 uniformly selected pages, separately for incoming and outgoing traffic directions because the two directions showed different inter-arrival time distributions in the crawl (asymmetric connection bit rates).
+- Infinity-bin token count kn (Appendix A): derived algebraically from a target burst-continuation probability Pn and total token count K, worked example kn = K*Pn/(1-Pn) = 34 for K=300, Pn=0.1 (i.e., 90% probability of continuing a fake burst).
+- Statistical test: Welch's t-test is not used here (that is the Kakhki QUIC paper); this paper reports accuracy, TPR, FPR, PPV/precision, F1-score, and AUC directly from classifier runs, not significance tests.
+
+### Stated limitations
+The authors state they do not know the exact bandwidth overhead percentage acceptable for deployment in Tor, and offer three unquantified mitigating considerations rather than a derived bound: an estimate (from 2008 data, the most recent the authors cite) that about 40% of Tor traffic is bulk downloads and so would not need defense coverage if that fraction still holds; a claim that WF defenses need not extend to the exit-node hop, so overhead applies only to one or two relays in a circuit rather than the most bandwidth-loaded relay; and a claim that open-world results suggest the padding percentile could be tuned lower while retaining useful security. The histograms HB and HG depend on the client's specific network connection and the authors state they cannot be estimated in advance and shipped as a fixed default; the authors propose, without implementing, precomputing separate configurations per group of clients with similar connections as a possible mitigation, and separately propose exploring genetic-algorithm-based histogram optimization (jointly optimizing bandwidth overhead and attack accuracy) as future work. The defense's TPR after protection remains above zero in the multi-tab scenarios (8% and 22% depending on scenario), so the authors do not claim it removes multi-tab distinguishability entirely, only that it reduces it substantially relative to the unprotected baseline. The paper states that some websites may still exhibit unusually distinctive traffic patterns susceptible to high-confidence attacks even under the open-world and multi-tab conditions it tests, and that an attacker observing repeated visits to the same site across multiple sessions can accumulate confidence beyond what a single-session evaluation captures — a scenario the paper does not evaluate.
+
+### Requirements it places on the rest of the system
+WTF-PAD requires a padding endpoint (a Tor pluggable transport instance) at both the client and the bridge/guard, each running its own AP state machine pair (forward and receive), so the mechanism cannot be deployed unilaterally by the client alone — the paper's own threat model places the observation point between client and bridge/guard, and the defense pads exactly that hop. Because the PT client sends control messages specifying which histogram the PT server should pad with, the transport channel between client and server must itself be reliable and support an additional message type beyond the padded application data, meaning the mechanism cannot be layered onto a transport that cannot carry out-of-band control signaling. The defense is stated by the authors to depend on histograms matched to the client's specific connection characteristics, so a deploying system needs either an a priori grouping of clients by connection profile with a precomputed histogram set per group, or some other mechanism supplying connection-appropriate histograms — the paper does not itself supply that grouping or selection mechanism. The defense pads only the hop(s) up to the guard or bridge and, per the authors' own discussion, is not intended to extend to the Tor exit node; a system relying on end-to-end (client-to-destination) traffic-shape concealment beyond the guard hop needs a separate mechanism, since WTF-PAD's threat model and evaluation cover only the client-to-guard observation point.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- Foundational: V. Shmatikov, M.-H. Wang, "Timing analysis in low-latency mix networks: Attacks and defenses," ESORICS 2006 — the original Adaptive Padding algorithm (burst/gap dual-mode state machine) that WTF-PAD generalizes; this paper states the original AP paper did not specify how to build the inter-arrival-time histograms, which this paper supplies empirically.
+- Competing: K. P. Dyer, S. E. Coull, T. Ristenpart, T. Shrimpton, "Peek-a-Boo, I Still See You: Why Efficient Traffic Analysis Countermeasures Fail," IEEE S&P 2012 — source of BuFLO and VNG++, two of the four defenses in Table 1's direct comparison.
+- Competing: X. Cai, R. Nithyanand, R. Johnson, "CS-BuFLO: A Congestion Sensitive Website Fingerprinting Defense," WPES 2014 — source of CS-BuFLO, another Table 1 comparison defense.
+- Competing: T. Wang, X. Cai, R. Nithyanand, R. Johnson, I. Goldberg, "Effective Attacks and Provable Defenses for Website Fingerprinting," USENIX Security 2014 — source of Tamaraw (comparison defense) and of the k-NN attack (k=5, >4,000-feature set) this paper's own evaluation is built on.
+- Attack: X. Cai, X. C. Zhang, B. Joshi, R. Johnson, "Touching from a Distance: Website Fingerprinting Attacks and Defenses," ACM CCS 2012 — one of the >90%-accuracy WF attacks against Tor this paper's introduction cites as motivation.
+- Attack: T. Wang, I. Goldberg, "Improved Website Fingerprinting on Tor," WPES 2013 — another cited >90%-accuracy attack.
+- Foundational: M. Juarez, S. Afroz, G. Acar, C. Diaz, R. Greenstadt, "A Critical Analysis of Website Fingerprinting Attacks," ACM CCS 2014 — source of the realistic open-world/multi-tab evaluation methodology and the underlying dataset this paper's own evaluation reuses.
+- Foundational: A. Panchenko, F. Lanze, A. Zinnen, M. Henze, J. Pennekamp, K. Wehrle, T. Engel, "Website fingerprinting at internet scale," NDSS 2016 — a large-scale attack, contemporary with this paper, relevant to the realism of the threat model.
+- Foundational: T. Wang, "Website Fingerprinting: Attacks and Defenses," PhD thesis, University of Waterloo, 2016 — source of the open-world evaluation methodology (Figure 7) this paper reproduces before applying its own defense.
+
+### Verbatim extracts
+- "reduces the accuracy of the state-of-the-art attack from 91% to 20%"
+- "introducing zero latency overhead and less than 60% bandwidth overhead"
+- "WTF-PAD is the only defense to provide zero latency overhead"
+- "beyond a certain point (around 0.1 percentile), the tuning mechanism saturates to 15% accuracy"
+- "approximately 40% of Tor traffic is bulk downloads (from 2008, the last data we know of)"
+- "we cannot estimate them a priori and ship them with WTF-PAD" [the histograms]
+
+---
+
+## [JUELS-CCS-07] PORs: Proofs of Retrievability for Large Files
+**Citation:** Ari Juels, Burton S. Kaliski Jr. "PORs: Proofs of Retrievability for Large Files." ACM Conference on Computer and Communications Security (CCS), 2007. DOI 10.1145/1315245.1315317.
+**Retrieved:** full text via https://doi.org/10.1145/1315245.1315317
+**Source URL:** https://doi.org/10.1145/1315245.1315317
+**Domain:** C
+
+### What it does
+A proof of retrievability (POR) lets a storage archive prove to a verifier that it still holds a specific file in full, through a short challenge-response exchange that never transmits the file. The verifier obtains this assurance without needing a copy of the file itself. The construction, called Sentinel-PORSYS, prepares a file for storage in four steps. First, the verifier splits the file into k-block chunks and applies an (n,k,d)-error-correcting code to each chunk over an l-bit alphabet, expanding the file. Second, the verifier encrypts the expanded file with a cipher that can decrypt each block independently of the others, so missing blocks do not block decryption of the rest. Third, the verifier generates s sentinels — indistinguishable-from-random check values produced by a one-way function keyed on a secret — and appends them to the encrypted blocks. Fourth, the verifier applies a keyed pseudorandom permutation to scatter the positions of all blocks, including sentinels, so an archive cannot locate and selectively preserve only the sentinels. To challenge the archive, the verifier picks q sentinel positions (using the permutation and a counter, so no per-sentinel storage is needed beyond the keys) and asks the archive to return the values at those positions. The archive fails the check if it returns an incorrect value for any queried sentinel. Because sentinel positions are indistinguishable from data-block positions to an archive that has deleted or corrupted some fraction of the file, an incorrect sentinel response is evidence the archive corrupted enough of the file to also have hit that data. To retrieve the file, the verifier requests all blocks, reverses the permutation, strips the sentinels, decrypts, and applies error-correcting decoding to recover the original file even if the archive lost or altered some blocks.
+
+### Measured results
+This is a cryptographic construction and security proof, not a system with runtime measurements. The paper works through one worked numerical example of its own security bound rather than running an implementation.
+
+| Parameter set | Derived result |
+|---|---|
+| File size b = 2^27 blocks (2 gigabytes), block size l = 128 bits, (255,223,32)-Reed-Solomon code (n=255, k=223, d=32), s = 1,000,000 sentinels | Error-coded file expands to b' = 153,477,870 blocks; total file expansion (error coding plus sentinels) is around 15% |
+| Same setup, adversary corrupts fraction epsilon = 0.005 of data blocks and unused sentinels | Probability the adversary renders the file unretrievable (bound rho from Theorem 1) is less than 1 in 200,000 |
+| Same setup, verifier queries q = 1,000 sentinels per challenge, s = 1,000,000 sentinels total | Verifier can issue 1,000 challenges over the file's life (about one challenge per day for three years); probability of detecting the epsilon = 0.005 corruption on a single challenge is about 71.3%; 12 challenges bring detection-failure probability below 1 in 1,000,000 |
+
+The paper states an example proof size on the order of 32 bytes and an example challenge seed on the order of 128 bits, both as design targets rather than a measured runtime cost.
+
+### Parameters
+- l: block size in bits. Example: 128 (matches an AES block).
+- (n,k,d): error-correcting code parameters. Example: (255,223,32) Reed-Solomon over GF(2^8), striped to GF(2^128) so a chunk holds n = 255 blocks. d must be even; the code corrects up to d/2 block errors per chunk.
+- b: file size in blocks. Example: 2^27 (2 gigabytes).
+- s: number of sentinels generated and stored. Example: 1,000,000.
+- q: number of sentinels queried per challenge. Example: 1,000. Total challenges supportable is floor(s/q).
+- epsilon: adversary's corrupted fraction of data blocks and unused sentinels, used as an input to the security bound, not a protocol parameter the verifier sets. Example value analyzed: 0.005.
+- gamma: number of extractor queries per block during recovery, bounded below by 24(j ln 2 + ln b') per Theorem 1, so that extraction of uncorrupted blocks succeeds with overwhelming probability.
+- j: security parameter controlling sentinel and key sizes.
+
+### Stated limitations
+The construction protects a static file only; the authors state that any naive partial update to the file undermines the security guarantees, because the archive can learn which blocks were touched and are therefore not sentinels, then alter or delete them with impunity once it knows they are not sentinels. Constructing a POR that supports dynamic partial updates is left as future work. The permutation step requires random access across the whole encoded file, which the authors describe as the most resource-intensive part of the scheme in practice, particularly for disk-resident files. Sorting through the paper's own listed design parameters and protocol variants to reach a fully specified, deployable POR system is stated as unfinished work of, in the authors' words, "formidable dimensions." The construction proves only that the archive still holds data sufficient to reconstruct the file; it does not by itself provide file robustness or availability if the sole copy is destroyed, and the authors state that robustness requires separate storage redundancy across multiple systems.
+
+### Requirements it places on the rest of the system
+The verifier must generate and retain the sentinel-generation key and the permutation key; loss of these keys makes future challenges and file recovery impossible, since sentinel positions and values are derived from them. The verifier (not the archive) must perform the initial encoding — error-correction, encryption, sentinel insertion, permutation — before handing the file to the archive, so the mechanism requires a trusted setup step outside the archive's control. The cipher used for encryption must support independent per-block decryption (a tweakable block cipher or stream cipher), because the extractor must recover any subset of surviving blocks without access to the missing ones. The system needs a component that supplies unpredictable, uniformly distributed challenge positions (via the keyed permutation) so that the archive cannot distinguish sentinel positions from data-block positions in advance. The number of challenges the verifier can issue over the file's lifetime is capped at floor(s/q); a caller needing more challenges than this must re-encode the file with a larger sentinel count s, which changes the stored ciphertext.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- Foundational: M. Blum, W. S. Evans, P. Gemmell, S. Kannan, M. Naor, "Checking the correctness of memories," Algorithmica 12(2/3), 1994 — first general formulation of verifying data integrity without full access.
+- Foundational: M. Naor, G. N. Rothblum, "The complexity of online memory checking," FOCS 2005 — closest prior formal security definition; error-codes an entire file as one codeword and MACs blocks, checked by the paper as asymptotic rather than concrete and lacking an extractor definition.
+- Competing: G. Ateniese, R. Burns, R. Curtmola, J. Herring, L. Kissner, Z. Peterson, D. Song, "Provable data possession at untrusted stores," 2007 (contemporaneous) — RSA-based homomorphic hashing over individual file blocks, computationally intensive, relies on a knowledge-of-exponent hardness assumption.
+- Competing: D.L.G. Filho, P.S.L.M. Barreto, "Demonstrating data possession and uncheatable data transfer," IACR ePrint 2006/150 — RSA-modulus homomorphic hash scheme requiring the prover to exponentiate over the entire file.
+- Competing: M. Lillibridge, S. Elnikety, A. Birrell, M. Burrows, M. Isard, "A cooperative Internet backup scheme," USENIX ATC 2003 — earliest POR-like protocol, peer-distributed files with error-coding and per-block spot-checks via separate MACs, no formal definitions or bounds.
+- Competing: M. Shah, R. Swaminathan, M. Baker, "Privacy-preserving audit and extraction of digital contents" (cited as Shah et al. [37]) — third-party auditor verifying storage-provider possession via challenge-response MAC over the full encrypted file.
+- Foundational: P. Golle, S. Jarecki, I. Mironov, "Cryptographic primitives enforcing communication and storage complexity," Financial Cryptography 2002 — storage-enforcing commitment schemes proving committed storage capacity without proving the specific file is stored.
+- Foundational: J. Black, P. Rogaway, "Ciphers with arbitrary finite domains," CT-RSA 2002 — pseudorandom permutation constructions over non-power-of-two domains, used for the permutation step.
+
+### Verbatim extracts
+- "the archive retains and reliably transmits file data sufficient for the user to recover F"
+- "the security of our POR system depends on q, the number of sentinels per challenge"
+- "probability of detecting adversarial corruption of the file...is at least 1−(1−ϵ/4)^q ≈71.3% per challenge"
+- "Any naïvely performed, partial updates to F would undermine the security guarantees of our protocol."
+- "A POR does not by itself...protect against loss of file contents."
+
+---
+
+## [JUELS-NDSS-99] Client Puzzles: A Cryptographic Countermeasure Against Connection Depletion Attacks
+**Citation:** Ari Juels, John Brainard. "Client Puzzles: A Cryptographic Countermeasure Against Connection Depletion Attacks." NDSS, 1999. DOI not stated in registry.
+**Retrieved:** full text via https://www.ndss-symposium.org/wp-content/uploads/2017/09/Client-Puzzles-A-Cryptographic-Countermeasure-Against-Connection-Depletion-Attacks.pdf
+**Source URL:** https://www.ndss-symposium.org/wp-content/uploads/2017/09/Client-Puzzles-A-Cryptographic-Countermeasure-Against-Connection-Depletion-Attacks.pdf
+**Domain:** I
+
+### Text-extraction defect — read before using this entry
+The retrieved text file contains zero numeric digit characters (`grep -oE '[0-9]+'` returns no matches across all 69,795 bytes) and zero percent signs. The paper is confirmed correct by title, author names (Ari Juels, John Brainard, RSA Laboratories), and content — this is not a mismatch. The source PDF apparently set numerals and bracketed citation numbers in a font or math-mode encoding the extractor could not map to characters; every digit-bearing quantity in the worked example (Section on parameterizing the buffer), the formal theorem and heuristic (attacker MIPS bound, buffer ratio c, subpuzzle count m, subpuzzle bit-length k, the probability bound, the performance-overhead percentages), and every bracketed citation number was dropped, leaving gaps or the surrounding prose only. Per Rule 1, no number can be recorded from this file with confidence, because the number itself — not just its conditions — is missing from the source. The mechanism description, parameter names, structural claims, and bibliography author/title strings below survived because they are set in ordinary prose type. A clean re-extraction of the original PDF is needed before any figure from this paper's Theorem 1, Heuristic 1, Corollary 1, or the worked TCP SYN flooding example can enter the evidence base.
+
+### What it does
+A client puzzle protocol defends a server against a connection-depletion attack — an attack in which an adversary opens and leaves unresolved a large number of connection or service requests so as to exhaust a server's memory or computation and deny service to legitimate clients, TCP SYN flooding being the paper's running example. Under normal operation the server accepts every connection request. Once the server detects it is under attack, it stops accepting connections unconditionally and instead issues each requesting client a puzzle: a bitstring problem constructed from the current time, a server secret, and information specific to that request, solvable only by an exhaustive search of a fixed-size space (the paper's construction hashes the puzzle input, discloses all but a chosen number of trailing bits, and requires the client to search for the missing bits so that the hash matches). A puzzle is composed of several independent, uniformly sized subpuzzles rather than one larger puzzle of equivalent total search space, because an adversary who submits a partially correct guess across multiple independent subpuzzles has to guess every one of them correctly to pass, which the paper states drives down the probability of a lucky guess passing verification compared to one subpuzzle of the same total bit length. The server allocates a buffer slot to a connection request only after the client returns a correct puzzle solution within a validity window, and the request must complete within further separate timeout windows for puzzle validity, post-solution connection initiation, and buffer-slot retention. Because puzzle difficulty is a parameter the server sets at issue time rather than something baked into the protocol format, the server can scale subpuzzle bit-length and count, and the timeout windows, in proportion to the severity of the attack it observes, producing graceful degradation instead of an all-or-nothing defense.
+
+### Measured results
+Not extractable from this file — see the text-extraction defect note above. The paper contains a formal Theorem, a looser practitioner Heuristic derived from it, and a fully worked TCP SYN flooding parameterization example (assumed client and adversary computing power in MIPS, an assumed one-year attack duration, resulting minimum buffer-slot multiplier and subpuzzle parameters, and a stated performance overhead for legitimate clients relative to normal TCP connection setup time), but every quantity in all three is a stripped digit in this extraction. Qualitatively recoverable without numbers: the theorem bounds the probability of a successful connection-depletion attack, given an assumed upper bound on adversary computing power (in MIPS) and an assumed maximum attack duration, as a function of two protocol parameters — the number of subpuzzles per puzzle (m) and the ratio (c) of the allocated buffer size to the buffer size an average-case adversary would need to exhaust; the paper states the theorem's bound is deliberately loose for tractability of the proof and that a tighter, more detailed analysis (via a stated Corollary) permits a smaller buffer for the same security level; the worked example concludes that the overhead the client-puzzle protocol adds to legitimate connection setup is small, and that the buffer-slot count it recommends is not substantially larger than conventional TCP SYN-flood defense buffer recommendations of the time.
+
+### Parameters
+- k: bit-length of each subpuzzle's hidden portion (the exhaustive-search space size is 2^k per subpuzzle). Exact recommended value not recoverable from this text.
+- m: number of independent subpuzzles composing one client puzzle. Exact recommended value not recoverable from this text.
+- T1: time window during which an issued puzzle remains valid for solution and submission.
+- T2: time window the client has to initiate the underlying protocol after submitting a correctly solved puzzle.
+- T3: duration a server buffer slot allocated to the underlying protocol's execution is retained before being purged.
+- b: number of extra buffer slots reserved specifically for the client-puzzle defense, beyond maxcon (the slot count reserved for normal-condition usage); total buffer size is maxcon + b.
+- c: ratio of the chosen buffer size b to the buffer size an adversary of average success would need to exhaust — the security-relevant free parameter in Theorem 1 and Heuristic 1. Exact threshold values required by the theorem and by the heuristic are not recoverable from this text (digits stripped).
+- Adversary computing-power bound and maximum attack duration: both are explicit assumptions feeding the theorem; exact figures used (MIPS bound, duration in seconds/instructions) are not recoverable from this text.
+
+### Stated limitations
+The protocol's principal disadvantage relative to conventional SYN-cookie or dropped-connection defenses is that it requires special-purpose client-side software capable of solving a puzzle, whereas the alternatives require modification only on the server side; the authors note this is not an obstacle inside an environment with homogeneous or centrally distributed client software. The security theorem and heuristic rest on assumptions the authors describe as deliberately conservative for proof simplicity, and the authors state that a more detailed analysis (via a Corollary given in the appendix) yields a smaller required buffer size than the main theorem's bound. The protocol assumes the adversary cannot modify or significantly delay packets sent from a legitimate client to the server, and cannot outright saturate the server, the network, or a specific port; the authors state that some relaxation of the packet-modification and packet-delay assumptions is possible without invalidating the protocol, by adjusting the timeout parameters. The authors state as future work that better puzzle constructions (via closer study of hash-function properties and attacker time-space tradeoffs) and better theoretical bounds narrowing the gap between the main theorem and the practical heuristic remain open.
+
+### Requirements it places on the rest of the system
+The server must hold a secret value used to construct puzzle inputs, and must know the current time, since both feed the one-way function that produces each puzzle; compromise of that secret lets an adversary precompute or verify puzzle solutions off-protocol. The server must maintain a buffer of maxcon + b slots and enforce the three timeout windows (T1, T2, T3) on every pending connection, purging a slot when any window expires, so the mechanism requires an existing per-connection buffer/slot abstraction to attach to (the paper frames this in terms of TCP half-open connections or SSL session initiations, but states the construction generalizes to any client-initiated protocol with a buffer resource to protect). The defense assumes an adversary who cannot modify or significantly delay packets between honest clients and the server and cannot saturate the network or server outright; a network model where an adversary can tamper with or delay third-party traffic falls outside the stated assumptions. Because puzzle difficulty is meant to scale with observed attack severity, the server needs a signal of attack severity (buffer fill level, in the paper's own account) to drive graceful degradation; the mechanism itself does not supply that signal.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- Foundational: C. Dwork, M. Naor, "Pricing via processing or combatting junk mail," CRYPTO 1992 — the non-interactive proof-of-work / cryptographic-puzzle precursor this paper's interactive server-issued puzzle is positioned against.
+- Foundational: R. L. Rivest, A. Shamir, D. Wagner, "Time-lock puzzles and timed-release crypto," manuscript, 1996 — a related but non-interactive puzzle construction for time-delayed release rather than connection admission.
+- Competing: M. K. Franklin, M. Malkhi, "Auditable metering with lightweight security," Financial Cryptography 1997 — a related lightweight cryptographic metering mechanism cited alongside the junk-mail and time-capsule puzzle literature.
+- Attack/measurement: CERT Advisory, "TCP SYN Flooding and IP Spoofing Attacks," September 1996 — the primary connection-depletion attack this protocol defends against.
+- Attack/background: Daemon9, "Project Neptune," Phrack Magazine — the SYN-flood attack tool/technique write-up cited as background.
+- Foundational (cryptanalysis, informs hash-function choice for puzzle construction): H. Dobbertin, "Cryptanalysis of MD4," Fast Software Encryption, Third International Workshop, Springer LNCS.
+- Background/protocol context: A. Freier, P. Karlton, P. Kocher, "The SSL Protocol Version 3.0," 1996 — cited as a resource-intensive connection protocol the puzzle defense is stated to be especially valuable for protecting.
+
+### Verbatim extracts
+- "a cryptographically based countermeasure against connection depletion attacks"
+- "the server hands out to each client wishing to make a connection a unique client puzzle"
+- "puzzles are constructed such that m subpuzzles" [exact subpuzzle-count digit not recoverable from source text]
+- "the client puzzle protocol does not yield a substantially larger buffer size than current recommendations"
+- "requirement for special-purpose software does not pose a problem" [for a homogeneous client environment]
+
+---
+
 ## [KAASHOEK-IPTPS-03] Koorde: A Simple Degree-Optimal Distributed Hash Table
 
 **Citation:** M. Frans Kaashoek, David R. Karger. "Koorde: A Simple Degree-Optimal Distributed Hash Table." IPTPS, 2003. DOI 10.1007/978-3-540-45172-3_9.
@@ -11660,6 +12443,84 @@ None found among the papers in this batch (W1-5). The paper's Lemma 2.1 (degree 
 - "it is unclear whether the Koorde can similarly self-stabilize"
 - "we mostly... ignore them in this paper" [proximity routing and malicious-node resilience]
 - "An implementation of Koorde is available as part of the Chord software distribution"
+
+---
+
+## [KAKHKI-IMC-17] Taking a Long Look at QUIC: An Approach for Rigorous Evaluation of Rapidly Evolving Transport Protocols
+**Citation:** Arash Molavi Kakhki, Samuel Jero, David Choffnes, Cristina Nita-Rotaru, Alan Mislove. "Taking a Long Look at QUIC: An Approach for Rigorous Evaluation of Rapidly Evolving Transport Protocols." ACM Internet Measurement Conference (IMC), 2017. DOI 10.1145/3131365.3131368.
+**Retrieved:** full text via https://doi.org/10.1145/3131365.3131368
+**Source URL:** https://doi.org/10.1145/3131365.3131368
+**Domain:** L
+
+### What it does
+The paper builds a controlled testbed and measurement methodology to compare Google's QUIC transport protocol (UDP-based, application-layer, carrying HTTP/2 and TLS-equivalent encryption) against HTTP/2 over TLS over TCP (referred to throughout as "TCP"), across desktop, mobile, and commercial cellular network conditions, and instruments QUIC's source code to automatically infer its congestion-control state machine at runtime so that observed performance differences can be root-caused rather than only reported. The testbed places a controlled router between a client device and an Amazon EC2 server; the router runs Linux traffic-control and network-emulation tools to impose bandwidth caps, added delay, added loss, and jitter/reordering. Both TCP and QUIC servers run on the same virtual machine and are driven by the same client so that only the transport differs. State-machine inference works by adding log statements at points in the QUIC source where congestion-control state transitions occur (23 lines across 5 files for the Cubic implementation), running experiments, and feeding the resulting execution traces to the Synoptic tool, which produces a state-transition diagram with per-state time fractions and per-transition probabilities; the same instrumentation approach was repeated for QUIC's experimental BBR congestion-control implementation.
+
+### Measured results
+
+| Result | Conditions |
+|---|---|
+| One QUIC flow consumes ~2x the bottleneck bandwidth of one competing TCP flow (throughput 2.71 vs 1.62 Mbps, std dev 0.46/1.27) despite both using Cubic congestion control | 5 Mbps bottleneck link, RTT=36ms, buffer=30 KB, averaged over 10 runs |
+| QUIC vs. 2 competing TCP flows: QUIC 2.8 Mbps; the two TCP flows 0.7 and 0.96 Mbps (QUIC still over half the link) | Same 5 Mbps link/buffer/RTT, 10 runs |
+| QUIC vs. 4 competing TCP flows: QUIC 2.75 Mbps; the four TCP flows 0.45, 0.36, 0.41, 0.45 Mbps (QUIC still over half the link, contradicting the 2/(M+1) fair share it should get under its 2-connection emulation) | Same 5 Mbps link/buffer/RTT, 10 runs |
+| Setting N (QUIC's per-connection TCP-flow emulation factor) to 1 (QUIC 37 default) instead of 2 (QUIC 34 default) had little impact on the unfairness; varying buffer size (including sizes used by a prior comparison paper, Carlucci et al.) also had no significant effect | Same testbed; repeated against Google's production servers with similar results |
+| QUIC outperforms TCP (lower page load time) in every desktop scenario tested except large numbers of small objects, at RTT=36ms, 0% added loss | Rate limits 5/10/50/100 Mbps, object counts 1/2/5/10/100/200, object sizes 5KB-210MB (full parameter matrix in Table 2), statistical significance by Welch's t-test at p<0.01 |
+| QUIC outperforms TCP under added loss (better loss recovery, no head-of-line blocking) and under added delay (0-RTT connection setup), but under high latency this does not compensate for QUIC's poor performance with large numbers of small objects | Same rate/object matrix with 0.1%/1% added loss, 0/50/100ms added RTT |
+| Under variable delay (jitter causing packet reordering), QUIC performs significantly worse than TCP; QUIC's fixed default NACK threshold of 3 before declaring fast-retransmit loss falsely detects loss when packets reorder past that threshold; TCP's DSACK-based adaptive threshold avoids this | 112ms RTT with 10ms jitter (netem-induced reordering), desktop, larger NACK thresholds shown to substantially improve QUIC's performance under this condition (Fig. 10) |
+| Downloading a 210MB object with bandwidth randomly fluctuating between 50 and 150 Mbps (re-picked every 1 second): QUIC achieves 79 Mbps average throughput (std=31) vs. TCP's 46 Mbps (std=12) | 3+ back-to-back runs, desktop, repeated across other bandwidth ranges/frequencies with the same qualitative result |
+| On mobile devices (Nexus 6, MotoG over WiFi), QUIC's advantage over TCP diminishes or disappears across the board versus desktop, because QUIC runs in userspace and cannot drain received packets as fast as TCP in the kernel; QUIC spends 58% of its time in the "Application Limited" congestion-control state on mobile vs. 7% on desktop | Same bandwidth/loss/RTT matrix, no 100Mbps tier tested (phones capped under 50 Mbps over WiFi) |
+| Verizon cellular: 0.17% loss (3G) / 4.0% loss (LTE); RTT 109ms std 20 (3G) / 62ms std 14 (LTE); reordering 9% (3G) / 0.25% (LTE). Sprint: 0.31%/2.4% loss; RTT 70ms std 39 (3G) / 55ms std 11 (LTE); reordering 1.38%/0.13% | Measured characteristics of the live commercial networks at time of test, desktop tethered to phone, no network emulation |
+| On LTE, QUIC performs similarly to a desktop low-bandwidth scenario with 0-RTT benefit larger for a 1MB page due to higher cellular latency; on 3G, QUIC's benefit diminishes because higher packet-reordering rates work against it even though higher loss works in its favor; some 3G scenarios show QUIC with lower average PLT but high enough variance that the difference is not statistically significant | Same testbed methodology applied to live Verizon/Sprint 3G and LTE |
+| YouTube QoE at hd2160 quality: QUIC loads 0.8% of a 60-second video segment window vs. TCP's 0.4%; QUIC spends 50.2% of time buffering vs. TCP's 73.1%; QUIC has 6.7 rebuffers/minute vs. TCP's 4.9, but about 30% fewer rebuffers per second of video actually played; no significant QUIC/TCP difference at tiny, medium, or hd720 quality | 100 Mbps bandwidth, 1% loss, averaged over 10 runs (Table 6); similar results observed at 10 and 50 Mbps under similar loss |
+| Across 10 QUIC versions (25 to 34) tested with identical Chrome version and identical QUIC parameter configuration, performance was nearly identical despite substantial codebase changes | Same testbed; changelog review attributes most changes to cryptography logic, flags, and connection IDs rather than congestion control |
+| QUIC 37 raised the default Maximum Allowable Congestion Window (MACW) from 430 (QUIC 34, used for the paper's main experiments) to 2000; at MACW=430, QUIC 37 and QUIC 34 perform almost identically; at the new default MACW=2000, QUIC 37 achieves markedly higher throughput and larger gains over TCP for large transfers on high-bandwidth links | Instrumented and compared QUIC 37 vs. 34 directly |
+| Proxied comparison: QUIC still outperforms proxied TCP in many scenarios but the advantage diminishes or disappears at low loss/latency and under 1% loss; under high added delay QUIC still outperforms proxied TCP | QUIC proxy co-located with a TCP proxy positioned midway between client and server (two 40ms RTT hops summing to 80ms total), PLT comparisons under no-loss, 1% loss, and 100ms added RTT |
+| A QUIC-terminating proxy hurts QUIC's own performance for small objects (0-RTT establishment is unavailable through the proxy) but helps for large objects under loss | Same proxy testbed, comparing QUIC direct-to-server vs. QUIC-through-QUIC-proxy |
+
+### Parameters
+- Bandwidth rate limits tested: 5, 10, 50, 100 Mbps.
+- Added delay (extra RTT) tested: 0ms, 50ms, 100ms.
+- Added loss tested: 0.1%, 1%.
+- Object counts tested: 1, 2, 5, 10, 100, 200.
+- Object sizes tested: 5KB, 10KB, 100KB, 200KB, 500KB, 1MB, 10MB, 210MB.
+- Proxy configurations tested: QUIC proxy, TCP proxy, at 40ms+40ms RTT hops.
+- Client devices tested: desktop (Ubuntu 14.04, 8GB RAM, Intel Core i5 3.3GHz), Nexus 6 (Android 6.0.1, 3GB RAM, 2.7GHz quad-core), MotoG (Android 4.4.4, 1GB RAM, 1.2GHz quad-core).
+- Video quality levels tested: tiny, medium, hd720, hd2160.
+- Server: Amazon EC2, Ubuntu 14.04 kernel 4.4.0-34-generic, 16GB RAM, 2.4GHz quad-core, Apache 2.4 for HTTP/2-over-TCP, Chromium's standalone QUIC server for QUIC.
+- Statistical significance threshold: p < 0.01 via Welch's t-test, minimum 10 measurements per protocol per scenario.
+- QUIC Maximum Streams Per Connection (MSPC), default 100; varying it (except down to 1, which substantially worsened performance) had no statistically significant effect on the large-numbers-of-small-objects PLT deficit.
+- QUIC's fixed NACK threshold before declaring fast-retransmit loss: default 3.
+- QUIC Maximum Allowable Congestion Window (MACW): 430 in QUIC 34 (used for the paper's main results), 2000 as QUIC 37's new default.
+- QUIC per-connection TCP-flow emulation factor N: default 2 in QUIC 34, default 1 in QUIC 37; varying it had little effect on fairness.
+- QUIC versions instrumented for the historical comparison: versions 25 through 34, plus version 37 for the follow-up comparison.
+
+### Stated limitations
+The authors state they do not study QUIC's forward error correction (FEC) because it was removed from the protocol in early 2016. They state they leave investigation of dynamic (script-heavy, object-dependency-laden) web pages to future work, having deliberately restricted their page-load-time tests to static HTML pages referencing only JPG images so results reflect transport-layer efficiency rather than browser rendering behavior. They state they leave investigation of the root cause of a sudden minimum-observed-RTT increase during multiplexing of many objects to future work. They state that automating their state-machine-inference methodology and porting it to other application-layer protocols is future work, along with evaluating additional operational networks (particularly more mobile networks and data centers) and investigating techniques to improve QUIC's fairness to TCP while preserving high utilization. They state the recently proposed BBR congestion-control algorithm was not deployed in QUIC's stable branch at the time of writing and so could not be evaluated fairly against Cubic; a private communication from a QUIC team member is cited stating BBR was "not yet performing as well as Cubic" in Google's own deployment tests. They note their initial QUIC-terminating proxy implementation gave mixed results and that identifying further benefits needs additional tuning, which they do not perform.
+
+### Requirements it places on the rest of the system
+Any comparison of QUIC against TCP that claims fairness must control for competing-flow count and buffer size explicitly, because this paper found QUIC consumes roughly double a single competing TCP flow's throughput and remains over half of a shared link's bandwidth against as many as 4 competing TCP flows, under the same Cubic congestion-control algorithm on both sides — a system relying on TCP-style fair-queuing behavior from mixed QUIC/TCP traffic on a shared bottleneck cannot assume that property holds. A deployment that needs QUIC's 0-RTT connection-establishment benefit must retain per-server 0-RTT state across requests (the paper's own methodology explicitly avoids clearing this state between experiments while clearing all other caches/sockets), so a system erasing that state between sessions loses the largest share of QUIC's measured advantage for small objects and high-RTT links. A deployment running QUIC on resource-constrained or contended userspace environments (this paper's finding for mobile handsets) should expect QUIC's throughput advantage over kernel-resident TCP to shrink or vanish, because QUIC's userspace packet processing cannot keep pace with the kernel's, independent of any transport-level algorithmic advantage. A system relying on in-network transparent proxies for high-latency links (common in cellular deployments, per the paper) loses that optimization path for QUIC specifically, because QUIC encrypts its transport-layer headers and a fixed-function proxy cannot terminate or rewrite them; the paper's own attempt at a QUIC-aware proxy still degraded small-object performance. A system operating over a network with reordering — the paper measures 9% reordering on Verizon 3G and cites reordering as common on cellular paths generally — should expect QUIC's default fixed NACK threshold to generate false loss detections unless the threshold is raised or an adaptive scheme like TCP's DSACK is added to QUIC.
+
+### Contradicts
+Contradicts the finding of Carlucci et al. [17] (cited in this paper's own related work) that larger TCP/QUIC buffer sizes restore fair bandwidth sharing between the two protocols: this paper repeated the buffer-size variation, including the sizes used by Carlucci et al., and observed no significant effect on the unfairness. The paper also states a finding partially at odds with Biswal and Gnawali [16] (cited in related work): both find QUIC and TCP differ in the presence of loss, but Biswal et al. report QUIC outperforming TCP+HTTP under loss while this paper reports HTTP outperforming QUIC "in environments with high bandwidth links, high packet loss, and many large objects" — the two results are not on the identical experimental condition, so the paper frames this as a partial disagreement rather than a direct contradiction. None found against other papers in this corpus.
+
+### References worth retrieving
+- Competing: G. Carlucci, L. De Cicco, S. Mascolo, "HTTP over UDP: an experimental investigation of QUIC," ACM SAC 2015 — independent QUIC-vs-TCP measurement (goodput, utilization, PLT) on QUIC version 21, whose buffer-size fairness finding this paper directly contradicts.
+- Competing: P. Biswal, O. Gnawali, "Does QUIC make the web faster?," IEEE GLOBECOM 2016 — independent QUIC-vs-TCP+HTTP comparison, partially disagreeing with this paper's loss-condition result.
+- Competing: S. R. Das, "Evaluation of QUIC on web page performance," MIT M.S. thesis, 2014 — independent evaluation via mahimahi replay of 500 real web pages; found QUIC improves small-page performance but was inconclusive for large-object-count pages.
+- Foundational: A. Langley et al., "The QUIC transport protocol: Design and Internet-scale deployment," ACM SIGCOMM 2017 — the QUIC designers' own paper, source of the Google-reported "18% fewer rebuffers" YouTube QoE claim this paper partially corroborates and partially refines (limited to high resolution).
+- Competing: T. Jager, J. Schwenk, J. Somorovsky, "On the security of TLS 1.3 and QUIC against weaknesses in PKCS#1 v1.5 encryption," ACM CCS 2015 — cryptographic security analysis of QUIC.
+- Competing: M. Fischlin, F. Günther, "Multi-stage key exchange and the case of Google's QUIC protocol," ACM CCS 2014 — formal security analysis of QUIC's key exchange.
+- Competing: R. Lychev, S. Jero, A. Boldyreva, C. Nita-Rotaru, "How secure and quick is QUIC? provable security and performance analyses," IEEE S&P 2015 — combined security and performance analysis of QUIC.
+- Foundational: P. Megyesi, Z. Krämer, S. Molnár, "How quick is QUIC?," IEEE ICC 2016 — an earlier independent QUIC performance measurement.
+- Foundational: R. Netravali et al., "Mahimahi: Accurate Record-and-replay for HTTP," USENIX ATC 2015 — the replay tool used by the Das MIT thesis comparator.
+- Foundational: S. Ha, I. Rhee, "Taming the elephants: New TCP slow start," Computer Networks 2011 — source of the Hybrid Slow Start algorithm identified as the root cause of QUIC's poor performance with many small objects.
+
+### Verbatim extracts
+- "QUIC consumes nearly twice the bottleneck bandwidth than TCP flows combined, resulting in substantial unfairness"
+- "This directly contradicts their finding that larger buffer sizes allow TCP and QUIC to fairly share available bandwidth."
+- "its advantages diminish across the board" [QUIC on mobile devices]
+- "QUIC spends most of its time (58%) in the Application Limited state" [mobile, vs. 7% desktop]
+- "not yet performing as well as Cubic in our deployment tests" [BBR, private communication from QUIC team]
+- "about 30% rebuffers per playing second" [reduction for QUIC vs TCP at hd2160]
 
 ---
 
@@ -12158,6 +13019,58 @@ None found. This RFC's stated keepalive-interval default (15 seconds) and HALKES
 - "Agents SHOULD use a Tr value of 15 seconds... MUST NOT use a value smaller than 15 seconds" (Section 11).
 - "The penalty of these improvements is that ICE increases session establishment times." (Section 18.3).
 - "reveals the source addresses of the client and its peer to any on-network listening attacker" (Section 19.1).
+
+---
+
+## [KERMARREC-DICG-20] Gossiping with Append-Only Logs in Secure-Scuttlebutt
+**Citation:** Anne-Marie Kermarrec, Erick Lavoie, Christian Tschudin. "Gossiping with Append-Only Logs in Secure-Scuttlebutt." 1st International Workshop on Distributed Infrastructure for Common Good (DICG'20), co-located with ACM/IFIP Middleware 2020. DOI 10.1145/3428662.3428794.
+**Retrieved:** full text via https://doi.org/10.1145/3428662.3428794
+**Source URL:** https://doi.org/10.1145/3428662.3428794
+**Domain:** J
+
+### Reading note on this entry
+The paper is a protocol-and-algorithm description with a related-work comparison, not a controlled measurement study. It does not report per-connection request overhead or message-propagation cost figures in the quantitative form the registry's why-needed note anticipates (node counts, bandwidth measurements, round counts under stated conditions). The few quantitative statements it does make are recorded below as anecdotal or order-of-magnitude, each flagged, and no number below should be treated as a controlled measurement.
+
+### What it does
+Secure-Scuttlebutt (SSB) replicates data across participant-run stores by gossiping authenticated single-writer append-only logs: each participant owns one log, a sequence of immutable events, each event signed and linked to the previous event by hash so that only the log's owner (holder of the corresponding private key) can extend it and no two events can share a predecessor. A store holds a set of logs. A frontier is a store's record of the latest known index for each log it holds; the difference between two stores' frontiers for the logs they hold in common identifies exactly the events one store has that the other lacks. To update, two connected stores each compute the other's frontier, retrieve only the events after that frontier from their own copy, and send those events to the other side (Algorithm 1), so unlike buffer-based or fan-out-based gossip protocols, no temporary buffer size, retransmission logic, or neighbor fan-out count needs to be tuned — persistence, reliable transport, and pairwise reconciliation on connection replace them. The paper presents two gossip policies built on this exchange. The open gossip model (Algorithm 2) replicates every log to every participant on each pairwise connection, providing total replication and total persistence but no participant control over what is stored. The transitive-interest gossip model (Algorithm 3), which is the model SSB deploys in production, restricts replication to the logs a participant transitively follows: participants record follow/unfollow and block/unblock events naming another participant's log id in their own log, and on connection a participant first adds the logs newly reachable through its followed set, removes logs that became blocked, and only then runs the frontier-difference update, so replication is limited to and directed by each participant's own subjective interest graph, and only shared (mutually held) logs are exchanged in that update step. Content-level privacy is layered independently: SSB uses Ed25519 keys for both signing and, via a "private-box" scheme, encrypting content to specific recipients' public keys such that a recipient attempts decryption on every incoming event and simply discards those not intended for them, which also hides the number and identity of the intended recipients from other observers.
+
+### Measured results
+No controlled measurement is reported. The paper states the following empirical figures, each without stated methodology, sample size, or measurement conditions, and each should be read as an anecdote or a cited external figure rather than a reproducible result:
+- More than 10,000 SSB identities had been created at the time of writing, citing the SSB overview paper (Tarr et al., ICN 2019) as the source, with most participants following "up to a few hundred logs" — no distribution, date, or measurement method given.
+- One author of the paper reports personally updating their own SSB client after being offline for months and finding 4,000 new messages — a single anecdote about one participant, not a study.
+- SSB's deployed friend-of-friend interest computation (the ssb-friends module) is configured to transitively follow to 2 hops (friends-of-friends) by default — this is a stated configuration value of the deployed software, not a measured outcome.
+- The paper cites, without independent verification, the commonly cited figure that an individual can meaningfully track on the order of 150 social relationships on average (Dunbar's number), attributing this to a cited source and noting it was separately empirically validated on Twitter by another cited paper — neither validation is performed in this paper.
+- The paper cites daily active SSB participant counts as "hundreds" per day, attributed to an external, continuously updated activity-tracking page (Lehner, "Daily Active Users"), not a figure this paper measured itself.
+
+### Parameters
+The paper's central claim about parameters is negative: relative to conventional gossip protocols, SSB's persistent-log design eliminates the need to tune (1) a temporary buffer size, because logs are persisted rather than held in a bounded buffer, (2) a retransmission policy, because events are exchanged over reliable channels once identified as missing from frontier metadata, and (3) a fan-out (number of neighbors contacted per round), because participants exchange the full set of missing events whenever they happen to connect, sometimes after days offline. The one configuration value stated for the deployed transitive-interest model is the follow-graph traversal depth, fixed at 2 hops in the current ssb-friends implementation, with the paper noting alternative traversal policies (e.g., only following ids not blocked by anyone) are possible but not deployed or evaluated.
+
+### Stated limitations
+The open gossip model's per-store memory usage is proportional to the total activity of all participants ever recorded, so the authors state it does not scale to large groups generating large data volumes. Under the open model, participants have no agency to opt out of replicating a log — even if a participant removes an unwanted log, other stores will copy it back on the next connection — and the authors state this same property makes the open model unable to resist spam, restricting it to small groups of mutually trusting participants. Under the transitive-interest model, participants have only unilateral control over propagation: a log a participant has blocked can still reach their store indirectly through other participants who have not blocked it, because block and follow are one-directional signals and the authors state that interest (wanting data to flow to oneself) is not the same relation as trust (allowing data to flow to another), so mutual interest does not imply mutual trust. The transitive-interest model also leaks the follower graph: the authors state that because interests are revealed during the update step (a participant requests exactly the logs it follows), another participant observing updates can learn who follows whom, and state this makes the model unsuitable for at-risk populations such as investigative journalists whose safety depends on hiding their interests. The authors state that convincing other participants to follow a newly created identity carries a real ongoing effort (creating regular compelling content), which they present as the basis of the model's sybil resistance, but do not present a boundary or attack analysis beyond noting that an attacker's sybil cluster with few links to the rest of the social graph is eventually detectable as a graph cut, without demonstrating that detection or bounding its cost.
+
+### Requirements it places on the rest of the system
+Every log requires a durable per-store persistence layer with no eviction, because the reconciliation protocol (Algorithm 1) assumes each store retains every event of every log it holds; the paper's frontier-difference computation is undefined for a store that has evicted events. Reliable, ordered delivery between two connected stores is required at the transport layer, since the design explicitly removes retransmission logic from the gossip layer itself and depends on the underlying channel to guarantee delivery of the events sent during an update. Every log requires a single append-only owner enforced by signature verification tied to that log's id (its public key), because the total-order and single-writer properties the reconciliation protocol depends on (no two events sharing a predecessor, all events in a log signed by the same key) are enforced entirely by that check; a system allowing multiple writers to one log identifier breaks the frontier/difference mechanism. The transitive-interest model requires each participant to maintain and gossip its own follow/block events inside its own log alongside content events, so any component built on top of SSB that wants to know a participant's current interest graph must read and interpret that participant's log rather than query a separate directory service. Confidential content requires the private-box encryption layer to run above the replication layer, since replication itself is content-agnostic and copies encrypted bytes identically to plaintext bytes; a recipient's decryption attempt against every incoming event is the only place where recipient targeting is enforced, so no filtering or access control happens during replication itself — an untrusted or compromised store that follows a log holds every event of that log in plaintext-ciphertext form regardless of who the content is encrypted for.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- Foundational: Dominic Tarr, Erick Lavoie, Aljoscha Meyer, Christian Tschudin, "Secure Scuttlebutt: An Identity-Centric Protocol for Subjective and Decentralized Applications," ACM ICN 2019 — the SSB protocol's own general overview and comparison to other information-centric approaches, and the source cited for the ">10,000 identities" figure.
+- Foundational: Dominic Tarr, "Designing a secret handshake: authenticated key exchange as a capability system," self-published, 2015 — describes the SSB secure handshake this paper's replication protocol runs over.
+- Foundational: Robbert van Renesse, Dan Dumitriu, Valient Gough, Chris Thomas, "Efficient Reconciliation and Flow Control for Anti-Entropy Protocols," LADIS 2008 — the Scuttlebutt gossip protocol this paper's log-replication mechanism is built on and named after.
+- Attack/competing: Haifeng Yu, Phillip B. Gibbons, Michael Kaminsky, Feng Xiao, "SybilLimit: A near-Optimal Social Network Defense against Sybil Attacks," IEEE/ACM Transactions on Networking, 2010 — cited as using similar social-interest signals for sybil detection/prevention, offered as the comparison point for the transitive-interest model's stated sybil resistance.
+- Competing: David Koll, Jun Li, Xiaoming Fu, "SOUP: An Online Social Network by the People, for the People," Middleware 2014 — cited as complementary work decreasing storage usage while preserving availability, a stated limitation this paper's open model does not address.
+- Competing: Giuliano Mega, Alberto Montresor, Gian Pietro Picco, "Efficient dissemination in decentralized social networks," IEEE P2P 2011 — cited as complementary work optimizing propagation speed based on participant interactions, a dimension this paper does not measure.
+- Competing/attack: cited work on Reliable Email using friend-of-friend whitelisting gathered from email contacts (paper's reference [16], author names not fully legible in this extraction) — comparison point for the transitive-interest model's follow/block mechanism, applied to unconditional email acceptance rather than replication.
+- Foundational: Martin Kleppmann, Adam Wiggins, Peter van Hardenberg, Mark McGranaghan, "Local-First Software: You Own Your Data, in Spite of the Cloud," Onward! 2019 — the local-first application model the open gossip model's offline-operation property is compared to.
+
+### Verbatim extracts
+- "SSB has less parameters to tune: (1) no temporary buffer size"
+- "One author successfully updated after months offline to find 4000 new messages."
+- "Convincing other participants to follow new identities has a significant cost"
+- "Mutual interest therefore does not imply mutual trust."
+- "interests are revealed during the update step"
+- "is set to transitively follow 2 hops (i.e., friends-of-friends)"
 
 ---
 
@@ -13204,6 +14117,63 @@ None found against another entry in this batch. The paper's own reported Search 
 
 ---
 
+## [LARSEN-CRYPTO-18] Yes, There is an Oblivious RAM Lower Bound!
+**Citation:** Kasper Green Larsen, Jesper Buus Nielsen. "Yes, There is an Oblivious RAM Lower Bound!" CRYPTO, 2018. DOI 10.1007/978-3-319-96881-0_18.
+**Retrieved:** full text via https://eprint.iacr.org/2018/955.pdf
+**Source URL:** https://eprint.iacr.org/2018/955.pdf
+**Domain:** G
+
+### What it does
+An Oblivious RAM (ORAM) lets a client store data on an untrusted server so that the sequence of server-side memory accesses the server observes reveals nothing about which read or write operations the client performed. The paper proves a lower bound on the bandwidth overhead any such construction must pay: the multiplicative factor of extra memory blocks accessed per operation compared to reading the data itself. The proof recasts the online ORAM problem as an oblivious data structure solving an array-maintenance problem (read/write to an n-entry array), then proves the bound in a new model the authors call the oblivious cell probe model, an extension of Yao's cell probe model that additionally accounts for client memory. The proof method is the information-transfer method of Patrascu and Demaine: a binary tree is built over a random sequence of M operations, each server memory access is attributed to a tree node, and the amount of information that must flow into each node's subtree bounds the number of accesses that subtree requires.
+
+### Measured results
+This is a theory paper; it contains no experiments. The results are proved bounds, not measurements, and each is stated with the class of construction it binds.
+
+| Result | Applies to | Statement |
+|---|---|---|
+| Main theorem (informal Theorem 1) | Any online ORAM, n blocks of r >= 1 bits each, random oracle model | Expected amortized bandwidth overhead is Omega(lg(nr/m)) on sequences of Theta(n) operations, where m is client memory in bits; holds under only computational indistinguishability, for any server cell size w, and for arbitrary data representations |
+| Simplified form | Natural parameter range r <= m <= n^(1-eps) for arbitrarily small constant eps > 0 | The bound simplifies to Omega(lg n) |
+| Comparison to prior bound | Goldreich-Ostrovsky 1996 | That bound required statistical security and restricted the ORAM to "balls in bins" algorithms (block-shuffling only, no re-encoding); this paper's bound removes both restrictions |
+| Matching upper bound | Path ORAM (Stefanov et al., CCS 2013) | Path ORAM achieves amortized Theta(lg n) memory-cell accesses per operation for blocks of size Omega(lg^2 n) bits, computed in the paper as Theta(lg^3 n) bits moved, a Theta(lg n) multiplicative overhead relative to the r = Theta(lg^2 n)-bit block; the paper states its own bound "asymptotically matches the known upper bounds when r = Omega(lg^2 n)" |
+
+### Parameters
+- n: number of memory blocks maintained by the ORAM.
+- r: bits per block (data argument size), r >= 1.
+- w: bits per server-side memory cell; the bound is stated to hold "regardless of the memory cell size w."
+- m: client-side memory, in bits.
+- M: number of operations in the sequence the bound is proved over, set to Theta(n).
+- Failure probability: the proof in Section 3 (Theorem 2) is carried out assuming the data structure has failure probability at most 1/32, stated as a proof-convenience choice, with the paper noting the bound extends to the more standard error probability of 1/3.
+
+### Stated limitations
+The lower bound applies only to "online" ORAMs, meaning constructions that must remain secure when operations arrive one at a time without knowledge of future operations; the paper argues most ORAM constructions and most ORAM applications are of this kind, following Boyle and Naor's online-ORAM definition. The bound explicitly does not apply to "passive" ORAM's complement: constructions in which the server performs untrusted computation on the client's behalf rather than acting as passive storage, citing Onion ORAM and a 2016 proposal by Abraham et al. as examples, and the paper states most such schemes achieve sub-logarithmic overhead. The authors could not extend the stronger cell-probe lower-bound techniques of Larsen (STOC 2012) and Larsen-Weinstein-Yu (STOC 2018), which prove bounds of order lg^2 n and lg^1.5 n respectively for other problems, to the ORAM setting, and label pushing past lg n on ORAM worst-case overhead an open problem for future work. The paper also notes its security definition is slightly stricter than Boyle and Naor's: it lets the adversary observe which server accesses belong to which operation, a choice the authors justify but flag as a definitional divergence from the paper the result answers.
+
+### Requirements it places on the rest of the system
+Any component in the target architecture that stores client data on an untrusted peer or server and wants access-pattern privacy through ORAM inherits a floor: retrieving one r-bit block from an n-block online ORAM under bounded client memory costs at least a constant times lg(nr/m) times as much server-side traffic as an access-pattern-revealing read would, and this floor holds even for computationally secure constructions and even for constructions that re-encode data rather than merely shuffle blocks. The floor holds only for passive-storage ORAM; a design that instead lets the storage node compute obliviously on the client's behalf (Onion-ORAM-style) is not bound by this result and can be sub-logarithmic, so a component wanting to beat lg n overhead must place computation, not merely storage, at the peer holding the data. The bound assumes the online-operation-arrival model; a design that can batch and reorder its full operation sequence in advance falls outside this bound's stated scope (the paper distinguishes this as the "offline" setting, which is where the original Goldreich-Ostrovsky statistically-secure bound already applied).
+
+### Contradicts
+None found against other entries in this corpus. Against attribution in general: the bound is frequently summarized as applying to "statistically secure ORAM" (matching the original Goldreich-Ostrovsky statement); this paper's own contribution is that the Omega(lg n) bandwidth floor holds even for computationally secure, arbitrarily-encoding constructions, which is a strictly stronger claim than the statistically-secure-only version.
+
+### References worth retrieving
+- foundational: Goldreich, Ostrovsky. "Software protection and simulation on oblivious RAMs." J. ACM 43(3), 1996.
+- foundational: Boyle, Naor. "Is there an oblivious RAM lower bound?" ITCS 2016.
+- foundational: Patrascu, Demaine. "Logarithmic lower bounds in the cell-probe model." SIAM J. Comput. 35(4), 2006.
+- competing: Stefanov, van Dijk, Shi, Fletcher, Ren, Yu, Devadas. "Path ORAM: an extremely simple oblivious RAM protocol." CCS 2013.
+- competing: Devadas, van Dijk, Fletcher, Ren, Shi, Wichs. "Onion ORAM: A constant bandwidth blowup oblivious RAM." TCC 2016.
+- competing: Abraham, Fletcher, Nayak, Pinkas, Ren. "Asymptotically tight bounds for composing ORAM with PIR." ePrint 2016/849.
+- competing: Chung, Liu, Pass. "Statistically-secure ORAM with o~(log^2 n) overhead." ASIACRYPT 2014.
+- foundational: Wang, Nayak, Liu, Chan, Shi, Stefanov, Huang. "Oblivious data structures." CCS 2014.
+- foundational: Larsen. "The cell probe complexity of dynamic range counting." STOC 2012.
+- foundational: Larsen, Weinstein, Yu. "Crossing the logarithmic barrier for dynamic boolean data structure lower bounds." STOC 2018.
+- competing: Stefanov, Shi. "Oblivistore: High performance oblivious distributed cloud data store." NDSS 2013.
+
+### Verbatim extracts
+"expected amortized bandwidth overhead of Ω(lg(nr/m))"
+"holds regardless of the memory cell size w"
+"most of these schemes achieves sub-logarithmic overhead"
+"eliminating both restrictions of the Goldreich-Ostrovsky lower bound"
+
+---
+
 ## [LAS-EPRINT-26] De-SyRIS: A Decentralized Sybil-Resistant Identity System without a Trusted Credential Issuer
 **Citation:** Michal Ľaš, Ivan Homoliak, Juraj Mariani. "De-SyRIS: A Decentralized Sybil-Resistant Identity System without a Trusted Credential Issuer." IACR ePrint Archive, 2026.
 **Retrieved:** full text via https://eprint.iacr.org/2026/1723
@@ -13543,6 +14513,72 @@ None found among the papers in this corpus.
 
 ---
 
+## [LESNIEWSKI-LAAS-SNS-08] A Sybil-proof One-hop DHT
+**Citation:** Chris Lesniewski-Laas. "A Sybil-proof one-hop DHT." ACM SNS Workshop (SocialNets'08), 2008. Pages 19-24. DOI 10.1145/1435497.1435501.
+**Retrieved:** full text via https://pdos.csail.mit.edu/~ctl/papers/one-hop-dht.pdf
+**Source URL:** https://pdos.csail.mit.edu/~ctl/papers/one-hop-dht.pdf
+**Domain:** F
+
+### What it does
+The protocol lets an honest node in a social network locate any other honest node's current network address in O(1) messages per lookup, while an adversary who controls many false identities (a Sybil attack) and links a bounded number of them into the honest social graph cannot prevent this. It solves what the paper calls the Byzantine Dissidents problem: an honest node wants to reach another honest node it has no direct social link to, without being misdirected by dishonest intermediaries. The mechanism has two layers.
+
+Layer one (Section 3.2, the simple protocol): each node performs r independent random walks of length w over its social-network edges and records the terminal node of each walk as a "finger." Because the social graph is assumed fast mixing (a random walk of length w = O(log n) approaches the graph's uniform edge distribution), and because the fraction of walks that cross an attacker-controlled edge is bounded, at least a constant fraction of a node's r fingers are honest, and each finger is a near-uniform sample of the honest region weighted by node degree. To look up a target t, node s broadcasts t's identifier to all its fingers; because fingers are near-uniform samples, at least one honest finger has t as one of its own fingers with high probability, and that finger forwards the request or returns t's address. This costs O(sqrt(m log m)) messages per lookup, where m is the number of honest social edges.
+
+Layer two (Section 3.4, the one-hop DHT): each node hashes its public key to a random identifier on a Chord-style ring. Each node builds a successor table of the O(sqrt(m log m)) nodes immediately following its ring position by querying its fingers (not its ring successors, unlike Chord) for their own nearby successors, because a constant fraction of fingers are honest while ring successors carry no such guarantee. A lookup for target t sends the request to the queryer's finger whose ring position most closely precedes t's; if that finger is honest it holds t in its successor table and forwards or answers directly. Because only a bounded fraction of fingers are dishonest, the expected number of fingers tried before reaching an honest one is constant, giving O(1) expected messages per lookup, with O(log n) as the high-probability worst case, and the requester can send in parallel to all its finger predecessors of t to bound worst-case latency instead of expected latency.
+
+Layer three (Section 3.5, finger table balancing): because a fixed hash of a node's public key lets an adversary grind private keys until it lands identifiers next to a chosen victim, each node is given k = Theta(log n) virtual IDs from independent hash functions, and virtual IDs that cluster too closely with another finger's virtual IDs are discarded (a cuckoo-hashing-style pruning rule), so that with high probability every honest finger retains at least one virtual ID and the finger set stays evenly spread around the ring even under a clustering attack.
+
+### Measured results
+| Result | Conditions |
+|---|---|
+| 15.8% lookup failure rate | Orkut social-network graph (Orkut Online Community dataset), preprocessed by removing nodes of degree less than 5 and disconnected clusters, leaving 7,335 nodes and 56,211 edges with power-law degree distribution. Simulation parameters w=10, r=1000 (typical resulting finger-table size approx. 650 entries due to walk collisions). At g=12,000 attacker-controlled edges (attack edges) against m=43,930 honest edges (this m value differs from the base graph's edge count because the attack-edge instance redraws honest/Sybil marking); adversary behaved optimally for the simple broadcast protocol: it absorbs escaping random walks and ignores all requests. |
+| Approximately 750 attack edges | The theoretical guarantee threshold g = o(n/log n) computed for the 7,335-node preprocessed Orkut graph; below this the paper claims a strict routing-success guarantee, above it only the graceful-degradation curve in Figure 4 applies. |
+| Instance at g=32,000 attack edges | n=4,487 honest nodes, m=29,445 honest edges, 2,848 Sybil nodes, generated by marking random nodes "evil" until g edges cross the honest/Sybil boundary; failure rate read from Figure 4's curve (not stated as a single number in text for this specific g, plotted). |
+
+The paper states the results are from "a simulation proof-of-concept," a single implementation of the Section 3.2 simple protocol (not the O(1)-message one-hop DHT of Section 3.4, and not the finger-balancing defense of Section 3.5, neither of which was simulated), and calls them "preliminary."
+
+### Parameters
+| Parameter | Meaning | Value used | Relationship |
+|---|---|---|---|
+| n | honest nodes | 7,335 (base graph), 4,487 (g=32000 instance) | implicit, not directly known to nodes |
+| m | honest social edges | 56,211 (base graph), 29,445 (g=32000 instance), 43,930 (g=12000 instance) | Omega(n), O(n^2), implicit |
+| w | mixing time (random-walk length) | 10 (simulation) | O(log n); rough upper bound must be known to nodes; for approx. 10^6 nodes, w approx. 20 is given as the ballpark; nodes uncertain of n can run parallel protocol instances for every w up to e.g. 30 with no added bandwidth, since a length-w walk's prefixes are themselves walks of length 1..w-1 |
+| r | finger table size | 1,000 nominal, approx. 650 realized after walk collisions | Theta(sqrt(m log m)); only a lower bound is needed for correctness, so nodes increase r (e.g. by doubling) until a sampled majority of lookups succeed |
+| g | attack edges | 12,000 and 32,000 tested; approx. 750 is the guaranteed-safe threshold for the base graph | assumed o(n/log n) for the strict guarantee; unknown to honest nodes |
+| k | virtual IDs per node (Section 3.5 balancing) | not simulated | Theta(log n) |
+
+### Stated limitations
+The protocol "only applies straightforwardly to a one-hop structured DHT"; the paper states multi-hop routing is not solved because each hop carries a non-negligible chance of adversary control, and after O(log n) hops almost all routes become tainted, leaving open whether a logarithmic-table-size structured DHT can achieve comparable Sybil resistance. The strict routing guarantee holds only up to g = o(n/log n) attack edges; above that threshold the paper offers no proof, only the simulated graceful-degradation curve. The guarantee additionally excludes a small fraction epsilon of honest nodes situated near a concentration of attack edges, a caveat the paper attributes to the underlying SybilLimit analysis and does not resolve itself. The protocol as described provides no anonymity; the paper states such features would need onion routing added separately. The finger-balancing defense against ID-clustering attacks (Section 3.5) is presented with an argument for correctness but was not simulated or otherwise measured. The successor-table one-hop routing protocol of Section 3.4 (the O(1)-message version) was likewise not simulated; only the simpler O(sqrt(m log m))-message broadcast protocol of Section 3.2 was tested. Node estimation of the parameters n, m, w, g and r is stated as impossible in principle from "a God's-eye view" since real nodes cannot distinguish Sybil from honest peers; the protocol substitutes rough bounds and adaptive doubling of r instead of exact knowledge.
+
+### Requirements it places on the rest of the system
+Requires a social graph, given to each node as its list of immediate neighbors, where all honest nodes hold locally generated unforgeable public/private keypairs and each node knows its immediate social friends' public keys through an out-of-band channel (for example physical rendezvous). Requires the social graph to be fast mixing (random-walk mixing time w = O(log n)); the paper asserts real social networks are likely to have this property but does not itself measure it for Orkut or any other network. Requires each honest node to be able to recognize a claimed target node as genuine once reached, through a self-certifying identifier or another out-of-band mechanism; the protocol supplies routing only, not endpoint authentication. Requires the number of attacker-to-honest social edges (attack edges) to stay below o(n/log n) for the strict correctness guarantee to hold; the mechanism supplies no way to measure or enforce this bound at runtime; nodes are stated to not know g. Requires a hash-function family H_i for virtual-ID generation (Section 3.5) for which it is computationally infeasible for an adversary to find a public key whose derived virtual IDs collide with another node's virtual IDs under every H_i. Assumes a Byzantine adversary that can create arbitrary edges among Sybil nodes and can observe messages between honest nodes but cannot modify or fully block them; an adversary able to modify or drop honest-to-honest traffic is out of scope. The paper does not itself provide anonymity or content authenticity, and any component in the target architecture using this routing layer must add those properties separately if required (the paper names onion routing as the mechanism it would compose with).
+
+### Contradicts
+None found against other entries in this corpus.
+
+### References worth retrieving
+- foundational: Douceur, "The Sybil Attack," IPTPS 2002.
+- foundational: Yu, Kaminsky, Gibbons, Flaxman, "SybilGuard: Defending against sybil attacks via social networks," SIGCOMM 2006.
+- competing: Yu, Gibbons, Kaminsky, Xiao, "A near-optimal social network defense against sybil attacks" (SybilLimit), IEEE S&P 2008.
+- foundational: Danezis, Lesniewski-Laas, Kaashoek, Anderson, "Sybil-resistant DHT routing," ESORICS 2005.
+- competing: Marti, Ganesan, Garcia-Molina, "DHT routing using social links," IPTPS 2004.
+- competing: Popescu, Crispo, Tanenbaum, "Safe and private data sharing with turtle: Friends team-up and beat the system," Security Protocols Workshop 2004.
+- attack: Singh, Ngan, Druschel, Wallach, "Eclipse attacks on overlay networks: Threats and defenses," INFOCOM 2006.
+- attack: Sit, Morris, "Security considerations for peer-to-peer distributed hash tables," IPTPS 2002.
+- attack: Rowaihy, Enck, McDaniel, Porta, "Limiting sybil attacks in structured p2p networks," INFOCOM 2007.
+- foundational: Stoica, Morris, Liben-Nowell, Karger, Kaashoek, Dabek, Balakrishnan, "Chord: A scalable peer-to-peer lookup protocol for Internet applications," ToN 11(1), 2003.
+- foundational: Gupta, Liskov, Rodrigues, "Efficient routing for peer-to-peer overlays," NSDI 2004.
+- competing: Castro, Druschel, Ganesh, Rowstron, Wallach, "Secure routing for structured peer-to-peer overlay networks," OSDI 2002.
+
+### Verbatim extracts
+"o(n/log n) attack edges"
+"routing tables contain O(sqrt(m) log m) entries per node"
+"lookups take only O(1) messages"
+"multiple-hop routes pose a challenge"
+"with g=12000 and m=43930, the failure rate is 15.8%"
+
+---
+
 ## [LEVIEN-USS-98] Attack-Resistant Trust Metrics for Public Key Certification
 **Citation:** Raph Levien, Alexander Aiken. "Attack-Resistant Trust Metrics for Public Key Certification." 7th USENIX Security Symposium, 1998.
 **Retrieved:** full text via https://www.usenix.org/legacy/publications/library/proceedings/sec98/full_papers/levien/levien.pdf
@@ -13607,6 +14643,80 @@ None found within this corpus. On attribution: the paper's own comparison table 
 - "about 35% of the keys in the strongly connected subgraph have one predecessor."
 - "resisting attacks is possible, but increases the cost of certification."
 - "only practical experience with a prototype system can determine whether this tradeoff is worthwhile."
+
+---
+
+## [LEVIN-SIGCOMM-08] BitTorrent is an Auction: Analyzing and Improving BitTorrent's Incentives
+**Citation:** Dave Levin, Katrina LaCurts, Neil Spring, Bobby Bhattacharjee. "BitTorrent is an Auction: Analyzing and Improving BitTorrent's Incentives." ACM SIGCOMM, 2008. Pages 245-256. DOI 10.1145/1402958.1402987.
+**Retrieved:** full text via https://www.cs.umd.edu/projects/coneru/publications/sigcomm2008.pdf
+**Source URL:** https://www.cs.umd.edu/projects/coneru/publications/sigcomm2008.pdf
+**Domain:** I
+
+### What it does
+The paper models BitTorrent's bandwidth-allocation rule (the unchoking algorithm) as a repeated first-price auction rather than tit-for-tat, then uses that model to find two new exploitable weaknesses and to design a replacement rule, proportional share (PropShare), that removes them.
+
+The auction model (Algorithm 1): each peer i divides time into per-peer, unsynchronized rounds (10 seconds in the Azureus client studied). Each round, i accepts bandwidth bids from interested neighbors (the bid is the bandwidth that neighbor sent i in the previous round) and sends 1/s of its total upload bandwidth to each of the top (s-1) bidders plus one additional interested peer chosen at random, where s is the peer's number of unchoke slots. Because the reward for winning is identical (1/s of bandwidth) regardless of how much a peer overbids the marginal winning bid, the paper identifies two attacks. First, a Sybil attack (Algorithm 2, distinct from the already-known BitTyrant strategy of minimally outbidding the current lowest winning bid): a peer with upload capacity U_p computes the maximum number k of the auction's cheapest winning slots (across possibly many victim peers) it can afford at cost (c_(s-k) + epsilon) each, then creates k Sybil identities, each bidding to win one such slot; the paper shows the worst case of this attack (only ever affording the single last-place slot at any peer) reduces to BitTyrant. Second, collusion: a coalition of peers agrees to bid only nominal amounts epsilon at one or more victim peers, extracting a full unchoke slot each for near-zero contribution; the paper shows a victim with s unchoke slots needs s non-colluding bidders to make the coalition unprofitable and force its dissolution.
+
+The paper also derives a strategic piece-revelation rule (Algorithm 3): because BitTorrent's have-message protocol lets a peer under-report which pieces it holds (over-reporting is detectable and punishable, so only under-reporting is viable), a peer i who has lost the interest of a neighbor j searches its own held-but-unrevealed pieces for the one that maximizes the number of other neighbors already known to hold or have been shown that same piece, and reveals only that piece to j, deliberately withholding the neighbor's rarest pieces so as not to make j interesting to its own other neighbors.
+
+The replacement mechanism, PropShare (Algorithm 4): each round, peer i accepts bandwidth bids b_j(t-1) from each neighbor j and returns to j a share of i's total upload bandwidth B_i proportional to j's bid relative to the sum of all bids i received in the previous round: b_i-to-j(t) = B_i * b_j(t-1) / sum_k(b_k(t-1)). The paper proves algebraically (Section 6.3) that for a fixed total contribution C split across any number of Sybil identities, the sum of bandwidth returned to those identities equals B_v * C / (C + y_v), independent of how many identities C was split across, making the rule Sybil-proof by construction; splitting further only adds per-identity protocol overhead. The paper proves (Section 6.4) that PropShare is also more collusion-resistant than BitTorrent's rule: for a colluding coalition to keep from dissolving under PropShare, every coalition member must maintain contribution proportional to its target share even as the nominal contribution shrinks toward zero, and any single honest (non-colluding) bidder at the same victim captures a share approaching the victim's entire bandwidth as the coalition's contribution shrinks, whereas BitTorrent's discretized reward requires only outbidding the number of unchoke slots' worth of honest bidders, not all of them.
+
+The implementation (Section 7) adds three features beyond Algorithm 4: peers allocate a fixed fraction of upload bandwidth (80% in the built client) to returning proportional shares and reserve the rest to probe new neighbors for better return on investment; each peer computes proportional shares from a weighted average of a neighbor's four most recent per-round contributions rather than only the immediately preceding round, to avoid a research-then-ignore oscillation; and a ratio cap of factor f limits how much more bandwidth a peer sends any one neighbor relative to what that neighbor has sent back, applied only under high disparity, to blunt the residual collusion exposure identified in Section 6.4.
+
+### Measured results
+| Result | Experimental conditions |
+|---|---|
+| Colluding block-hoarders fail to gain a private copy of a rare block; non-hoarding clients using rarest-first obtain the block faster than hoarders as hoarder count rises | Local cluster of 25 machines; modified Azureus client made to withhold have-messages for a chosen block; number of hoarding peers varied from 0 to 25; single run set plotted in Figure 2 |
+| Hoarders' relative download time follows a parabola: faster than non-hoarders when hoarders are a small or very large fraction of peers, slower when hoarders are roughly half of peers | Same 25-machine cluster and hoarding-count sweep as above; Figure 3 plots hoarders' download time relative to their own download time with zero hoarders |
+| Strategic (under-reporting) piece revealer maintains neighbor interest and completes faster than a standard client under identical conditions | PlanetLab; one late-joining peer (starts 20 s after all others) runs either the standard client or the strategic-revelation algorithm against otherwise-standard peers; two runs compared in Figure 4 |
+| All-peers-strategic piece revelation increases system-wide average download time by 12% | PlanetLab, all peers in the swarm running Algorithm 3 simultaneously; single reported average, no run count stated |
+| Best-response to PropShare differs from PropShare allocations by roughly 30% on average per peer (decreasing as the deviating peer's bandwidth increases), yet best-response improves that peer's download speed by under 1% in every scenario tested | Simulation; deviating peer p's bandwidth varied from 0.1x to 40x the average system-wide bandwidth; results averaged over 30 runs per configuration; each simulated game ran 30 rounds, observed to converge within a few rounds |
+| PropShare finishes faster than BitTorrent in all but one of 21 live-swarm downloads tested, and performs comparably to (though generally slightly worse than) BitTyrant | Live public swarms with a large leecher-to-seeder ratio, one PropShare, one BitTyrant, one BitTorrent client run simultaneously from separate machines on the University of Maryland network, each capped at 100 KB/s upload, 21 torrents |
+| BitTyrant average download time falls as its own population share falls (best when a minority); with a majority of BitTyrant peers, overall performance is better than all-BitTorrent but with no strategy-proofness guarantee | 110 PlanetLab nodes, Piatek et al.'s BitTyrant setup: 3 seeders per file at combined 128 KBps, local tracker, 5 MB files, each peer's bandwidth cap drawn from Piatek et al.'s measured bandwidth distribution; each plotted point averaged over at least 3 runs, error bars at 95% confidence intervals |
+| PropShare maintains low download times as its own population share rises against BitTorrent, at the cost of increasing download times for the remaining BitTorrent peers | Same 110-node PlanetLab setup, PropShare-vs-BitTorrent mix swept 0 to 1 |
+| PropShare clients outperform BitTyrant clients at every tested mixture ratio; an all-PropShare swarm is on average slower than an all-BitTyrant swarm | Same 110-node PlanetLab setup, PropShare-vs-BitTyrant mix swept 0 to 1 |
+| A lone BitTyrant peer among N-1 PropShare peers averages 109 s (std. dev. 15.6 s); a lone PropShare peer among N-1 BitTyrant peers averages 70.5 s (std. dev. 4.61 s); all-BitTyrant baseline 86.9 s (std. dev. 6.40 s), all-PropShare baseline 107 s (std. dev. 14.3 s) | Same 110-node PlanetLab all-versus-one setup, Table 1, at least 3 runs per cell |
+
+### Parameters
+- s: number of unchoke slots per peer; described as generally a small constant (4) or a function of upload bandwidth, not fixed by the paper.
+- Round length: 10 seconds, cited as the value used by the Azureus client under study.
+- PropShare bandwidth split (implementation): 80% of upload bandwidth returned proportionally to existing neighbors, 20% reserved for probing new neighbors, stated as "in our implementation" with no swept range given.
+- PropShare smoothing window: weighted average over a neighbor's 4 most recent per-round contributions, stated as the value used, no tested range given.
+- Ratio cap factor f (collusion defense): described only qualitatively as capping the multiplicative disparity between what a peer sends a neighbor and what that neighbor has sent back; no numeric value is stated in the retrieved text.
+- Competitive-experiment setup (Section 8.3, adopted from Piatek et al.): 3 seeders per file, 128 KBps combined seed upload bandwidth, 5 MB files, live-swarm client upload cap 100 KBps (Section 8.2 only).
+- Simulation sweep (Section 6.2): deviating peer's bandwidth from 0.1x to 40x the system-wide average bandwidth, 30 runs per point, 30 rounds per game.
+
+### Stated limitations
+The paper's utility definition for a leecher (download speed) deliberately excludes the cost of uploading, which the authors state is intentional because they judge minimizing upload not to be a leecher's actual goal; this is a modeling choice the authors flag as such rather than a result. The auction model is stated by the authors not to be intended as "the most accurate representation of BitTorrent," only as a tool that reproduces known attacks and motivates new ones. Demonstrating PropShare's resilience to strategic gaming experimentally is stated by the authors to be difficult or impossible in general, since a single unsuccessful gaming attempt does not prove invulnerability; the paper is explicit that its experiments are not proof of strategy-proofness beyond the specific opponents tested. The all-peers-strategic piece-revelation experiment is reported as a single 12% average with no stated run count. The piece-rarity mechanism (Algorithm 3) and the unchoking/allocation mechanism (PropShare) are treated as orthogonal in this paper; the authors list unifying them as future work. The bootstrapping mechanism proposed in Section 9 to replace optimistic unchoking is designed for new peers joining the system and the paper states it is unclear whether an existing peer has incentive to use it to obtain rare blocks from otherwise-uninteresting peers. The paper's incentive analysis is confined to interactions within a single swarm; incentives across swarms, including the problem of motivating peers who have finished downloading to continue seeding ("seeder promotion"), are stated as not addressed. The specific numeric ratio-cap factor f used to defend PropShare against residual collusion is not given a stated value in the retrieved text, only its qualitative behavior.
+
+### Requirements it places on the rest of the system
+PropShare requires each peer to observe, per round, how much bandwidth each neighbor sent it in the prior round(s); it needs no information about neighbors' total capacity or their bids to other peers, unlike the best-response strategy from Feldman et al., which the paper states would require knowing each neighbor's total upload capacity and the sum of bids that neighbor received from everyone else, information the paper judges unrealistic to obtain in an open file-swarming system. PropShare requires a bootstrapping contribution: a peer must give some initial nonzero amount to a neighbor before receiving anything back, the same requirement BitTorrent's optimistic unchoking already satisfies; the paper's own proposed alternative bootstrapping scheme (Section 9) is presented as a replacement for optimistic unchoking but is analyzed only as a bootstrapping mechanism for new peers, not evaluated experimentally in this paper's Section 8 results. The system as a whole must continue to supply a piece-availability signal (the have-message / bitfield protocol) for the piece-selection layer (rarest-first, and the paper's own strategic-revelation Algorithm 3) to operate on; the paper's under-reporting strategy assumes truthful non-over-reporting is enforced by neighbor-side detection and punishment, which requires that neighbors verify delivered blocks against what was reported. The paper explicitly separates piece selection (Section 5) from bandwidth allocation (Section 6) and analyzes each holding the other fixed at BitTorrent's or PropShare's respective default, so a design that changes both simultaneously has an interaction the paper states is unstudied.
+
+### Contradicts
+Against the belief, attributed by the paper to prior common description of BitTorrent, that its unchoking rule implements tit-for-tat: the paper shows the rule differs from tit-for-tat in whom a peer rewards, since it always sends to the top (s-1) most recent bidders regardless of long-run reciprocation history, and states this divergence explains why BitTyrant's minimal-outbid strategy is profitable against it. Against a "strict fairness" property (giving proportional to receiving) sometimes attributed to BitTorrent's incentive design: the paper shows the top (s-1) uploaders to a peer all receive the identical 1/s allocation regardless of how much more the highest of them contributed, and a peer that already wins all the auctions it enters has no incentive to contribute further. No disagreement found with another entry in this corpus.
+
+### References worth retrieving
+- foundational: Cohen, "Incentives build robustness in BitTorrent," P2PEcon 2003.
+- competing: Piatek, Isdal, Anderson, Krishnamurthy, Venkataramani, "Do incentives build robustness in BitTorrent?" (BitTyrant), NSDI 2007.
+- competing: Locher, Moor, Schmid, Wattenhofer, "Free riding in BitTorrent is cheap" (BitThief), HotNets 2006.
+- competing: Levin, Sherwood, Bhattacharjee, "Fair file swarming with FOX," IPTPS 2006.
+- foundational: Wu, Zhang, "Proportional response dynamics leads to market equilibrium," STOC 2007.
+- competing: Feldman, Lai, Zhang, "A price-anticipating resource allocation mechanism for distributed shared clusters," ACM EC 2005.
+- foundational: Douceur, "The Sybil Attack," IPTPS 2002.
+- attack: Sirivianos, Park, Chen, Yang, "Free-riding in BitTorrent networks with the large view exploit," IPTPS 2007.
+- competing: Legout, Urvoy-Keller, Michiardi, "Rarest first and choke algorithms are enough," IMC 2006.
+- foundational: Qiu, Srikant, "Modeling and performance analysis of BitTorrent-like peer-to-peer networks," SIGCOMM 2004.
+- competing: Ngan, Wallach, Druschel, "Enforcing fair sharing of peer-to-peer resources," IPTPS 2003.
+- competing: Garbacki, Epema, van Steen, "An amortized tit-for-tat protocol for exchanging bandwidth instead of content in P2P networks," SASO 2007.
+- foundational: Vishnumurthy, Chandrakumar, Sirer, "KARMA: A secure economic framework for P2P resource sharing," P2PEcon 2003.
+- attack: Liogkas, Nelson, Kohler, Zhang, "Exploiting BitTorrent for fun (but not profit)," IPTPS 2006.
+
+### Verbatim extracts
+"BitTorrent uses, not tit-for-tat as widely believed, but an auction"
+"peers have incentive to intelligently under-report what pieces of the file they have"
+"prop-share client is strategy-proof"
+"a majority of BitTyrant peers yields faster system-wide download times"
+"we saw on average a 12% increase in system-wide download times"
 
 ---
 
@@ -13772,6 +14882,77 @@ The registry's why-needed note for this key states the paper "introduces Accordi
 - "slice and unit leaders use about 8 to 10 times more network bandwidth than the average" (section V.A)
 - "our simulator does not allow us to model bandwidth congestion" (Related Work, contrasting with Rhea et al.)
 - "leaving the effect on join for future work" (section V.C)
+
+---
+
+## [LI-IPTPS-03] On the Feasibility of Peer-to-Peer Web Indexing and Search
+**Citation:** Jinyang Li, Boon Thau Loo, Joseph M. Hellerstein, M. Frans Kaashoek, David R. Karger, Robert Morris. "On the Feasibility of Peer-to-Peer Web Indexing and Search." IPTPS, 2003. DOI 10.1007/978-3-540-45172-3_19.
+**Retrieved:** full text via https://netdb.cis.upenn.edu/papers/search_feasibility.pdf
+**Source URL:** https://netdb.cis.upenn.edu/papers/search_feasibility.pdf
+**Domain:** B
+
+### What it does
+The paper derives whether full-text keyword search of the Web can run on a peer-to-peer (P2P) network at all, given fixed per-peer storage and a fixed per-query communication budget, then evaluates a sequence of optimizations against that budget. It analyzes two search architectures rather than proposing a new one. Partition-by-document assigns each peer a subset of documents and its own local inverted index over them; a query is broadcast to every peer holding a shard, and each peer returns its top-ranked local matches, the strategy used by Gnutella and KaZaA. Partition-by-keyword assigns each peer responsibility, through a distributed hash table (DHT), for the posting list of one or more words; a multi-word query routes the smaller posting list to the peer holding the larger one, which performs the set intersection and ranking and returns the top document identifiers (docIDs). The paper then walks through compression and query-processing optimizations applied to partition-by-keyword: caching previously seen posting-list transfers, precomputing intersections for popular term pairs, Bloom-filter-based approximate set representations, gap compression of sorted docIDs after remapping 160-bit hashes to dense sequential IDs, adaptive set intersection that exploits sorted-list structure to skip elements, semantic clustering of documents (via Probabilistic Latent Semantic Analysis) to make docIDs assigned to related documents numerically adjacent so gap compression and adaptive intersection perform better, and finally two compromises outside the optimization set: streaming users partial, ranked, incrementally computed results instead of full intersections (using Fagin's algorithm over a ranking function), and replicating the full inverted index once per Internet service provider (ISP) to trade P2P structure purity for access to aggregate rather than bisection bandwidth.
+
+### Measured results
+| Result | Experimental conditions |
+|---|---|
+| Naive partition-by-document flooding costs about 6 megabytes per query, 6x over budget | 60,000 peers needed to hold a 6*10^13-byte Web inverted index at 1 GB storage per peer; flooding modeled as one 100-byte packet to each of the 60,000 peers |
+| Naive partition-by-keyword averages 530 megabytes per query for a two-term query, a required 530x improvement; a specific two-term query ("the who") costs 4 GB, exceeding budget by 4000x | Baseline measured from 81,000 real queries against a search engine indexing 1.7 million mit.edu Web pages, average 300,000 bytes of postings moved per query at that corpus size, then linearly scaled by document-count ratio to an assumed 3-billion-document Web; the 40%/35%/25% one/two/three-plus-term query-length split is from the same 81,000-query trace; the "the who" figure uses Google-reported document counts of 3*10^9 pages containing "the" and 2*10^8 containing "who" |
+| Caching reduces average per-query communication cost by 38% (Table 1 states this as a 1.5x improvement factor) | Same 81,000-query mit.edu trace; peers cache posting lists received per query to avoid re-fetching for repeated future queries; the paper attributes the modest gain to many trace queries appearing only once |
+| Precomputation reduces average per-query communication cost by 50% (Table 1 states this as a 2x improvement factor) | Same mit.edu corpus and trace; precomputing intersections for 7.5 million term pairs (3% of all possible pairs), selected from the most popular terms under an assumed Zipf popularity distribution |
+| Simple two-round Bloom-filter intersection gives a 13x compression ratio (best case); four-round Bloom exchange raises this to 40x; compressed Bloom filters add a further 30% to reach approximately 50x | 13x figure stated as a best-case assuming an empty intersection and near-equal-size posting lists; 40x and approx. 50x figures given without restating the equal-size/empty-intersection assumption explicitly, drawn from the same mit.edu evaluation context as the rest of Section 5 |
+| Gap compression achieves a 30x compression ratio | mit.edu data set, after periodically remapping 160-bit content-hash docIDs to dense sequential integers from 1 to the document count |
+| Adaptive set intersection on top of gap compression improves the ratio to 40x (a further 30% over gap compression alone, stated as an upper bound) | mit.edu data set |
+| Semantic clustering (PLSA into 100 clusters, contiguous docIDs within a cluster) combined with gap compression and adaptive set intersection reaches a 75x compression ratio | mit.edu data set; clusters formed by grouping documents by term-occurrence similarity under Probabilistic Latent Semantic Analysis |
+| Combined best-case optimizations reduce average communication cost by 75x, still an order of magnitude (about 7x) above the 1-megabyte-per-query budget | Same mit.edu-derived analysis; the paper states achieving this in practice needs distributed renumbering and clustering algorithms it calls "rather complex" and does not implement at scale |
+| Incremental ranked intersection reduces communication cost by 50x for retrieving the top 10 results, on average | mit.edu data set, computing 10 matching results via Fagin's algorithm over sorted, ranked posting lists |
+| Incremental ranked intersection reduces the "the who" query's cost from 4 GB to about 4 kilobytes, within the 1-megabyte budget | Derived arithmetically from the Google-reported counts above (3*10^9 "the" documents, 2*10^8 "who" documents, roughly 10^7 documents in the true intersection), computing roughly (2*10^8/10^7)*10 = 200 docIDs needed at 20 bytes each to retrieve the top 10 ranked results |
+| Replicating the full inverted index at 10 ISPs increases the effective per-query communication budget by 10x | Stated as "a rough analysis" exploiting aggregate rather than bisection Internet bandwidth; no experiment run, no specific ISPs named |
+
+### Parameters
+- Assumed Web corpus size: 3 billion documents, chosen conservatively above Google's then-stated 2 billion indexed documents.
+- Assumed document length: 1,000 words per document, used to derive the total inverted-index size.
+- DocID size: 20-byte hash of document content, giving a total inverted-index size of about 6*10^13 bytes.
+- Assumed query load: 1,000 queries per second, cited as Google's load at the time.
+- Per-peer storage budget: 1 gigabyte, described as a small fraction of typical PC disk capacity; at this budget the full Web index requires 60,000 peers with no compression.
+- Per-query communication budget: 1 megabyte, the paper's chosen operating budget, derived from a 100-gigabit 1999 U.S. Internet backbone bisection bandwidth figure, an assumed 10% of that bandwidth allocated to Web search (an "optimistic" figure the paper contrasts against DNS's few-percent share), and 1,000 queries/second; the paper also computes and rejects as too pessimistic an alternative 10-kilobyte budget derived from average Web page size.
+- Evaluation trace: 81,000 real queries against a search engine over 1.7 million mit.edu Web pages, used as the empirical basis for every optimization ratio in Table 1.
+- Bloom filter rounds: 2 rounds gives 13x compression (best case); 4 rounds gives 40x; the paper states more than 4 rounds yields little further improvement.
+- Semantic clustering: 100 clusters via PLSA.
+- Precomputation coverage: 7.5 million term pairs, stated as 3% of all possible term pairs in the mit.edu corpus.
+- ISP-replication compromise: 10 ISPs, unmeasured, "a rough analysis."
+
+### Stated limitations
+The paper states its own conclusion directly: naive implementations of both partition-by-document and partition-by-keyword P2P Web search are not feasible under its assumed budget. Even the most effective combination of optimizations (clustering plus gap compression plus adaptive set intersection, 75x) leaves the average query an order of magnitude (about 7x) above the paper's 1-megabyte budget; the paper states this final gap is closed only by "compromises," not by further optimization within the partition-by-keyword architecture as evaluated. The 75x combined-optimization figure requires distributed renumbering and clustering algorithms the paper itself calls "rather complex" and does not claim to have built or evaluated at Web scale; all quantitative results are extrapolations or direct measurements from the much smaller 1.7-million-document mit.edu corpus and the 81,000-query trace, not from a 3-billion-document deployment. Incremental ranked (Fagin's-algorithm) intersection is stated to work only with ranking functions that are compatible with incremental sorted-list merging, such as PageRank, term-frequency, or font-size based scores; the paper states a ranking function based on proximity of query terms cannot be used with this technique, which the paper flags as reducing achievable result quality relative to commercial search engines. The paper does not evaluate query privacy, adversarial peers, or churn; feasibility is analyzed purely on the axes of storage and communication bandwidth against an honest, static peer population.
+
+### Requirements it places on the rest of the system
+Partition-by-keyword requires a DHT that maps a word to the peer responsible for its posting list; the paper does not specify or evaluate which DHT, treating routing as already solved by cited prior systems (Chord, CAN, Pastry, Tapestry). The gap-compression and clustering optimizations require a periodic distributed renumbering step that remaps content-hash docIDs (160-bit) to dense sequential integers, which requires coordination across the peers holding the index to keep the numbering consistent; the paper does not specify a protocol for this renumbering, only its effect on compression ratio. Bloom-filter intersection requires an extra network round trip beyond a plain posting-list exchange (to send the filter, then the filtered candidates, then a false-positive-filtering pass), a cost the paper's compression-ratio figures do not appear to net against; gap compression is noted by the paper as not incurring this extra round trip. Semantic clustering requires a global or corpus-wide document-similarity computation (PLSA) to assign contiguous docIDs to similar documents, which requires visibility into term-occurrence statistics across the whole indexed corpus, not just a local shard. Incremental ranked intersection requires posting lists to already be sorted by a ranking function compatible with incremental merging (PageRank, term frequency, or font size are given as compatible; term-proximity ranking is stated as incompatible), which constrains what the indexing and ranking components upstream can compute the ranking from. The ISP-replication compromise requires whatever deployment model assigns and coordinates one full index replica per participating ISP, which the paper does not specify beyond naming it as an option.
+
+### Contradicts
+None found against other entries in this corpus. The paper's own headline conclusion is frequently compressed in secondary summaries to "P2P Web search is infeasible" without the qualifier that combined optimizations bring the cost within a stated single order of magnitude (about 7x) of the paper's own 1-megabyte budget, and that the paper proposes two further compromises (result-quality reduction via incremental ranking, and P2P-structure compromise via 10x ISP-level replication) that it states would close that remaining gap.
+
+### References worth retrieving
+- competing: Reynolds, Vahdat, "Efficient Peer-to-Peer Keyword Searching," unpublished manuscript, 2002 (source of the two-round Bloom intersection technique and the "most ambitious known evaluation," about 100,000 documents, that this paper cites and extends).
+- foundational: Stoica, Morris, Karger, Kaashoek, Balakrishnan, "Chord: Scalable Peer-To-Peer Lookup Service for Internet Applications," SIGCOMM 2001.
+- foundational: Ratnasamy, Francis, Handley, Karp, Shenker, "A Scalable Content Addressable Network" (CAN), SIGCOMM 2001.
+- foundational: Rowstron, Druschel, "Pastry: Scalable, Decentralized Object Location, and Routing for Large-Scale Peer-to-Peer Systems," 2001.
+- foundational: Zhao, Kubiatowicz, Joseph, "Tapestry: An Infrastructure for Fault-tolerant Wide-area Location and Routing," UC Berkeley TR, 2001.
+- competing: Tang, Xu, Mahalingam, "pSearch: Information Retrieval in Structured Overlays," HotNets-I 2002.
+- competing: Harren, Hellerstein, Huebsch, Loo, Shenker, Stoica, "Complex Queries in DHT-based Peer-to-Peer Networks," IPTPS 2002.
+- competing: Gnawali, "A Keyword Set Search System for Peer-to-Peer Networks," MIT Master's thesis, 2002.
+- foundational: Demaine, Lopez-Ortiz, Munro, "Adaptive Set Intersections, Unions, and Differences," SODA 2000.
+- foundational: Fagin, Lotem, Naor, "Optimal Aggregation Algorithms for Middleware," PODS 2001.
+- foundational: Mitzenmacher, "Compressed Bloom Filters," PODC 2001.
+- foundational: Hofmann, "Probabilistic Latent Semantic Analysis," UAI 1999.
+- foundational: Page, Brin, Motwani, Winograd, "The PageRank Citation Ranking: Bringing Order to the Web," Stanford tech report, 1998.
+
+### Verbatim extracts
+"the peer-to-peer network does not have enough capacity"
+"bring the problem to within an order of magnitude of feasibility"
+"a query's communication cost would be 6 megabytes"
+"the average query might require 530 megabytes"
+"a combination of optimizations and compromises will bring us within feasibility"
 
 ---
 
@@ -14063,6 +15244,83 @@ to this paper in the reviewed corpus.
 
 ---
 
+## [LIVADARIU-INFOCOM-18] Inferring Carrier-Grade NAT Deployment in the Wild
+**Citation:** Ioana Livadariu, Karyn Benson, Ahmed Elmokashfi, Amogh Dhamdhere, Alberto Dainotti. "Inferring Carrier-Grade NAT Deployment in the Wild." IEEE INFOCOM, 2018. DOI 10.1109/INFOCOM.2018.8486223.
+**Retrieved:** full text via https://www.caida.org/catalog/papers/2018_inferring_cgn_deployment/
+**Source URL:** https://www.caida.org/catalog/papers/2018_inferring_cgn_deployment/
+**Domain:** L
+
+### What it does
+The paper infers which networks deploy Carrier-Grade NAT (CGN), a mechanism where an internet service provider (ISP) shares one public IPv4 address across many customers inside the provider's own network rather than at the customer's equipment, using only passively collected traffic observed from outside the target network, with no access to any host behind the CGN. It reports two independent detection methods, each scoring contiguous /24 IPv4 address blocks (the smallest block size typically announced in Border Gateway Protocol, BGP, routing and therefore likely configured uniformly).
+
+The first method (Internet Background Radiation, IBR, from the UCSD Network Telescope, an unused /8 address block that passively receives unsolicited traffic) extracts BitTorrent DHT (Distributed Hash Table) KRPC control packets, each carrying a node's globally unique 160-bit identifier (ID), that reach the telescope because some BitTorrent DHT nodes propagate incorrect routing information pointing at telescope addresses. For each IP address the method computes a weighted score S(/24) = sum over addresses in the block of ids_i * interwoven_i * persistent_i * diversity_i, where ids_i is a logarithmic function of the number of distinct IDs seen from that address (relative to a 100-devices-per-address CGN reference), interwoven_i flags whether packets from different IDs interleave in time rather than arriving in separate unbroken bursts (interleaving indicates many devices sharing the address concurrently, as CGN does, rather than one device at a time, as DHCP reassignment does), persistent_i is the fraction of days in the month the address sent traffic, and diversity_i flags whether more than one BitTorrent client software version was observed from the address. The /24-level CGN threshold is set empirically each month as the 99.99th percentile of the fitted Poisson distribution of block scores, under the assumption that block scores in non-CGN configurations are Poisson-distributed.
+
+The second method uses server-side access logs from the Measurement Lab (M-Lab) Network Diagnostic Tool, reasoning that a public IPv4 address behind CGN, shared across many concurrent users, is more likely to reappear across separate time windows than an address used by a single user, home NAT, or Dynamic Host Configuration Protocol (DHCP). The measurement period T is divided into N detection windows of length t; the method computes, for the hypothesis that an address is not CGN (static, DHCP, or home NAT), the probability Q_s(mu) = 0.5^mu of observing the same address in mu or more separate detection windows, and treats the complement of that probability as the confidence that mu-or-more repeat sightings indicate CGN. To bound false negatives (CGN addresses that appear in only one detection window because the underlying service is unpopular), the method separately estimates, from a per-network access probability p and an assumed compression factor c (users sharing one address), the expected count E of addresses seen only once, and requires the observed single-appearance count to fall below E before rejecting the CGN hypothesis for a block.
+
+Both methods are cross-checked against a manually curated validation list of 22 known-CGN and 15 known-non-CGN ASes assembled from a CAIDA survey, email and LinkedIn confirmations, reverse-DNS-derived subscriber counts, and an independent client-side CGN-detection study (Lutu et al., NAT Revelio). Both methods restrict analysis to /24 blocks that a CAIDA AS-classification dataset places in "Transit/Access" ASes (as opposed to Enterprise or Content ASes) and that WHOIS or Regional Internet Registry (RIR) delegation records confirm are actually registered to the announcing AS, to exclude cases where the observed AS merely routes address space that a downstream customer network configures independently.
+
+### Measured results
+| Result | Experimental conditions |
+|---|---|
+| 4,191 autonomous systems (ASes) and 154,098 /24 blocks inferred as deploying CGN, 23.9% of measured ASes and 3.64% of measured /24 blocks | Five three-month periods of IBR and M-Lab data, July 2014 to September 2016; base population 17.4K "Transit/Access" ASes and their filtered /24 space |
+| Inferred CGN AS count rose from 1.2K (Jul-Sep 2014) to 3.4K (Jul-Sep 2016); inferred /24 count rose from 3.9K to 104.6K over the same interval, with a step increase after Jul-Sep 2015 (79.4K) tied to a roughly 100x rise in BitTorrent IBR volume in July 2015 | Same five three-month snapshots; the paper attributes most of the /24 growth after mid-2015 to increased measurement visibility (higher IBR volume) rather than only to new CGN deployment |
+| 2,920 ASes inferred as continuously deploying CGN from first detection through the end of the study; of these, 2,177 first appear in Jul-Sep 2015 and 634 are inferred as deploying CGN throughout the full 2014-2016 period | Progressive (monotonic-onset) inference across the same five snapshots |
+| Cross-validation: 47 of 52 (90%) /24 blocks independently detected as CGN by Mandalari et al.'s NAT Revelio active-measurement technique were also inferred as CGN by this paper's passive methods in at least one period; 507 of 582 (87.11%) "Transit/Access" ASes from Richter et al.'s updated 609-AS CGN list were also inferred; overall more than 85% of previously published CGN networks were recovered | Comparison against Mandalari et al. (CAIDA technical report 2017) and Richter et al. (IMC 2016, updated list supplied directly by the authors, collected second half of 2015) |
+| This paper infers roughly 6x more ASes as CGN than Richter et al.'s 609-AS figure | Same comparison; the paper attributes part of the gap to Richter et al. restricting to ASes where a BitTorrent DHT crawl found at least 200 peers with unique IP addresses, to this paper's longer observation window capturing address-usage churn, and to possible errors in either technique's inference, noting that both active-measurement baselines instead rely on detecting leaked internal (private-range) IP addresses, which the paper describes as a stronger CGN indicator than concurrent-client counts |
+| Validation-set recall: 1,233 CGN /24 blocks correctly inferred across 15 of 19 known-CGN ASes; 99% agreement between the IBR-based and M-Lab-based methods on /24 blocks both methods flagged as CGN, in Jul-Sep 2015 | Validation set of 22 CGN / 15 non-CGN ASes; M-Lab method held roughly constant (80 then 93 /24 blocks, 11 then 14 ASes) across Jan-Mar and Jul-Sep 2015; IBR method's true positives rose from 7 to 15 ASes between the same two periods, tracking the IBR-volume increase |
+| 4 of 19 known-CGN validation ASes were false negatives under both methods, attributed to jurisdictions (UK: British Telecom AS2856, Sky AS5607) that block popular BitTorrent tracker sites | Same validation set, both time periods |
+| Near-complete true-negative agreement: almost all of roughly 90K /24 blocks from validation-set ASes using traditional (non-CGN) addressing failed to meet either method's CGN criteria in both periods; the residual false positives traced to one mobile-operator AS (Orange, AS3215) independently confirmed by a company presentation, and to Hungarian university networks sharing address space beneath their announcing upstream (Hungarnet, AS1955) | Same validation set, both time periods |
+| 44.87% of 3,906 CGN-inferred ASes with routing data in both July 2014 and September 2016 show no change in advertised IPv4 address space; 41% increased their advertised space, and for 49% of inferred CGN ASes overall that increase was at most 256 /24 blocks (one /16 block) | Routing-table snapshots from July 2014 and September 2016, RouteViews/RIPE NCC BGP data |
+| 208 of 3,050 CGN-inferred networks (with data available through September 2015, when the transfer-market dataset ends) appear in the IPv4 address transfer market records | Cross-referenced against reported IPv4 prefix transfer records |
+| 39.48% of inferred CGN ASes originated IPv6 prefixes as of Jul-Sep 2016, versus 22% of all ASes in the IPv4 AS graph in the same period; CGN ASes are stated as 17% more likely than the average AS to originate IPv6; of the dual-stacked CGN ASes, 46.55% began deploying CGN before they began advertising IPv6 prefixes | Jul-Sep 2016 snapshot compared against the full measured IPv4 AS graph for the same period |
+| Empirically set thresholds: IBR-based CGN score threshold at the 99.99th percentile of the fitted Poisson score distribution, equal to 0.95 in January 2015 and 5.33 in July 2015; /24 blocks scoring above 5 sent at least 700 BitTorrent IBR packets in the observation window | Threshold fit separately each month over all 3.7 million /24 blocks observed sending BitTorrent IBR in July 2015 |
+| M-Lab detection threshold: mu >= 15 repeat-address sightings within T, chosen to give 99.99% confidence against non-CGN configurations at the paper's assumed access probability p; sensitivity analysis (Figure 2) shows fewer than 10 sightings give high confidence only for p < 0.1, while p > 0.9 requires more than 44 sightings for equivalent confidence | Confidence-level curve computed analytically from the Q_s(mu) model across p in roughly [0.001, 1] |
+| Estimated per-network M-Lab access probability p ranged 0.0000039 to 0.00016 across the validation set's non-CGN networks; using the maximum observed p and an assumed compression factor of 100 users per address, the model predicts E = 88 expected single-appearance false negatives for one /24 block | APNIC Labs customer-count estimates combined with 90 days of M-Lab access logs (T = 90 days, t = 1 day detection window) |
+| Sensitivity of the IBR score formula to its four component weights: varying each exponent individually across {0, 0.125, 0.25, 0.5, 2, 4, 8} changes the fraction of validation-set ASes still classified as CGN by between roughly 54% and 99%, with the "ids" and "persistent" components producing the largest swings | Table I, January and July 2015 snapshots, one weight varied at a time with the other three held at 1 |
+| Arbitrary address pooling (an internal address mapped to multiple simultaneous external addresses, contrary to RFC 4787's paired-pooling recommendation) detected in 14,000 /24 blocks across 73 ASes in July 2015, 42% of that month's CGN blocks; two Chinese ASes (AS4134, AS4812) account for 94% of these blocks | July 2015 IBR dataset, arbitrary pooling defined operationally as a same-ID address reused by a different ID within under 5 minutes |
+
+### Parameters
+- Detection granularity: /24 IPv4 address blocks, chosen as the smallest unit typically announced in BGP.
+- Target CGN configuration: 100 or more users per external-facing IP address, taken from a CAIDA CGN survey as a commonly reported configuration; both methods are tuned to this population size.
+- IBR score formula weights (default, a=b=c=d=1 in the generalized form): ids_i = min(1, log(num_IDs)/log(100)); interwoven_i = 1 if interwoven else 0.5; persistent_i = fraction of days in the month with observed traffic; diversity_i = 1 if multiple client software versions observed else 0.5. The paper states these were "chosen somewhat arbitrarily" as a reasonable starting point, with the exact values dependent on the traffic type and dataset the method is applied to.
+- IBR CGN score threshold: 99.99th percentile of the monthly Poisson-fitted score distribution, computed values 0.95 (January 2015) and 5.33 (July 2015); recomputed independently each month.
+- M-Lab measurement period T = 90 days; detection window t = 1 day, chosen to be shorter than typical DHCP lease durations.
+- M-Lab repeat-appearance threshold mu = 15 IP sightings across multiple detection windows, corresponding to 99.99% confidence under the model's assumption that repeat-access probability given prior access is 0.5.
+- CGN compression factor c = 100 users per address, used in the false-negative estimate E; based on the same CAIDA CGN survey.
+- Arbitrary-pooling detection: an inter-ID gap under 5 minutes on the same address, with a block counted only if more than 5 distinct IDs show such evidence.
+- Home NAT reference population: 5 devices per address, cited from Grover et al. (IMC 2013).
+- BitTorrent adoption assumption used in the score-threshold simulation: 30% probability a given device runs BitTorrent, cited from a Swedish file-sharing survey.
+
+### Stated limitations
+The methods detect large-scale IP address sharing as a signal, which the paper states is "an inherent property but not a concrete proof of CGN"; other middleware such as proxies can produce the same signal, and without locating the customer-premises equipment there is ambiguity about whether the sharing occurs inside the ISP (CGN) or at a downstream customer network the ISP merely routes for (the paper gives Hungarian universities behind Hungarnet as an observed case of the latter). A low score under either method does not establish that CGN is absent: detection requires sufficient BitTorrent or M-Lab traffic volume, so an operator that blocks or limits BitTorrent, or a network whose users rarely run M-Lab tests, produces false negatives; the paper attributes 4 of 19 validation-set false negatives specifically to jurisdictions known to block popular torrent-tracker sites. The IBR method's per-address-attribute weights (ids, interwoven, persistent, diversity) were chosen heuristically rather than fit to ground truth, because the paper states no comprehensive ground-truth network set was available; a sensitivity analysis is offered in place of a fitted optimum. The M-Lab method's core parameter, the probability that a user who has accessed M-Lab once accesses it again within the measurement period, is assumed to be 0.5 in the absence of behavioral data to estimate it directly, and the paper runs a separate sensitivity analysis to characterize the resulting confidence bounds rather than validating this assumption against measured user behavior. The IPv6-adoption finding is explicitly qualified: the paper states this analysis "deserves future revisiting" given the pace at which CGN deployment is still increasing. The paper states outright that it does not conclusively determine which networks deploy CGN, only that it improves understanding of CGN prevalence; and that inferring CGN "in the wild" from outside the network remains, in the authors' words, challenging.
+
+### Requirements it places on the rest of the system
+A design that needs to know whether a client sits behind CGN, such as an admission or reputation mechanism keying on IP address, cannot rely on passive external inference alone to identify individual CGN clients: both methods here operate at /24-block granularity and infer that an address block is used for CGN, not that any specific client address is currently behind one, and the paper notes CGN networks frequently mix CGN-configured and traditionally configured /24 blocks within the same AS ("mixed configurations," found in three-quarters of ASes inferred to deploy CGN via BitTorrent IBR) and, in observed cases (T-Mobile), CGN configured within only part of a /24 block (a /25 through /28 subrange), so per-block inference does not guarantee per-address accuracy. A design that assumes one externally visible IP address corresponds to one participant, for the purposes of rate limiting, Sybil resistance, or peer-uniqueness assumptions, cannot assume a fixed compression ratio: the paper's own reference figure of 100 users per address is a survey-reported common case, not a bound, and observed arbitrary-pooling behavior means even the address-to-user mapping for a single CGN block can change over sub-5-minute intervals for a meaningful fraction (42% in the paper's July 2015 sample, concentrated in two ASes) of inferred CGN blocks. Both detection methods require an external, passively collected traffic source that both is generated continuously by the target population and encodes a per-device identifier (BitTorrent DHT KRPC IDs) or exhibits address-reuse behavior over time (M-Lab repeat access); a design relying on this paper's methodology to characterize its own deployment's NAT exposure needs access to a comparably identifying passive traffic source for its user population, which the paper states is not available for networks that block or suppress BitTorrent or that have negligible M-Lab usage.
+
+### Contradicts
+Against a claim the paper explicitly frames as a prior expectation and states it is proven wrong by its own measurement: "we find no evidence that CGN deployment negatively impacts IPv6 adoption" — the paper finds inferred CGN ASes 17% more likely to originate IPv6 prefixes than the average AS in Jul-Sep 2016, the opposite of the more intuitive "CGN as an alternative to IPv6, and thus anti-correlated with it" reading.
+
+Against [RICHTER-IMC-16]: Richter et al. report CGN deployment in 13.3% of roughly 52,000 non-cellular routed ASes (609 CGN-positive ASes after the authors' own later update, of which 582 fall in the "Transit/Access" category this paper also uses), collected in a one-week BitTorrent DHT crawl starting March 2016 combined with voluntary Netalyzr sessions. This paper reports 23.9% of 17,400 "Transit/Access" ASes (4,191 ASes) over July 2014-September 2016, roughly 6x Richter et al.'s AS count. The two figures are not directly comparable measurements of the same population: Richter et al.'s method requires direct evidence of a leaked internal (private-range) address alongside the external address, a stricter per-AS signal, while this paper's IBR method requires only a traffic-volume and behavioral score crossing an empirically set monthly threshold over a longer observation window, and this paper's own text attributes part of the gap to that lower evidentiary bar rather than claiming Richter et al.'s figure was too low. Both figures should be read as different-methodology estimates of the same underlying quantity (CGN-deploying AS count) rather than as directly reconciled measurements.
+
+### References worth retrieving
+- competing: Richter, Wohlfart, Vallina-Rodriguez, Allman, Bush, Feldmann, Kreibich, Weaver, Paxson, "A Multi-perspective Analysis of Carrier-Grade NAT Deployment," ACM IMC 2016 (the prior most-comprehensive CGN prevalence study, the direct measured-comparison baseline for this paper's headline 6x figure).
+- competing: Mandalari, Lutu, Dhamdhere, Bagnulo, claffy, "Tracking the Big NAT across Europe and the U.S.," CAIDA Technical Report, 2017.
+- foundational: Lutu, Bagnulo, Dhamdhere, Claffy, "NAT Revelio: Detecting NAT444 in the ISP," PAM 2016 (the active inside-the-network CGN-detection technique used for cross-validation).
+- foundational: Grover, Park, Sundaresan, Burnett, Kim, Feamster, "Peeking Behind the NAT: An Empirical Study of Home Networks," ACM IMC 2013 (source of the 5-devices-per-home-NAT reference figure).
+- competing: Richter, Smaragdakis, Plonka, Berger, "Beyond Counting: New Perspectives on the Active IPv4 Address Space," ACM IMC 2016.
+- foundational: Padmanabhan, Dhamdhere, Aben, Claffy, Spring, DHCP lease-duration measurement study (full citation truncated in retrieved text, reference [27]).
+- foundational: Casado, Freedman, "Peering Through the Shroud: The Effect of Edge Opacity on IP-Based Client Identification," (active outside-the-network NAT-characterization technique).
+- attack: Liang, Naoumov, Ross, "The Index Poisoning Attack in P2P File Sharing Systems" (explains the source of the misrouted BitTorrent DHT traffic this paper's IBR method depends on).
+
+### Verbatim extracts
+"CGN deployment is increasing rapidly"
+"4.1K autonomous systems are deploying CGN, 6 times the number inferred"
+"we find no evidence that CGN deployment negatively impacts IPv6 adoption"
+"we discover more than 85% of the CGN networks inferred by previous work"
+"three-quarters of ASes inferred to deploy CGN...have mixed configurations"
+
+---
+
 ## [LOCHER-HOTNETS-06] Free Riding in BitTorrent is Cheap
 **Citation:** Thomas Locher, Patrick Moor, Stefan Schmid, Roger Wattenhofer. "Free Riding in BitTorrent is Cheap." Proc. 5th ACM Workshop on Hot Topics in Networks (HotNets-V), 2006. Pages 85-90.
 **Retrieved:** full text via http://conferences.sigcomm.org/hotnets/2006/locher06free.pdf
@@ -14158,6 +15416,67 @@ The paper describes an apparent conflict with an earlier Gnutella measurement st
 "average connection lifetimes of leaf and ultrapeer nodes are 58 minutes and 93 minutes"
 "our deployment should be seen as a strawman"
 "the hybrid approach would reduce the latency by about 25 seconds"
+
+---
+
+## [LUBY-FOCS-02] LT Codes
+**Citation:** Michael Luby. "LT Codes." IEEE Symposium on Foundations of Computer Science (FOCS), 2002. DOI: 10.1109/SFCS.2002.1181950.
+**Retrieved:** full text via https://doi.org/10.1109/SFCS.2002.1181950 (matching PDF text; ICSI tech-report mirror also listed in target record)
+**Source URL:** https://doi.org/10.1109/SFCS.2002.1181950
+**Domain:** C
+
+### What it does
+An LT (Luby Transform) code lets a sender produce an unbounded stream of coded symbols from k source symbols, so that a receiver who collects any sufficient set of coded symbols — regardless of which ones were lost in transit — recovers all k source symbols. The sender needs no advance estimate of the channel loss rate, because it stops generating symbols only when the receiver signals it has decoded, or after a fixed number if the channel is one-way.
+Encoding one symbol: draw a degree d from a fixed degree distribution, choose d distinct source symbols uniformly at random as neighbors, and exclusive-or (XOR) them together to form the symbol value. Each encoded symbol carries or implies its degree and neighbor list (by explicit list, by a shared pseudo-random seed keyed to the symbol, or by reception order), so the decoder can reconstruct the encoding graph.
+Decoding: repeatedly find an encoded symbol with exactly one not-yet-recovered neighbor, set that source symbol equal to the encoded symbol's value (adjusting for already-recovered neighbors already XORed out), then remove that source symbol as a satisfied neighbor from every other encoded symbol referencing it. The paper calls the set of encoded symbols currently reducible to degree one the "ripple." Decoding succeeds only while the ripple never empties before all k source symbols are recovered.
+The central design problem is the degree distribution: it must keep the ripple non-empty with high probability throughout decoding while using as few total encoded symbols as possible. The paper introduces the Ideal Soliton distribution (ρ(1) = 1/k; ρ(i) = 1/(i(i−1)) for i = 2..k) as the distribution that makes the expected total received-symbol count exactly k, but states it fails in practice because the ripple's expected size (one) has too much variance and disappears with realistic probability. The Robust Soliton distribution (Definition 11) adds a spike term τ(i) to ρ(i), parameterized by a target failure probability δ and a constant c, engineered to keep the expected ripple size near c·ln(k/δ)·sqrt(k) throughout the process.
+
+### Measured results
+This is a theoretical paper: every quantitative claim is a proved asymptotic bound, not an empirical measurement from an implementation or simulation run. The paper states explicitly (Section 3.4) that its proofs use pessimistic estimates chosen for provability, and that better constants are attainable "based on computer simulations" whose description it places out of scope. No simulation parameters, node counts, or run counts are given anywhere in the text.
+
+| Bound (Robust Soliton distribution, over k source symbols, target failure probability δ) | Statement |
+|---|---|
+| Number of encoded symbols needed for successful decoding with probability ≥ 1 − δ (Theorem 12) | K = k + O(sqrt(k) · ln²(k/δ)) |
+| Average degree of an encoded symbol (Theorem 13) | D = O(ln(k/δ)) |
+| Average symbol operations (XORs/copies) per generated encoded symbol | O(ln(k/δ)) |
+| Total decoder symbol operations | O(k · ln(k/δ)) |
+| Decoding failure probability from K encoded symbols (Theorem 17) | at most δ |
+
+Comparative bound against a degree-one-only ("All-At-Once") baseline: both require the same total sum of encoded-symbol degrees, approximately k·ln(k/δ), but the Robust Soliton distribution concentrates that degree sum into close to the minimum possible number of encoded symbols, while the all-degree-one baseline needs one encoded symbol per unit of degree.
+
+### Parameters
+- k: number of source symbols. Free parameter, arbitrary.
+- δ: target decoding-failure probability. Free parameter chosen by the implementer; appears in every asymptotic bound above.
+- R = c · ln(k/δ) · sqrt(k), for a "suitable constant c > 0": the target ripple size in the Robust Soliton distribution. The paper does not state a numeric value for c; it is left as a free constant in the construction (labeled here as NOT DERIVED for our purposes — the paper gives no worked value or measured range).
+- Symbol length ℓ: stated to be arbitrary, from single-bit to general ℓ-bit symbols; the paper notes only that per-symbol overhead makes the scheme "efficient in practice for larger values of ℓ" without giving a threshold.
+
+### Stated limitations
+The paper states the Ideal Soliton distribution "works poorly in practice" because its expected ripple size of one is too small and any downward variation empties it, failing decoding. The Robust Soliton analysis is explicitly pessimistic ("in several places we make pessimistic estimates that enable a simple, comprehensive, and complete analysis"); the authors state that heuristic, simulation-based tuning gives lower reception overhead and average degree than the proved bounds, but state that description is beyond the paper's scope. The paper does not analyze or bound encoding/decoding time for non-Robust-Soliton distributions, does not address adversarial manipulation of received symbols, and gives no networking-layer mechanism for signaling degree/neighbor metadata beyond listing candidate options (explicit lists, timing-based implicit computation, or a shared-seed keyed function) without recommending one.
+
+### Requirements it places on the rest of the system
+- The encoder and decoder must agree on the same degree distribution (the Robust Soliton distribution, parameterized by k and δ) before encoding begins; this is stated as the only required preprocessing.
+- The decoder must be able to determine, for each received encoded symbol, its degree and its exact set of neighbor source-symbol indices — the paper requires this metadata to reach the decoder but leaves the transport mechanism open (explicit signaling, deterministic ordering, or a shared pseudo-random seed correlated with the symbol).
+- The channel is assumed to be an erasure channel: received symbols are assumed correct (not corrupted), only some are assumed lost; the paper gives no integrity-check or authentication mechanism for encoded symbols.
+- Decoding requires collecting K = k + O(sqrt(k)·ln²(k/δ)) encoded symbols from any subset the channel delivers; nothing in the mechanism enforces or verifies which subset arrives, so the surrounding transport must ensure the receiver eventually accumulates that many distinct symbols (via retransmission, a return channel, or an assumption of sufficient redundancy).
+- The source data must be pre-partitioned into k equal-length symbols before encoding; the paper does not address padding, symbol-length negotiation, or variable-length objects.
+
+### Contradicts
+None found within this corpus; no other entry addresses fountain codes with conflicting figures.
+
+### References worth retrieving
+- foundational: J. Byers, M. Luby, M. Mitzenmacher, A. Rege, "A Digital Fountain Approach to Reliable Distribution of Bulk Data," ACM SIGCOMM 1998, pp. 56-67 — origin of the "digital fountain" concept LT codes realize.
+- foundational: M. Luby, M. Mitzenmacher, A. Shokrollahi, D. Spielman, V. Stemann, "Practical Loss-Resilient Codes," ACM STOC 1997 — Tornado codes, the fixed-rate predecessor whose degree-distribution technique LT codes generalize to the rateless setting.
+- foundational: M. Luby, M. Mitzenmacher, A. Shokrollahi, D. Spielman, "Efficient Erasure Correction Codes," IEEE Trans. Information Theory 47(2), 2001 — Tornado codes' full analysis, cited for the linear-time encode/decode comparison baseline.
+- competing: I. S. Reed, G. Solomon, "Polynomial Codes Over Certain Finite Fields," J. Soc. Indust. Appl. Math 8, 1960 — Reed-Solomon codes, the fixed-rate optimal-recovery baseline this paper compares encode/decode time against.
+- foundational: M. Luby, M. Mitzenmacher, A. Shokrollahi, "Analysis of Random Processes via And-Or Tree Evaluation," ACM-SIAM SODA 1998 — analytical technique referenced for degree-distribution proofs.
+- competing: J. W. Byers, J. Considine, M. Mitzenmacher, S. Rost, "Informed Content Delivery Across Adaptive Overlay Networks," ACM SIGCOMM 2002 — contemporary overlay-based bulk-data delivery using erasure coding.
+
+### Verbatim extracts
+- "LT codes are the first realization of a class of erasure codes that we call universal erasure codes."
+- "the k original input symbols can be recovered from any k+O(√k ln²(k/δ)) of the encoding symbols with probability 1 − δ"
+- "Although the Ideal Soliton distribution works poorly in practice, it does give insight into a robust distribution."
+- "Heuristic techniques can be used to provide a design and analysis that leads to lower reception overhead and average degree based on computer simulations"
+- "LT codes are not systematic."
 
 ---
 
@@ -14667,6 +15986,118 @@ Provides direct primary-source support for the "deployed-Kademlia identity-forge
 
 ---
 
+## [MARTINS-JCC-26] Matrix Protocol: A Comprehensive Systematic Mapping Study
+**Citation:** José A. P. Martins, Paulo A. L. Rego, José A. F. de Macêdo, Francisco Airton Silva, Vinícius Lagrota. "Matrix protocol: a comprehensive systematic mapping study." Journal of Cloud Computing, 2026. DOI: 10.1186/s13677-025-00829-7.
+**Retrieved:** full text via https://link.springer.com/article/10.1186/s13677-025-00829-7
+**Source URL:** https://link.springer.com/article/10.1186/s13677-025-00829-7
+**Domain:** J
+
+### What it does
+This paper classifies the published research literature on the Matrix protocol (a federated, decentralized real-time-communication protocol) rather than measuring the protocol itself. It follows the systematic-mapping-study method of Petersen, Vakkalanka, and Kuzniarz (2015): define research questions, construct a search string, screen candidate papers against stated inclusion/exclusion criteria, classify the surviving papers by keyword, and report frequency counts per category. The authors searched digital libraries with 15 unified search-string expressions, screened 156 candidate papers, and retained 21 as primary studies. Each primary study was classified along four research questions: RQ01 whether the paper uses Matrix in practice or only mentions it, RQ02 the paper's main research area, RQ03 the paper's main contribution type, and RQ04 which Matrix feature the paper explores.
+
+### Measured results
+The paper's own measured output is a classification count over its 21-paper corpus, not a protocol-performance benchmark. No throughput, latency, or scalability figures for the Matrix protocol itself are reported as the mapping study's own measurements; such figures belong to the individual primary studies it cites (each would need retrieval and full-text verification separately before use as evidence).
+
+| Research question | Result | Corpus |
+|---|---|---|
+| RQ01 — uses Matrix in practice vs. only mentions it | 13 of 21 papers implement or formally analyze Matrix in practice; 8 of 21 only mention/reference it | 21 primary studies, drawn from 156 screened candidates |
+| RQ02 — main research area | Security and Privacy is the largest category; Networks and Communications second; Human-Computer Interaction has 2 papers; Forensic Analysis, Natural Language Processing, and Educational Technology each have 1 paper (a paper may count in more than one category) | Same 21-paper corpus |
+| RQ03 — main contribution type | Four categories reported: Matrix Protocol Analysis, Security and Privacy Approaches, Protocol Development, Tool Development (Tool Development named as exactly 4 papers in the text; other category counts given only as figure references, not stated inline) | Same 21-paper corpus |
+| RQ04 — Matrix feature explored | Three categories: Group Communication (most frequent), Security Issues, Matrix Architecture | Same 21-paper corpus |
+
+### Parameters
+Not applicable in the sense of a system parameter — this is a literature-classification methodology, not a mechanism with tunable inputs. The methodological "parameters" are the search and screening choices: 15 unified search-string expressions (Table 14 in the source), inclusion/exclusion criteria (Table 12), and the four research questions (Table 10), each defined and applied uniformly across the 156 screened papers.
+
+### Stated limitations
+The authors state the study is restricted to 21 primary studies drawn from academic literature; papers not indexed by the searched digital libraries or not matching the search strings would not appear. The conclusion states several unresolved technical gaps found across the surveyed literature (not gaps in the mapping study's own method): limited formal-verification coverage of Matrix's access-control and security models, unresolved scalability limits in event synchronization and message propagation at large scale, unresolved cross-platform interoperability between Matrix and non-Matrix systems, unquantified cryptographic overhead from end-to-end encryption (E2EE), and no unified security model across independently operated federated homeservers. The paper does not itself measure any of these; it reports that the surveyed primary studies raise them as open issues.
+
+### Requirements it places on the rest of the system
+This entry is a literature survey and places no mechanical requirement on a system design. Its value to the architecture synthesis is as a bibliography index over Matrix-specific primary studies (listed below) and as a map of which technical questions about federated real-time messaging remain open in the published literature as of this survey's search date, each of which would need its own full-text entry before any measured figure from it is used.
+
+### Contradicts
+None found. This paper reports no protocol-performance figures for Matrix that could disagree with another entry in this corpus.
+
+### References worth retrieving
+- foundational: Weidner M, Kleppmann M, Hugenroth D, Beresford AR, "Key Agreement for decentralized secure group messaging with strong security guarantees," ACM CCS 2021 — the DCGKA (Decentralized Continuous Group Key Agreement) construction that BeeKEM (already in this corpus, ePrint 2026/1434) supersedes; cited here as foundational to Matrix's own group-messaging security discussion.
+- attack: Albrecht MR, Celi S, Dowling B, Jones D, "Practically-exploitable cryptographic vulnerabilities in Matrix," IEEE Symposium on Security and Privacy (S&P), 2023 — demonstrated practical attacks on Matrix's key-management and authentication workflows.
+- attack: Albrecht MR, Dowling B, Jones D, "Device-oriented group messaging: a formal cryptographic analysis of Matrix core," IEEE S&P, 2024 — formal security model for Matrix's core group-messaging cryptography, follow-up to the 2023 attack paper.
+- attack: Wichelmann J, Berndt S, Pott C, Eisenbarth T, "Help, my Signal has bad Device! Breaking the Signal Messenger's Post-Compromise Security Through a Malicious device," DIMVA 2021 — device-compromise attack analysis Matrix's own post-compromise security is compared against.
+- competing: Jacob F, Grashöfer J, Hartenstein H, "A glimpse of the Matrix: scalability issues of a new message-oriented data synchronization middleware," ACM Middleware 2019 Demos and Posters — direct measurement of Matrix server-to-server scalability and centralization.
+- competing: Jacob F, Beer C, Henze N, Hartenstein H, "Analysis of the Matrix event Graph Replicated data type," IEEE Access 9, 2021 — formal analysis of Matrix's event graph as a CRDT (Conflict-free Replicated Data Type), directly relevant to this corpus's domain D (replicated state).
+- competing: Jacob F, Becker L, Grashöfer J, Hartenstein H, "Matrix decomposition: analysis of an access control approach on transaction-based DAGs without finality," ACM SACMAT 2020 — access-control analysis of Matrix's non-finalizing event DAG (directed acyclic graph).
+- competing: Chowdhury PD, Sameen M, Blessing J, Boucher N, Gardiner J, Burrows T, Anderson R, Rashid A, "Threat models over space and time: a case study of E2EE messaging applications," arXiv:2301.05653, 2023 — threat-model comparison across six end-to-end-encrypted desktop messaging clients using STRIDE and LINDDUN frameworks, including Matrix.
+- competing: Rahman M, Wang Y, De D, "Implementation of dew-inspired matrix-mesh communication protocol," in Dew Computing: the sustainable IoT perspectives, Springer Nature Singapore, 2024 — hybrid cloud-dew/client-server/peer-to-peer (P2P) messaging protocol built on Matrix, evaluated for operation under limited connectivity.
+- irrelevant: Schipper GC, Seelt R, Le-Khac NA, "Forensic analysis of Matrix protocol and Riot.Im application," Forensic Science International: Digital Investigation 36, 2021 — digital-forensics extraction study, outside this corpus's architecture-selection scope.
+
+### Verbatim extracts
+- "a broad review of primary studies in a specific topic area that aims to identify what evidence is available"
+- "identification and categorization of 156 papers, leading to the selection of 21 primary studies"
+- "Thirteen papers have used the Matrix protocol in practice"
+- "Eight papers were assigned the Only Mentions category"
+- "no unified security model across federated servers is an ongoing concern"
+- "formal verification methods for access control and security models need to be developed"
+
+---
+
+## [MATURANA-ISIT-23] Locally Repairable Convertible Codes: Erasure Codes for Efficient Repair and Conversion
+**Citation:** Francisco Maturana, K. V. Rashmi. "Locally Repairable Convertible Codes: Erasure Codes for Efficient Repair and Conversion." IEEE International Symposium on Information Theory (ISIT), 2023. pp. 2033-2038. DOI: 10.1109/ISIT54713.2023.10206604.
+**Retrieved:** full text via https://doi.org/10.1109/ISIT54713.2023.10206604
+**Source URL:** https://doi.org/10.1109/ISIT54713.2023.10206604
+**Domain:** C
+
+### What it does
+This paper lowers the data-transfer cost of changing an erasure code's parameters (called code conversion) on data already encoded with a locally repairable code (LRC), so an operator can adjust the tradeoff between repair cost and storage overhead as failure rates, workloads, or storage budgets change over the data's lifetime, without paying the cost of reading and re-encoding everything from scratch.
+An LRC divides k data symbols into m = k/r local groups of r symbols each, adds ℓ local parity symbols per group (each a function only of that group's r data symbols), and adds g global parity symbols (each a function of all k data symbols). This (r, ℓ) data locality lets a single failed data node be repaired by reading only r other nodes in its local group, instead of reading all k data nodes as a maximum-distance-separable (MDS) code such as Reed-Solomon would require.
+Code conversion changes the code's parameters (k, g, r, or ℓ) on data already encoded, without decoding to the original message and re-encoding. The mechanism (called a converter) reads data from existing nodes, computes new symbols, and writes them; conversion bandwidth is the total data moved between nodes during this process. This paper's construction technique starts from a systematic Vandermonde-matrix maximum-distance-separable base code, applies a basic pyramid-code transformation (zeroing out generator-matrix entries outside each local group's row range) to obtain (r, ℓ) locality, then layers a piggybacking framework on top — encoding α parallel instances of the base code per symbol and adding extra "piggyback" functions to certain symbols so that, during conversion, the initial code's local and global parity symbols can be reused directly as inputs to the final code's parity symbols instead of requiring the underlying data symbols to be re-read. The paper gives two named conversion types under this framework, both holding r and ℓ fixed while k and g vary: global merge conversion, combining λI ≥ 2 initial codewords into one larger final codeword (kF = λI·kI); and global split conversion, dividing one initial codeword into λF ≥ 2 final codewords (kI = λF·kF). Each parity in the construction is classified as a merge parity, split parity, or unchanged parity, and constructed via one of a small set of named techniques (linear combination, piggybacking, piggybacking-plus-linear-combination, or direct pass-through) depending on its classification.
+
+### Measured results
+The paper reports read conversion bandwidth (γ̃ = γ/α, where γ is the total data read from nodes during conversion and α is the per-symbol vector length) as closed-form expressions (Theorem 2 for global merge, Theorem 3 for global split) parameterized by the initial and final code's (k, g, r, ℓ) values, not as an empirical measurement from an implementation. All reported numeric comparisons are worked examples evaluating these closed-form expressions, not simulation or deployment results — no runtime, wall-clock cost, hardware, or trial count is given anywhere in the paper.
+
+| Conversion (initial → final parameters) | This construction's γ̃ | Default re-encode-from-scratch γ̃ | Prior maximum-distance-separable-only construction's γ̃ |
+|---|---|---|---|
+| Global merge: (k=6, g=1, r=3, ℓ=1) → (k=12, g=2, r=3, ℓ=1) | 7⅓ | 12 | 8 (Maturana & Rashmi, ISIT 2021) |
+| Global split: (k=12, g=2, r=3, ℓ=1) → (k=6, g=1, r=3, ℓ=1) | 5 | 12 | 5⅓ (Maturana & Rashmi, 2022) |
+| Global conversion: (k=40, g=2, r=10, ℓ=2) → (k=20, g=3, r=10, ℓ=2) | not given in absolute γ̃ | not given | 17.89% more bandwidth than this paper's construction (stated as a relative reduction, absolute figures not stated in the retrieved text) |
+
+### Parameters
+- (k, g, r, ℓ): the four code parameters this construction converts between — k data symbols, g global parity symbols, r data symbols per local group, ℓ local parity symbols per group. The paper's worked examples use (6,1,3,1)→(12,2,3,1), (12,2,3,1)→(6,1,3,1), and (40,2,10,2)→(20,3,10,2); no general recommended values are given, since the construction is parameter-general.
+- α: per-symbol vector length (number of parallel base-code instances via the piggybacking framework), treated as a free variable in the construction, not fixed to a numeric value.
+- Constraint r | k (r must divide k) is required for the construction as presented.
+- d (minimum distance) is fixed at the optimal value for given (k, g, r, ℓ) via the bound d ≤ n − k + 1 − ℓ(⌈k/r⌉ − 1), from prior work (Gopalan, Huang, Simitci, Yekhanin, 2012) that this paper's constructions meet with equality.
+
+### Stated limitations
+The paper restricts its constructions to global conversions, meaning only k and g change while r and ℓ stay fixed; it does not address conversions that change r or ℓ (changing the group size or the number of local parities) — this is stated as a scope choice ("in this paper we focus on global conversions") rather than argued to be infeasible. The paper also states its read-conversion-bandwidth focus explicitly excludes access cost (the number of nodes contacted, as opposed to the volume of data moved), citing Xia et al.'s prior up/downcoding work as the access-cost-focused alternative. No formal limitations, discussion, or future-work section appears in this conference-length paper; it ends immediately after presenting Theorem 3 with no concluding discussion of open problems.
+
+### Requirements it places on the rest of the system
+- The initial and final codes must both be systematic codes with (r, ℓ) data locality and optimal minimum distance, built from the paper's Vandermonde-based pyramid-code-plus-piggybacking construction; the technique is not stated to generalize to arbitrary existing LRCs.
+- A conversion changing k requires M := lcm(kI, kF) data nodes to be evenly divided among λI = M/kI initial codewords and λF = M/kF final codewords — the storage layer must be able to regroup data across this least-common-multiple boundary, not just within one codeword.
+- Where the number of codewords increases during conversion, the construction requires an explicit instance-reassignment permutation step (defined via a `batch()` function and permutation πᵢ) to keep every final codeword using the identical code; without this step the paper states the system would need to track extra per-codeword metadata.
+- The converter role (reading old symbols, computing, writing new symbols) is assumed to be a single logical actor with read access to all relevant initial-code nodes and write access to all final-code nodes; the paper does not model converter failure, partial conversion, or concurrent access during conversion.
+- The construction assumes a sufficiently large finite field to guarantee the Vandermonde matrix's maximum-distance-separable property (via a primitive-element choice of evaluation points); no field-size bound is stated in the retrieved text.
+
+### Contradicts
+None found. No other entry in this corpus reports locally-repairable-code conversion-bandwidth figures to compare against.
+
+### References worth retrieving
+- foundational: F. Maturana, K. V. Rashmi, "Convertible codes: enabling efficient conversion of coded data in distributed storage," IEEE Transactions on Information Theory 68, 2022 — introduces the general code-conversion problem this paper extends to locally repairable codes.
+- foundational: F. Maturana, K. V. Rashmi, "Bandwidth cost of code conversions in distributed storage: fundamental limits and optimal constructions," ISIT 2021 — the maximum-distance-separable-only conversion-bandwidth construction this paper's Example 1 (γ̃=8) compares against.
+- foundational: F. Maturana, K. V. Rashmi, "Bandwidth cost of code conversions in the split regime," 2022 — the maximum-distance-separable-only split-conversion construction this paper's Example 2 (γ̃=5⅓) compares against.
+- competing: M. Xia, M. Saxena, M. Blaum, D. Pease, "A tale of two erasure codes in HDFS," USENIX FAST 2015 — first LRC-to-LRC conversion procedure (up/downcoding), optimizing access cost rather than conversion bandwidth; the direct prior-work comparison point.
+- foundational: C. Huang, M. Chen, J. Li, "Pyramid codes: flexible schemes to trade space for access efficiency in reliable data storage systems," ACM Transactions on Storage 9, 2013 — the basic pyramid-code construction this paper's base code derives from.
+- foundational: P. Gopalan, C. Huang, H. Simitci, S. Yekhanin, "On the locality of codeword symbols," IEEE Transactions on Information Theory 58(11), 2012 — proves the minimum-distance bound for (r,ℓ) data locality that this paper's codes meet with equality.
+- foundational: K. V. Rashmi, N. B. Shah, K. Ramchandran, "A piggybacking design framework for read-and download-efficient distributed storage codes," IEEE Transactions on Information Theory 63(9), 2017 — the piggybacking framework this paper's construction is built on.
+- competing: S. Wu, Z. Shen, P. P. C. Lee, Y. Xu, "Optimal repair-scaling trade-off in locally repairable codes: analysis and evaluation," IEEE Transactions on Parallel and Distributed Systems 33, 2022 — LRC scaling in a clustered setting optimizing inter-cluster communication, a related but distinct cost model from this paper's inter-node conversion bandwidth.
+- competing: Y. Hu, L. Cheng, Q. Yao, P. P. C. Lee, W. Wang, W. Chen, "Exploiting combined locality for wide-stripe erasure coding in distributed storage," USENIX FAST 2021 — clustered LRC scaling work cited alongside Wu et al. as related but addressing a different cost model.
+
+### Verbatim extracts
+- "Locally repairable codes (LRCs) reduce the repair cost at the cost of higher storage overhead."
+- "our construction achieves the conversion of (k,g,r,ℓ) from (40, 2, 10, 2) to (20, 3, 10, 2) with 17.89% less conversion bandwidth"
+- "The present paper is, to the best of our knowledge, the first one to focus on LRC conversion bandwidth"
+- "we focus on reducing conversion bandwidth instead" [of access cost]
+- "in this paper we focus on global conversions, which only change k and g"
+
+---
+
 ## [MATURANA-TIT-22] Convertible Codes: Enabling Efficient Conversion of Coded Data in Distributed Storage
 
 **Citation:** Francisco Maturana, K. V. Rashmi. "Convertible Codes: Efficient Conversion of Coded Data in Distributed Storage." IEEE Transactions on Information Theory, 2022. DOI 10.1109/TIT.2022.3155972.
@@ -14721,6 +16152,71 @@ None found.
 
 ---
 
+## [MAXWELL-DCC-19] Simple Schnorr Multi-Signatures with Applications to Bitcoin
+**Citation:** Gregory Maxwell, Andrew Poelstra, Yannick Seurin, Pieter Wuille. "Simple Schnorr Multi-Signatures with Applications to Bitcoin." Designs, Codes and Cryptography, 2019. DOI: 10.1007/S10623-019-00608-X.
+**Retrieved:** full text via https://eprint.iacr.org/2018/068.pdf (revised May 20, 2018 preprint; matches the published Designs, Codes and Cryptography 2019 version's title, authors, and MuSig scheme)
+**Source URL:** https://eprint.iacr.org/2018/068.pdf
+**Domain:** E
+
+### What it does
+MuSig lets a group of n signers, each holding an independent private/public key pair with no prior certification or proof-of-knowledge step, jointly produce one short signature over a common message, such that the signature verifies exactly like an ordinary Schnorr signature under a single "aggregated" public key computed from the n individual public keys. This key aggregation property means a verifier, or any third party holding only the list of public keys, can compute the aggregated key without interacting with the signers, and later verify a joint signature with the same cost as verifying one individual Schnorr signature.
+The scheme runs in three rounds among the n cosigners. Each signer i first computes a weight aᵢ = H_agg(L, Xᵢ), where L is the multiset of all n public keys and H_agg is a hash function, and derives the aggregated public key X̃ = ∏ᵢ Xᵢ^aᵢ. Round 1: each signer draws a random nonce rᵢ, computes Rᵢ = g^rᵢ, and broadcasts a commitment tᵢ = H_com(Rᵢ) (a hash of the nonce) to every other cosigner. Round 2: after receiving all n commitments, each signer reveals its Rᵢ; every signer checks every other signer's revealed Rᵢ against its earlier commitment tᵢ and aborts if any check fails. Round 3: each signer computes the aggregate nonce R = ∏ᵢ Rᵢ, the challenge c = H_sig(X̃, R, m), its partial signature sᵢ = rᵢ + c·aᵢ·xᵢ mod p, and broadcasts sᵢ. Any party then sums s = Σᵢ sᵢ mod p to obtain the final signature σ = (R, s), which a verifier checks against g^s = R·X̃^c — identical in form to a standard Schnorr verification equation.
+The commit-then-reveal first round exists specifically to prevent a signer from choosing its own nonce share Rᵢ after seeing the other signers' shares, which would let it bias the aggregate nonce R to a value it can forge against; the paper proves (Section 3.2) that omitting this round, or using simpler aggregation weights (aᵢ = 1, or aᵢ = H_agg(Xᵢ) alone without the full multiset L as input), each admit a concrete attack — the aᵢ = 1 case reduces to the same rogue-key attack that motivated the scheme, and the aᵢ = H_agg(Xᵢ)-alone case is broken by Wagner's generalized birthday algorithm when the attacker controls multiple keys.
+
+### Measured results
+The paper reports no runtime, latency, or throughput benchmark from an implementation; its quantitative content is a structural comparison of signature and key sizes against three prior discrete-logarithm-based multi-signature schemes secure in the same "plain public-key" security model (no certification authority, no proof-of-knowledge of the secret key required before signing), stated in bits/group-element sizes rather than measured wall-clock costs.
+
+| Scheme | Signature size | Public-key size | Secret-key size | Rounds | Key aggregation |
+|---|---|---|---|---|---|
+| Bellare-Neven (BN06, ACM CCS 2006) | \|G\|+\|p\| | \|G\| | \|p\| | 3 | No |
+| Bagherzandi et al. (BCJ08, ACM CCS 2008) | 3\|G\|+3\|p\| | \|G\| | \|p\| | 2 | No |
+| Ma et al. (MWLD10, Des. Codes Cryptogr. 2010) | \|G\|+2\|p\| or ℓ+2\|p\| | \|G\| | 2\|p\| | 2 | No |
+| MuSig (this paper) | \|G\|+\|p\| or ℓ+\|p\| | \|G\| | \|p\| | 3 | Yes |
+
+Here G is a cyclic group of prime order p (p a k-bit integer), and ℓ is the bit-length of the hash function's output used for the challenge — a Schnorr signature can be represented either as (R, s), giving size \|G\|+\|p\|, or as (H(R), s), giving the smaller ℓ+\|p\| representation, matching standard Schnorr signature practice.
+
+Security reduction bound (Theorem 1): given a forger against MuSig running in time t, making q_s signature queries and q_h random-oracle queries, and succeeding with probability ε across N possible target public keys, the paper constructs an algorithm solving the discrete-logarithm (DL) problem in time t′ = 4t + 4Nt_exp + O(N(q_h+q_s+1)) (t_exp being one group exponentiation) with probability ε′ ≥ ε⁴/(q_h+q_s+1)³ − 16q_s(q_h+Nq_s)/2^k − 16(q_h+Nq_s)²/2^ℓ + 3/2^ℓ. This is a proved reduction bound, not an empirical measurement; the paper states explicitly that the double application of the Forking Lemma required by its proof technique (nesting two forkings of the forger, so the reduction runs the forger four times total) yields a loose bound, and states this looseness as a known property of rewinding-based security proofs rather than evidence of an actual attack close to that bound.
+
+The paper reports a blockchain-space-savings simulation run against Bitcoin's historical blockchain, comparing actual cumulative blockchain size to a hypothetical size with every transaction's individual signatures replaced by one signature per transaction (Figure 3). No numeric percentage or byte figure for this saving is stated in the body text; the result is presented only as a graph, so it is not usable as a quoted number under this corpus's evidence rule.
+
+### Parameters
+- G: a cyclic group of prime order p, with p a k-bit integer; g a generator of G. No specific curve or k value is fixed by the scheme itself — the Bitcoin application (Section 5) names secp256k1, the curve Bitcoin's existing ECDSA (Elliptic Curve Digital Signature Algorithm) deployment already used at time of writing, as the concrete instantiation target.
+- ℓ: output bit-length of the random-oracle hash functions H_com, H_agg, H_sig. Left as a free parameter; the paper notes these three hash roles can be built from a single hash function via domain separation.
+- n: number of cosigners. Unbounded in the protocol description; the security bound above is stated for a forger controlling up to N possible target public keys and does not give a recommended maximum n.
+- Security model: proved under the standard discrete-logarithm assumption alone (not the stronger One-More-Discrete-Logarithm, OMDL, assumption), modeling H_com, H_agg, H_sig as random oracles.
+
+### Stated limitations
+The paper states plainly that an earlier revision (dated January 15, 2018) of this same work proposed a 2-round variant omitting the commitment round, claiming security under the OMDL assumption; this claim was refuted by Drijvers, Edalatnejad, Ford, and Neven, who found a flaw in the security proof and further showed by a meta-reduction argument that the 2-round variant cannot be proved secure via any algebraic black-box reduction to the DL or OMDL problem. The published version restores the three-round protocol with the commitment round specifically to recover provable security. The authors state explicitly that "no attack is currently known against the 2-round variant of MuSig and that it might be secure although this is not provable under standard assumptions from existing techniques" — an explicit statement that the 2-round variant's security status is open, not refuted, only unprovable by the paper's own technique. The security reduction itself is stated as loose (a consequence of the double-forking proof technique), which the authors describe as a property of the proof technique rather than a demonstrated weakness in the scheme. The scheme requires all n public keys to be known to compute the aggregated key and to verify — verification cost and bandwidth still grow with n even though signature size does not. For cross-input Bitcoin multi-signature transactions (where the same key participates in multiple transaction inputs and no advance commitment to the signer set exists), the paper states rogue-key-attack protection is essential and cannot rely on private proofs of knowledge, unlike the single-input case.
+
+### Requirements it places on the rest of the system
+- Every signer must complete all three rounds — commit, reveal, partial-sign — with every other signer in a given signing session before the signature can be assembled; a signer that aborts after seeing others' revealed nonces (failing the commitment check) must cause the whole protocol run to abort, since the commitment step exists precisely to remove a signer's ability to choose its nonce share after seeing others'.
+- The aggregation weight aᵢ = H_agg(L, Xᵢ) must be computed over the full multiset L of all participating public keys, not over each key alone — using per-key-only weights is explicitly broken by Wagner's algorithm when an attacker controls more than one key in the group.
+- L must use a canonical, unique encoding of the multiset of public keys (the paper suggests lexicographic order) before being hashed, so that all signers and verifiers compute an identical X̃.
+- The three hash functions H_com, H_agg, H_sig must be modeled as independent random oracles (or built from one hash function with explicit domain separation) for the security proof to apply.
+- For the Bitcoin multi-input application, the paper states that because the plain public-key model's win condition for an attacker is forging a signature over any key set containing at least one honestly controlled key, the surrounding system cannot rely on any private proof of key possession to block rogue-key attacks — the protocol's own aggregation-weight construction must carry that protection alone.
+- No mechanism for identifying or excluding a specific misbehaving signer is provided; an aborted signing session or a threshold/verification failure is a property of the group as a whole, not attributed to an individual signer, in the base protocol described (accountable-subgroup variants are cited as related but separate work, Micali-Ohta-Reyzin).
+
+### Contradicts
+None found. No other entry in this corpus reports a competing multi-signature construction's numbers to compare against.
+
+### References worth retrieving
+- foundational: Mihir Bellare, Gregory Neven, "Multi-Signatures in the Plain Public-Key Model and a General Forking Lemma," ACM CCS 2006 — the BN scheme MuSig is a variant of; source of the plain-public-key security model and the three-round structure MuSig's first two rounds copy exactly.
+- competing: Ali Bagherzandi, Jung Hee Cheon, Stanislaw Jarecki, "Multisignatures Secure Under the Discrete Logarithm Assumption and a Generalized Forking Lemma," ACM CCS 2008 — the 2-round, larger-signature variant (3\|G\|+3\|p\|) compared in Table 1; no key aggregation.
+- competing: Changshe Ma, Jian Weng, Yingjiu Li, Robert H. Deng, "Efficient discrete logarithm based multi-signature scheme in the plain public key model," Designs, Codes and Cryptography 54(2), 2010 — the other 2-round variant compared in Table 1, using a double-hashing technique; no key aggregation.
+- attack: Manu Drijvers, Kasra Edalatnejad, Bryan Ford, Gregory Neven, "Okamoto Beats Schnorr: On the Provable Security of Multi-Signatures," IACR ePrint 2018/417 — the paper that broke this paper's own earlier 2-round OMDL security claim, forcing the three-round revision.
+- foundational: Silvio Micali, Kazuo Ohta, Leonid Reyzin, "Accountable-Subgroup Multisignatures," ACM CCS 2001 — the interactive-key-generation multi-signature scheme with accountable subgroups, in a different (not plain public-key) security model.
+- competing: Ewa Syta, Iulia Tamas, Dylan Visher, David Isaac Wolinsky, Philipp Jovanovic, Linus Gasser, Nicolas Gailly, Ismail Khoffi, Bryan Ford, "Keeping Authorities 'Honest or Bust' with Decentralized Witness Cosigning" (CoSi), — a naive Schnorr multi-signature scheme organizing cosigners in a tree structure for fast signature generation, cited as achieving key aggregation only in the stronger KOSK (knowledge-of-secret-key) model.
+- foundational: David Pointcheval, Jacques Stern, "Security Arguments for Digital Signatures and Blind Signatures," (Forking Lemma, [PS00] in this paper's reference list) — the original single Forking Lemma technique MuSig's proof extends to a nested double application.
+
+### Verbatim extracts
+- "the first multi-signature scheme provably secure in the plain public-key model which allows key aggregation"
+- "no attack is currently known against the 2-round variant of MuSig"
+- "this double application of the Forking Lemma results in a rather loose overall security bound"
+- "security against rogue-key attacks is essential here" [for cross-input Bitcoin signatures]
+- "it is no longer possible to rely on proofs of knowledge/possession that are private to the signers"
+
+---
+
 ## [MAYOR-P2P-13] On Unstructured Distributed Search over BitTorrent
 **Citation:** William Mayor, Ingemar Cox. "On Unstructured Distributed Search over BitTorrent." IEEE P2P, 2013. DOI 10.1109/P2P.2013.6688715.
 **Retrieved:** full text via https://discovery.ucl.ac.uk/1420897/1/Mayor_Billy.pdf
@@ -14768,6 +16264,62 @@ None found against other entries in this evidence corpus. Within the paper, the 
 "we would require small amounts of bandwidth, that are easily provided by current home broadband"
 "average probability of a successful query of 14.26%"
 "average probability of a successful query is 99.06% for torrents that peak at 10,000 nodes"
+
+---
+
+## [MAZIERES-SIGOPSEW-98] Escaping the Evils of Centralized Control with Self-certifying Pathnames
+**Citation:** David Mazières, M. Frans Kaashoek. "Escaping the Evils of Centralized Control with Self-certifying Pathnames." ACM SIGOPS European Workshop, 1998. DOI: 10.1145/319195.319213.
+**Retrieved:** full text via https://doi.org/10.1145/319195.319213 (matching PDF text, MIT Laboratory for Computer Science authors)
+**Source URL:** https://doi.org/10.1145/319195.319213
+**Domain:** E
+
+### What it does
+A self-certifying pathname lets a client verify a remote file server's authenticity from the pathname alone, without consulting any certification authority, by embedding a cryptographic hash of the server's public key directly in the name used to reach it. This paper presents SFS (Secure File System), a global distributed file system built on this mechanism, and states that any naming authority controlling the mapping from names to servers becomes a point of centralized control — able to block new servers from joining, extort fees, or exclude participants — so the paper's design goal is a naming scheme in which no single party holds that control.
+Every SFS file system has a pathname of the form "/sfs/Location:HostID". Location is an ordinary DNS hostname or IP address, telling the client which machine to contact. HostID is SHA-1( server's public key, hostname ) — a 160-bit cryptographic hash computed with the SHA-1 one-way hash function, which the paper states has no known collisions as of publication. Because HostID is derived from the public key itself, the pathname is self-certifying: the client, on first referencing a pathname of this form, contacts the named Location, and mounts the remote file system into the local /sfs/ directory only if that server can prove possession of the private key matching the hash in HostID. Anyone can generate a keypair, compute the corresponding HostID, run the SFS server software on any reachable host, and be reachable at that self-certifying pathname immediately — no registration or certification step is required for a server's pathname to become valid.
+Because a raw 160-bit hash is not human-usable, the paper layers human-readable naming on top through ordinary filesystem symbolic links: a client administrator (or an individual user, in a home directory) creates a symbolic link, e.g. from /verisign to /sfs/sfs.verisign.com:<hash>, and that filesystem's own directory can in turn hold further symbolic links to other self-certifying pathnames, letting certification-authority-style naming hierarchies exist purely as a local convention layered on the cryptographic base, never as a requirement the protocol enforces.
+The SFS authentication protocol (modeled on ssh, with stated fixes) runs in two stages between three parties: the client software C, the server software S, and a per-user local authentication agent A holding private keys. Stage one authenticates the server to the client: the server sends its long-lived public key PKs (whose hash appears in the pathname) and a temporary public key PKt that changes every hour, and client and server derive two session keys Kcs and Ksc; using a separate short-lived key for each session gives forward secrecy, since even a compromised long-lived private key does not let an attacker decrypt past sessions once the corresponding temporary key has been discarded. Stage two authenticates the user to the server via the client and the local agent: the server issues a nonce challenge encrypted under the user's public key, and the agent's correct response (proving possession of the matching private key) causes the server to grant credentials (user and group IDs) for that session. All traffic after stage one is encrypted and integrity-protected under the negotiated session keys.
+For read-only file systems with high availability or performance needs (the paper names certification authorities as an example), SFS lets a server prove content authenticity using precomputed digital signatures over the read-only data, rather than performing per-connection cryptographic operations, and states this allows such read-only content to be replicated on machines that do not hold the corresponding private key.
+
+### Measured results
+This is a position/design paper with one performance claim and no reported benchmark numbers, run counts, or hardware description: the paper states that its user-level SFS client and server implementation, built on NFS (Network File System) with a custom asynchronous remote-procedure-call (RPC) library, fast encryption, and aggressive on-disk and write-back client caching, "performs comparably to Sun's unencrypted NFS on standard application workloads" while adding security and lease-based consistency. No numeric throughput, latency, or comparative percentage is given in this paper; the paper explicitly defers implementation specifics to a separate cited source (Mazières' 1997 MIT master's thesis), which this evidence entry has not retrieved and therefore cannot cite figures from.
+
+### Parameters
+- HostID: SHA-1 hash (160 bits) of the concatenation of the server's public key and hostname. SHA-1 is the specific hash function used; no alternative is offered in this paper.
+- Temporary public key PKt: server-generated, stated to change every hour — the only concrete numeric parameter given in the paper.
+- Session ID: a hash of the two session keys Kcs, Ksc, the server's temporary public key PKt, and a server-chosen nonce N0.
+- No key-length, cipher-suite, or specific asymmetric-algorithm parameter is stated for the public/private keypairs themselves.
+
+### Stated limitations
+The paper states this is a "position paper" and explicitly places implementation specifics "beyond the scope" of this text, deferring them to a separate MIT master's thesis. It states plainly that a second, separate user-authentication mechanism (the /etc/sfs_users file mapping accounts to public keys) is required to access any file that is not universe-readable — self-certifying pathnames alone authenticate the server, not the user. Access control in SFS is stated to be based entirely on the requesting user's identity, not on the requesting machine, so SFS has no notion of an administrative realm for client machines; every client is identically configured. The paper states the only implementation of the authentication agent at time of writing keeps all private keys on the same machine as the client, though it states this need not be so and envisions (without building) "dumb agents" forwarding requests to smart cards or other agents over encrypted connections. No revocation mechanism for a compromised long-lived server key is described; forward secrecy is provided only for past session traffic via the hourly temporary key, not for the long-lived identity key itself.
+
+### Requirements it places on the rest of the system
+- A verifier (the SFS client) must already possess the self-certifying pathname string (Location and HostID) through some out-of-band channel before it can verify anything — the mechanism verifies a claimed public key against a name the client already holds, and states no discovery mechanism for finding an unknown server's correct HostID other than symbolic links, digitally signed email, or other manual distribution.
+- The naming scheme requires a collision-resistant hash function; the paper's specific security claim (that HostID "specifies a unique, verifiable public key") depends entirely on SHA-1 having no known collisions, stated as true at time of writing and not re-derived or bounded quantitatively.
+- The protocol requires the server to hold and use its long-lived private key online for stage-one server authentication (proving possession of the key matching HostID) on every new session, except for the precomputed-signature read-only mode, in which case the paper states the private key need never be kept online at all.
+- User authentication requires a separate, locally maintained mapping (/etc/sfs_users) from user identities to public keys on every server the user accesses; this mapping is per-server local state, not derived from or verified against any global naming structure.
+- Any human-readable naming layered on top (via symbolic links to self-certifying pathnames) is local, per-client configuration; the paper states explicitly that such conventions (e.g., a /verisign link) carry no protocol-level special status, so any two clients may point the same human-readable name at different or no self-certifying pathnames without inconsistency at the protocol level.
+- The forward-secrecy property for past sessions requires the temporary key PKt to actually be destroyed after its hourly rotation; the paper does not specify a mechanism enforcing that destruction.
+
+### Contradicts
+None found. No other entry in this corpus reports conflicting figures about self-certifying naming or SFS.
+
+### References worth retrieving
+- competing: John H. Howard, Michael L. Kazar, Sherri G. Menees, David A. Nichols, M. Satyanarayanan, Robert N. Sidebotham, Michael J. West, "Scale and performance in a distributed file system," ACM Transactions on Computer Systems 6(1), 1988 — AFS (Andrew File System), the comparison baseline the paper states requires a client-side administrator-maintained list of every reachable server and relies on Kerberos shared secrets, unable to guarantee integrity for users without accounts on a given server.
+- competing: Michael L. Kazar et al., "DEcorum file system architectural overview," USENIX Summer 1990 — DFS, described as a second-generation AFS-derived system with a centrally maintained database determining all available file systems.
+- competing: Peter Reiher, Thomas Page, Gerald Popek, Jeff Cook, Stephen Crocker, "Truffles — a secure service for widespread file sharing," Proceedings of the PSRG Workshop on Network and Distributed System Security, 1993 — fine-grained cross-user file export without administrator involvement, but relying on centralized hierarchical certification authorities and X.509 certificates.
+- competing: Amin M. Vahdat, Paul C. Eastham, Thomas E. Anderson, "WebFS: A global cache coherent file system," 1996 — HTTP-layered network file system requiring a hierarchy of certification authorities for its authentication layer.
+- foundational: Carl M. Ellison, Bill Frantz, Butler Lampson, Ron Rivest, Brian M. Thomas, Tatu Ylönen, "SPKI certificate documentation" — SPKI/SDSI, the security infrastructure the paper states is "similar in spirit" to SFS's egalitarian namespace, where every public key acts as its own certification authority for its own namespace.
+- foundational: Ronald L. Rivest, Butler Lampson, "SDSI — a simple distributed security infrastructure" — the specific distributed-naming half of SPKI/SDSI the paper compares its symbolic-link-based root-naming convention against.
+- foundational: J. G. Steiner, B. C. Neuman, J. I. Schiller, "Kerberos: An authentication service for open network systems," USENIX Winter 1988 — the shared-secret authentication system the paper states forces large administrative realms and underlies AFS's centralization problem.
+- foundational: David Mazières, "Security and decentralized control in the SFS distributed file system," MIT Master's thesis, August 1997 — holds the implementation details and (per this paper) the performance comparison this workshop paper only summarizes; not yet retrieved as a separate corpus entry.
+
+### Verbatim extracts
+- "HostID is a cryptographic hash of the server's public key and hostname"
+- "SFS calculates HostID with SHA-1, a one-way function for which there exist no known collisions"
+- "the client transparently creates the referenced directory in /sfs/ and mounts the remote file system there"
+- "Use of a temporary public key provides forward secrecy"
+- "SFS performs comparably to Sun's unencrypted NFS on standard application workloads"
+- "administrators of client machines must also enumerate every single file server the client can talk to" [describing AFS]
 
 ---
 
@@ -15447,6 +16999,75 @@ None found against other entries in this corpus.
 
 ---
 
+## [MINSKY-TIT-03] Set Reconciliation with Nearly Optimal Communication Complexity
+**Citation:** Yaron Minsky, Ari Trachtenberg, Richard Zippel. "Set Reconciliation with Nearly Optimal Communication Complexity." IEEE Transactions on Information Theory, vol. 49, no. 9, 2003, pp. 2213-2218. DOI 10.1109/TIT.2003.815784.
+**Retrieved:** full text via https://www.ipax.org/publications/2003_minsky_reconciliation.pdf (candidate URL; matched title, authors, and journal citation in first 2000 characters)
+**Source URL:** https://doi.org/10.1109/TIT.2003.815784
+**Domain:** D
+
+### What it does
+Reconciles two sets held on separate hosts — determines their union with a communication cost close to the size of the symmetric difference, not the size of either set — by representing each set as a characteristic polynomial and exchanging the polynomial's values at a shared collection of points rather than the set elements themselves.
+
+A characteristic polynomial of a set S = {x1, ..., xn} is defined as S(Z) = (Z - x1)(Z - x2)...(Z - xn), a polynomial whose roots are exactly the set's elements, over a finite field F_q with q at least 2^b for b-bit elements. Dividing host A's characteristic polynomial by host B's characteristic polynomial cancels every element common to both sets, leaving a rational function whose numerator's roots are the elements only A holds and whose denominator's roots are the elements only B holds. Each host evaluates its own characteristic polynomial at an agreed set of m-bar points (m-bar an assumed upper bound on the symmetric difference size m), exchanges the m-bar values, and either host computes the ratio of the two polynomials at each point and interpolates the m-bar values into a rational function of bounded degree. Factoring the recovered numerator and denominator recovers the two one-sided difference sets. The protocol requires only one round: host A can broadcast its evaluations, and every receiving host whose set differs from A's by at most m-bar elements recovers its own missing elements from that single message, even when different receivers are missing different elements (Protocol 2).
+
+When no prior bound on the symmetric difference size m is known, the paper gives an interactive probabilistic protocol (Section 3.3): hosts start from an assumed m-bar, exchange evaluations one at a time (or in batches that grow by a factor c per round), and each side recomputes the interpolated rational function whenever a new evaluation contradicts the previous one. After k consecutive evaluations confirm the same rational function, the parties accept it as correct; k is chosen from a target failure probability using equation (5) in the paper. Adding or deleting an element from a set updates every stored characteristic-polynomial evaluation by multiplying or dividing by (Z - x) at each evaluation point, at a cost of 2*m-bar field operations per update, so evaluations already computed for prior rounds can be reused across set modifications rather than recomputed from scratch.
+
+### Measured results
+This is a theoretical paper with no implementation, testbed, or simulation. Every "result" is an asymptotic bound proven from the protocol's own structure, not a measured quantity. Recorded here as derived bounds, each with the assumptions from which it is derived; none of these figures involves an experimental run, node count, topology, or dataset, and none should be treated as an empirical measurement.
+
+| Bound | Value | Conditions / derivation |
+|---|---|---|
+| Communication complexity, Protocol 2 (bounded m, known m-bar) | (b+1)*m-bar + b bits, i.e. (m-bar+1)(b+1) - 1 | b-bit elements, symmetric-difference bound m-bar chosen close to true difference size m; approaches m*b, the cost of sending the missing elements directly, when m-bar = m |
+| Computational complexity, Protocol 2 | O(\|S\|*m-bar) for evaluation (amortizable to O(m-bar) per insertion/deletion), O(m-bar^3) for interpolation and root-finding via Gaussian elimination | m-bar evaluation points, field F_q |
+| Communication complexity, probabilistic protocol sending one evaluation at a time (Section 3.3.1) | at most (b+2)(m-bar+k) + b bits | k extra confirming evaluations chosen per equation (5); example given: k=1 extra evaluation suffices for a 10^-11 failure probability reconciling 64-bit-string sets whose combined symmetric difference is under 10,000 elements |
+| Computational complexity, one-at-a-time probabilistic protocol | O(m-bar^4) | interpolation repeated up to m-bar times |
+| Round complexity, batched probabilistic protocol (batch growth factor c per round) | ceil(log_c(m-bar+k)) rounds | trades rounds against roughly c times the one-at-a-time communication cost |
+| Communication complexity, batched probabilistic protocol | at most (b+1)*c*(m-bar+k) + b + ceil(log_c(m-bar+k)) bits | same k as above |
+| Computational complexity, batched probabilistic protocol (fixed c) | O((m-bar+k)^3) | cubic in m-bar rather than quartic |
+| Information-theoretic lower bound on transmitted bits, unbounded rounds | C-hat_1 >= lg( C(2b - N - mA, mB) * C(2b - N - mB, mA) ), reducing to C-hat_1 >= lg( C(2b - N - m, m) ) when m = mA + mB is fixed and one of mA, mB is zero | N = size of the intersection, b-bit elements; when 2^b is at least twice either set's size this bound is approximately (b - 1 - lg m)*m, so C-hat_1 / (m*b) >= 1 - (lg m)/b, i.e. Protocol 2's cost is within a small fraction of this bound for sparse sets |
+| Deterministic lower bound without a known m | no algorithm can do better than communication linear in set size | follows from Yao's theorem that set-equality communication complexity is linear in set size, cited as [32] in the paper; this is why the no-bound case (Section 3.3) is necessarily probabilistic |
+
+### Parameters
+- b: bitstring length of each set element (elements map into a field F_q with q >= 2^b).
+- m-bar: the assumed upper bound on the symmetric difference size m = mA + mB, chosen a priori by both hosts for Protocol 2; drives both the number of evaluation points exchanged and the communication cost.
+- q: the field size; must satisfy q >= 2b + m-bar to guarantee at least m-bar evaluation points do not coincide with actual set elements (an "anomalous" evaluation point causes the corresponding characteristic polynomial to vanish there), at a cost of at most one extra bit per element.
+- k: the number of extra confirming evaluations in the probabilistic protocol, computed from a target failure probability epsilon by k = ceil(log(epsilon/m-bar)) (equation 5); the worked example gives k=1 for epsilon = 10^-11 with combined set size under 10,000, 64-bit elements.
+- c: the batch growth factor per round in the round-minimizing variant of the probabilistic protocol, trading rounds (ceil(log_c(m-bar+k))) against a roughly c-fold increase in bits transmitted.
+
+### Stated limitations
+The deterministic protocol (Protocol 2) requires a tight prior bound on the symmetric difference size; the paper states directly that the protocol "requires a tight bound on the number of differences between reconciling hosts." A bound that is too small can produce a system of equations that fails to have a valid low-degree solution; the paper does not give an explicit failure/retry procedure for this case beyond restarting with a larger bound. Without a known bound, reconciliation is necessarily probabilistic and necessarily interactive — the deterministic, non-interactive, broadcast-capable form (Protocol 2) is unavailable in that case, and the paper cites Yao's result that no deterministic protocol beats linear communication complexity when the difference size is unknown. The paper does not address adversarial senders, network loss, or authentication of exchanged evaluations; its bounds assume both hosts hold sets in memory sufficient to evaluate the characteristic polynomial at each required point (a linear scan over each host's full data set, amortizable across incremental updates but not free on first use).
+
+### Requirements it places on the rest of the system
+- Both hosts must map their set elements into a common finite field F_q of size at least 2^b (b = element bit length), and must agree in advance on which evaluation points to use (or on a shared pseudo-random generator to produce them), so the field and evaluation-point selection are a pre-shared configuration, not negotiated per session.
+- The deterministic protocol needs a symmetric-difference bound m-bar supplied by whatever component tracks how far two replicas have diverged; if no component in the system can supply this bound, only the slower, interactive, probabilistic variant is available.
+- Set membership must be representable as fixed-length b-bit strings drawn from a space where "element" has a stable, comparable encoding; the protocol reconciles sets of these strings, not arbitrary ordered data, and the paper notes reconciling ordered strings (rather than unordered sets) requires different techniques with a logarithmic dependency on set size that this scheme avoids.
+- Recovering the union after reconciliation requires an additional mA*b bits from whichever host has the larger local addition, since the base protocol above recovers only the two one-sided difference sets, not each side applying them.
+- Incremental use (reusing evaluations across many small updates) requires each host to maintain running per-point polynomial evaluations updated on every insertion or deletion (2*m-bar field operations per update) rather than recomputing from the full set each time; a component using this protocol needs to hook set-mutation events to this update step to get the amortized cost rather than the full linear-scan cost.
+
+### Contradicts
+None found within this corpus. No other paper in the current batch measures or disputes this protocol's bounds.
+
+### References worth retrieving
+- Foundational: A. Orlitsky, "Worst-case interactive communication I: Two messages are almost optimal," IEEE Trans. Info. Theory, vol. 5, no. 36, 1990 — interactive communication complexity bounds this paper builds its lower bound from.
+- Foundational: R. J. Lipton, "Efficient checking of computations," STACS, 1990 — first proposal of characteristic-polynomial set representation.
+- Foundational: M. Blum, S. Kannan, "Designing programs that check their work," Journal of the ACM, vol. 42, no. 1, 1995 — probabilistic set-equality test the characteristic-polynomial representation was reused from.
+- Foundational: B. H. Bloom, "Space/time trade-offs in hash coding with allowable errors," CACM, vol. 13, no. 7, 1970 — Bloom filter, cited as an alternative set representation the paper argues is ineffective for reconciliation (linear size in set, nonzero false-positive rate).
+- Foundational: A. C. Yao, "Some complexity questions related to distributive computing," STOC, 1979 — source of the linear-communication-complexity lower bound for set equality without a known difference bound.
+- Related mechanism: E. Kaltofen, B. M. Trager, "Computing with polynomials given by black boxes for their evaluations," Journal of Symbolic Computation, vol. 9, no. 3, 1990 — black-box polynomial GCD/factorization techniques the value-based (rather than coefficient-based) polynomial manipulation approach draws on.
+- Related mechanism / competing representation: G. Cormode, M. Paterson, S. Sahinalp, U. Vishkin, "Communication complexity of document exchange," ACM-SIAM SODA, 2000 — an ordered-string reconciliation approach the paper contrasts with its unordered-set approach.
+- Application: A. Trachtenberg, D. Starobinski, S. Agarwal, "Fast PDA synchronization using characteristic polynomial interpolation," INFOCOM, 2002 — a stated implementation of these protocols.
+- Application: S. Agarwal, D. Starobinski, A. Trachtenberg, "On the scalability of data synchronization protocols for PDAs and mobile devices," IEEE Network, vol. 16, no. 4, 2002 — a stated implementation/scalability study of these protocols.
+
+### Verbatim extracts
+- "allowing many clients to reconcile with one host based on a single broadcast" (abstract)
+- "the communication complexity of these set reconciliation protocols is close to the size of the symmetric difference"
+- "the protocol requires a tight bound on the number of differences between reconciling hosts, but it does not require interaction"
+- "the probabilistic protocol does not require any a priori bound... but is interactive"
+- "Bloom filters do not provide an effective solution to the set reconciliation problem"
+- "there is no deterministic algorithm for set reconciliation that has better than linear communication complexity" without a known bound m
+
+---
+
 ## [MISLOVE-HOTOS-03] POST: A Secure, Resilient, Cooperative Messaging System
 
 **Citation:** Alan Mislove, Ansley Post, Charles Reis, Paul Willmann, Peter Druschel, Dan S. Wallach, Xavier Bonnaire, Pierre Sens, Jean-Michel Busca, Luciana Arantes-Bezerra. "POST: A Secure, Resilient, Cooperative Messaging System." Proceedings of HotOS IX, USENIX Association, 2003. Pages 61-66.
@@ -15636,6 +17257,87 @@ None found among the papers in this corpus.
 - "the YouTube social network does not meet Ostra's requirements, because there is no significant cost"
 - "each legitimate user receives only 0.22 unwanted messages per week"
 - "more than 90% of users' bloom filters are smaller than 4 kilobytes"
+
+---
+
+## [MOHAISEN-IMC-10] Measuring the Mixing Time of Social Graphs
+**Citation:** Abedelaziz Mohaisen, Aaram Yun, Yongdae Kim. "Measuring the Mixing Time of Social Graphs." ACM Internet Measurement Conference (IMC), 2010. Pages 383-389. DOI 10.1145/1879141.1879191.
+**Retrieved:** full text via https://www.tdi.gatech.edu/pub/imc10-mohaisen.pdf (candidate URL; matched title, authors, venue in first 2000 characters)
+**Source URL:** https://dl.acm.org/doi/10.1145/1879141.1879191
+**Domain:** F
+
+### What it does
+Measures, rather than assumes, the mixing time of real social graphs — the length of random walk needed for the walk's position distribution to approach the graph's stationary distribution — because several Sybil-defense designs (SybilGuard, SybilLimit, SybilInfer, Whanau) rely on social graphs being "fast mixing" (mixing time polynomial in log(n) for a target closeness epsilon) as a precondition for their security proofs, and no prior paper had directly measured this property on the graphs those defenses target.
+
+Mixing time T(epsilon) is defined as the maximum, over all starting nodes v_i, of the minimum walk length t such that the total variation distance between the walk's distribution after t steps and the graph's stationary distribution falls below epsilon. Two measurement methods are used. The first computes the Second Largest Eigenvalue Modulus (SLEM), written mu, of the graph's random-walk transition matrix; mu bounds mixing time as mu/(2(1-mu)) * log(1/(2*epsilon)) <= T(epsilon) <= (log(n) + log(1/epsilon))/(1-mu). The paper reports the lower bound from this formula because it stated more forcefully how much larger the true mixing time can be than assumed. The second method directly samples: starting from a randomly chosen node, it computes the walk's distribution after t steps for increasing t and measures the total variation distance to the stationary distribution, repeated from 1,000 randomly chosen starting nodes per graph, aggregated as percentiles (top 10%, median 20%-60%, bottom 10%) of the resulting epsilon values at each walk length t. For graphs too large to exhaustively sample (millions of nodes), representative subgraphs of 10,000, 100,000, and 1,000,000 nodes are extracted from the original graph using breadth-first search from a random starting node; the paper notes this sampling method may bias toward faster mixing, which only strengthens a finding of slower-than-expected mixing.
+
+### Measured results
+
+| Dataset | Nodes | Edges | SLEM (mu) | Mixing time to reach epsilon=0.1 (lower bound, SLEM method) |
+|---|---|---|---|---|
+| Wiki-vote | 7,066 | 100,736 | 0.899418 | (small dataset, in the 200-400 range group below) |
+| Slashdot 1 | 82,168 | 582,533 | 0.987531 | (small dataset, in the 200-400 range group below) |
+| Slashdot 2 | 77,360 | 546,487 | 0.987531 | (small dataset, in the 200-400 range group below) |
+| Facebook | 63,392 | 816,886 | 0.998133 | (small dataset, in the 200-400 range group below) |
+| Physics 1 | 4,158 | 13,428 | 0.998133 | 200-400 |
+| Physics 2 | 11,204 | 117,649 | 0.998221 | 200-400 |
+| Physics 3 | 8,638 | 24,827 | 0.996879 | 200-400 |
+| Enron | 33,696 | 180,811 | 0.996473 | 200-400 |
+| Epinion | 4,158 | 13,428 | 0.998133 | 200-400 |
+| DBLP | 614,981 | 1,155,148 | 0.997494 | 100-400 |
+| Facebook A | 1,000,000 | 20,353,734 | 0.982477 | 100-400 |
+| Facebook B | 1,000,000 | 15,807,563 | 0.992020 | 100-400 |
+| Livejournal A | 1,000,000 | 26,151,771 | 0.999387 | 1,500-2,500 |
+| Livejournal B | 1,000,000 | 27,562,349 | 0.999695 | 1,500-2,500 |
+| Youtube | 1,134,890 | 2,987,624 | 0.997972 | 100-400 |
+
+The dataset-grouped mixing-time figures above are the paper's stated ranges read from Figures 1 and 2 (small-graph and large-graph lower-bound plots), quoting the paper's own text: "physics co-authorship, Enron, and Epinion... a mixing time of 200 to 400 is required to achieve epsilon=0.1"; "about 1500 to 2500 in case of Livejournal, it ranges from 100 to about 400 in case of DBLP, Youtube, and Facebook."
+
+Sample-versus-SLEM discrepancy, measured on the 1,000,000-node Facebook A subgraph: the top-10th-percentile of 1,000 sampled random walks reaches an average variation distance of epsilon=10^-5 at walk length 100, while the SLEM-derived bound reaches only epsilon=10^-2 at the same walk length — a 3-order-of-magnitude gap between the best-case sampled behavior and the worst-case SLEM bound, on the same graph and walk length.
+
+Node-pruning effect, measured on the DBLP graph (614,981 nodes) by iteratively removing nodes below a minimum degree threshold from 1 to 5 (producing DBLP1 through DBLP5, with DBLP5 at 145,497 nodes): at a fixed walk length of 100, the lower-bound total variation distance falls from about 0.2 to about 0.03, and the average total variation distance falls from about 0.015 to about 0.002 — i.e., pruning to under a quarter of the original node count materially speeds mixing, replicating the trimming step used in SybilGuard's and SybilLimit's own evaluations.
+
+SybilLimit reimplementation, applied without an attacker present (since SybilLimit's guarantee is stated as a function of attack-edge count, not measurable without simulating an attack): random-walk parameter r set to r0*sqrt(m) per the birthday-paradox admission formula, m being the graph's undirected edge count; walk length t increased until nearly all honest nodes in the graph were admitted by a trusted verifier node. Result (Figure 8): admission-rate-versus-walk-length curves plotted for Physics 1, Physics 2, Physics 3, Facebook A (10,000-node sample), and Slashdot 1 (10,000-node sample); the paper's stated conclusion from this is that the walk length needed to admit nearly all honest nodes is larger, and the resulting variation-distance quality worse, than the fixed walk lengths of 10 or 15 used in SybilLimit's own published evaluation.
+
+Prior-work critique with specific figures: SybilGuard and SybilLimit's own experiments used fixed walk lengths of 10 or 15 nodes; this paper's measurement finds walk lengths of 100-2,500 are needed across the datasets in Table 1 to reach epsilon=0.1, one to two orders of magnitude larger than the walk lengths those defenses' own evaluations used.
+
+### Parameters
+- epsilon: the target total variation distance defining mixing time T(epsilon); the paper measures at multiple epsilon but reports epsilon=0.1 as its headline comparison figure; SybilGuard/SybilLimit's theoretical framing requires epsilon=Theta(1/n).
+- Walk sample count: 1,000 randomly chosen starting nodes per graph for the direct-sampling method.
+- Subgraph sizes for large-graph BFS sampling: 10,000, 100,000, and 1,000,000 nodes, drawn from source graphs of 3 to 5 million nodes.
+- r (SybilLimit random-walk instance count parameter): set to r0*sqrt(m), r0 computed from the birthday-paradox formula for a target intersection probability, m = undirected edge count of the graph under test.
+- Node-degree pruning threshold (DBLP trimming experiment): minimum degree thresholds 1 through 5, applied iteratively, reducing DBLP from 614,981 nodes (DBLP1) to 145,497 nodes (DBLP5).
+
+### Stated limitations
+The paper states its own future work as building theoretical models that account for average-case (rather than worst-case) mixing time, and cost models relating a social graph's mixing time to its trust model, motivated by the observation that graphs requiring physical acquaintance (DBLP, physics co-authorship) mix slower than online social networks with looser trust models (Facebook, wiki-vote) whose links tolerate more Sybil identities. The authors state the average mixing time observed across sampled starting nodes is consistently better than the SLEM-derived worst-case bound, but still larger than the walk lengths (10, 15) that prior Sybil-defense evaluations used. The paper does not evaluate any Sybil defense scheme other than SybilLimit for quantitative performance impact, and its SybilLimit reimplementation is run without a simulated attacker, so it reports only admission of honest nodes, not the resulting count of admitted Sybil identities under attack.
+
+### Requirements it places on the rest of the system
+- A Sybil-defense mechanism relying on a "fast mixing" precondition for its security proof needs the deployment's actual social graph measured for mixing time before that proof's guarantees can be trusted; this paper's own results show mixing time varies by more than an order of magnitude across graph types (100-400 for DBLP/Youtube/Facebook versus 1,500-2,500 for Livejournal, at the same epsilon=0.1), so no single walk-length constant transfers across deployments.
+- A mechanism that trims or prunes low-degree nodes to make its social graph mix faster (as SybilGuard and SybilLimit's own evaluations do) needs to disclose the resulting reduction in graph size as part of its security claim, since this paper measures DBLP shrinking from 614,981 to 145,497 nodes (76% of nodes removed) to obtain its mixing-time improvement.
+- A design that uses SLEM as its analytic proxy for mixing time needs to compute the transition matrix's second-largest eigenvalue modulus, which the paper found computationally feasible up to graphs of about one million nodes given a sparse transition matrix; beyond that the direct-sampling method (starting-node random walks) is the fallback, and it yields a materially more optimistic (smaller) mixing-time estimate than the SLEM bound on the same graph.
+- Any component setting a fixed random-walk length as a network-wide constant (as SybilGuard and SybilLimit do, using 10 or 15) needs a graph-specific justification, because this paper's measurement shows the walk length required to reach epsilon=0.1 varies by dataset from about 100 to about 2,500.
+
+### Contradicts
+Contradicts the fast-mixing assumption underlying SybilGuard (Yu, Kaminsky, Gibbons, Flaxman, SIGCOMM 2006 / IEEE/ACM ToN 2008), SybilLimit (Yu, Gibbons, Kaminsky, Xiao, IEEE S&P 2008), SybilInfer (Danezis, Mittal, NDSS 2009), and Whanau (Lesniewski-Laas, Kaashoek, USENIX NSDI 2010): those designs' published evaluations used walk lengths of 10 or 15 and this paper's direct and SLEM-based measurements find mixing times one to two orders of magnitude larger (100 to 2,500, depending on dataset) are needed to reach epsilon=0.1 on the same or comparable real-world social graphs. The paper explicitly states Whanau's own attempted mixing-time estimate is "only circumstantial" and does not establish fast mixing. None found against any other paper in the current evidence corpus.
+
+### References worth retrieving
+- Competing / independent measurement, concurrent: B. Viswanath, A. Post, K. P. Gummadi, A. Mislove, "An analysis of social network-based sybil defenses," SIGCOMM 2010 — compares SybilGuard, SybilLimit, SybilInfer, and SumUp directly and finds their behavior reduces to community detection; this paper states its own slow-mixing findings agree with that result.
+- Attack / critique target: H. Yu, M. Kaminsky, P. B. Gibbons, A. Flaxman, "SybilGuard: defending against sybil attacks via social networks," SIGCOMM 2006, and IEEE/ACM Trans. Netw. 16(3), 2008 — the defense whose fixed walk-length (10) evaluation this paper's central results contradict.
+- Attack / critique target: H. Yu, P. B. Gibbons, M. Kaminsky, F. Xiao, "SybilLimit: A near-optimal social network defense against sybil attacks," IEEE S&P 2008 — the defense this paper reimplements and finds needs a substantially larger walk length than the original evaluation used.
+- Attack / critique target: G. Danezis, P. Mittal, "SybilInfer: Detecting sybil nodes using social networks," NDSS 2009 — a fast-mixing-property-dependent Sybil detection scheme this paper cites as relying on an unverified mixing assumption.
+- Competing: C. Lesniewski-Laas, M. F. Kaashoek, "Whanau: A sybil-proof distributed hash table," USENIX NSDI 2010 — a fast-mixing-dependent Sybil-proof DHT whose own mixing-time estimate this paper calls circumstantial.
+- Foundational: J. R. Douceur, "The Sybil Attack," IPTPS 2002 — origin of the Sybil-attack problem these defenses address.
+- Foundational: A. Sinclair, "Improved bounds for mixing rates of Markov chains and multicommodity flow," Combinatorics, Probability & Computing, 1992 — source of the SLEM-based mixing-time bound (Theorem 2) this paper's methodology uses.
+- Dataset source: A. Mislove, M. Marcon, P. K. Gummadi, P. Druschel, B. Bhattacharjee, "Measurement and analysis of online social networks," IMC 2007 — source of the Livejournal and Youtube graph datasets used in Table 1.
+
+### Verbatim extracts
+- "the mixing time of social graphs is much larger than anticipated"
+- "current security systems based on fast mixing have weaker utility guarantees or have to be less efficient"
+- "a mixing time of 200 to 400 is required to achieve epsilon=0.1"
+- "about 1500 to 2500 in case of Livejournal, it ranges from 100 to about 400 in case of DBLP"
+- "the variation distance is reduced from about 0.2 to 0.03" after successive trimming
+- "the SLEM-based mixing time results in only epsilon=10^-2" versus 10^-5 for the sampled top 10%
+- "their evidence is only circumstantial and it does not directly follow that these social graphs are really fast mixing"
 
 ---
 
@@ -15916,6 +17618,81 @@ None found. This is a wire-format specification without prior claims commonly at
 
 ---
 
+## [NGAN-IPTPS-03] Enforcing Fair Sharing of Peer-to-Peer Resources
+**Citation:** Tsuen-Wan "Johnny" Ngan, Dan S. Wallach, Peter Druschel. "Enforcing Fair Sharing of Peer-to-Peer Resources." IPTPS, 2003. DOI 10.1007/978-3-540-45172-3_14.
+**Retrieved:** full text via https://www.cs.rice.edu/~druschel/publications/samsara-iptps03.pdf (candidate URL; matched title and authors in first 2000 characters)
+**Source URL:** https://link.springer.com/chapter/10.1007/978-3-540-45172-3_14
+**Domain:** I
+
+### What it does
+Enforces a storage-consumption limit per participant in a peer-to-peer network — a node may store no more remote data than the local disk space it advertises as available to others — using a publish-and-audit mechanism rather than a central broker or a hardware trust anchor, so no single point of failure or trusted issuing authority is required.
+
+Every node keeps a signed usage file readable by any other node, containing the node's advertised storage capacity, a local list of (nodeId, fileId, size) entries for files the node stores on behalf of others, and a remote list of fileIds (with sizes) the node has published to remote storage. A node is "under quota" and permitted to write new files when advertised capacity minus the sum of its remote list (charging per replica) is positive; a node accepting a file first fetches the publisher's usage file to check this. Filesystem possession is checked by a challenge mechanism: for each stored file, a node periodically picks a replica holder as challenge target, notifies the other replica holders, and queries the target for the hash of a few randomly selected blocks; the target can answer only if it holds the file, and any attempt to fetch the file from another holder mid-challenge is visible to the challenger, who restarts the challenge.
+
+Inflation of the local list (claiming to store files nobody actually published) is detected by two audit mechanisms. A normal audit: any node with a file entry in a target's remote list periodically (anonymized via a Crowds-style one-hop random relay so the target cannot identify its auditor) fetches the target's usage file and checks the file is present. A random audit: every node, at lower frequency, picks a node uniformly at random from the whole overlay, fetches its usage file, and cross-checks every entry in its local list against the corresponding remote-list entry at the nodes identified there. Cheaters who collude to push their own debt onto each other's books form a chain; the chain necessarily terminates at a "cheating anchor" node whose local list contains an entry with no matching remote-list entry anywhere, and random auditing discovers that anchor with a bounded probability per period (derived below). Because usage files are digitally signed, the anchor's own file is a signed record of its inconsistency, usable as evidence for ejecting it from the network; ejecting the anchor exposes the next cheater in the chain who depended on it.
+
+A competing design, quota managers, replaces this publish-and-audit approach with a manager set: a fixed set of nodes adjacent to a given node in the overlay's identifier space, which jointly track that node's storage consumption and must approve (via a Byzantine fault-tolerant agreement protocol among the managers) every new-file request from the node they manage.
+
+### Measured results
+Simulation study; no real-world deployment or testbed measurement. All figures below use these fixed settings unless stated otherwise: 10,000 nodes, 285 files stored per node, average node lifetime 14 days, per-node storage capacity drawn from a truncated normal distribution ranging 2 GB to 200 GB with a 48 GB average, 1% of files reclaimed and republished per simulated day, two challenges issued per stored file per day against randomly chosen replicas, quota-manager sets of size 10 (tolerating 3 Byzantine nodes per set via Castro and Liskov's BFT algorithm), normal audits performed on average 4 times daily per remote-list entry, random audits performed once daily, and simulations assuming all nodes honestly follow the protocol (no cheating modeled). The measured quantity throughout is per-node communication bandwidth attributable to storage accounting only — overlay maintenance and actual file storage/retrieval traffic are explicitly excluded from the measurement.
+
+| Experiment | Independent variable | Compared designs | Reported outcome |
+|---|---|---|---|
+| Figure 3: overhead vs. node count | 1,000 to 100,000 nodes (log scale), other parameters at baseline | Auditing without caching, auditing with caching, quota managers | Per-node upstream bandwidth (identical to downstream) stays nearly constant across this three-order-of-magnitude range of node counts for all three designs, i.e. all three scale with overlay size; axis range plotted is 0-80 bps |
+| Figure 4: overhead vs. files stored per node | 0 to 700 files per node, other parameters at baseline | Same three designs | Overhead grows linearly with files-per-node for all three; auditing without caching grows at roughly twice the rate of the other two designs; axis range plotted is 0-200 bps |
+| Figure 5: overhead vs. average node lifetime | 0 to 25 days average node lifetime, other parameters at baseline | Same three designs | Quota-manager overhead rises rapidly as node lifetime shortens, attributed to the cost of nodes joining and leaving manager sets and voting on file insertions for new nodes; axis range plotted is 0-350 bps |
+| Random-audit detection probability (analytical, not simulated) | n-node network with c colluding ("conspiring") nodes | — | Probability the cheating anchor escapes random audit in one period is approximately ((n-2)/(n-1))^c, converging to e^-1 (about 0.368) as c grows; probability of discovery within three audit periods exceeds 95% |
+
+The paper states, without giving a specific bandwidth figure, that under these conditions "auditing overhead is quite low — only a fraction of a typical p2p node's bandwidth," and that auditing with caching performs comparably to quota managers while quota managers are more sensitive to file turnover rate (higher voting cost) and to manager-set size (larger sets tolerate more Byzantine nodes but cost more).
+
+### Parameters
+- Node count: baseline 10,000; varied 1,000-100,000 in Figure 3.
+- Files stored per node: baseline 285; varied 0-700 in Figure 4.
+- Average node lifetime: baseline 14 days; varied 0-25 days in Figure 5.
+- Per-node storage capacity: truncated normal distribution, 2 GB to 200 GB, average 48 GB.
+- File reclamation/republication rate: 1% of files per simulated day.
+- Challenge frequency: 2 challenges per stored file per day, against randomly selected replicas.
+- Quota-manager set size: 10 nodes per set, tolerating up to 3 Byzantine-faulty members (via Castro and Liskov's BFT protocol), consistent with the standard n >= 3f+1 Byzantine fault tolerance bound.
+- Normal audit frequency: average 4 times daily, per entry in a node's remote list.
+- Random audit frequency: once daily, target chosen uniformly at random from the whole overlay.
+- Anonymization for audits: one-hop random relay indirection (a technique the paper describes as similar to Crowds), stated as providing "weak anonymity sufficient for our purposes."
+
+### Stated limitations
+The paper states it focuses "primarily on minority collusions" — a threat model where a subset of nodes conspires but most of the network is not conspiring — and explicitly separates this from "minority bribery," where an adversary selects and bribes specific nodes; the authors state that while bribery-resistant mechanisms at this layer may be buildable, "it is entirely unclear that the lower-level p2p routing and messaging systems can be equally robust," and for the remainder of the paper they assume the correctness of the underlying peer-to-peer routing system rather than defending it. The paper explicitly excludes overlay-maintenance and file storage/retrieval bandwidth from its overhead measurements, so the reported figures cover accounting traffic only, not total system bandwidth. The simulation assumes all nodes honestly follow the protocol (no cheating is modeled in the reported experiments) — the discovery-probability analysis for the cheating anchor is a separate, closed-form calculation, not a simulated adversarial run. The recursive audit that would fully verify a node's entire dependency chain is stated to be "prohibitively expensive" to implement directly, which is why the paper substitutes random sampling (the random-audit mechanism) instead. Quota managers are stated to be vulnerable to bribery because "managers suffer no direct penalty if they grant requests that would be correctly denied."
+
+### Requirements it places on the rest of the system
+- Requires a public key infrastructure allowing every node to sign documents that any other node can verify and that others cannot forge; both the smart-card, quota-manager, and auditing designs assume this as given.
+- Requires the underlying peer-to-peer storage system to supply a mechanism for locating the replica holders of a given fileId (the paper cites PAST for this) since the remote list stores only fileIds, not the identities of the nodes holding those replicas.
+- Requires an anonymizing relay layer (one-hop indirection, described as Crowds-like) available to the accounting mechanism, so that an auditor's identity is hidden from the node it audits; without this, a node under audit could distinguish and selectively satisfy known auditors while defrauding others.
+- Requires every node in the overlay to perform both normal audits (against nodes with entries in its own remote/local lists) and random audits (against nodes chosen uniformly from the whole overlay) on a regular schedule; the stated 95%-within-three-periods detection guarantee holds only if this schedule is actually followed by participants, which the paper treats as incentivized by mutual benefit from cheater ejection but does not separately verify under an adversarial simulation.
+- The quota-manager alternative requires the overlay's node-identifier space to supply well-defined "adjacent" node sets usable as manager sets, and requires those manager sets to run a Byzantine fault-tolerant agreement protocol (Castro and Liskov's PBFT) tolerant of at most floor((set size - 1)/3) faulty members; increasing Byzantine-fault tolerance in this design requires enlarging manager sets, which the paper's Figure 5 result shows raises overhead as node lifetime shortens due to more frequent manager-set churn.
+- Requires all nodes storing replicas of a file to be reachable for challenge-response block-hash queries; a challenge requires that other replica holders of the target file be notified in advance so a mid-challenge file-fetch from among them is visible to the challenger.
+
+### Contradicts
+None found among the current corpus. No other paper in this batch measures fair-sharing/storage-accounting overhead against which this paper's Figures 3-5 could be compared.
+
+### References worth retrieving
+- Foundational: M. Castro, B. Liskov, "Practical Byzantine fault tolerance," OSDI, 1999 — the BFT agreement protocol the quota-manager design's manager sets run, used directly in this paper's simulation.
+- Foundational: M. Castro, P. Druschel, A. Ganesh, A. Rowstron, D. S. Wallach, "Security for structured peer-to-peer overlay networks," OSDI, 2002 — source of the minority-collusion threat-model framing this paper adopts and explicitly restricts itself to.
+- Foundational: P. Druschel, A. Rowstron, "PAST: A large-scale, persistent peer-to-peer storage utility," HotOS, 2001 — the storage system this accounting mechanism is designed to sit on top of; source of the original smart-card quota proposal this paper rejects as unsuitable for "grassroots" (non-organizationally-backed) systems.
+- Foundational: M. K. Reiter, A. D. Rubin, "Crowds: Anonymity for web transactions," ACM TISSEC 1(1), 1998 — the anonymization technique the auditor-identity-hiding mechanism is modeled on.
+- Competing: R. Anderson, "The Eternity Service," Proc. 1st Int'l Conf. on the Theory and Applications of Cryptology, 1996 — an alternative fairness/persistence design using explicit electronic currency to purchase storage, contrasted with this paper's currency-free barter framing.
+- Competing: M. Waldman, D. Mazieres, "Tangler: A censorship-resistant publishing system based on document entanglements," ACM CCS, 2001 — a small-scale (under 30 servers) certificate-based fairness design requiring a first-month no-publish period for new servers, cited as an alternative fairness mechanism.
+- Attack/critique input: E. Adar, B. Huberman, "Free riding on Gnutella," First Monday 5(10), 2000 — measurement motivating the paper's fair-sharing problem statement.
+- Related economic result: E. Fehr, S. Gachter, "Altruistic punishment in humans," Nature 415, 2002 — a human-subject economic study the paper cites as justification that users will accept the cost of performing random audits.
+- Foundational (DAMD framing): J. Feigenbaum, S. Shenker, "Distributed algorithmic mechanism design: Recent results and future directions," DIALM, 2002 — the distributed-mechanism-design framing the paper's introduction adopts.
+
+### Verbatim extracts
+- "requiring nodes to publish auditable records of their usage can give nodes economic incentives"
+- "This paper focuses primarily on minority collusions."
+- "it is entirely unclear that the lower-level p2p routing and messaging systems can be equally robust"
+- "the cheating anchor would be discovered in three periods with probability higher than 95%"
+- "auditing overhead is quite low — only a fraction of a typical p2p node's bandwidth"
+- "managers suffer no direct penalty if they grant requests that would be correctly denied"
+- "auditing with caching has performance comparable to quota managers, but is not subject to bribery attacks"
+
+---
+
 ## [OVEZIK-ACNS-25] SoK: Measuring Blockchain Decentralization
 **Citation:** Christina Ovezik, Dimitris Karakostas, Mary Milad, Aggelos Kiayias, Daniel W. Woods. "SoK: Measuring Blockchain Decentralization." Applied Cryptography and Network Security (ACNS), 2025. DOI 10.1007/978-3-031-95761-1_7.
 **Retrieved:** full text via https://arxiv.org/abs/2501.18279
@@ -16160,6 +17937,76 @@ None found.
 "an adversary controlling a set of T nodes... can inject at most sum of beta errors"
 "the rate of the resulting code is reduced from k/n to Kk/(Nn)"
 "it is also of interest to design codes that support repair in the presence of adversaries with optimal overhead for repair of all nodes"
+
+---
+
+## [PEDERSEN-CRYPTO-91] Non-Interactive and Information-Theoretic Secure Verifiable Secret Sharing
+**Citation:** Torben Pryds Pedersen. "Non-Interactive and Information-Theoretic Secure Verifiable Secret Sharing." CRYPTO 1991 (published as J. Feigenbaum, ed., Advances in Cryptology — CRYPTO '91, LNCS 576), 1992. Pages 129-140. DOI 10.1007/3-540-46766-1_9.
+**Retrieved:** full text via https://www.cs.cornell.edu/courses/cs754/2001fa/129.PDF (candidate URL; matched title and author in first 2000 characters)
+**Source URL:** https://doi.org/10.1007/3-540-46766-1_9
+**Domain:** E
+
+### What it does
+Distributes a secret among n participants so that any k of them can later recover it (a (k,n)-threshold scheme) while every participant can check, without communicating with anyone else, that the share received is consistent with the shares everyone else received — without revealing any information about the secret itself, even to a computationally unbounded adversary holding fewer than k shares.
+
+The scheme combines Shamir's polynomial secret sharing with a commitment scheme. The commitment scheme fixes a large prime p, a prime q dividing p-1, the unique order-q subgroup G_q of the integers mod p, and two generators g, h of G_q chosen so that nobody knows the discrete logarithm of h base g; committing to a value s in Z_q is done by picking a random t in Z_q and computing E(s,t) = g^s * h^t mod p. This commitment reveals no information about s (it is uniformly distributed in G_q regardless of s) and cannot be opened to a different value s' unless the committer can compute the discrete logarithm log_g(h).
+
+The dealer distributes a secret s as follows. It picks a random degree-(k-1) polynomial F with F(0) = s (Shamir's scheme) and a second random degree-(k-1) polynomial G with a random constant term t, and broadcasts a commitment E_j = E(F_j, G_j) to each coefficient F_j of F (using the matching coefficient of G as the commitment's randomness), for j = 0 to k-1 — E_0 = E(s,t) is the commitment to the secret itself. Each participant P_i then privately receives its Shamir share s_i = F(i) together with the matching randomness value t_i = G(i), and checks a verification equation (labeled (*) in the paper) built by evaluating the product of the broadcast commitments raised to powers of i; the equation holds if and only if (s_i, t_i) is consistent with the broadcast commitments. If a dishonest dealer distributes shares that fail to lie on a consistent degree-(k-1) polynomial, any two disagreeing accepted shares let the participants who hold them jointly compute log_g(h) (the proof runs a binary-search-like scan for the first index where the reconstructed polynomial disagrees with a claimed share) — so a cheating dealer is caught except with probability negligible in the size of q, and being caught is equivalent to breaking discrete log. Any k participants with accepted shares reconstruct the secret using standard Lagrange interpolation on the s_i values, exactly as in unmodified Shamir sharing; recombining is not more expensive than plain Shamir.
+
+Section 5 shows the scheme is additively homomorphic over the shares: given two secrets s' and s'' distributed this way, every participant can locally combine its two shares (s_i' + s_i'' mod q, t_i' + t_i'' mod q) and the two sets of broadcast commitments (pairwise products E_j' * E_j'') to obtain a valid verifiable distribution of s = s' + s'' mod q, without any interaction; scalar multiplication by a public constant a is supported the same way (share times a, commitment raised to the a-th power). This lets n participants who trust nobody, including each other, jointly generate a shared secret nobody individually knows: each participant P_i independently runs the distribution protocol on its own randomly chosen sub-secret s_i0, every participant verifies every share it receives and publicly exposes (with signature) any inconsistent share it detects, and the final secret is the sum of all sub-secrets — uniformly random in Z_q as long as at least one participant chose its sub-secret at random, and unknown to any coalition of fewer than k participants.
+
+### Measured results
+This is a cryptographic construction paper with theorem-proof results and closed-form efficiency counts; there is no implementation, benchmark, or experimental run. All quantities below are analytically derived from the protocol's own operation count, not measured on hardware, and none should be read as a wall-clock or throughput measurement.
+
+| Quantity | Value | Derivation / conditions |
+|---|---|---|
+| Information rate | 1/2 | (size of secret) / (size of share); each share (s_i, t_i) is twice the size of the secret s alone, because the randomness value t_i accompanies it |
+| Commitment size | at most \|p\| + 2*log\|q\| bits, for a commitment to \|q\|-bit s | when p and q are constructed so p <= q*(log q)^2 (a heuristic cited from Wagstaff 1979) |
+| Commitment computation cost | fewer than 2*\|q\| multiplications mod p, i.e. under 2 multiplications per bit of the secret | after precomputing the product g*h once |
+| Dealer's distribution cost | fewer than 2*\|q\|*k multiplications mod p, i.e. approximately 2k multiplications per bit of the secret | k = threshold, computing k broadcast commitments; ignores the cost of evaluating F(x) and G(x) themselves, described as small because they are evaluated only at small integer arguments 1..n |
+| Verification cost per participant | fewer than 2\|q\|(k-1) + 2\|q\| + (k-1) = (2k+1)\|q\| + (k-1) multiplications | k-1 modular exponentiations plus one commitment computation; the paper states this is a pessimistic estimate because many of the exponents involved are small integers (in particular the exponent 1 for participant index 1) |
+| Comparison against Feldman's 1987 scheme (Fel87) | computationally similar per-bit cost | distributing an l-bit secret in Feldman's scheme costs about the same as distributing a \|q\|-bit secret in this scheme, given \|p\| ≈ 2^l; the two schemes are described as dual in their security properties (see Requirements section below) |
+
+### Parameters
+- n: total number of shareholders.
+- k: reconstruction threshold, 1 <= k <= n; any k shareholders with accepted shares recover the secret, fewer than k get no Shannon information about it.
+- p, q: primes with q dividing p-1; G_q is the order-q subgroup of Z_p*; chosen so that discrete logarithm in G_q is assumed computationally hard for the dealer.
+- g, h: generators of G_q such that nobody knows log_g(h); the paper states these can be chosen either by a trusted center at system initialization or by (some of) the participants via a coin-flipping protocol.
+- s: the secret, an element of Z_q.
+
+### Stated limitations
+The paper proves the scheme's two security properties — perfect (Shannon) secrecy against fewer than k shareholders, and detection of a cheating dealer — cannot both be made unconditional at once for any non-interactive verifiable secret-sharing scheme in this model: it shows that a non-interactive scheme revealing zero information about the secret necessarily allows a computationally unbounded dishonest dealer to distribute inconsistent shares (in nondeterministic polynomial time), because the set of shares that pass a given participant's verification predicate is an NP set, so a coalition of k-1 honest participants could nondeterministically guess a consistent additional share and thereby recover the secret regardless of what the dealer actually distributed. This scheme resolves that trade-off by choosing unconditional secrecy for participants and only computational (discrete-log-hardness) security against a cheating dealer; the paper states this is "in some sense dual" to Feldman's 1987 scheme, which instead gives an unconditionally cheat-proof dealer at the price of only computational secrecy for participants. The paper does not address network transport, participant availability, or share revocation/refresh; it defines the verification protocol abstractly as dealer-to-participant broadcast plus private per-participant messages and does not specify how broadcast is implemented. The homomorphic linear-combination result (Section 5) is stated only for addition and scalar multiplication by a public constant; multiplication of two shared secrets is not addressed.
+
+### Requirements it places on the rest of the system
+- Requires a shared, agreed group setup — primes p, q with q | (p-1), and two generators g, h of the order-q subgroup G_q such that no party knows log_g(h) — established either by a trusted setup authority or by a coin-flipping protocol run by (some of) the participants before any secret is distributed; the security of the commitment scheme (and thus the whole verifiable-sharing protocol) depends on this discrete-logarithm relation staying unknown to every dealer.
+- Requires each participant to receive its private share (s_i, t_i) over a channel with confidentiality (the paper states the dealer "sends (s_i, t_i) secretly to P_i") separate from the public broadcast channel carrying the E_j commitments; the two channels have different security requirements (broadcast integrity/authenticity for the commitments, confidentiality for the private shares).
+- Requires every participant to run the verification check (*) on receipt of its share and, per Definition 4.1's model, to make its accept/reject decision independent of communication with other participants; the paper's guarantee (any two accepting sets of k shares recover the same secret, except with probability negligible in \|q\|) holds only under this non-interactive verification model.
+- For the anonymous-shared-secret extension (Section 5.2), requires every participant to be capable of producing digital signatures, since a participant who detects an inconsistent share it received must publish that share together with its signature as public evidence of the sending participant's misbehavior; the mechanism for propagating and acting on that published evidence (e.g., excluding the accused participant, restarting the protocol) is not specified by this paper and must be supplied elsewhere.
+- Linear combination of two independently shared secrets (Section 5.1) requires both secrets to have been distributed with the same threshold k and the same group parameters (p, q, g, h); combining is a purely local computation per participant with no additional communication, but only under matching parameters.
+- Any downstream component treating this scheme's "cheating dealer caught" guarantee as a strong integrity property should note the guarantee is computational, not information-theoretic: a dealer that can solve the discrete logarithm problem in G_q before the last share is sent can distribute inconsistent shares undetected.
+
+### Contradicts
+None found. No other paper in the current batch measures or disputes verifiable secret sharing schemes; this paper's own contribution is explicitly positioned as dual (not contradictory) to Feldman's 1987 scheme, which it discusses directly (see Stated limitations).
+
+### References worth retrieving
+- Foundational: A. Shamir, "How to share a secret," Communications of the ACM, 22, 1979 — the underlying (k,n)-threshold polynomial secret-sharing scheme this paper's commitment mechanism is layered on top of.
+- Foundational: G. R. Blakley, "Safeguarding cryptographic keys," Proc. AFIPS 1979 National Computer Conference, 1979 — independent co-origin of secret sharing, cited alongside Shamir.
+- Competing: P. Feldman, "A practical scheme for non-interactive verifiable secret sharing," 28th IEEE FOCS, 1987 — the scheme this paper directly compares against for computational cost and describes as dual in its security trade-off (unconditional dealer-cheat-proofness, computational secrecy, versus this paper's unconditional secrecy, computational dealer-cheat-proofness).
+- Foundational: M. Ben-Or, S. Goldwasser, A. Wigderson, "Completeness theorems for non-cryptographic fault-tolerant distributed computation," STOC 1988 — an unconditionally secure but interactive verifiable secret sharing scheme requiring fewer than n/3 dishonest participants, cited as a predecessor this paper's non-interactive scheme improves on for the non-interaction property.
+- Foundational: D. Chaum, C. Crepeau, I. Damgard, "Multiparty unconditionally secure protocols," STOC 1988 — a second interactive unconditionally secure VSS scheme with the same n/3 dishonesty bound, cited alongside Ben-Or et al.
+- Foundational: T. Rabin, M. Ben-Or, "Verifiable secret sharing and multiparty protocols with honest majority," STOC 1989 — improves the dishonest-participant bound to under n/2 but remains interactive; cited as the strongest prior interactive scheme.
+- Foundational: J. C. Benaloh, "Secret sharing homomorphisms: Keeping shares of a secret secret," CRYPTO 1986 — the first non-interactive VSS scheme, but dependent on a mutually trusted entity, which this paper's scheme removes.
+- Foundational: I. Ingemarsson, G. J. Simmons, "A protocol to set up shared secret schemes without the assistance of a mutually trusted party," EUROCRYPT 1990 — prior work on trustless shared-secret setup (without verifiability) that Section 5.2's anonymous-shared-secret protocol generalizes with verifiability added.
+- Foundational: G. Brassard, D. Chaum, C. Crepeau, "Minimum disclosure proofs of knowledge," JCSS 37, 1988 — source of the "blobs" zero-knowledge-proof technique the paper notes does not generalize to prove that two of its commitments contain different values.
+
+### Verbatim extracts
+- "each person can verify that he has received correct information about the secret without talking with other persons"
+- "the information rate of the scheme is 1/2"
+- "distribution as well as the verification requires approximately 2k modular multiplications pr. bit"
+- "even an infinitely powerful dealer cannot distribute incorrect shares" — describing Feldman's scheme, contrasted with this one
+- "the correctness of the shares depends on a computational assumption" — describing this paper's own scheme
+- "it is impossible to construct a non-interactive secret sharing scheme in which no information about the secret is revealed and even a dealer with unlimited computing power cannot cheat"
+- "this scheme is in some sense dual to that of [Feldman 1987]"
 
 ---
 
@@ -16714,6 +18561,115 @@ None found within this corpus as of this batch. Note for later composition check
 
 ---
 
+## [QU-TOMCCAP-26] Understanding User-Generated Content and Communities in Decentralized Web3 Networks: An Empirical Study on Nostr
+**Citation:** Shutong Qu, Chunyang Li, Hongzhou Chen, Wei Cai. "Understanding User-Generated Content and Communities in Decentralized Web3 Networks: An Empirical Study on Nostr." ACM Transactions on Multimedia Computing, Communications, and Applications (TOMCCAP), 2026. DOI 10.1145/3828666.
+**Retrieved:** full text via https://doi.org/10.1145/3828666 (matched title and authors in first 2000 characters)
+**Source URL:** https://doi.org/10.1145/3828666
+**Domain:** J
+
+### What it does
+Characterizes, by direct measurement rather than protocol specification, how content production, social structure, and monetary reward behave on a live deployment of Nostr (Notes and Other Stuff Transmitted by Relays) — a decentralized social-networking protocol in which a lightweight cryptographic event format and signature-verification rule are specified centrally, while storage and dissemination of events are delegated to independently operated relay servers, and clients read from and publish to whichever relays they choose.
+
+Data collection: continuous crawling of four major publicly reachable relays (wss://relay.damus.io, wss://relay.nostr.band, wss://relay.primal.net, wss://nos.lol) from August 30, 2024 to September 14, 2025, retrieving five Nostr event kinds — Kind-0 (user metadata), Kind-1 (text notes), Kind-3 (contact/follow lists), Kind-7 (reactions), and Kind-9735 (Lightning "Zap" tipping receipts) — while excluding encrypted, auxiliary, or non-analyzable kinds (relay recommendations, direct messages, deletions, custom kinds). Each stored record carries event ID, timestamp, author public key, relay source, and raw content, which the authors state supports reconstructing both the discourse layer (text) and the network layer (follow/engagement graph). Deduplication of events mirrored by multiple relays retained the latest copy within a relay and the earliest copy across relays (to approximate cross-relay propagation timing); messages with empty content were dropped, but no other spam/bot filtering was applied, so automated accounts remain in the dataset by design.
+
+Semantic clustering: Kind-1 post text was embedded with SBERT (specifically the all-MiniLM-L6-v2 distilled-BERT sentence-transformer model, producing 384-dimensional vectors) and partitioned into k=10 clusters via MiniBatch K-means, with k chosen by the elbow method combined with silhouette analysis. PCA-then-UMAP (50 principal components, then 2D) was used only for visualization, never for cluster assignment.
+
+Network structure: Kind-3 follow relations among users who both post and participate in the follow graph were modeled as a directed graph, and the Louvain community-detection algorithm (which greedily maximizes modularity, grouping nodes more densely connected to each other than to the rest of the network) partitioned it into communities. A relative-density metric D_r = E / (V * log V) was defined per community (E = intra-community edge count, V = node count) to compare internal cohesion across communities of different sizes without the small-community bias that a V^2 denominator would produce.
+
+Economic-feedback analysis: Kind-9735 Zap events (a Lightning Network micropayment receipt format) were mapped onto the ten semantic clusters to measure how monetary tipping activity distributes across content types.
+
+### Measured results
+
+| Measurement | Value | Conditions |
+|---|---|---|
+| Total deduplicated events collected | 22,317,426 | across Kind-0, Kind-1, Kind-3, Kind-7, Kind-9735; four relays; Aug 30, 2024 - Sep 14, 2025 |
+| Kind-1 posts used for semantic modeling | 6,696,205 | posts with valid textual content entries in the JSONL records; this is a different (smaller) scope than the total event count, explicitly flagged by the authors as not numerically comparable to it |
+| Kind-1 posts used for multimedia/URL analysis | 4,749,879 | stricter subset requiring unique, parsable, non-empty text content, after URL parsing and validity checks |
+| Distinct Kind-1 authors | 91,311 | unique public keys authoring text notes over the full period |
+| Distinct public keys observed overall (posting or interaction) | 378,599 | representing the "observable active population"; this is also the node count of the follow graph used for community detection |
+| Point-in-time relay-layer coverage estimate | 72.26% | event-ID overlap check on Kind-1 messages from a single day (Sep 13, 2025 UTC): 109,374 unique Kind-1 messages in an independent same-day relay-universe sample versus 79,037 also observed at the four collection relays; explicitly reported as a one-day relay-layer estimate, not a full-network coverage claim |
+| Per-relay unique (deduplicated) event totals | relay.nostr.band 6.48M, nos.lol 5.98M, relay.primal.net 5.44M, relay.damus.io 4.42M | full Aug 30, 2024 - Sep 14, 2025 window; one deduplicated instance counted per event via the default Python Nostr relay manager's relay-selection rule |
+| Relay-level growth pattern | relay.damus.io roughly an order of magnitude below the other three before May 2025, then rapid growth toward parity; relay.nostr.band and relay.primal.net show multiple surges after May 2025 and become the most active; nos.lol stays stable and moderate throughout | same period |
+| Louvain community count | 1,385 total communities, 108 with at least 10 users | follow graph of 378,599 nodes, 12,068,537 directed following edges |
+| User-follow-participation breakdown | of 684,394 total observed users: 296,445 isolated (no follow interaction), 136,907 only-following, 135,066 only-followed, 115,976 both; 378,599 (following and/or followed, with posting activity) form the analyzed follow graph | same collection window |
+| Top 8 community sizes | C1 113,580; C2 98,988; C3 40,647; C4 34,843; C5 22,601; C6 21,836; C7 20,062; C8 9,045; remaining communities 16,997 combined | of the 378,599-node follow graph |
+| Community 51 internal cohesion example | 35 core users, 274 directed edges, average degree 15.7 | one worked example of a medium-sized, tightly reciprocal community from the D_r metric analysis |
+| Inter-community follow ties | 1,408,315 of 12,068,537 total follow edges (about 12%) are inter-community; these span 721 inter-community links across 403 clusters; two communities (IDs 1 and 4) account for more than 80% (1,145,427 edges) of all inter-community ties | follow graph, same window |
+| Multimedia (URL) prevalence | 50.4% of posts contain at least one URL; mean 0.72 URLs per post; 15.5% of posts contain 2+ URLs | 4,749,879-post multimedia-analysis subset |
+| Zap activity by post type | 1.8% of multimedia posts (>=1 URL) received a Zap vs. 2.4% of text-only posts; mean Zap count 0.093 for multimedia posts vs. 0.080 for text-only posts | same subset |
+| Embedding dimensionality and scale | 384-dimensional SBERT vectors (all-MiniLM-L6-v2), embedding matrix shape (6,696,205, 384) | full Kind-1 semantic-modeling subset |
+| Cluster validity check | random-sample cosine-similarity check found semantically related messages (e.g., technical updates, decentralization discussion) typically score above 0.8 similarity | qualitative validation, not a formal benchmark |
+| UMAP visualization parameters | n_neighbors=15, min_dist=0.1, metric=cosine, applied after PCA reduction to 50 components; 100,000 points randomly sampled for plotting | visualization only, not used for cluster assignment |
+| Clustering-quality Silhouette Coefficient | 0.083 (cosine distance) | over the full 10-cluster MiniBatch K-means solution on 6,696,205 posts; authors characterize this as low in absolute terms but consistent with continuous, overlapping high-dimensional text semantic space rather than indicating invalid clustering |
+| Cluster sizes, content type, and multimedia rate (Table 1) | see table below | 10 clusters, k selected via elbow method plus silhouette analysis |
+| Total observed Zap volume | 0.656 BTC | full Kind-9735 Zap set over the entire observation window (not restricted to the text-clustering subset) |
+| Zap concentration by cluster | Clusters 1, 2, 5, and 8 (lifestyle/knowledge/identity content) account for more than 80% of observed Zap activity; Clusters 6 and 9 (automated on-chain/financial broadcasts) receive only a small fraction | full Zap dataset mapped onto the 10 semantic clusters |
+| Zap share detail by cluster (message share % / BTC share %) | Cluster 0: 5.12% msgs / 4.30% BTC; Cluster 1: 19.90% msgs / 30.15% BTC; Cluster 2: 7.63% / 19.59%; Cluster 3: 5.83% / 0.80%; Cluster 4: 10.95% / 0.77%; Cluster 5: 13.97% / 23.73%; Cluster 6: 4.13% / 0.01%; Cluster 7: 11.44% / 5.53%; Cluster 8: 11.34% / 13.33%; Cluster 9: 9.69% / 1.79% | message-share denominator is 6,696,205 posts; BTC-share denominator is the 0.656 BTC total Zap volume |
+
+Table 1 (cluster themes, message counts, multimedia rate — full reproduction):
+
+| Cluster | Language | Main content type | Interpretation | n_posts | Multimedia rate |
+|---|---|---|---|---|---|
+| 0 | Japanese + emoji | Greetings, reactions | Casual affective exchange | 342,692 | 2.0% |
+| 1 | English | Nostr / Bitcoin posts | Web3 community broadcasting | 1,332,879 | 25.4% |
+| 2 | Mixed | Profile cards, images | Visual identity sharing | 510,652 | 36.0% |
+| 3 | English | Sports / fantasy football | Informational analysis | 390,630 | 54.1% |
+| 4 | Japanese | Daily life expressions | Localized social interaction | 733,232 | 25.7% |
+| 5 | English | External articles (Substack/Medium) | Knowledge curation | 935,664 | 65.9% |
+| 6 | English | On-chain OP_RETURN posts | Technical broadcast | 276,323 | 99.8% |
+| 7 | English | Global political comments | Opinion and news discussion | 766,106 | 65.2% |
+| 8 | English | Motivational short texts | Community solidarity | 759,236 | 40.3% |
+| 9 | English | Daily Bitcoin reports | Automated financial content | 648,791 | 69.4% |
+
+### Parameters
+- Collection window: August 30, 2024 to September 14, 2025 (over one year).
+- Relays crawled: relay.damus.io, relay.nostr.band, relay.primal.net, nos.lol (four major publicly accessible relays; no authoritative relay registry exists for Nostr, so this is a sample, not a census).
+- Event kinds retained: Kind-0, Kind-1, Kind-3, Kind-7, Kind-9735.
+- Deduplication rule: within a relay, keep the latest-seen copy of a duplicate event; across relays, keep the earliest-seen copy.
+- SBERT model: all-MiniLM-L6-v2, 384-dimensional output.
+- Cluster count k = 10, selected via elbow method plus silhouette analysis (range of k tested is not stated in the retrieved text).
+- MiniBatch K-means used for cluster assignment; UMAP used only for 2D visualization, with n_neighbors=15, min_dist=0.1, metric=cosine, after PCA reduction from 384 to 50 dimensions.
+- Louvain community detection applied to the 378,599-node, 12,068,537-edge directed follow graph.
+- Relative density metric: D_r = E / (V log V), with baseline reference D_r = 1.0 used to distinguish high-cohesion from low-cohesion communities in Fig. 6a.
+
+### Stated limitations
+The authors state their collection reflects "the historically observable relay layer during the collection window" rather than the entire global Nostr ecosystem, because Nostr has no global state and no authoritative relay registry, and their one-day overlap check found only 72.26% coverage against an independent same-day relay-universe sample — so an unknown fraction of network activity on other relays is absent from every reported figure. The one-year observation window is stated as insufficient to capture longer-term structural and behavioral evolution. Clustering and visualization outcomes are stated to depend on model and parameter choices (embedding model, k, UMAP parameters); the reported Silhouette Coefficient of 0.083 is explicitly called low in absolute terms, attributed by the authors to the continuous and overlapping nature of high-dimensional text semantic space rather than to invalid clustering, but no alternative validation (e.g., held-out labeled data) is reported to substantiate this interpretation. Multimedia analysis is stated to be descriptive and URL-presence-based only, not a structured or multimodal analysis of the media objects themselves, because Kind-1 events lack a uniform structured media field. Zap-engagement differences are interpreted only at the cluster level; the authors explicitly state they do not model post-level sentiment or emotional intensity and therefore do not infer affective mechanisms from the engagement patterns. The paper explicitly declines causal attribution: the two observed 2025 activity surges are only temporally associated with (not causally linked to) publicly documented governance controversies, and the authors state directly that their dataset "does not establish causal attribution." No spam or bot filtering beyond removing empty-content messages was applied, so all reported activity figures include automation-driven signal by design, which the authors state explicitly rather than treating as a defect.
+
+### Requirements it places on the rest of the system
+- A measurement or indexing component built on top of Nostr's relay layer needs to query multiple relays and deduplicate by event ID, because the same event is commonly mirrored across relays and no single relay is authoritative; this paper's own pipeline required exactly this deduplication step (latest-within-relay, earliest-across-relay) before any downstream analysis.
+- A component inferring "the observable network" from relay data must treat relay selection as a sampling decision with a measurable, non-total coverage rate: this paper's 72.26% one-day overlap figure, on four major relays, is the only quantified figure in this corpus for how much of the live event stream a fixed relay set misses; a coverage claim about a Nostr-based system cannot assume any fixed relay subset sees all events.
+- Any component performing social-graph analysis (community detection, trust inference, ranking) over Nostr's follow graph (Kind-3) needs to first separate posting-active users from purely passive or purely-followed accounts, since this paper found 43.31% of the observed 684,394-user population had no follow interaction at all (neither following nor being followed) and had to be excluded from the 378,599-node graph actually analyzed.
+- A cross-relay content-discovery or ranking mechanism needs a way to bridge community boundaries deliberately, because this paper's Louvain analysis found only about 12% of follow edges are inter-community and over 80% of those inter-community edges concentrate in just two of 1,385 communities — a design relying on organic inter-community diffusion, without added mechanism, will inherit this near-absence of cross-community connectivity.
+- An engagement-weighted ranking or moderation signal built on Zap (Lightning tipping) data needs to account for extreme content-type skew before treating Zap volume as a general quality proxy: this paper found automated/technical content (Clusters 6 and 9) attracted under 2% of total Zap value despite representing over 13% of posts, while affective/identity content attracted a disproportionate share — so raw Zap totals reward social/affective content structurally, independent of informational value.
+- A component relying on Nostr's Lightning-Zap layer as an economic signal must accommodate its stated skew toward a small number of high-value transfers ("whale" users); the paper reports this qualitatively (strong skewness in per-transaction Zap value) without a quantified Gini coefficient or percentile breakdown in the retrieved text.
+
+### Contradicts
+None found within this corpus against another paper's specific measured figures. The paper is explicitly positioned (per its own bibliography, reference [34]) as an independent check against Wei and Tyson's prior Nostr measurement (arXiv:2402.05709, "An Empirical Analysis of the Nostr Social Network: Decentralization, Availability, and Replication Overhead") on relay concentration and availability; the retrieved text of this paper cites that work only once, in a general statement that "Nostr traffic is concentrated in a small set of relays," without reproducing Wei and Tyson's specific figures for direct numeric comparison — so no side-by-side contradiction or confirmation between the two papers' numbers can be extracted from this text alone. Retrieve WEI-TYSON (arXiv:2402.05709) directly to perform that comparison.
+
+### References worth retrieving
+- Competing / independent measurement: Yiluo Wei, Gareth Tyson, "An Empirical Analysis of the Nostr Social Network: Decentralization, Availability, and Replication Overhead," arXiv:2402.05709, 2025 — the prior Nostr relay-concentration and availability measurement this paper is meant to check against; cited once here but not quantitatively compared in the retrieved text.
+- Competing: Matteo Zignani, Christian Quadri, Sabrina Gaito, Hocine Cherifi, Gian Paolo Rossi, "The Footprints of a 'Mastodon': How a Decentralized Architecture Influences Online Social Relationships," IEEE INFOCOM Workshops, 2019 — a measurement study of a different decentralized/federated social network (Mastodon) with directly comparable structural-fragmentation findings.
+- Competing: G. La Cava, R. Zagaria, M. Stella, "Understanding the growth of the Fediverse through the lens of Mastodon," Applied Network Science 6(1), 2021 — growth-and-structure measurement of another federated social network, useful for cross-protocol comparison of relay/instance concentration.
+- Competing: Carlo Alberto Bono, Lucio La Cava, Luca Luceri, Francesco Pierri, "An Exploration of Decentralized Moderation on Mastodon," ACM WebSci 2024 — direct comparison point for the moderation-design discussion in Section 6.2 of this paper.
+- Foundational (method): Nils Reimers, Iryna Gurevych, "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks," EMNLP-IJCNLP 2019 — source of the SBERT embedding technique used for all semantic clustering in this paper.
+- Foundational (method): Leland McInnes, John Healy, James Melville, "UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction," arXiv:1802.03426, 2018 — the dimensionality-reduction technique used for this paper's cluster visualization.
+- Foundational: Nostr Protocol Community, "Nostr: Notes and Other Stuff Transmitted by Relays," GitHub, 2023 — the protocol specification itself.
+- Related: Philipp Zabka, Klaus-T. Foerster, Christian Decker, Stefan Schmid, "A centrality analysis of the Lightning Network," Telecommunications Policy 48(2), 2024 — direct source for understanding the Lightning Network structure underlying Nostr's Zap micropayment mechanism.
+- Related: Andrea De Salve, Paolo Mori, Laura Ricci, "A Survey on Privacy in Decentralized Online Social Networks," Computer Science Review 27, 2023 — survey covering privacy properties of decentralized social platforms generally, useful for the identity/privacy component of this corpus.
+
+### Verbatim extracts
+- "22.3 million user events collected from four major publicly accessible relays"
+- "the interaction network remains highly modular and loosely connected"
+- "we report this as a relay-layer overlap estimate, not as a full-network coverage claim"
+- "Nostr traffic is concentrated in a small set of relays"
+- "only 1,408,315 (about 12%) are inter-community ties"
+- "the total observed Zap volume is 0.656 BTC"
+- "clusters... account for more than 80% of observed Zap activity"
+- "our dataset does not establish causal attribution"
+- "we do not model post-level sentiment or emotional intensity"
+
+---
+
 ## [QUELLE-PLOSONE-25] Bluesky: Network topology, polarization, and algorithmic curation
 **Citation:** Dorian Quelle, Alexandre Bovet. "Bluesky: Network topology, polarization, and algorithmic curation." PLOS ONE, 2025. DOI 10.1371/journal.pone.0318034.
 **Retrieved:** full text via https://arxiv.org/abs/2405.17571
@@ -16952,6 +18908,65 @@ None found.
 
 ---
 
+## [RATNASAMY-SIGCOMM-01] A Scalable Content-Addressable Network
+**Citation:** Sylvia Ratnasamy, Paul Francis, Mark Handley, Richard Karp, Scott Shenker. "A Scalable Content-Addressable Network." ACM SIGCOMM, 2001. DOI 10.1145/383059.383072.
+**Retrieved:** full text via https://people.eecs.berkeley.edu/~sylvia/papers/cans.pdf
+**Source URL:** https://people.eecs.berkeley.edu/~sylvia/papers/cans.pdf
+**Domain:** A
+
+### What it does
+A Content-Addressable Network (CAN) maps a key to a value across a distributed set of nodes so that any node can locate a value knowing only its key, without a central index. Each node owns a distinct zone of a virtual d-dimensional Cartesian coordinate space defined on a torus (the space wraps at its edges). A key is hashed by a uniform hash function onto one point in that space; the (key, value) pair is stored at the node owning the zone containing that point. Two nodes are neighbors if their zones overlap along d-1 dimensions and abut along one dimension. Routing forwards a message greedily toward the destination coordinates, at each step choosing the neighbor whose zone lies closest to the destination point (straight-line greedy forwarding). A joining node discovers a bootstrap node, is routed by that node's CAN to a random point, and splits the zone of the node currently owning that point, taking half. A departing or failed node's zone is taken over by a neighbor: on graceful departure the zone is merged with a neighbor's or handed to the neighbor with the smallest zone; on failure, neighbors independently start a takeover timer proportional to their own zone volume and the neighbor with the smallest zone volume wins by sending a TAKEOVER message, so the takeover algorithm favors the neighbor whose absorption keeps the space best balanced. A background zone-reassignment algorithm (Appendix A) later restores a one-node-per-zone assignment by locating, via local coordinate-routing-table operations equivalent to a depth-first search over an implicit binary partition tree, a pair of sibling zones that can be recombined.
+
+### Measured results
+
+| Result | Value | Conditions |
+|---|---|---|
+| Path length scaling | O(d · n^(1/d)) hops; average path length = (d/4)(n^(1/d)) for perfect partitioning | d-dimensional coordinate space, n nodes, analytical result confirmed by simulation (Figure 4) |
+| Per-node neighbor state | 2d neighbors | perfectly partitioned d-dimensional space |
+| Effect of dimensions on path length | path length falls from 198.0 hops (d=2 "bare-bones") to ~5.0 hops (d=10 "knobs-on-full") | n = 2^18 = 262,144 nodes, Transit-Stub topology, 100ms intra-transit / 10ms stub-transit / 1ms intra-stub link delays |
+| RTT-weighted routing, per-hop latency reduction | 24%-40% lower per-hop latency than unweighted routing, depending on dimension count (Table 1: d=2, 116.8ms to 88.3ms; d=3, 116.7ms to 76.1ms; d=4, 115.8ms to 71.2ms; d=5, 115.4ms to 70.9ms) | Transit-Stub topology, 100/10/1ms link delays, average underlying IP path latency ~115ms, n ranging from 2^8 to 2^18, results averaged over test runs |
+| Zone overloading (MAXPEERS), per-hop latency reduction | per-hop latency falls from 116.4ms (1 node/zone) to 92.8ms (2), 72.9ms (3), 64.4ms (4 nodes/zone) (Table 2) | system sizes ranging from 2^8 upward |
+| Cumulative "knobs-on-full" vs "bare-bones" comparison at n = 2^18 (262,144) nodes | path length 198.0 to 5.0 hops; average neighbor count 4.57 to 27.1 (plus 2.95 peers, i.e. ~30 total); average IP-level latency to the retrieved replica 115.9ms to 82.4ms; CAN path latency 23,008ms to 135.29ms | bare-bones: d=2, r=1, p=0, k=1, RTT weighting off, uniform partitioning off. Knobs-on-full: d=10, r=1, p=4, k=1, RTT weighting on, uniform partitioning on, landmark ordering excluded. Same Transit-Stub topology as above (Tables 4 and 5) |
+| Scaling n from 2^14 to 2^18 under "knobs-on-full" (d=10) | path length rises from 4.56 hops (2^14 nodes) to 5.0 hops (2^18 nodes), growing slower than the n^(1/10) bound predicts because added hops at growing topology edges carry lower-than-average per-hop latency | same Transit-Stub topology, edge nodes added without scaling the backbone |
+| Extrapolated scaling limit | authors state that under a pessimistic assumption (latency grows as n^(1/10)), the system could grow roughly another factor of 2^10 (to close to one billion nodes) before path latency exceeds four times the underlying IP latency | extrapolation from the above measured trend, not itself measured |
+| Uniform partitioning effect on zone-volume distribution | without the feature, ~40% of nodes hold zones of volume V (the per-node fair share); with the feature, ~90% of nodes hold zones of volume V, and the largest observed zone volume drops from 8V to 2V | n = 65,536 nodes, 3 dimensions, 1 reality, simulation (Figure 9) |
+| Background zone-reassignment hop count | average hops to find a re-assignable sibling zone: 1.12 (d=2), 1.09 (d=3), 1.07 (d=4); maximum observed: 3 hops in all three cases | simulation, uniform-partitioning feature enabled (Table 6) |
+| Multiple realities effect on path length | additional independent coordinate spaces ("realities") reduce path length; for equal per-node neighbor state, increasing dimensionality reduces path length more than increasing the number of realities | 2-dimensional space, comparison at n up to 131,072 nodes (Figures 5 and 6) |
+
+### Parameters
+- Dimensionality d of the coordinate space: bare-bones d=2, knobs-on-full d=10; per-node neighbor state grows as O(d), path length falls as O(d n^(1/d)).
+- Number of realities (independent coordinate spaces) r: bare-bones r=1; each reality adds an independent neighbor set and replicates the full (key,value) store, improving availability but adding O(r) per-node state.
+- MAXPEERS (peer nodes sharing one zone) p: bare-bones p=0, knobs-on-full p=4; the paper states this value would typically be low, 3 or 4.
+- Number of hash functions k (points per reality at which a (key,value) pair is stored): bare-bones and knobs-on-full both use k=1; the paper separately evaluates k=3 and k=5 (Figure 7), each multiplying query traffic and store size by k.
+- RTT-weighted routing metric: on/off switch; forwards to the neighbor maximizing the ratio of coordinate-space progress to measured round-trip time.
+- Uniform-partitioning feature: on/off switch; a joining node's host node splits whichever of its own zone or its neighbors' zones has the largest volume, rather than always splitting its own.
+- Landmark ordering (topologically-sensitive construction): evaluated separately with 4 landmarks at least 5 hops apart; excluded from the knobs-on-full comparison and described by the authors as work in progress not otherwise used in the paper.
+
+### Stated limitations
+Designing a CAN resistant to denial-of-service attacks is called an open problem by the authors: a malicious node can act as a malicious client, server, or router, unlike on the Web. Extending CAN to handle mutable content and building keyword search on top of CAN indexing are listed as future work. The immediate-takeover algorithm loses the (key,value) pairs held by a failed node until other holders refresh that state. Under simultaneous failure of multiple adjacent nodes, a node may detect failure while fewer than half of the failed node's neighbors remain reachable; taking over in that case can leave CAN state inconsistent, so the node first performs an expanding-ring search before triggering takeover. The topologically-sensitive construction (landmark ordering) unevenly populates the coordinate space, raising load on nodes in bins corresponding to common landmark orderings. Large-scale experiments (hundreds of thousands of nodes) were judged too difficult to run physically, so all reported scaling results come from simulation, not a deployed system.
+
+### Requirements it places on the rest of the system
+Requires a uniform hash function mapping keys to points in the d-dimensional coordinate space, available to every node. Requires a bootstrap mechanism supplying a new node with the IP address of at least one existing CAN node (the paper assumes, as in prior work, an associated DNS mechanism for this). Requires nodes to send periodic soft-state update messages to their immediate neighbors carrying their own zone coordinates and neighbor list; the prolonged absence of updates is the sole failure-detection signal, so the mechanism assumes the update interval is short relative to the node-departure and node-failure rate the deployment expects. RTT-weighted routing requires each node to measure round-trip time to its neighbors, which requires periodic bidirectional probing. Landmark-based topological construction requires a well-known, globally reachable set of landmark machines that every joining node can probe. Replication across multiple realities or multiple hash functions requires the application to accept a k-fold or r-fold increase in per-node storage and, for parallel queries, in query traffic.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- Plaxton, Rajaraman, Richa, "Accessing nearby copies of replicated objects in a distributed environment," ACM SPAA 1997 — foundational (basis for the OceanStore/Tapestry O(log n)-hop, O(log n)-state routing family the paper compares CAN against).
+- Karp, Kung, "Greedy Perimeter Stateless Routing," ACM MOBICOM 2000 — foundational (geographic routing precedent for CAN's coordinate-space greedy forwarding).
+- Kubiatowicz, Bindel, Chen, Czerwinski, Eaton, Geels, Gummadi, Rhea, Weatherspoon, Weimer, Wells, Zhao, "OceanStore: An Architecture for Global-scale Persistent Storage," ASPLOS 2000 — competing (uses the Plaxton algorithm as its data-location scheme; the paper directly contrasts CAN's O(dn^(1/d)) routing and O(d) state against Plaxton's O(log n) routing and O(log n) state).
+- Clarke, Sandberg, Wiley, Hong, "Freenet: A Distributed Anonymous Information Storage and Retrieval System," ICSI Workshop on Design Issues in Anonymity and Unobservability, 2000 — competing (contrasted as a system where content may not be found even with every node behaving correctly, unlike CAN's guaranteed "home" location).
+- Waldman, Rubin, Cranor, "Publius: A Robust, Tamper-evident, Censorship-resistant, Web Publishing System," 9th USENIX Security Symposium, 2000 — competing (assumes a static system-wide server list; the paper proposes CAN's self-organization as a complementary extension).
+- Stoica, Morris, Karger, Kaashoek, Balakrishnan, "Chord: A scalable content-addressable network," ACM SIGCOMM 2001 — competing (contemporaneous ring-geometry DHT).
+
+### Verbatim extracts
+- "we can route with a latency that is well within a factor of two of the underlying network latency" (n = 262,144 nodes, knobs-on-full).
+- "designing a secure CAN that is resistant to denial of service attacks" is called "a particularly hard problem."
+- "a malicious node can act, not only as a malicious client, but also as a malicious server or router."
+- "landmark ordering is work in progress which we do not discuss further (nor make use of) in this paper."
+
+---
+
 ## [RAWAT-DLT-24] Accelerating Prolly Trees: Simplified Chunking for Rapid Updates
 
 **Citation:** Abhimanyu Rawat, Tarun Kumar Vangani, Hanno Cornelius, Vanesa Daza. "Accelerating Prolly Trees: Simplified Chunking for Rapid Updates." Distributed Ledger Technologies Workshop (DLT), CEUR-WS, 2024.
@@ -17093,6 +19108,48 @@ None found.
 - "TURN servers provide a degree of anonymization"
 - "a four-to-one amplification out of a 1500-byte packet is possible"
 - "TURN should not weaken the protections afforded by firewalls"
+
+---
+
+## [REED-SIAM-60] Polynomial Codes Over Certain Finite Fields
+**Citation:** I. S. Reed, G. Solomon. "Polynomial Codes Over Certain Finite Fields." Journal of the Society for Industrial and Applied Mathematics, Vol. 8, No. 2, June 1960. Pages 300-304. DOI 10.1137/0108018.
+**Retrieved:** full text via https://www.jstor.org/stable/2098968
+**Source URL:** https://www.jstor.org/stable/2098968
+**Domain:** C
+
+### What it does
+The code lets a receiver recover an original m-symbol message from a transmitted 2^n-symbol codeword even when some transmitted symbols were corrupted, without retransmission. Let K be a finite field of degree n over the two-element field Z2, so K contains 2^n elements, and let a generator beta produce every nonzero element of K by repeated multiplication. To encode a message of m symbols (a0, ..., a(m-1)) drawn from K, treat the symbols as coefficients of a polynomial P(x) of degree m-1, and transmit the 2^n values obtained by evaluating P at every element of K: P(0), P(beta), P(beta^2), ..., P(beta^(2^n - 1)). Because any m of these evaluation points determine P(x) uniquely (the coefficient matrix for any m of them is a Vandermonde matrix, which has nonzero determinant), a receiver holding any m correct evaluations among the 2^n received values can reconstruct the original m coefficients exactly by solving that linear system, and holding more than m evaluations lets the receiver detect and correct symbol errors by majority vote over subsets. K's elements can be represented as n-bit binary vectors via a linear recurring sequence generated by an irreducible polynomial f(x) of degree n (following N. Zierler's construction), so the whole scheme reduces to arithmetic on n-bit binary vectors and correspondingly maps mn message bits into n·2^n transmitted bits.
+
+### Measured results
+No experiments are reported; this is a pure-mathematics construction and proof paper with no implementation, simulation, or hardware evaluation. The paper's only quantitative claims are derived bounds, proved algebraically, not measured:
+- The code corrects any s errors satisfying s < (2^n - m + 1)/2. For odd m the code corrects up to s = (2^n - m - 1)/2 and detects up to s = (2^n - m + 1)/2. For even m the code corrects up to s = (2^n - m)/2, with no further error detection beyond that.
+- Worked example: n=3, m=3 (so 2^n = 8 transmitted symbols for a 3-symbol message), stated to correct up to (2^3 - 3 - 1)/2 = 2 symbol errors.
+- The proof bounding the number of "votes" a wrong m-tuple can receive: for s errors, at most C(s + m - 1, m) determinations of a wrong m-tuple are possible, against C(2^n - s, m) determinations of the correct one; the correction bound above follows from requiring the correct count to exceed the wrong count.
+
+### Parameters
+- n: the degree of the finite field extension K over Z2; K has 2^n elements and the codeword has 2^n symbols. No range is tested; n=3 is used only in the worked example.
+- m: the number of message symbols (degree of P(x) plus one), required to satisfy m < 2^n. No range is tested beyond the m=3 example.
+- s: the number of symbol errors the code corrects, bounded by s < (2^n - m + 1)/2 as derived above; not a free parameter but a consequence of n and m.
+
+### Stated limitations
+The authors note the binary representation of the code generally corrects more than (2^n - m - 1)/2 bits, because each K-symbol maps to n consecutive bits, so this code may be more useful than other "more efficient" multiple-error-correcting codes specifically when binary errors are strongly correlated or occur in bursts — implying the plain symbol-level bound is not tight against bit-level burst errors. The paper states the code generalizes to polynomials of degree m in several variables over K, and that for K = Z2 such generalized codes reduce to Reed-Muller codes, but does not develop that generalization further. No decoding algorithm's computational cost (time or space) is analyzed; the paper describes decoding as solving simultaneous linear equations and taking a plurality vote, without stating an algorithm's complexity.
+
+### Requirements it places on the rest of the system
+Requires the sender and receiver to share the same finite field K of degree n over Z2 and the same generator beta (equivalently, the same irreducible polynomial f(x) of degree n) before any message is encoded or decoded. Requires the transmission channel to deliver each of the 2^n evaluated symbols tagged by, or otherwise associated with, its evaluation point (0, beta, beta^2, ...), because decoding solves a linear system keyed to which point produced which received value. Requires m < 2^n, i.e., the message length in symbols must be strictly smaller than the codeword length in symbols, and the number of correctable errors falls as m approaches 2^n. Any system layering erasure coding for storage on top of this construction (n/k overhead ratios, as later systems such as Storj, Sia, Xorbas, Azure LRC, and Clay codes do) inherits this m < 2^n symbol-length ceiling and the requirement that the receiver knows which coded symbols it holds.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- R. W. Hamming, "Error detecting and error correcting codes," Bell System Technical Journal 26 (1950), pp. 147-160 — foundational (the systematic single-bit-error-correcting code the paper opens by citing as prior art).
+- I. S. Reed, "A class of multiple-error-correcting codes and the decoding scheme," Trans. I.R.E., Professional Group on Information Theory No. 4 (1954), pp. 38-49 — foundational (Reed's own earlier multiple-error-correcting code and decoding scheme, cited as the origin of the Reed-Muller code family this paper's generalization reduces to over Z2).
+- N. Zierler, "Linear recurring sequences," this Journal (SIAM), 7 (1959), pp. 31-48 — foundational (supplies the linear-recurring-sequence construction the paper follows to translate field elements of K into n-bit binary vectors).
+
+### Verbatim extracts
+- "The code will thus correct errors of order less than (2^n - m + 1)/2."
+- "this code may be more desirable than other more 'efficient' multiple-error-correction codes" for burst errors.
+- "code E may be generalized to polynomials of the mth degree in several variables over K."
+- "such codes reduce to Reed-Muller codes" for K = Z2.
 
 ---
 
@@ -17554,6 +19611,131 @@ None found against other entries in this evidence corpus. The paper's own Novemb
 
 ---
 
+## [RODRIGUES-IPTPS-05] High Availability in DHTs: Erasure Coding vs. Replication
+**Citation:** Rodrigo Rodrigues, Barbara Liskov. "High Availability in DHTs: Erasure Coding vs. Replication." International Workshop on Peer-to-Peer Systems (IPTPS), 2005. DOI 10.1007/11558989_21.
+**Retrieved:** full text via https://link.springer.com/chapter/10.1007/11558989_21
+**Source URL:** https://link.springer.com/chapter/10.1007/11558989_21
+**Domain:** C
+
+### What it does
+The paper determines, for a given deployment's node availability, whether replication or erasure coding stores an object at a target availability level using less maintenance bandwidth. It builds a bandwidth-maintenance model on top of an earlier availability model (Blake and Rodrigues, HotOS 2003): a set of N identical nodes cooperatively stores D bytes of unique data at redundancy factor k, giving S = kD bytes of contributed storage; nodes join at rate lambda and leave at rate mu with lambda = mu at steady state, so the average membership lifetime is T = N/lambda (Little's Law). A joining node downloads S/N bytes on average, and a leaving node's data (S/N bytes) must be recopied elsewhere to avoid losing redundancy, so aggregate maintenance bandwidth is B = 2S/T, or per node BW/node = 2 x (space/node) / lifetime. The model separates session time (an interval a node is reachable) from membership lifetime (time from first join to permanent departure), because triggering data movement on every temporary disconnection would waste bandwidth; a membership timeout tau delays the system's response to an apparent departure, so data movement begins only after a node has been unreachable for longer than tau. Increasing tau lengthens the effective membership lifetime T(tau) and lowers the observed node availability a(tau), which the model links by N(tau) = N(0)/a(tau). For replication, the required copy count k solves epsilon = (1-a)^k, i.e., k = log(epsilon)/log(1-a), where epsilon is the target per-object unavailability. For erasure coding with m fragments needed to reconstruct an object out of kc x m total fragments, the required expansion factor kc is obtained from the normal approximation to the binomial availability formula, parameterized by a and by beta, the number of standard deviations corresponding to the target availability. To restore lost fragments without downloading m fragments per repair, the paper's scheme keeps one full extra copy of each object alongside the coded fragments, so that node can create a replacement fragment directly and push it to the new holder; restoring a lost full copy is done by downloading m fragments whose combined size is close to the object size.
+
+### Measured results
+
+| Result | Value | Conditions |
+|---|---|---|
+| Redundancy-savings ratio from coding vs. replication | Ranges from 1x to 3x, rising as server availability falls and as the target availability level rises | Analytic (Equations 1 vs. 2), m = 7 fragments (the value used in Chord/CFS), evaluated at 3, 4, and 5 nines of per-object availability across the full range of I.I.D. server availability (Figure 1) |
+| Node reachability trace: fraction of nodes leaving per hour, as a function of membership timeout tau | Decreases monotonically as tau increases from 0 to 80 hours, across all three traces (Overnet decreases fastest) | Three independently collected traces: Overnet (peer-to-peer, 2,400 peers, node-ID lookups every 20 minutes over 7 days, Bhagwan/Savage/Voelker data); Farsite (51,663 corporate desktop PCs at Microsoft, pinged hourly over 35 days, Bolosky et al. data); PlanetLab (186 hosts, all-pairs pings every 15 minutes over 70 days, Oct-Dec 2003, Stribling data, host counted reachable if at least half the pinging nodes could reach it) |
+| Average node availability a(tau) | PlanetLab above 97%; Farsite above 85%; Overnet (peer-to-peer) below 50% once tau exceeds 11 hours | Same three traces, tau swept 0 to 80 hours (Figure 5) |
+| Required replication factor for four nines (epsilon = 3.7 standard deviations) per-object availability | Overnet reaches a replication factor of 20 (highest, rounded to next integer); Farsite and PlanetLab require only a few units | Same three traces, tau swept 0 to 80 hours, computed via Equation 1 from the availability values in Figure 5 (Figure 6) |
+| Required erasure-coding redundancy (expansion) factor for four nines, m = 7, including the extra full copy for fragment repair | Overnet still requires the most redundancy of the three but is reduced by coding to less than half its replication-factor requirement; Farsite and PlanetLab redundancy factors are lower and closer to their replication requirements | Same three traces and tau sweep, via Equation 2 with m = 7 and four nines target (Figure 7) |
+| Average maintenance bandwidth, replication | Order of 1,000-10,000+ kbps depending on tau and trace; Farsite shows two step-drops near tau = 14h and tau = 64h corresponding to nightly and weekend machine shutdowns | 10,000 nodes cooperatively storing 10 TB of unique data; replication factors taken from Figure 6; bandwidth computed via Equation 3 using leave rates from Figure 4 (Figure 8) |
+| Average maintenance bandwidth, erasure coding | Lower than the corresponding replication bandwidth at every tau for all three traces, with the largest reduction for Overnet | Same 10,000-node, 10 TB setup; coding redundancy factors from Figure 7 (Figure 9) |
+| Overnet coding-vs-replication bandwidth outcome | Coding reduces bandwidth substantially versus replication, but the resulting maintenance bandwidth (order of 100 kbps average per node for a per-node contribution of a few gigabytes) is stated by the authors as unsustainable for home users on the peer-to-peer deployment even after the reduction | Overnet trace, 10,000 nodes, 10 TB, four nines target |
+
+### Parameters
+- m (fragments needed to reconstruct an erasure-coded object): fixed at 7 throughout, matching the value used in the Chord/CFS implementation (Dabek et al.).
+- epsilon (target per-object unavailability): analysis fixed at four nines (99.99% availability, corresponding to beta = 3.7 standard deviations) for all measured results after Figure 1; Figure 1 separately sweeps 3, 4, and 5 nines.
+- tau (membership timeout): swept from 0 to 80 hours in all measured figures; no single value is called canonical, deliberately, because it trades off responsiveness against unnecessary data movement.
+- N (number of cooperating nodes) and D (unique data stored): fixed at 10,000 nodes and 10 TB for the bandwidth figures (Figures 8 and 9); not varied.
+- a (node availability): not set by the authors but measured per trace and per tau value from the three datasets described above.
+
+### Stated limitations
+The model performs only average-case analysis; the authors state that when parameters such as the node-leave rate are considered at worst-case values, the model underestimates required bandwidth. The model assumes a fixed redundancy factor and identical per-node storage contributions, unlike a cited prior system (Bhagwan et al., Total Recall) that uses a variable redundancy factor letting stable nodes carry a disproportionate share of storage and thereby cut bandwidth; the authors state this assumption affects some of their conclusions and leave analyzing the variable-redundancy design as future work. The analysis assumes constant, independent join and leave rates and a constant steady-state node count. It covers only deterministic, constant-rate coding schemes such as Reed-Solomon or Rabin's Information Dispersal Algorithm, and explicitly does not extend to rateless codes because the authors state there is no consensus on how to apply rateless codes in a DHT storage setting. The analysis considers only immutable data; the authors state the impact of mutable data on the redundancy choice is unclear and identify it as an area for future work, because a rejoining node's cached state may be stale rather than merely absent. Coding is stated to raise download latency versus replication in an internet setting with heterogeneous inter-node latency, because a replicated object can be fetched from the nearest replica while a coded object's download latency is bounded by the distance to the m-th closest fragment holder, a point the authors attribute to simulation results in an earlier paper (Dabek et al., NSDI). Coding is stated to prevent downloading a sub-block of an object without reconstructing the whole object, unlike replication. Coding is stated to be unsuited to designs that perform operations at the server holding the data, such as keyword search over the stored content.
+
+### Requirements it places on the rest of the system
+Requires a data-placement mapping from current membership to the set of replica or fragment holders for each stored block, the paper cites consistent hashing (as used in CFS) as the example. Requires every node to detect, or be told, when a peer has been unreachable for longer than the membership timeout tau before that peer's data is treated as lost and repair bandwidth is spent, so the system needs a liveness-tracking mechanism with at least that granularity. Requires, under the coding scheme the paper adopts, that one node hold a complete, un-fragmented copy of each coded object at all times, in addition to the m-of-(kc x m) coded fragments held elsewhere, so that fragment repair does not require downloading m fragments to reconstitute the object first; this doubles the role that node plays relative to the other fragment holders. Requires the object being coded or replicated to be immutable for the model's session/lifetime distinction to hold, because a rejoining node is assumed to still hold valid state. Assumes node availability within a deployment is adequately characterized by measuring reachability at fixed intervals over the trace window (20 minutes for Overnet, hourly for Farsite, 15 minutes for PlanetLab), so a deployment's actual availability must be measured at a comparable granularity before the model's redundancy formulas can be applied to it.
+
+### Contradicts
+The paper's own introduction states that prior comparisons (citing Weatherspoon and Kubiatowicz, and others) "mostly argue that erasure coding is the clear victor" on storage-savings grounds; this paper's conclusion is that the benefit is deployment-dependent and can be small or negative once bandwidth, complexity, latency, and sub-block access costs are accounted for. Whether this paper's own Figure 8/Figure 9 bandwidth numbers agree with the crossover point reported by a different research group's replication-vs-coding comparison (WEATHERSPOON-IPTPS-02, cited in the brief as a prior comparison) is not checked here, since WEATHERSPOON-IPTPS-02 is outside this batch; flagged for the composition/contradiction check.
+
+### References worth retrieving
+- C. Blake, R. Rodrigues, "High availability, scalable storage, dynamic peer networks: Pick two," 9th HotOS, 2003 — foundational (origin of the availability model this paper extends with measured trace data).
+- R. Bhagwan, S. Savage, G. Voelker, "Understanding availability," IPTPS — foundational (source of the Overnet trace: 2,400 peers tracked over 7 days).
+- W. Bolosky, J. Douceur, D. Ely, M. Theimer, "Feasibility of a serverless distributed file system deployed on an existing set of desktop PCs," SIGMETRICS 2000 — foundational (source of the Farsite/corporate-desktop trace: 51,663 hosts over 35 days).
+- J. Stribling, "PlanetLab - All Pairs Pings," http://pdos.lcs.mit.edu/~strib/pl_app — foundational (source of the PlanetLab trace: 186 hosts, 70 days).
+- R. Bhagwan, K. Tati, Y. Cheng, S. Savage, G. Voelker, "Total Recall: System support for automated availability management," NSDI — competing (variable-redundancy design the authors contrast with their fixed-redundancy assumption).
+- F. Dabek, J. Li, E. Sit, J. Robertson, F. Kaashoek, R. Morris, "Designing a DHT for low latency and high throughput," NSDI — competing (CFS/Chord implementation supplying the m = 7 fragment parameter and the earlier simulation result on coding's download-latency cost).
+- H. Weatherspoon, J. Kubiatowicz, "Erasure coding vs. replication: A quantitative comparison," IPTPS 2002 — competing (the earlier comparison this paper's introduction characterizes as favoring coding unconditionally; this is WEATHERSPOON-IPTPS-02 in the brief's registry, needed to check the two papers' crossover numbers against each other).
+- M. Rabin, "Efficient dispersal of information for security, load balancing, and fault tolerance," J. ACM 36(2), 1989 — foundational (Information Dispersal Algorithm, one of the two deterministic coding constructions the analysis covers).
+- S. Reed, G. Solomon, "Polynomial codes over certain finite fields," J. SIAM 8(2), 300-304, June 1960 — foundational (the other deterministic coding construction the analysis covers; already in this evidence file as REED-SIAM-60).
+- S. Rhea, D. Geels, T. Roscoe, J. Kubiatowicz, "Handling churn in a DHT," USENIX — foundational (session-vs-lifetime distinction the model's Section 3.4 builds on).
+- M. Luby, "LT codes," FOCS 2002 — superseded-by is not applicable here; classified attack/competing: the rateless-code family the paper explicitly excludes from its analysis.
+
+### Verbatim extracts
+- "the benefits from coding are limited, and may not be worth its disadvantages."
+- "bandwidth, and not spare storage, is most likely the limiting factor" for peer-to-peer storage scalability.
+- "Overnet requires the most redundancy, as expected, reaching a replication factor of 20."
+- "coding leads to the most substantial storage savings... since it can reduce the redundancy factors by more than half."
+- "the maintenance bandwidth... can be unsustainable for home users (around 100 kbps on average."
+- "erasure coding is not adequate for a system design where operations are done at the server side."
+
+---
+
+## [ROOS-PETS-14] Measuring Freenet in the Wild: Censorship-Resilience under Observation
+**Citation:** Stefanie Roos, Benjamin Schiller, Stefan Hacker, Thorsten Strufe. "Measuring Freenet in the Wild: Censorship-Resilience under Observation." Privacy Enhancing Technologies Symposium (PETS), 2014. DOI 10.1007/978-3-319-08506-7_14.
+**Retrieved:** full text via https://petsymposium.org/2014/papers/paper_71.pdf
+**Source URL:** https://petsymposium.org/2014/papers/paper_71.pdf
+**Domain:** J
+
+### What it does
+The paper measures the deployed Freenet network (also known as Hyphanet) — a fully decentralized publication system arranging nodes in a Kleinberg-style small-world topology to route requests by key proximity — using two monitoring techniques run against the live network rather than a simulation. Passive monitoring inserts instrumented nodes (running unmodified Freenet code with extended logging) that record every message they send or receive, capturing neighbor locations, degrees, and forwarded file requests without altering network behavior. Active monitoring sends explicit probe messages into the network: FNPRoutedPing queries for a node at a specific location by routing a message toward that location (available only up to a September 2012 protocol change), and FNPRHProbeRequest — a message type still present in the current Freenet client — returns identifying information (location or uptime) about one node chosen by an 18-hop Metropolis-Hastings-corrected random walk, intended to sample nodes close to uniformly at random. From repeated probes to the same location over time, the paper computes each node's session starts and ends, from which it derives session length (duration online), intersession length (duration offline between sessions), and connectivity factor (fraction of measurement time online). A separate simulation study builds a 15,000-node ring topology assigning each node the empirically observed neighbor degree distribution and long-range contact probability, to isolate how the neighbor-selection rule (rather than churn or scale) affects the number of routing hops.
+
+### Measured results
+
+| Result | Value | Conditions |
+|---|---|---|
+| Long-range contact distance distribution | For distance > 0.05 (in the [0,1) key space), contacts appear to be chosen uniformly at random rather than following Kleinberg's inverse-distance model; nodes do show a high number of close neighbors (distance < 0.01, matching the 1/d curve) | Two-week measurement, May 2013, 12 instrumented Freenet clients (Figure 1a) |
+| Neighbor degree distribution | Peaks at degree 13, 50, 75, and 100 (matching typical bandwidth-based neighbor caps, e.g. 100 neighbors allowed at 2 Mbit/s); degree up to 800 observed; fewer than 1% of nodes have degree above 100; nodes with degree below 10 are likely still in start-up (default minimum 14 neighbors) | Same two-week, 12-client measurement (Figure 1b) |
+| Simulated average routing length, Freenet's actual (uniformly-random) contact distribution vs. Kleinberg-optimal | 37.17 hops for uniformly-random long-range contacts (r=0, matching measured Freenet); less than 13 hops for Kleinberg-optimal distance-proportional contacts (r=1) | 15,000-node ring topology sized to the paper's own network-size estimate, empirical degree distribution applied, each node given max(l-2k,0) long-range contacts; k=0 short-range neighbors baseline |
+| Effect of adding k=3 short-range ring neighbors per node | Average routing length for r=0 falls from 37.17 to 28 hops; average routing length for r=1 rises about 30% to 17 hops | Same 15,000-node simulation, k set to 3 closest ring neighbors |
+| Small-Darknet routing-success impact | Of 3,540,000 requests received by the monitoring node, 47.94% were forwarded into the 10-node Darknet; 8.46% of requests forwarded into the Opennet succeeded versus 0.08% of requests forwarded into the Darknet; overall success rate for the monitor's forwarded requests was 4.4% | 140-hour measurement, April 2014; a manually built 10-node Darknet ring with 2 nodes each connecting one link to a single Opennet monitoring node |
+| Network size (unique locations) | 58,571 unique Freenet locations observed; 102,376 distinct IP addresses; 84.4% of nodes advertised only a single IP over the whole period, about 10% advertised 2, 3.6% advertised 3 | 8-week measurement, June-August 2012, 55 instrumented Freenet clients |
+| Geographic distribution | Nearly one quarter of discovered installations in the USA, about one eighth in Germany; USA, Germany, France, and Great Britain together account for more than half of all encountered nodes | Same 8-week, 55-client measurement (Figure 2) |
+| Session length (FNPRoutedPing method, hourly probing, k=5 pings/node, X=1h bins) | Majority of sessions under 2 hours; only 1.7% of sessions longer than 100 hours; longest observed session 357 hours; average connectivity factor 0.19; average of 3,207 of 15,503 pinged nodes online concurrently, varying diurnally between about 2,500 and 3,600, peaking around 10 PM CEST and troughing around 10 AM CEST | 28-day measurement, August-September 2012, 55 instrumented clients, session-length accuracy bounded to +/-2X = 2 hours |
+| Session length (FNPRHProbeRequest method, varying detection-probability threshold p) | Median session length between 49 and 110 minutes depending on p; 95 minutes at p=0.975, 99 minutes at p=0.99; median inter-session length ranged from under 10 minutes (p=0.9) to close to 6 hours (p=0.999); average connectivity factor about 0.22, stable across p | 9-day measurement, November 2013, 150 instrumented clients, at least 10,000 replies/minute received, p swept over {0.9, 0.925, 0.95, 0.975, 0.99, 0.999}, corresponding detection interval tau(p) ranging roughly 3 minutes (p=0.9) to 10 minutes (p=0.99) for an assumed network size n=15,000 |
+| Distribution fit to session length (p=0.99 data) | Residual error 0.019 for a fitted lognormal distribution (a=4.577, b=1.824), versus 8e-3 for Weibull (a=0.4788, b=5.355e3, best raw fit but overestimates short sessions), versus poor fits for exponential (a=4.086e-3) and shifted Pareto (a=1.054, b=116.3) | Non-linear least-squares fit (R's nls), same November 2013 dataset |
+| Detection accuracy of FNPRHProbeRequest sampling | Estimated probability of detecting an online node during an interval, q-hat, exceeded 0.98 (mean, min, and max) for all tested p except the minimum at p=0.999; overhead of FNPRoutedPing-based measurement was about 2,000 messages/hour against a baseline of roughly 13,000 file requests/replies per hour per node absent measurement (about 500 extra maintenance messages/node/hour) | Kolmogorov-Smirnov test on request distribution (p-value ~0.06) supporting uniform-random sampling; Table 3 in the paper |
+| File popularity | The 1,000 most popular files each received more than 21,000 requests; most popular file accounted for 0.73% of all seen requests, second-most for 0.45%, the 30th most popular for 0.25%, consistent with a Zipf-like distribution | Autumn 2012 measurement, 11 instrumented clients at uniformly random locations, several hundred thousand logged requests |
+
+### Parameters
+- Number of instrumented monitoring clients: varied per measurement — 12 (topology), 55 (network size and long-term churn), 150 (short-term churn), 11 (file popularity), 10 manually configured Darknet nodes plus 1 Opennet monitor (Darknet impact).
+- Freenet client versions used across the study: 1407 (before August 2012), 1410 (September-October 2012), 1442 (Spring 2013), 1457 (later measurements).
+- Active-monitoring probe interval X = 1 hour for the FNPRoutedPing long-term churn measurement; maximum pings per node k=5, chosen so the paper's own monitoring nodes replied with probability 99.9%.
+- Detection-probability threshold p for FNPRHProbeRequest, swept over {0.9, 0.925, 0.95, 0.975, 0.99, 0.999}; the corresponding wait-before-offline interval tau(p) is derived from Equation 4 using an assumed network size n=15,000 and an observed minimum request rate req=10,000 replies/minute.
+- Simulation ring-topology parameters: n=15,000 nodes, degree distribution taken from the empirical measurement, short-range neighbor count k in {0, 3}, long-range contact exponent r in {0 (uniform, matching Freenet), 1 (Kleinberg-optimal)}.
+
+### Stated limitations
+The paper's own topology-improvement proposals (Kademlia-like bucket-based neighbor selection, or extending the Darknet location-swapping algorithm to Opennet) are stated as requiring further work: the authors state an in-depth simulation study is required to give concrete guidelines, and the Darknet location-swapping extension's effect on overall performance is called an open question needing a detailed study. The Darknet-impact measurement covers only one small, 10-node Darknet connected by two links to a single Opennet monitor, and the authors state this configuration's impact on overall network performance is low by itself, generalizing only under an unverified assumption that many such small Darknets exist. The FNPRoutedPing-based session-length measurement is bounded to an accuracy of 2X (2 hours) and is stated to give only a lower bound on the fraction of long sessions, since nodes can be accidentally declared offline mid-session. The paper reports its two churn measurements gave different median session lengths (4 hours long-term vs. under 2 hours short-term) and attributes the discrepancy to measurement inaccuracy rather than to a real behavioral difference. The inter-session length could not be fit to any of the standard churn-model distributions tested (exponential, Pareto, Weibull, lognormal), which the authors state has not been reported in prior related work. The file-popularity measurement is stated to underestimate the true popularity of already-popular files, because Freenet's Least-Recently-Seen caching serves popular files locally before a request reaches the measurement node, so the authors did not attempt to fit a specific popularity-distribution shape. The study covers only the Opennet; the authors state it does not shed light on Darknet or Tor-relay users. The security implications of the tracking capability the paper demonstrates were not analyzed in detail: the authors state their study's focus was efficiency rather than security of the system.
+
+### Requirements it places on the rest of the system
+A design relying on Freenet-style location-based routing requires the deployed long-range contact distribution to match the theoretical small-world model (Kleinberg-style, contact probability proportional to 1/distance) for the O(log^2 n)-style routing-length bound to hold; this paper measures the deployed distribution as uniformly random instead, which the paper's own simulation shows produces routing length nearly 3x longer (37.17 vs. 13 hops) at 15,000 nodes. A capacity-ordered neighbor-selection scheme that ties neighbor count to bandwidth (as Freenet already does, producing the observed 13/50/75/100 degree peaks) requires nodes to accurately advertise or have measured their own bandwidth, since the peaks the paper observed align with commonly configured connection-speed tiers. A system attaching an isolated sub-network (a Darknet-style subgraph) to a larger overlay through few links requires those bridging links to carry proportionally higher traffic or accept sharply reduced per-request success (0.08% success for Darknet-forwarded requests versus 8.46% for Opennet-forwarded, in this measurement) unless the sub-network's nodes are integrated into the same coordinate/location space as the main overlay. Any mechanism permitting a node to be located by content-independent means (the paper cites FNPRHProbeRequest as its example, an uptime/location-disclosing probe reachable by any participant) supplies enough information, when combined with a way to map locations to IP addresses (shown in Section 5.1 by logging neighbor IPs), to run an intersection attack on participant anonymity; a system depending on Freenet-style location or session-length privacy must not expose an equivalent unauthenticated probe. Least-Recently-Used-style caching of popular content, as Freenet already applies, requires a Zipf-like request-popularity distribution to be effective; the paper's measurement is consistent with such a distribution existing in the deployed system, though the measurement itself underestimates true popularity because of that same caching.
+
+### Contradicts
+The paper's own churn measurements disagree with each other on median session length (roughly 4 hours in the 28-day FNPRoutedPing measurement versus under 2 hours in the 9-day FNPRHProbeRequest measurement), which the authors attribute to measurement-methodology inaccuracy rather than a real change in user behavior between the two measurement periods. The paper's finding that Freenet session length fits a lognormal or Pareto distribution disagrees with Stutzbach and Rejaie's 2006 finding (cited as [21] in this paper) that churn in structured P2P systems is well modeled by lognormal and Weibull distributions; this paper's data rejects the Weibull fit for Freenet specifically (residual error 8e-3 but visibly overestimating short sessions in Figure 5b) in favor of lognormal. The paper's median Freenet session length (49-110 minutes, or roughly 4 hours in the long-term measurement) is measured as longer than the 1-to-60-minute median session lengths the authors cite from Napster, Gnutella, FastTrack, Overnet, BitTorrent, and KAD measurement studies, directly contradicting any assumption that Freenet churn resembles those systems'.
+
+### References worth retrieving
+- Jon Kleinberg, "The small-world phenomenon: An algorithmic perspective," Symposium on Theory of Computing, 2000 — foundational (the routing-distance model Freenet's design targets and this paper tests the deployed network against).
+- Nathan S. Evans, Chris GauthierDickey, Christian Grothoff, "Routing in the dark: Pitch black," ACSAC 2007 — attack (already in this corpus as the Pitch Black paper per the brief's seed list; this paper is its measurement-based counterpart separating adversarial from ordinary churn-driven degradation).
+- Oskar Sandberg, "Distributed routing in small-world networks," ALENEX 2006 — foundational (source of the location-swapping algorithm shown to achieve Kleinberg-like distance distribution in a static network, cited as a possible fix).
+- Petar Maymounkov, David Mazieres, "Kademlia: A peer-to-peer information system based on the XOR metric," Peer-to-Peer Systems (IPTPS) 2002 — foundational (source of the bucket-based neighbor-selection scheme proposed as a fix to Freenet's degraded routing).
+- Daniel Stutzbach, Reza Rejaie, "Understanding churn in peer-to-peer networks," IMC 2006 — competing (independent churn-model measurement across multiple P2P systems that this paper's session-length distribution-fit result disagrees with for Freenet specifically).
+- P. Krishna Gummadi, Stefan Saroiu, Steven D. Gribble, "A measurement study of Napster and Gnutella as examples of peer-to-peer file sharing systems," Computer Communication Review, 2002 — competing (independent-measurement session-length baseline this paper's Freenet churn results are compared against; this is GUMMADI-CCR-02 in the registry).
+- Ranjita Bhagwan, Stefan Savage, Geoffrey M. Voelker, "Understanding availability," IPTPS 2003 — competing (Overnet availability-measurement baseline the paper cites for comparable session-length figures).
+- Prateek Mittal, Nikita Borisov, "ShadowWalker: peer-to-peer anonymous communication using redundant structured topologies," CCS 2009 — competing (alternative structured-topology anonymous-routing design, relevant to the anonymity-tracking risk this paper identifies).
+- David Isaac Wolinsky, Ewa Syta, Bryan Ford, "Hang with your buddies to resist intersection attacks," CCS 2013 — attack (cited directly as the intersection-attack mechanism the paper's tracking result enables).
+- Guanyu Tian, Zhenhai Duan, Todd Baumeister, Yingfei Dong, "A traceback attack on Freenet," INFOCOM 2013 — attack.
+
+### Verbatim extracts
+- "we captured the majority of online nodes per interval," with q-hat exceeding 0.98.
+- "Freenet's current ID selection fails to provide the desired routing performance."
+- "the reliability in tracking our own nodes indicates that FNPProbeRequest should be removed."
+- "only 0.08% of the Darknet requests returned the requested resource."
+- "our results indicate that Freenet users are online longer than users of common file-sharing applications."
+- "the data is poorly anonymized and can be potentially abused."
+
+---
+
 ## [ROSENBERG-RFC-03] STUN - Simple Traversal of User Datagram Protocol (UDP) Through Network Address Translators (NATs)
 
 **Citation:** Jonathan Rosenberg, Joel Weinberger, Christian Huitema, Rohan Mahy. "STUN - Simple Traversal of User Datagram Protocol (UDP) Through Network Address Translators (NATs)." IETF RFC 3489, March 2003. DOI 10.17487/RFC3489.
@@ -17603,6 +19785,68 @@ None found.
 - "provably unsolvable given what STUN is trying to accomplish"
 - "an increase of call setup delays equal to at least one RTT to the STUN server"
 - "half an hour should more than suffice" (for binding expiry before repeating discovery)
+
+---
+
+## [ROWSTRON-MIDDLEWARE-01] Pastry: Scalable, Decentralized Object Location, and Routing for Large-Scale Peer-to-Peer Systems
+**Citation:** Antony Rowstron, Peter Druschel. "Pastry: Scalable, Decentralized Object Location, and Routing for Large-Scale Peer-to-Peer Systems." IFIP/ACM Middleware, 2001. DOI 10.1007/3-540-45518-3_18.
+**Retrieved:** full text via https://people.mpi-sws.org/~druschel/publications/Pastry.pdf
+**Source URL:** https://people.mpi-sws.org/~druschel/publications/Pastry.pdf
+**Domain:** A
+
+### What it does
+Pastry routes a message to whichever live node, among all nodes in the overlay, has the numerically closest identifier (nodeId) to a given key, without any node holding a full membership list. Every node and every key gets a 128-bit nodeId, treated as a sequence of digits base 2^b (b is a configurable parameter). Each node maintains three data structures: a routing table with ceil(log_(2^b) N) rows of 2^b - 1 entries, where row n's entries each hold the IP address of a node sharing the current node's first n digits but differing at digit n+1 (chosen, among the several nodes with a qualifying prefix, to be one that is close under a proximity metric — this choice is Proximity Neighbor Selection, PNS); a leaf set of the |L| numerically closest nodeIds on each side of the current node; and a neighborhood set of the |M| nodes closest under the proximity metric, used only to propagate locality information, not for routing. To route a message with key K, a node first checks whether K falls within its leaf set's numeric range; if so, it forwards directly to the leaf-set member closest to K. Otherwise it forwards to the routing-table entry sharing one more prefix digit with K than the current node does; if that entry is empty, it forwards to any known node that shares at least as many prefix digits as the current node and is numerically closer to K. A joining node with a newly assigned nodeId contacts a nearby existing node A, which routes a special join message to the existing node Z whose nodeId is numerically closest to the new node; every node on the path from A to Z (A, then B, C, ... to Z) sends its state to the joining node, which takes leaf-set state from Z, neighborhood-set state from A, and routing-table row i from the i-th node on the path (because that node shares the joining node's first i digits). The joining node then contacts every node discovered in this first pass, compares their table entries by proximity, and adopts any closer entries found (the WTF procedure, versus two weaker variants SL and WT the paper also measures). Node failure is detected when a node's immediate neighbors can no longer reach it; a failed leaf-set entry is repaired by requesting the leaf set of the live node with the largest index on the far side of the gap; a failed routing-table entry is repaired by asking another entry in the same row (or, failing that, one row up) for its own value at that position.
+
+### Measured results
+
+| Result | Value | Conditions |
+|---|---|---|
+| Average routing hops vs. network size | Scales as predicted by log_(2^b) N ("Log N" reference curve) across 1,000 to 100,000 nodes | b=4 (i.e. 2^b=16), leaf set size 16, neighborhood set size 32, 200,000 random-pair lookups, emulated network, single Java VM |
+| Hop-count distribution at 100,000 nodes | 0.0000, 0.0006, 0.0156, 0.1643, 0.6449, 0.1745, 0.0000 for 0-6 hops respectively; maximum observed route length matched the predicted bound ceil(log_16 100,000) = 5 | Same 100,000-node, b=4 configuration, 200,000 lookups |
+| Route distance vs. ideal (complete-routing-table) scheme | Pastry's actual proximity-space route distance is approximately 30%-40% longer than a fictitious scheme with complete routing tables (99,999 entries at 100,000 nodes, vs. Pastry's ~75 entries) | b=4, leaf set 16, neighborhood set 32, 1,000 to 100,000 nodes, 200,000 routed message pairs, emulated proximity space (nodes placed at random coordinates on a [0,1000]x[0,1000] plane) |
+| Routing table size vs. hop count tradeoff (b parameter) | b=7 at 10^6 nodes: ~75 average routing table entries, expected 5 hops. b=7 at 10^9 nodes: ~105 average entries, expected 7 hops | Analytical, stated for b=7 specifically, not otherwise measured at these scales in this paper |
+| Node-join messaging cost | O(log_(2^b) N) messages, with a stated constant of about (log_(2^b) N) x (2^b) | Analytical result from the join procedure description |
+| Routing throughput | Over 3,000 messages per second per node | Unoptimized Java implementation, single Compaq AlphaServer ES40, 4x 500MHz 21264 Alpha CPUs, 6GB RAM, True64 UNIX 4.0F, Java 2 SDK 1.2.2-6 with Compaq FastVM 1.2.2-4 |
+| Routing-table locality quality by join procedure (WTF vs. WT vs. SL) | WTF (Pastry's actual two-stage procedure): on average fewer than 1 sub-optimal entry per routing-table level, out of the populated entries at levels 0-3. WT (fetch full state from path nodes only, no second-stage refinement) and SL (fetch only the matching row) both produced substantially worse locality | 5,000 nodes joining sequentially, b=4, leaf set 16, neighborhood set 32, routing tables examined after all joins |
+| Replica-routing accuracy (locating the nearest of k=5 numerically-closest nodes) | Standard WTF without the density-estimation heuristic: closest node found 68% of the time, one of the top 2 found 87% of the time. WTF with the heuristic ("Estimation"): 76% and 92% respectively. "Perfect estimation" (idealized heuristic): approximately 2% better than the standard heuristic | 10,000-node network, b=3, leaf set 8, neighborhood set 16, k=5, 100,000 random node/key pairs, message routed and the rank (among the 5 closest) of the first node reached recorded |
+| Routing-table quality and hop count after 10% node failure, with and without repair | Before failure: average 2.73 hops/lookup. After failure, before repair: 2.96 hops/lookup. After repair: 2.74 hops/lookup, close to the pre-failure figure. Repair recovered all missing table entries and returned optimal-entry fraction close to its pre-failure level (row-zero best-entry count about 1 lower than before failure, but the paper states the distance gap between the sub-optimal and optimal choices was very small) | 5,000-node network, b=4, leaf set 16, neighborhood set 32, k=5, 500 (10%) randomly selected nodes fail silently, 100,000 key lookups from 2 random nodes each (200,000 lookups total) run first with repair disabled then with repair enabled from the same starting nodes and key |
+| Average repair cost per failed node | 57 remote procedure calls on average | Same 5,000-node, 500-failure experiment |
+
+### Parameters
+- b: base-2 digit-group size for the nodeId and routing-table structure; the paper's main experiments use b=4 (Figures 4-7, 9, 10) or b=3 (Figure 8, the replica-routing experiment); the analytical routing-table-size/hop-count tradeoff is separately illustrated at b=7 for 10^6 and 10^9 nodes.
+- |L| (leaf set size): 16 in the b=4 experiments, 8 in the b=3 replica-routing experiment.
+- |M| (neighborhood set size): 32 in the b=4 experiments, 16 in the b=3 replica-routing experiment; typical values stated as 2^b or 2 x 2^b.
+- k (replication factor for the "route to nearest of k closest" mechanism): k=5 in the replica-routing and node-failure experiments.
+- Network sizes tested: 1,000 to 100,000 nodes (routing-hop and route-distance experiments); 5,000 nodes (join-quality and failure experiments); 10,000 nodes (replica-routing experiment).
+- Proximity metric: emulated as Euclidean distance between nodes placed at random coordinates on a [0,1000] x [0,1000] plane; the paper states this triangulation-inequality assumption does not hold in practice for metrics such as IP hop count, and reports (without full data) that early results using a more realistic topology model did not significantly change Pastry's locality-routing properties.
+
+### Stated limitations
+The paper assumes nodes fail silently throughout the main results; Section 2.6 separately and only qualitatively discusses arbitrary (Byzantine or malicious) node failures, stating that the deterministic routing scheme is vulnerable to a node that accepts but does not forward messages, that routing can be randomized to route around such nodes at the cost of higher average delay, and that extending join and failure-repair to tolerate misbehaving nodes is "beyond the scope of this paper." Pastry's locality property depends on the proximity metric obeying the triangulation inequality, which the authors state does not hold in practice for some metrics such as IP-hop count; when it does not hold, they state basic routing correctness is unaffected but route locality may suffer, and call quantifying this deviation "the subject of ongoing work" (left unresolved in this paper). IP routing anomalies can partition the Pastry overlay into isolated sub-networks that persist even after IP connectivity is restored, because Pastry relies almost exclusively on overlay-internal information to self-organize; the paper proposes periodic expanding-ring IP multicast search as a mitigation but does not evaluate it. Pastry's density-estimation heuristic for locating the nearest of k replicas is an estimate, not a guarantee: even with "perfect estimation" the paper reports it only approximated optimal nearest-node routing, missing the true nearest node about 24% of the time (100% - 76%) under standard estimation. All reported experiments ran in a single Java VM on one physical machine with network characteristics emulated in software, not on a real wide-area deployment; the authors state large-scale physical experiments were impractical, so the results describe an emulated 100,000-node network, not a deployed one.
+
+### Requirements it places on the rest of the system
+Requires every node's nodeId to be drawn from a well-distributed 128-bit identifier space, and the paper states this is typically computed as the SHA-1 hash of the node's IP address or public key — whatever assigns nodeIds must produce a close-to-uniform distribution or the average routing-table population and hop-count bounds do not hold. Requires an application-supplied proximity metric function returning a scalar distance between any two IP addresses (e.g. via traceroute or subnet maps), used to select routing-table entries during PNS; the paper states this function should approximate a Euclidean (triangulation-respecting) space for the stated locality-quality results to hold, and does not itself supply this function. Requires a bootstrap mechanism giving a joining node the address of at least one existing, topologically nearby Pastry node, located either by expanding-ring IP multicast or by out-of-band administrative configuration; neither the discovery protocol nor its cost is evaluated in this paper. Requires an application layer to interpret "the k nodes numerically closest to a key" as its replication or storage group if it wants replicated storage (as the paper's own PAST system does on top of Pastry) — Pastry supplies only the routing primitive and the density-estimation heuristic for finding a nearby member of that group, not the replication or consistency logic itself. Node-failure detection depends on neighbors in nodeId space actively noticing lost communication and does not itself provide global failure notification, so any application requiring prompt global awareness of departures needs its own additional mechanism.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- C. G. Plaxton, R. Rajaraman, A. W. Richa, "Accessing nearby copies of replicated objects in a distributed environment," Theory of Computing Systems 32:241-280, 1999 — foundational (prefix-based routing precedent the paper states Pastry and Tapestry both resemble, but calls neither fully self-organizing).
+- I. Stoica, R. Morris, D. Karger, M. F. Kaashoek, H. Balakrishnan, "Chord: A scalable peer-to-peer lookup service for Internet applications," ACM SIGCOMM 2001 — competing (contrasted directly: Chord routes on numerical difference rather than prefix match and, the paper states, makes no explicit effort at network locality).
+- S. Ratnasamy, P. Francis, M. Handley, R. Karp, S. Shenker, "A Scalable Content-Addressable Network," ACM SIGCOMM 2001 — competing (contrasted directly: CAN's routing table stays O(d) independent of network size but hop count grows faster than log N; this is RATNASAMY-SIGCOMM-01 already in this evidence file).
+- B. Y. Zhao, J. D. Kubiatowicz, A. D. Joseph, "Tapestry: An infrastructure for fault-resilient wide-area location and routing," UC Berkeley Technical Report UCB/CSD-01-1141, 2001 — competing (same prefix-routing family; the paper states Pastry "appears to be less complex" and differs in locality and replication approach).
+- P. F. Tsuchiya, "The landmark hierarchy: a new hierarchy for routing in very large networks," SIGCOMM 1988 — foundational (landmark-hierarchy routing the paper compares its prefix-routing generalization against).
+- I. Clarke, O. Sandberg, B. Wiley, T. W. Hong, "Freenet: A distributed anonymous information storage and retrieval system," Workshop on Design Issues in Anonymity and Unobservability, 2000 — competing (first-generation P2P system; the paper states Freenet is not guaranteed to find an existing object, unlike Pastry's bounded-hop guarantee).
+- J. Kubiatowicz, D. Bindel, Y. Chen, S. Czerwinski, P. Eaton, D. Geels, R. Gummadi, S. Rhea, H. Weatherspoon, W. Weimer, C. Wells, B. Zhao, "OceanStore: An architecture for global-scale persistent storage," ASPLOS 2000 — competing (application built on Tapestry, cited as the analogous application-layer use case to PAST-on-Pastry).
+- F. Dabek, M. F. Kaashoek, D. Karger, R. Morris, I. Stoica, "Wide-area cooperative storage with CFS," ACM SOSP 2001 — competing (application built on Chord, same comparison role as OceanStore-on-Tapestry).
+- W. J. Bolosky, J. R. Douceur, D. Ely, M. Theimer, "Feasibility of a serverless distributed file system deployed on an existing set of desktop PCs," SIGMETRICS 2000 — foundational/competing (Farsite; the paper notes it uses a conventional distributed directory but could be built on a Pastry-like substrate).
+
+### Verbatim extracts
+- "Pastry routes to any node in the overlay network in O(log N) steps in the absence of recent node failures."
+- "the Pastry routes are only approximately 30% to 40% longer" than a complete-routing-table scheme.
+- "Pastry is able to locate the closest node 68% of the time, and one of the top two nodes 87% of the time" (standard, no heuristic).
+- "a total of 57 remote procedure calls were needed on average per failed node to repair."
+- "Pastry relies almost exclusively on information exchange within the overlay network to self-organize," so isolated overlays may persist after IP connectivity resumes.
+- extending join/failure protocols to tolerate misbehaving nodes is called "beyond the scope of this paper."
 
 ---
 
@@ -17804,6 +20048,78 @@ None found within this corpus. The survey itself records that the homophily assu
 
 ---
 
+## [SAROIU-MMCN-02] A Measurement Study of Peer-to-Peer File Sharing Systems
+**Citation:** Stefan Saroiu, P. Krishna Gummadi, Steven D. Gribble. "A Measurement Study of Peer-to-Peer File Sharing Systems." Multimedia Computing and Networking (MMCN), Proceedings of SPIE Vol. 4673, 2002.
+**Retrieved:** full text via https://people.mpi-sws.org/~gummadi/papers/mmcn.pdf
+**Source URL:** https://people.mpi-sws.org/~gummadi/papers/mmcn.pdf
+**Domain:** B
+
+### Note on registry identity
+This key does not have a row in `registry/targets-deduped.json`; the title, authors, and content on disk (University of Washington affiliation, abstract on Napster/Gnutella measurement) match the paper by Saroiu, Gummadi, and Gribble unambiguously. The registry's `GUMMADI-CCR-02` entry (Gummadi, Saroiu, Gribble, "A Measurement Study of Napster and Gnutella as Examples of Peer-to-Peer File Sharing Systems," ACM SIGCOMM CCR 32(1), 2002) is a different, shorter paper by an overlapping author list reporting the same underlying measurement study; its own `candidate_urls` field in the registry points to this same `mmcn.pdf`, so the two registry-distinguished papers may be two published forms of one study. Do not merge their figures without checking GUMMADI-CCR-02's own full text directly against this entry.
+
+### What it does
+The paper measures the population of end hosts (peers) participating in the deployed Napster and Gnutella file-sharing systems, to characterize the bandwidth, latency, availability, and content-sharing behavior any system layered on top of such peers would have to accommodate. Measurement proceeds in two stages per system. First, a crawler gathers a near-instantaneous snapshot of a large subset of the population: the Napster crawler issues file-search queries for popular song-artist names against a single central Napster server (Napster's ~160-server cluster locates a peer through server-side query resolution) and follows references in the responses, capturing each peer's IP address, self-reported bandwidth, file count, and current upload/download counts; the Gnutella crawler exploits the protocol's own ping/pong neighbor-discovery messages, starting from a few well-known hosts and iterating for about two minutes, without forwarding protocol traffic or answering queries so the crawl does not alter system behavior. Second, the peers found in each snapshot are actively probed over several days for three additional properties: round-trip latency (a direct TCP SYN/RST exchange), lifetime (repeated TCP-level liveness probes using a tool named LF, built on Savage's Sting platform, classifying each peer as offline, inactive [reachable at IP level but not the application], or active [accepting P2P connections]), and bottleneck link bandwidth (measured, not self-reported, using a packet-pair dispersion tool named SProbe that detects and discounts interfering cross-traffic, chosen because available bandwidth fluctuates too quickly to measure with a single loss-rate sample and a peer's last-hop link is assumed to be the true bottleneck given the measurement hosts' own gigabit connectivity to Abilene).
+
+### Measured results
+
+| Result | Value | Conditions |
+|---|---|---|
+| Crawl population size | Napster: 509,538 peers on 546,401 unique IPs, over 4 days (May 6-9, 2001). Gnutella: 1,239,487 peers on 1,180,205 unique IPs, over 8 days (May 6-14, 2001) | Java crawlers, IBM Java 1.18 JRE on Linux 2.2.16, dual-processor Pentium III 700MHz hosts, 2GB RAM |
+| Crawl representativeness | Each Napster crawl typically captured 40%-60% of local peers on the crawled server, accounting for 80%-95% of that server's reported local files. Each ~2-minute Gnutella crawl gathered 8,000-10,000 unique peers, corresponding (per Clip2's independent measurement) to at least 25%-50% of the concurrent Gnutella population | Napster crawl compared against server-broadcast statistics; Gnutella crawl duration ~2 minutes per iteration |
+| Active-measurement sample sizes | Lifetime: 17,125 Gnutella peers probed every 7 minutes over 60 hours; 7,000 Napster peers probed every 2 minutes over 25 hours. Bandwidth/latency: Gnutella — 595,974 unique peers attempted, 223,552 downstream-bandwidth measurements succeeded, 16,252 upstream-bandwidth measurements succeeded, 339,502 latency measurements succeeded. Napster — 4,079 peers attempted, 2,049 downstream-bandwidth measurements succeeded (crawl truncated early after complaints to University of Washington computing staff) | Active probing from University of Washington measurement hosts, May 2001 |
+| Downstream/upstream bottleneck bandwidth (Gnutella) | 92% of peers have downstream bandwidth of at least 100 Kbps; only 8% have upstream bandwidth of at least 10 Mbps; 22% of peers have upstream bandwidth of 100 Kbps or less | Measured (SProbe), Gnutella peer sample above |
+| Downstream bottleneck bandwidth, cross-system comparison | About 25% of Napster peers connect via modem (<=64 Kbps) versus about 8% of Gnutella peers; 50% of Napster peers and 60% of Gnutella peers use broadband (cable/DSL/T1/T3); about 20% of Napster peers and 30% of Gnutella peers have >=3 Mbps | Measured (SProbe), both crawl samples |
+| Reported ("self-declared") bandwidth, Napster | 22% of Napster users report "Unknown" bandwidth | Self-reported field collected during crawl |
+| Latency to Gnutella peers | About 20% of peers have latency >=280ms; another 20% have latency <=70ms (a 4x spread between the closest and furthest quintiles); two visible clusters at (20-60 Kbps, 100-1,000ms) and (>1,000 Kbps, 60-300ms), plus two horizontal bands corresponding to North American East Coast and European peers | Measured from Seattle, WA measurement hosts, Gnutella latency sample above |
+| IP-level and application-level peer uptime | IP-level ("Internet host") uptime distributions are similar for Napster and Gnutella, with only 20% of peers in each system reaching 93%+ IP-level uptime. Application-level uptime differs: best 20% of Napster peers reach >=83% uptime versus >=45% for the best 20% of Gnutella peers | Lifetime-measurement samples above, peers with 0% observed uptime excluded from all curves |
+| Session duration | Median session duration approximately 60 minutes for both Napster and Gnutella | Create-based method (trace split into two halves, only sessions starting in the first half and ending in either half counted), reported only for sessions under 12 hours because the method cannot characterize longer sessions |
+| Free-riding, Gnutella | 25% of Gnutella clients share zero files; about 75% share 100 files or fewer; only 7% share more than 1,000 files, and that 7% collectively offers more files than all other peers combined | Gnutella crawl sample, file-count field from pong messages |
+| Free-riding, Napster | About 40-60% of Napster peers share only 5-20% of the total shared files (peers sharing zero files could not be captured by the query-driven Napster crawler, so this understates true Napster free-riding) | Napster crawl sample, file-count field |
+| Bandwidth-class correlation with downloads/uploads, Napster | 56 Kbps modem peers are 15% of the Napster population but account for 24% of downloads; cable-modem peers are 32% of the population but account for 46% of uploads; the fraction of zero-download peers is about 20 percentage points higher among high-bandwidth peers than low-bandwidth peers | Napster crawl snapshots of concurrent download/upload counts, classified by self-reported bandwidth |
+| Shared-data size correlation | Shared file count and shared MB of data are strongly correlated on a log-log plot in both systems, with slope corresponding to about 3.7 MB per file (consistent with a typical MP3), except one Gnutella outlier peer reporting 0 files but 730 MB shared, attributed to a software bug or deliberate misreporting | Napster and Gnutella crawl samples |
+| Bandwidth misreporting, Napster | Up to 30% of users who self-report bandwidth <=64 Kbps have significantly higher measured bandwidth; under 10% of users self-reporting >=3 Mbps have significantly lower measured bandwidth than reported | Cross-check of self-reported vs. SProbe-measured downstream bandwidth, Napster active-measurement sample |
+| Gnutella overlay resilience to random node removal | Modeled analytically (Cohen et al.'s power-law-network breakdown bound) using an observed vertex-connectivity power-law index alpha=2.3 (cited from Clip2's independent measurement) and minimum degree m=1: at maximum observed node degree 20, the model predicts the overlay fragments only once more than 60% of nodes are randomly removed | Analytical application of a published formula to Gnutella's measured degree distribution, not itself a live-network experiment |
+| Gnutella overlay resilience to targeted removal | Empirical: from a captured 1,771-peer connected Gnutella topology snapshot (February 16, 2001), removing a random 30% of nodes left the largest connected component at 1,106 of the remaining 1,300 nodes; removing only the highest-degree 63 nodes (under 4% of the total) shattered the topology into many disconnected components | Single captured topology snapshot, February 16, 2001, 1,771 peers |
+
+### Parameters
+- Napster crawl duration per snapshot: 3-4 minutes (parallel queries against one server).
+- Gnutella crawl duration per snapshot: approximately 2 minutes.
+- Lifetime-probe intervals: every 7 minutes for Gnutella (60-hour window), every 2 minutes for Napster (25-hour window, truncated early).
+- Latency-probe packet size: 40-byte TCP packets for round-trip time measurement.
+- Power-law index alpha used in the Gnutella overlay-resilience model: 2.3, cited from an independent Clip2 measurement rather than derived by this paper.
+- Minimum node degree m in the resilience model: set to 1; maximum node degree K plotted as the independent variable in Figure 12, with 20 identified as approximately the observed real maximum.
+
+### Stated limitations
+The Napster crawler could not capture peers sharing none of the queried popular content, biasing the file-sharing-related statistics; the authors state the central-server-reported aggregate statistics for uncaptured remote peers were similar in shape to the captured local-peer statistics, but this is a secondary check, not a correction. Napster active-bandwidth measurements were cut short (2,049 of an attempted 4,079 peers) after e-mail complaints to University of Washington computing staff forced early crawl termination, reducing the Napster sample relative to Gnutella. The lifetime-classification tool (LF) identifies hosts by IP address and cannot distinguish multiple hosts sharing a dynamic (e.g. DHCP) address, stated by the authors as a limitation of the lifetime characterization. The session-duration measurement (create-based method) cannot characterize sessions longer than half the trace window, so the reported distribution is restricted to sessions under 12 hours and says nothing about longer sessions. Bottleneck-bandwidth measurement assumes the peer's last-hop link is the true bottleneck relative to the measurement infrastructure's own gigabit connectivity; this is stated as an assumption, justified by the observation that most measured peers use low-bandwidth last-hop connections, not verified end-to-end. The Gnutella overlay-resilience-to-random-failure result (Figure 12) is an analytical application of a previously published formula (Cohen et al.) to the paper's own measured degree distribution, not a live-network experiment; the targeted-removal result (Figure 13), by contrast, is empirical but drawn from a single 1,771-peer topology snapshot on one date, not repeated or averaged over multiple snapshots.
+
+### Requirements it places on the rest of the system
+A system that delegates routing, indexing, or content-serving responsibility uniformly across all participating peers requires the peer population's bandwidth, latency, availability, and shared-content volume to be roughly homogeneous; this paper's measurement shows those four properties vary across three to five orders of magnitude within a single deployed peer population, so any such system instead requires a mechanism to detect and differentially weight peer capability rather than treating peers as interchangeable. A design that relies on peer self-reported bandwidth or capacity (as Napster's client software does) requires either a built-in incentive for accurate reporting or an independent measurement path, because this paper measures deliberate misreporting in a substantial fraction of low- and high-bandwidth peers, in a direction consistent with each peer's incentive to avoid attracting download requests. A design assuming symmetric client/server behavior (every peer serves and consumes roughly equally) requires enforcement or incentive mechanisms, because the measured population shows a persistent split between free-riding, download-only peers and a small set of peers supplying most shared content and most upload traffic. An overlay whose robustness argument rests on random-failure resilience (as Gnutella's preferential-attachment, power-law-degree topology provides) does not extend that robustness to targeted removal of high-degree nodes; a system relying on this kind of topology for fault tolerance must additionally defend the identification of, or the reachability advantage of, its highest-degree nodes, or accept the measured vulnerability (overlay shattered by removing under 4% of nodes when those nodes are chosen by degree).
+
+### Contradicts
+None found within this entry. Whether this paper's crawl-population, bandwidth, or session-duration figures agree with the same authors' shorter companion publication (GUMMADI-CCR-02, ACM SIGCOMM CCR 32(1), 2002, covering the same underlying Napster/Gnutella measurement study) is not checked here; flagged for the cross-paper contradiction check once GUMMADI-CCR-02's own full text is read directly, since the two keys may report the same numbers from the same dataset under different venue formatting rather than independent measurements.
+
+### References worth retrieving
+- E. Adar, B. Huberman, "Free riding on Gnutella," First Monday 5, October 2000 — foundational (origin of the "free-rider" term this paper applies to its own measured no-files-shared population).
+- Clip2, "Gnutella measurement project," May 2001 — foundational (independent source for the Gnutella population-coverage estimate and the vertex-connectivity power-law index alpha=2.3 this paper's resilience analysis uses without re-deriving).
+- A. Barabasi, R. Albert, "Emergence of scaling in random networks," Science 286, pp. 509-512, 1999 — foundational (preferential-attachment model cited as the mechanism producing Gnutella's observed power-law degree distribution).
+- R. Cohen, K. Erez, D. ben Avraham, S. Havlin, "Resilience of the Internet to random breakdowns" — foundational (source of the analytical power-law-network breakdown-probability formula this paper applies to the measured Gnutella degree distribution in Figure 12).
+- S. Savage, "Sting: a TCP-based Network Measurement Tool," USENIX USITS 1999 — foundational (platform the paper's own lifetime-probing tool LF and bandwidth tool SProbe are built on).
+- S. Ratnasamy, P. Francis, M. Handley, R. Karp, S. Shenker, "A scalable content-addressable network," ACM SIGCOMM 2001 — competing (cited as one of several proposed P2P routing/location systems the paper's recommendations are directed at; this is RATNASAMY-SIGCOMM-01 already in this evidence file).
+- I. Stoica, R. Morris, D. Karger, F. Kaashoek, H. Balakrishnan, "Chord: A scalable content-addressable network," ACM SIGCOMM 2001 — competing (same role as Ratnasamy et al. above, one of the DHT proposals the heterogeneity findings are directed at).
+- D. Roselli, J. Lorch, T. Anderson, "A comparison of file system workloads," USENIX Annual Technical Conference 2000 — foundational (source of the create-based method used to compute the session-duration distribution).
+
+### Verbatim extracts
+- "the magnitude of these characteristics vary between three and five orders of magnitude across the peers."
+- "22% of the participating peers have upstream bottleneck bandwidths of 100Kbps or less."
+- "as high as 30% of the users that report their bandwidth as 64 Kbps or less actually have a significantly greater bandwidth."
+- "25% of the Gnutella clients do not share any files."
+- "these 7% of users together offer more files than all of the other users combined."
+- "the overlay fragments only when more than 60% of the nodes shutdown" (random removal, degree 20).
+- "Gnutella is nevertheless highly vulnerable in the face of well-orchestrated, targeted attacks."
+- "the median session duration is approximately 60 minutes."
+
+---
+
 ## [SATHIAMOORTHY-VLDB-13] XORing Elephants: Novel Erasure Codes for Big Data
 
 **Citation:** Maheswaran Sathiamoorthy, Megasthenis Asteris, Dimitris Papailiopoulos, Alexandros G. Dimakis, Ramkumar Vadali, Scott Chen, Dhruba Borthakur. "XORing Elephants: Novel Erasure Codes for Big Data." Proceedings of the VLDB Endowment, Vol. 6, No. 5, 2013. Pages 325-336. DOI 10.14778/2535573.2488339.
@@ -17917,6 +20233,68 @@ None found.
 
 ---
 
+## [SHACHAM-ASIACRYPT-08] Compact Proofs of Retrievability
+**Citation:** Hovav Shacham, Brent Waters. "Compact Proofs of Retrievability." ASIACRYPT, 2008. DOI: 10.1007/978-3-540-89255-7_7.
+**Retrieved:** full text via https://eprint.iacr.org/2008/073.pdf
+**Source URL:** https://eprint.iacr.org/2008/073.pdf
+**Domain:** C
+
+### What it does
+A proof-of-retrievability (POR) protocol lets a verifier confirm that a storage server holds a client's file in full, without the verifier downloading the file. The client first erasure-encodes the file into n blocks so that any rho-fraction of the n blocks reconstructs the whole file, then computes one homomorphic authenticator per block and uploads blocks plus authenticators to the server. To audit, the verifier sends a challenge naming a random subset of l block indices, each paired with a random coefficient. The server computes one aggregated response: a linear combination of the challenged blocks (weighted by the coefficients) and the matching linear combination of their authenticators, using the homomorphic property to combine many authenticators into one value instead of returning them individually. The verifier checks the aggregated pair against one equation instead of checking each block-authenticator pair separately. The paper gives two constructions: a private-verification scheme built from a pseudorandom function (PRF), secure in the standard model, where only the holder of the secret key can audit; and a publicly-verifiable scheme built from BLS (Boneh-Lynn-Shacham) signatures over a bilinear group, secure in the random oracle model, where anyone holding the public key can audit. Both proofs show that any server that answers an epsilon-fraction of challenges convincingly can have a rho-fraction of the file blocks extracted from it by an algorithm that repeatedly rewinds and re-queries the server.
+
+### Measured results
+This is a cryptographic-construction and proof paper with no implementation benchmark or systems evaluation section; its stated results are asymptotic response-length and interaction-count bounds, not measured wall-clock or throughput numbers.
+
+| Quantity | Value | Conditions |
+|---|---|---|
+| Query length, publicly-verifiable scheme | 20 bytes | 80-bit security level (lambda=80); shortest query of any POR scheme with public verifiability, per the paper |
+| Response length, publicly-verifiable scheme | 40 bytes | 80-bit security level; shortest response of any POR scheme with public verifiability |
+| Response length, privately-verifiable scheme | 20 bytes | 80-bit security level; matches the response length of the Naor-Rothblum scheme, which uses a weaker security model; the query is longer than in the public scheme |
+| Storage overhead, base construction (s=1 sector per block) | 2x beyond the erasure code's own expansion | one authenticator per block, authenticator equal in length to the block |
+| Storage overhead, s-sector construction | (1+1/s)x beyond the erasure code's own expansion | one authenticator per block of s sectors; response length becomes (1+s)x the length of one authenticator |
+| Extraction interaction count | O(n/(epsilon-omega)) interactions with the cheating prover | n = number of file blocks, epsilon = fraction of challenges the prover answers convincingly, omega = 1/#B + (rho*n)^l/(n-l+1)^l, where #B is the size of the coefficient set, rho is the erasure code rate, l is the number of challenged indices per query |
+| Extraction time | O(n^2*s + (1+epsilon*n^2)*n/(epsilon-omega)) | same parameters as above |
+| Challenge-coefficient bit length reduction | 80 bits suffices at 80-bit security, versus 160 bits proposed in a prior scheme (Ateniese et al.) | derived from the paper's own security proof, which the authors state gives a tighter bound than the earlier analysis |
+| Attack on a related scheme (E-PDP, by Ateniese et al.) | The paper's own attack cheats with almost 9% success probability using no more storage than honestly storing the file | contrasted with Ateniese et al.'s own claim that a malicious server needs 10^140 blocks of storage to cheat with 100% probability under E-PDP; the two figures describe different attack goals (near-certain cheating vs. a lower but nonzero cheating probability under the compact scheme's own model) |
+
+### Parameters
+| Parameter | Meaning | Value used / range stated |
+|---|---|---|
+| lambda | security parameter | typically 80; also discussed at up to 128 |
+| p | prime field modulus | lambda bits (private-verification scheme) or 2*lambda bits (public-verification scheme, so that the discrete-log problem is 2*lambda-secure) |
+| n | number of file blocks | assumed n >> lambda; no fixed value, file-size dependent |
+| rho | erasure code rate (fraction of blocks sufficient to decode) | conservative choice rho = 1/2; can be reduced for applications tolerant of higher error |
+| l | number of challenged indices per query | conservative choice l = lambda (e.g., l=80); reducible to l=22 if a 1-in-1,000,000 extraction-failure rate is acceptable |
+| B | set from which challenge coefficients are drawn | conservative choice B = {0,1}^lambda (80-bit coefficients); reducible to 22-bit strings under the relaxed error-rate tolerance above |
+| s | sectors per block (storage/response tradeoff knob) | s=1 gives the base scheme; larger s reduces storage overhead to (1+1/s)x at the cost of a longer, (1+s)x, response |
+| curve choice (public-verification scheme) | pairing-friendly elliptic curve | Barreto-Naehrig curves recommended for lambda up to 128 |
+
+### Stated limitations
+The paper does not specify an extraction algorithm as part of the deployed scheme, because the authors do not expect the extraction algorithm to run in production outsourced-storage deployments; it exists only inside the security proof. Deriving short queries in the standard model (rather than the random-oracle model used for the public scheme) is stated as the major remaining open problem. The scheme requires the encoding erasure code to tolerate adversarial (not just random) erasure for the stated security proof to hold; the paper notes that Reed-Solomon-derived codes have this property but are slow to encode and decode for large files, and defers a discussion of faster codes secure only against random erasure to an appendix of the full paper. The authors state that weaker proof-of-data-possession models, which guarantee only that some percentage of blocks (or only the sum of challenged blocks) is available, are unsatisfactory for most practical applications, because partial loss of accounting data or of compression tables destroys the value of the retrieved bytestream.
+
+### Requirements it places on the rest of the system
+The client must run an erasure-encoding step over the file before storage; the code's rate rho and the challenge parameters l and #B are jointly constrained so that epsilon-omega stays positive and non-negligible in lambda, so a system deploying this construction cannot pick rho, l, and B independently of each other. The verifier must be able to generate and hold either a private key (private-verification scheme) or a private signing key at file-storage time (public-verification scheme, whose public key alone suffices thereafter for verification) — key management for that per-file secret or per-file authenticator-generation key is external to the paper. The construction assumes the storage server returns responses honestly computed from stored data or fails detectably; the extraction guarantee holds only for a server that is "well-behaved" in the sense of always computing its response as the honest prover algorithm would, conditional on passing verification, which the paper proves follows from the unforgeability of the underlying signature or PRF. Any system layering multiple audits atop this scheme (for example, to bootstrap the weaker E-PDP-style guarantee up to individual-block guarantees) must independently prove that composition sound and account for the added computational and communication overhead, which this paper does not provide.
+
+### Contradicts
+The paper explicitly disputes the extraction guarantee claimed for the "E-PDP" scheme of Ateniese et al. (CCS 2007): it shows that E-PDP provides only a guarantee about the sum of challenged blocks, not about individual blocks, and that the authors' own claim of 10^140 blocks needed to cheat with 100% probability describes a different, weaker attack goal than the one this paper's own model addresses. No other paper in this corpus (NEW-8 batch) makes claims about proof-of-retrievability response lengths. None found among the other five keys in this batch.
+
+### References worth retrieving
+- Ateniese, Burns, Curtmola, Herring, Kissner, Peterson, Song. "Provable data possession at untrusted stores." CCS 2007. — competing (the RSA-based homomorphic-authenticator scheme this paper improves on and partly refutes the extraction claims of)
+- Juels, Kaliski. "PORs: Proofs of retrievability for large files." CCS 2007. — foundational (defines the security model this paper's proofs are cast against)
+- Naor, Rothblum. "The complexity of online memory checking." FOCS 2005. — foundational (the "authenticators" model and the 1-bit-MAC scheme compared throughout)
+- Bowers, Juels, Oprea. "Proofs of retrievability: Theory and implementation." ePrint 2008/175. — competing (a contemporaneous framework trading off single-audit cost against multi-audit extraction efficiency, explicitly contrasted in section 1.1)
+- Boneh, Lynn, Shacham. "Short signatures from the Weil pairing." J. Cryptology 17(4), 2004. — foundational (BLS signatures, the basis of the public-verification scheme)
+- Ateniese, Di Pietro, Mancini, Tsudik. "Scalable and efficient provable data possession." SecureComm 2008. — competing
+
+### Verbatim extracts
+- "the shortest query and response of any proof-of-retrievability with public verifiability"
+- "gives a 2× overhead beyond that imposed by the erasure code"
+- "would need to store 10140 blocks in order to cheat with probability 100%"
+- "requires no more storage than were the server faithfully storing the file"
+- "derandomizing the query in this scheme is the major remaining open problem"
+
+---
+
 ## [SHAMIR-CACM-79] How to Share a Secret
 **Citation:** Adi Shamir. "How to Share a Secret." Communications of the ACM, 22(11), 1979. Pages 612-613. DOI 10.1145/359168.359176.
 **Retrieved:** full text via https://web.mit.edu/6.857/OldStuff/Fall03/ref/Shamir-HowToShareASecret.pdf
@@ -17959,6 +20337,225 @@ None found within this corpus batch.
 - "the minimal solution uses 462 locks and 252 keys per scientist"
 - "sixteen bit modulus ... suffices for applications with up to 64,000 Di pieces"
 - "there is absolutely nothing the opponent can deduce about the real value of D"
+
+---
+
+## [SHAPIRO-EATCS-11] Convergent and Commutative Replicated Data Types
+
+**Citation:** Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski. "Convergent and Commutative Replicated Data Types." Bulletin of the European Association for Theoretical Computer Science (EATCS), No. 104, 2011. Pages 67-88.
+**Retrieved:** full text via https://drops.dagstuhl.de/opus/volltexte/2011/eatcs/2011_bulletin_104.pdf
+**Source URL:** https://drops.dagstuhl.de/opus/volltexte/2011/eatcs/2011_bulletin_104.pdf
+**Domain:** D
+
+### What it does
+A Conflict-free Replicated Data Type (CRDT) is a data type whose replicas converge to the same state after every replica has received the same set of updates, without any coordination protocol (locking, consensus, or synchronous agreement) between replicas during normal operation. This paper is the expository companion to the SSS 2011 conference paper (SHAPIRO-SSS-11), giving the same two sufficient conditions for convergence with longer worked examples (Registers, Sets, Graphs, a bookstore shopping cart) and a dedicated treatment of garbage collection that the conference paper omits.
+
+Two update-propagation styles are defined, proved equivalent to each other (one can emulate the other), and each given one sufficient convergence condition:
+
+- State-based (Convergent Replicated Data Type, CvRDT): every update executes locally against the full replica state, then the entire updated state (or a delta) is transmitted to other replicas, which fold it in with a merge function. If a replica's payload takes values in a join semilattice — a partially ordered set with a least-upper-bound (LUB) operation ⊔ for every pair of elements — and every update moves the payload strictly forward in that order (monotonic), and merge computes the LUB of the local and delivered states, then two replicas that each receive every update infinitely often converge to the same state. The LUB operation is commutative, idempotent, and associative, so the communication subsystem may lose messages, reorder them, or deliver them multiple times without breaking convergence, as long as every update eventually reaches every replica by some path.
+- Operation-based (Commutative Replicated Data Type, CmRDT): the at-source phase of an update runs once at the initiating replica with no side effect other than producing the operation and its arguments to broadcast; the downstream phase, which mutates the payload, runs at every replica (including the source) once its precondition holds there. If every pair of concurrent operations (operations not ordered by happened-before) commutes, and the communication subsystem delivers every update to every replica in causal order (an update that happened-before another is delivered first everywhere), then replicas converge.
+
+Worked examples given: Last-Writer-Wins Register (LWW-Register, state- and op-based), Multi-Value Register (MV-Register, keeps all concurrently-written values instead of picking one), two-phase Set (2P-Set, an add-set and a remove-set with add-wins-once semantics, i.e., an element once removed cannot be re-added), Observed-Remove Set (OR-Set, tags every added element with a unique identifier so a concurrent add and remove of the "same" logical element do not collide), and an Observed-Remove Map extending OR-Set for a shopping-cart application (ISBN to quantity).
+
+### Measured results
+This is a formal-methods and design paper with no implementation benchmark, simulation, or deployment measurement. It states no throughput, latency, message-count, or storage-overhead figures under stated experimental conditions. The paper's only quantitative content is the asymptotic and structural argument that op-based CmRDTs avoid the storage overhead of certain metadata (see Parameters, "tombstone" and "version vector" comparisons below), stated as a design-level claim rather than a measured one.
+
+### Parameters
+- Semilattice partial order ≤_v and LUB operator ⊔_v: object-type-specific, chosen so every update is monotonic (non-decreasing) in ≤_v; this is a design choice per CvRDT type, not a tunable runtime parameter.
+- Causal-history tracking: state-based objects track C(x_i), the set of updates that have taken effect at replica i, used to prove convergence; the paper does not give a wire-format cost for this history but notes it as the formal device the convergence proof relies on.
+- Stability detection (Section 4, garbage collection): an update f is "stable" at replica i when every update concurrent with f has already taken effect at i; liveness of stability detection requires that the set of replicas be known and that no replica crashes permanently and undetectably. This is a precondition, not a numeric tunable.
+- Two garbage-collection classes are distinguished by their synchronization requirement: discarding metadata once an update is stable requires no synchronization beyond that already needed for delivery; resetting payload across all replicas (removing tombstones from a 2P-Set, trimming a version vector, rebalancing a replicated tree) requires a commitment protocol among a "core" stable subset of replicas, per Létia et al., cited as prior work applied to the Treedoc sequence CRDT.
+
+### Stated limitations
+The system model assumes non-Byzantine processes that may crash and recover with memory intact; Byzantine-tolerant replication is out of scope. State-based objects require only that the communication subsystem eventually deliver every update to every replica, arbitrarily many times, out of order, or with loss tolerated as long as delivery eventually happens; op-based objects additionally require causal-order delivery, a stronger requirement supplied by the communication layer, not by the CRDT logic itself. The 2P-Set and derived types (Containers, Maps, Graphs, Sequences built on Sets) that use a tombstone-based remove cannot re-add an element once removed under the plain 2P-Set semantics; the OR-Set removes that restriction but a removed-then-readded element is tracked as a logically new element via a unique identifier, not as the same element restored. Version-vector-based approaches (cited via comparison to Dynamo's MV-Register) impose a cost the OR-Set-based shopping cart design explicitly avoids, but the paper does not quantify that cost. The paper states its future work includes evaluating CRDT performance "analytically and experimentally," meaning no such evaluation exists in this paper. It also identifies as open the question of adding infrequent strongly-consistent (linearizable) operations to an otherwise eventually-consistent CRDT design, citing Serafini et al.'s result that the ◇S failure detector is insufficient to solve that problem under a requirement that all operations terminate.
+
+### Requirements it places on the rest of the system
+- CvRDT convergence requires the communication subsystem to deliver every update to every replica infinitely often (eventually, possibly with loss, reordering, or duplication tolerated); it does not require causal or any other ordering guarantee. A component selecting the state-based style needs only a best-effort anti-entropy or gossip transport, not a causal broadcast layer.
+- CmRDT convergence requires the communication subsystem to deliver updates in causal order to every replica: for any two updates f and g where f happened-before g, f must be delivered before g at every replica. A component selecting the operation-based style must supply causal broadcast, which itself requires the network to track and enforce a happened-before relation (e.g., via vector clocks or an equivalent mechanism) — this is a stronger requirement than the state-based style needs.
+- Both styles assume objects are independent and do not consider cross-object transactions; a system composing multiple CRDT-typed objects with a cross-object invariant is explicitly outside this paper's model.
+- Garbage collection that discards stability-tracked metadata requires that the full set of replicas be known and that no replica crash permanently without being detected as such; a system with unbounded or unknown replica membership (an open peer-to-peer network without a fixed replica set) cannot use this class of garbage collection without first supplying replica-membership knowledge.
+- Garbage collection that resets payload globally (tombstone removal, version-vector trimming) requires a commitment protocol among a designated stable "core" subset of replicas; a fully decentralized system without a distinguished core needs to construct that subset itself before this class of garbage collection is available.
+
+### Contradicts
+None found within this corpus. This paper and SHAPIRO-SSS-11 present the same two sufficient conditions; no numeric disagreement exists between them because neither states a measured figure.
+
+### References worth retrieving
+- foundational: Baquero, Moura. "Specification of convergent abstract data types for autonomous mobile computing." Technical report, Universidade do Minho, 1997. (Origin of the CvRDT formalization this paper extends.)
+- foundational: Baquero, Moura. "Using structural characteristics for autonomous operation." Operating Systems Review 33(4), 1999.
+- competing: Ellis, Gibbs. Operational Transformation (OT) for shared editing, cited as the alternative op-based Sequence approach that transforms operations against concurrent history rather than designing for commutativity; the paper cites Oster et al. showing most decentralized OT algorithms are incorrect.
+- competing: Roh et al. "Replicated Abstract Data Type," independently developed, generalizes Last-Writer-Wins to a partial order of updates.
+- competing: Alvaro et al., the Bloom programming language, enforces eventual consistency via logical monotonicity but does not support remove without synchronization.
+- attack/critique: Oster et al., cited as demonstrating that most Operational Transformation algorithms for decentralized architectures are incorrect (specific venue not given in this excerpt).
+- foundational: Preguiça, Shapiro et al., Treedoc, a Sequence CRDT for collaborative text editing based on approximating a continuum as a binary tree.
+- foundational: Serafini et al., result that the ◇S failure detector is insufficient to guarantee termination when mixing strong (linearizable) and weak operations; motivates this paper's stated future work.
+- foundational: Létia et al., core-replica commitment protocol for CRDT garbage collection, applied to Treedoc.
+
+### Verbatim extracts
+- "successive states of an object should form a monotonic semilattice"
+- "concurrent operations should commute"
+- "Assuming only that the communication subsystem eventually delivers"
+- "Causal delivery... is sufficient to ensure that the downstream precondition is true"
+- "reliable causal delivery does not require agreement"
+- "does not have the cost of the version vectors needed by Dynamo's MV-Register"
+- "the ◇S failure detector is insufficient for solving this problem"
+
+---
+
+## [SHAPIRO-SSS-11] Conflict-Free Replicated Data Types
+
+**Citation:** Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski. "Conflict-Free Replicated Data Types." Stabilization, Safety, and Security of Distributed Systems (SSS), 2011. DOI: 10.1007/978-3-642-24550-3_29.
+**Retrieved:** full text via https://hal.inria.fr/inria-00609399/document
+**Source URL:** https://hal.inria.fr/inria-00609399/document
+**Domain:** D
+
+### What it does
+A Conflict-free Replicated Data Type (CRDT) is a data type whose replicas converge to the same state after receiving the same set of updates, without a consensus protocol or synchronous coordination between replicas. This paper defines Strong Eventual Consistency (SEC), a correctness condition that resolves the tradeoff named by the CAP theorem (Consistency, Availability, Partition-tolerance — Gilbert and Lynch's proof that a system cannot guarantee all three simultaneously) by giving up only strong (immediate cross-replica) consistency, and proves two independent sufficient conditions under which a replicated object achieves SEC. This paper is the original conference publication of the CRDT concept, distinct from its expository companion (SHAPIRO-EATCS-11), which shares the same two conditions and worked examples but adds a garbage-collection treatment this paper omits; this paper instead adds the formal definition of Strong Eventual Consistency, the CAP-theorem resolution argument, two theorems proving state-based and operation-based objects can each emulate the other, and a directed-Graph CRDT case study motivated by a web-crawler and page-rank application.
+
+Strong Eventual Consistency is defined by three properties: eventual delivery (an update delivered at one correct replica is eventually delivered to every correct replica), convergence (correct replicas that have delivered the same updates reach equivalent state), and termination (every method execution terminates). Strong Convergence — replicas that have delivered the same updates have equivalent state, stated without the eventuality operator that ordinary eventual consistency uses — is what distinguishes SEC from ordinary eventual consistency: an SEC replica never needs to detect a conflict and roll back, because the two given conditions guarantee that whichever updates a replica has already delivered produce the same result regardless of delivery order.
+
+State-based (Convergent Replicated Data Type, CvRDT): an update executes at one replica, modifying its local state; each replica occasionally sends its full local state to another replica, which merges the received state into its own via a merge method. If the payload's states form a join semilattice (a partially ordered set with a least-upper-bound operation for every pair) under order ≤, merge always computes the least upper bound (LUB) of the two states being merged, and every update is monotonically non-decreasing under ≤, then (Theorem 1) any state-based object with this "monotonic semilattice" property is SEC, assuming only eventual delivery and termination — no ordering requirement on delivery, since the LUB operation is commutative, idempotent, and associative and thus insensitive to delivery order, repetition, or loss as long as delivery eventually happens.
+
+Operation-based (Commutative Replicated Data Type, CmRDT): an update splits into a side-effect-free prepare-update, executed once at the source replica, and an effect-update, executed at every replica (including the source) once a delivery precondition holds there. If every pair of concurrent operations (not ordered by happened-before) commutes — executing either order from the same reachable state produces equivalent results and preserves each other's enabledness — then (Theorem 2) any op-based object with this commutativity property is SEC, assuming causal-order delivery of updates (an update that happened-before another is delivered before it, everywhere) and termination.
+
+Theorem 3 proves any SEC state-based object can be emulated by an SEC op-based object: the emulating CmRDT's prepare-update computes the post-update state locally and passes it as the argument to an effect-update that performs the original merge; since merge always commutes, the emulated effect-updates commute, giving a valid CmRDT. Theorem 4 proves the converse: an SEC op-based object can be emulated by an SEC state-based object whose state additionally tracks delivered-but-not-yet-applied and applied update sets, formalizing what the paper calls "the mechanics of an epidemic reliable causal broadcast." The two styles are therefore equally expressive; the choice between them is an engineering one about update size versus delivery-ordering requirements, not an expressiveness one.
+
+The directed Graph CRDT (Section 5) specifies a graph as two OR-Set-style sets — vertices V and arcs A, each holding (element, unique-tag) pairs — with the invariant that every arc's endpoints exist as vertices. Because a concurrent addArc(v', v'') and removeVertex(v') can violate that invariant, the paper enumerates three resolution policies (vertex removal wins by hiding incident arcs; arc addition wins by resurrecting removed vertices; or synchronize removeVertex against concurrent addArc, which the paper rejects as violating the asynchrony and fault-tolerance goals) and selects the first (vertex removal wins) for its web-crawling scenario, stating there is no policy that is correct for every application.
+
+### Measured results
+This is a formal-methods paper proving sufficient conditions and giving worked constructions; it reports no implementation, simulation, or deployment measurement, and no throughput, latency, message-count, or storage-overhead figure under stated experimental conditions. Its only quantitative claim is a fault-tolerance bound stated as a direct consequence of the SEC definition, not as a measurement: an SEC object tolerates up to n − 1 simultaneous replica crashes out of n replicas, because every correct replica remains available for reads and writes regardless of network partition and any communicating subset of replicas converges independently of the rest.
+
+### Parameters
+- Semilattice order ≤ and LUB operator ⊔: object-type-specific design choice for each CvRDT, not a runtime-tunable value.
+- Delivery precondition P for op-based effect-updates: the paper restricts scope to preconditions that causally-ordered broadcast alone is sufficient to satisfy, so that liveness (eventual enabledness) does not require additional synchronization.
+- Directed-Graph CRDT's arc-removal policy: one of three named alternatives (vertex-removal-wins, arc-addition-wins, or synchronized removal); the paper selects vertex-removal-wins for its web-crawling scenario and states explicitly that the choice is application-dependent, not derivable from the model.
+- Unique-tag generation (unique()): every vertex and arc addition is tagged with a value assumed unique across the whole system; the paper does not specify a concrete generation mechanism, leaving it as an assumed primitive.
+
+### Stated limitations
+The system model assumes a finite set of non-Byzantine processes that may crash silently and may or may not recover with memory intact; Byzantine fault tolerance is out of scope. The paper states SEC "does not require to solve consensus," which is a design property, not a limitation, but the corollary limitation is that no cross-replica invariant beyond what monotonic-semilattice merge or commutative operations can express is enforced without additional synchronization — the paper's own Graph CRDT discussion shows the vertex/arc-existence invariant cannot be enforced without picking a policy that breaks symmetry between concurrent operations, because full synchronization "violates the goals of asynchrony and fault tolerance." The paper explicitly defers implementation, applying the data types in real applications, and empirical performance evaluation to future work — none of that is present in this paper. It also states as open the question of supporting infrequent, non-critical synchronous operations (state commitment, global reset) within an otherwise SEC design, and of building stronger global invariants using probabilistic or heuristic techniques.
+
+### Requirements it places on the rest of the system
+- CvRDT convergence (Theorem 1) requires only that the communication subsystem deliver every update to every replica eventually — no ordering, no exactly-once guarantee; the proof explicitly tolerates message loss, reordering, and duplication because LUB is idempotent and commutative. A component selecting the state-based style needs a fault-tolerant eventual-delivery transport (gossip or anti-entropy, cited as standard), nothing stronger.
+- CmRDT convergence (Theorem 2) requires the communication subsystem to guarantee causally-ordered, reliable broadcast: every message delivered to every recipient exactly once, in an order consistent with happened-before. A component selecting the operation-based style must supply that stronger delivery guarantee, which the state-based style does not need.
+- The two emulation theorems mean a system need not commit to one style architecture-wide: any op-based object can run over a state-based transport (Theorem 4, at the cost of tracking additional delivered/applied-update state) and vice versa (Theorem 3), so the choice between the two styles is a per-object cost tradeoff rather than a global architectural commitment — but a system exploiting this needs to implement the emulation layer itself, which the paper does not supply as running code.
+- The Graph CRDT requires the application to accept the paper's chosen conflict-resolution policy (vertex removal wins over concurrent arc addition) as the effective invariant-repair rule at every replica; any other policy needs the graph specification changed and reproved, not merely reconfigured.
+- SEC in general requires update methods to terminate at every replica (the termination clause of the SEC definition); a component whose per-replica update logic can block indefinitely violates the model's precondition for the convergence guarantee to apply.
+
+### Contradicts
+None found within this corpus.
+
+### References worth retrieving
+- foundational: Gilbert, Lynch. "Brewer's conjecture and the feasibility of consistent, available, partition-tolerant web services." (The CAP theorem proof this paper's SEC result is positioned against.)
+- foundational: Lamport. "Time, clocks, and the ordering of events in a distributed system." (Source of the happened-before relation used to define causal delivery and concurrency.)
+- foundational: Demers, Greene, Hauser, Irish, Larson. "Epidemic algorithms for replicated database maintenance." (Cited as the standard gossip/anti-entropy delivery mechanism assumed for state-based CvRDT propagation.)
+- competing: Ellis, Gibbs. "Concurrency control in groupware systems." (Operational Transformation, the competing op-based approach for shared editing that transforms rather than commutes operations.)
+- attack/critique: Oster, Urso, Molli, Imine. "Proving correctness of transformation functions in real-time groupware." (Cited elsewhere in the companion paper as demonstrating most decentralized OT algorithms are incorrect; worth retrieving to check the specific correctness failures against any OT-based design considered here.)
+- competing: Roh, Jeon, Kim, Lee. "Replicated abstract data types: Building blocks for collaborative applications." (Independently developed concept generalizing Last-Writer-Wins.)
+- foundational: DeCandia et al. "Dynamo: Amazon's highly available key-value store." (Cited for the version-vector-based MV-Register approach the paper's OR-Set-based designs are compared against.)
+- foundational: Saito, Shapiro. "Optimistic replication." ACM Computing Surveys 37(1). (Survey of the broader optimistic-replication literature this paper's SEC condition is positioned within.)
+- foundational: Preguiça, Marquès, Shapiro, Leția. "A commutative replicated data type for cooperative editing." (Prior Treedoc work cited as an existing non-trivial CRDT.)
+- superseded-by: Shapiro, Preguiça, Baquero, Zawirski. "A comprehensive study of Convergent and Commutative Replicated Data Types." Technical report [19], cited repeatedly for proofs omitted here "for lack of space" — the technical report is the full-proof version of this paper.
+
+### Verbatim extracts
+- "does not require to solve consensus"
+- "tolerates up to n−1 simultaneous crashes"
+- "Any SEC state-based object can be emulated by a SEC op-based object"
+- "Any SEC op-based object can be emulated by a SEC state-based object"
+- "There is no perfect choice."
+- "violates the goals of asynchrony and fault tolerance"
+- "Assuming eventual delivery and termination, any state-based object that satisfies the monotonic semilattice property is SEC"
+
+---
+
+## [SHEN-SP-24] Real-Time Website Fingerprinting Defense via Traffic Cluster Anonymization
+
+**Citation:** Meng Shen, Kexin Ji, Jinhe Wu, Qi Li, Xiangdong Kong, Ke Xu, Liehuang Zhu. "Real-Time Website Fingerprinting Defense via Traffic Cluster Anonymization." IEEE Symposium on Security and Privacy, 2024. Pages 3243-3261 (page range per IEEE Xplore pagination visible in text: 3243-3261, exact start/end not independently confirmed). DOI: 10.1109/SP54263.2024.00247.
+**Retrieved:** full text via https://doi.org/10.1109/SP54263.2024.00247
+**Source URL:** https://doi.org/10.1109/SP54263.2024.00247
+**Domain:** G
+
+### What it does
+Palette defends a Tor client's traffic pattern against website fingerprinting (WF) attacks — machine-learning classifiers that identify which website a client is visiting from the size and timing of encrypted packets observed on the path between the client and the Tor guard node. Palette makes many distinct websites produce traffic that is statistically indistinguishable from each other, rather than trying to make one website's traffic look like unstructured noise.
+
+Mechanism, in three stages. First, offline clustering groups a set of monitored websites into anonymity sets of size k based on similarity of their traffic patterns, represented as a Traffic Aggregation Matrix (TAM) that counts incoming and outgoing packets per small time slot; for each anonymity set the system builds one shared "super-matrix" summarizing the traffic shape all websites in that set will be regulated to match. Second, the super-matrix is refined using historical traces from the set's member websites to reduce the bandwidth and time overhead needed to force every member's traffic to match it. Third, at real-time packet-sending time, the client (via a Tor Pluggable Transport, a mechanism that transforms Tor traffic to disguise it from network observers) regulates the live trace against the anonymity set's super-matrix by injecting dummy packets or delaying real ones — "trace regularization." Two techniques reduce the overhead of this regularization: early sending, which forwards buffered real packets ahead of the super-matrix schedule once a buffer-occupancy threshold sampled uniformly from [0, U) is exceeded, avoiding buffer congestion and its time-overhead cost; and tail padding, which checks every B-th time slot whether the sending buffer is empty to infer the page has finished loading and stop dummy-packet padding, without needing to know the true page-load-completion time the way the competing Tamaraw defense does.
+
+### Measured results
+Dataset: a public real-world dataset (cited as reference [6] in the paper, also used by other WF attack/defense papers) with a closed-world set of 1,000 traces across 95 websites and an open-world set of 40,716 websites at one trace each. Attacks compared: six published WF classifiers — CUMUL, k-FP, DF (a CNN using packet direction), Tik-Tok (DF's CNN structure on direction-times-time), Var-CNN (ResNet-based, uses direction, inter-packet time, and metadata), and RF (uses the TAM representation with a CNN) — all retrained by the authors with adversarial training on each defense's defended traffic, trained and tested on one server (Intel Core i7 3.4 GHz, 32 GB RAM, 10 GB GPU memory).
+
+| Defense | Bandwidth overhead | Time overhead | Notes |
+|---|---|---|---|
+| Undefended | -- | -- | Baseline classifier accuracy 94.5-98.8% across all six attacks |
+| Supersequence | 88% | 91% | Reduces all six attacks to below 30% accuracy |
+| Tamaraw | 121% | 43% | Reduces all six attacks to below 30% accuracy |
+| WTF-PAD | 61% | 0% | Defeated by four deep-learning attacks at over 90% accuracy |
+| FRONT | 80% | 0% | RF attack still achieves over 90% accuracy against it |
+| Surakav | 80% | 6% | Reduces DF/Tik-Tok/Var-CNN accuracy to 64.00%/67.63%/54.56%; ineffective against RF |
+| RegulaTor | 80% | 5% | Reduces all six attacks to at least 53.11% accuracy |
+| Palette | 84% | 9% | Reduces RF accuracy to 36.43%, a 16.68-percentage-point reduction versus RegulaTor's 53.11%; reduces the other five attacks to between 9.78% (CUMUL) and 24.73% (Var-CNN) |
+
+Conditions for the above table: closed-world scenario, 95 monitored websites, 8:1:1 train/validation/test split, with adversarial training applied per attack per defense.
+
+Open-world scenario: 95 monitored websites (900 training traces each) and 20,000 unmonitored-website training traces at an 8:1 split; testing used 95×100 monitored traces and 20,000 unmonitored traces. Without defense, DF, Tik-Tok, Var-CNN, and RF achieve high precision and recall. Palette reduces recall of all four deep-learning attacks below 0.1 at high precision, outperforming Surakav (effective only against DF and Tik-Tok) and RegulaTor (ineffective specifically against RF). As the unmonitored-website pool scaled from 10,000 to 40,000, Palette's bandwidth overhead grew from 79.63% to 81.81% and time overhead stayed roughly constant (8.89% to 8.86%).
+
+One-page setting (single monitored website, k-FP attack, 900 positive / 102,600 negative training traces, 100 positive / 29,400 negative testing traces): Supersequence and Tamaraw outperform Palette on the ROC curve in this harder setting, but at 82% and 34% higher time overhead than Palette respectively.
+
+Real-world deployment on the live Tor network: Palette implemented as a Pluggable Transport via the WFDefProxy framework, tested with two cloud servers (one Tor private bridge with 2 CPU cores/4 GB RAM, one client host with 8 CPU cores/16 GB RAM running eight Docker container clients in parallel over a 120 Mbps connection, Tor Browser 10.5.10, first 100 accessible sites from the February 2023 Tranco list). Under this deployment, Tamaraw incurred 135% bandwidth and 78% time overhead; RegulaTor's real-world time overhead rose to 112% (versus 5% in simulation) with attack accuracy on DF/Tik-Tok/RF improving by more than 10 percentage points relative to simulation; Palette reduced DF, Tik-Tok, and Var-CNN accuracy to under 15% and RF accuracy to 53.28%.
+
+Varying network conditions (super-matrix and parameters fixed at 120 Mbps / Tor Browser, then applied under other conditions): at 80/120/160 Mbps bandwidth constraints on Tor Browser, Palette's bandwidth overhead was 76%/73%/77% and time overhead 28%/30%/34%, with RF accuracy 47.74%/50.87%/47.76%. Switching from Tor Browser to Chrome at the same 120 Mbps reduced bandwidth overhead by 54 percentage points and increased time overhead by 20 percentage points, attributed to Chrome's larger baseline traffic volume (Tor Browser strips SPDY/HTTP-2 features that inflate traffic).
+
+Stability over time: traces recollected 5 days after initial collection (120 Mbps, Tor Browser) showed RF accuracy still at 48.98% (versus 50.87% at time 0), bandwidth overhead rising from 73% to 75%, time overhead falling from 30% to 29%.
+
+Update cost: with anonymity-set size k tested at 5, 10, 15, 20, 30, 45, and 95, the super-matrix generation time held roughly constant at approximately 112.6-113.0 seconds regardless of k, while refinement time fell from 148.78s (k=5) to 65.75s (k=20) then rose again for larger k, and storage fell from 228 KB (k=5) to 17 KB (k=95). Communication overhead for distributing updated super-matrices was measured against Tor client-population scale (2.5M, 5M, 7.5M, 10M clients) and update frequency (1-30 days), plotted rather than tabulated in the source text available here.
+
+Adaptive attacks (attacker has full knowledge of Palette's mechanism and first classifies which anonymity set a trace belongs to, then which website within it): highest resulting accuracy across DF, Tik-Tok, Var-CNN, and RF was 36.92% (under RF), only marginally above the non-adaptive adversarially-trained RF result of 36.43%.
+
+Two separate parameter settings are used: for the closed-/open-world simulation experiments (Table 10), Palette used k=30, α=0.16, B=20, U=45; for the real-world Tor deployment (Table 11), Palette used k=30, α=0.25, B=1, U=15.
+
+### Parameters
+| Parameter | Description | Value(s) tested |
+|---|---|---|
+| k | anonymity set size (number of websites clustered together) | 5, 10, 15, 20, 30, 45, 95 tested for update cost and grid search; k=30 used for both the simulation (Table 10) and real-world deployment (Table 11) experiments |
+| α | threshold for time-slot sampling in super-matrix construction | 0.16 (simulation, Table 10) / 0.25 (real-world deployment, Table 11) |
+| B | multiple for tail padding (checks buffer emptiness every B-th time slot) | 20 (simulation) / 1 (real-world deployment) |
+| U | upper bound for the early-sending threshold, sampled uniformly from [0, U) | 45 (simulation) / 15 (real-world deployment) |
+| s | TAM time-slot width | 80 ms, with N=1,000 slots, "for a better overhead trade-off" |
+
+### Stated limitations
+The threat model assumes a local, passive eavesdropper limited to the connection between client and Tor guard node — an attacker who cannot modify, drop, or decrypt packets; defenses of this kind, including Palette, do not address an attacker capable of observing traffic at multiple points or performing active manipulation. The paper assumes the Tor client already knows the identity of the website being visited (needed to select the correct super-matrix) and assumes the client visits one page at a time, stating that multi-tab browsing is generally considered a harder scenario for attackers and is not evaluated. The website list for evaluation is drawn from the Tranco list, which the authors state "may not reflect the visiting interests of real Tor users"; they identify collecting a more representative list via a Tor exit node as raising ethical concerns about revealing real users' destinations, and leave this unresolved. The paper states, as explicit future work: extending clustering to a larger-scale open-world setting to improve within-set similarity of the small fraction of dissimilar websites; and assigning each website to multiple anonymity sets (rather than one) to defeat the adaptive attacker's anonymity-set-identification stage, since the current single-assignment design lets an adaptive attacker first narrow to the correct anonymity set before attacking individual websites within it. Performance stability was measured only over a 5-day window; the authors state "the performance over a longer period would be interesting future work," meaning no longer-horizon stability claim is supported. Real-world deployment measurements diverge from simulation for every defense tested, most severely for RegulaTor (time overhead more than doubling, from 5% to 112%); the authors attribute Palette's own smaller but present real-world overhead increase to packet dependencies between incoming and outgoing traffic that simulation cannot represent.
+
+### Requirements it places on the rest of the system
+- Requires a Tor Pluggable Transport deployment point on both the client and a cooperating Tor middle node (or bridge), since the defense negotiates and applies packet regulation between those two parties; a system without a controllable relay/bridge component in the path cannot deploy this mechanism as specified.
+- Requires the client to know the destination website's identity before the connection begins, in order to select the correct super-matrix/anonymity set; a design in which the client's own component cannot observe or decide this in advance (e.g., a fully blinded browsing proxy) cannot supply this precondition.
+- Requires an offline corpus of website traffic traces for the monitored set, collected in advance, to build the TAM-based super-matrices per anonymity set; a system targeting arbitrary, unenumerated destinations (the open-world case) falls back to randomly assigning an unmatched website to an existing anonymity set, which the paper shows increases bandwidth overhead as the unmonitored population grows (79.63% to 81.81% from 10,000 to 40,000 unmonitored sites).
+- Requires periodic redistribution of updated super-matrices, PMFs, and anonymity-set mappings to every client; the paper measures the resulting communication overhead as a function of Tor's client population scale and the chosen update frequency, meaning a system adopting this mechanism inherits a scaling cost tied to total user population.
+- Requires the underlying transport (Tor) to tolerate the added bandwidth (order of 70-90%) and delay (order of 5-35% depending on deployment condition) this defense introduces; a network or client-side agreement with a strict end-to-end latency budget below that added delay cannot adopt this mechanism without the traffic-cluster-anonymization tradeoff.
+
+### Contradicts
+None found within this corpus regarding a specific numeric conflict with another entry. The paper's own real-world results contradict its simulation results for other defenses it reproduces (most sharply RegulaTor's time overhead, 5% simulated versus 112% deployed) — this is an intra-paper finding, not a cross-paper contradiction with another corpus entry, and it is recorded here because it bears on the reliability of any other paper's simulation-only overhead figures for these same defenses (Supersequence, Tamaraw, WTF-PAD, FRONT, Surakav, RegulaTor) if those figures are cited from simulation rather than a real-network deployment.
+
+### References worth retrieving
+- competing: J. K. Holland, N. Hopper. "RegulaTor: A straightforward website fingerprinting defense." (Best-performing baseline this paper compares directly against; holds the closest comparison numbers.)
+- competing: J. Gong, W. Zhang, C. Zhang, T. Wang. "Surakav: generating..." (Second comparison defense.)
+- competing: J. Gong, T. Wang. "Zero-delay lightweight defenses against website fingerprinting." (FRONT, a zero-delay defense this paper shows is defeated by the RF attack.)
+- competing: M. Juarez, M. Imani, M. Perry, C. Diaz, M. Wright. "Toward..." (WTF-PAD, a zero-delay obfuscation defense this paper shows is defeated by four of six deep-learning attacks.)
+- competing: X. Cai, R. Nithyanand, T. Wang, R. Johnson, I. Goldberg. "A systematic approach to developing and evaluating website fingerprinting defenses." (Tamaraw, the strongest-protection but highest-overhead baseline.)
+- attack: P. Sirinam, M. Imani, M. Juárez, M. Wright. "Deep fingerprinting: ..." (DF attack, one of the six benchmark WF attacks.)
+- attack: M. S. Rahman, P. Sirinam, N. Mathews, K. G. Gangadhara, ... "Tik-Tok: ..." (Tik-Tok attack.)
+- attack: S. Bhat, D. Lu, A. Kwon, S. Devadas. "Var-CNN: A data-efficient..." (Var-CNN attack.)
+- attack: M. Shen, K. Ji, Z. Gao, Q. Li, L. Zhu, K. Xu. "Subverting website fingerprinting..." (RF attack using the Traffic Aggregation Matrix representation, the strongest attack against most defenses tested here, including a self-citation by overlapping authors of this paper.)
+- foundational: R. Dingledine, N. Mathewson, P. F. Syverson. "Tor: The second-generation onion router." (Foundational Tor design this defense operates within.)
+- attack: T. Wang. "The one-page setting: A higher standard for evaluating website fingerprinting defenses." (Source of the harder open-world evaluation setting used in Section 6.3.)
+- foundational: J. Gong, W. Zhang, C. Zhang, T. Wang. "WFDefProxy: Real world..." (The deployment framework used for the real-Tor-network prototype; also the source of the observation, corroborated here, that RegulaTor's real-world performance differs sharply from simulation.)
+- foundational: V. Le Pochat, T. Van Goethem, S. Tajalizadehkhoob, W. Joosen. (Tranco list, source of the website ranking used for real-world data collection.)
+
+### Verbatim extracts
+- "attacker is a local and passive eavesdropper"
+- "cannot modify, drop, or decrypt packets"
+- "assume that the client visits one page at a time"
+- "reduce the accuracy of RF to 36.43%, a decrease of 16.68%"
+- "the highest accuracy achieved by the adaptive attack is merely 36.92%"
+- "the performance over a longer period would be interesting future work"
+- "We leave these as the future work."
+- "time overhead increases to 112%"
 
 ---
 
@@ -18083,6 +20680,83 @@ The Maturana-Rashmi (2023 ISIT) global-split LRCC construction is shown not band
 
 ---
 
+## [SHI-WWW-25] Centralization in the Decentralized Web: Challenges and Opportunities in IPFS Data Management
+
+**Citation:** Ruizhe Shi, Ruizhi Cheng, Yuqi Fu, Bo Han, Yue Cheng, Songqing Chen. "Centralization in the Decentralized Web: Challenges and Opportunities in IPFS Data Management." ACM Web Conference (WWW), 2025. Pages 4069-4075 (page numbers per running headers in text). DOI: 10.1145/3696410.3714627.
+**Retrieved:** full text via https://dl.acm.org/doi/10.1145/3696410.3714627
+**Source URL:** https://dl.acm.org/doi/10.1145/3696410.3714627
+**Domain:** A
+
+### What it does
+This is a longitudinal measurement study of the InterPlanetary File System (IPFS), a decentralized, content-addressed peer-to-peer storage system. The paper measures three properties of IPFS over a three-year window and separately proposes a modified deduplication scheme; only the first two measurement results (replication and centralization) are within this entry's evidence scope.
+
+Data collection: the authors ran a customized IPFS node that accepts unlimited peer connections to passively record all 1-hop Bitswap (IPFS's block-exchange protocol) broadcast traffic, and separately ran two modified Distributed Hash Table (DHT) server peers to log DHT Find_Node traffic, from March 1, 2021 to August 15, 2024. Each logged Bitswap and DHT request records timestamp, sender PeerID and network address, request type, receiver PeerID, and the targeted Content Identifier (CID, IPFS's hash-derived content address).
+
+Replication measurement: a CID-provider mapping is built from the DHT and Bitswap logs, filtered to CIDs identified as complete files or directories by their request pattern (such a CID is typically requested first). Replication level per CID is verified by sending a WANT-HAVE Bitswap message to an assumed provider peer, retried every 4 hours for one week; a peer that never responds is not counted as a valid provider for that CID.
+
+Centralization measurement: two statistical measures are computed weekly across the 3-year trace. Shannon entropy H = −Σp_i·log2(p_i), where p_i is the fraction of all file accesses directed at file i, measures the unpredictability of file-access patterns (lower entropy means access is concentrated on fewer files). The Gini coefficient G = (ΣᵢΣⱼ|xᵢ−xⱼ|)/(2n²x̄), where n is the number of nodes, xᵢ is the amount of data node i stores, and x̄ is the mean stored per node, measures storage-distribution inequality across peers. Both are computed under three stated assumptions: each CID represents one 256 KB storage block (IPFS's default block size); a peer hosting a CID remains active and continues serving it without leaving the network; and a peer announcing multiple IP addresses due to churn is counted as one entity.
+
+### Measured results
+
+| Measurement | Value | Conditions |
+|---|---|---|
+| Bitswap trace volume | ~21 million requests/day, 1.8 billion unique CIDs total | March 1, 2021 - August 15, 2024, from a single custom-crawler node with unlimited peer connections |
+| DHT trace volume | ~1 million requests/day, 120 million unique CIDs total | Same period, 2 virtual DHT peer IDs |
+| CID replication (all versions detected) | 214 million CIDs total: 147 million version0, 67 million version1 | Filtered to CIDs identified as complete files/directories |
+| CIDs replicated more than once | 29.20% | Same dataset |
+| CIDs replicated more than 5 times | 2.71% | Same dataset |
+| "Replication wastage" from CID versioning | 18.24 million files hold both a version0 and a version1 CID for the same content | Inflates the apparent count of unique content |
+| Average lookup time vs. replication level | 1,817 ms at replication level 1, falling to 397 ms at replication level 20 | IPFS client on a t2.medium AWS EC2 instance (2 vCPUs, 4 GB memory) in central Europe, fetching 1,000 files of 10 MB each at every replication level from 1 to 20 |
+| Bitswap success ratio vs. replication level | 73.21% at level 1, rising to 95.09% at level 20 | Same client setup |
+| Download throughput vs. replication level | peaks at 14.54 MB/s at replication level 2, then declines as replication level rises further | Same client setup; decline attributed to a rising rate of "request-peer switching" during download |
+| Gini coefficient of storage distribution | 0.53 in early 2021, rising to 0.78 by mid-2024 | Weekly measurement across the 3-year trace |
+| Share of peers hosting 80% of content | 21.38% of peers at start of measurement period, versus 5% of peers hosting 80.55% of content by the last measured week | Same 3-year trace |
+| Cloud-node share of peer population and hosted files | 50.02% of peers / 52.32% of files at start of period, rising to 87.33% of peers / 97.43% of files by end of period | Cloud peers identified by IP address as located in data centers or operating as public gateway nodes |
+
+The paper states its cloud-node share estimate is higher than the estimate in a prior study (Balduf et al., cited as reference [6]), which the authors attribute to that prior study estimating cloud-node share by crawling the DHT and reconstructing network topology, versus this paper's direct measurement from internal Bitswap and DHT traffic.
+
+CID-download load for the (out-of-scope-here) deduplication analysis: spread over a three-week period, generating an average of 55 GB of daily traffic, characterized by the authors as negligible against an estimated over 100 TB of daily traffic on the IPFS network as a whole (that 100 TB estimate is attributed to a cited source [33], not independently measured by this paper).
+
+### Parameters
+- CID-provider WANT-HAVE retry interval: every 4 hours, for up to one week, before a non-responding peer is excluded as an invalid provider.
+- Storage-block size assumption for centralization analysis: 256 KB per CID, stated as IPFS's default block size.
+- Centralization-analysis granularity: weekly aggregation across the 3-year trace.
+- Client-side replication-performance test: file size 10 MB, 1,000 files fetched per replication level, replication levels 1 through 20, single client instance type (t2.medium, 2 vCPUs, 4 GB memory), located in central Europe.
+- IRB approval obtained for the data collection; IP addresses in the traces anonymized and mapped only to country level.
+
+### Stated limitations
+The paper states three of its own centralization-analysis assumptions as simplifications rather than measured facts: that peers hosting a given CID remain continuously active without leaving the network, that every CID maps to exactly one 256 KB block, and that a peer using multiple IP addresses due to churn is treated as a single entity — each assumption, if violated in the underlying network, would bias the Gini-coefficient and entropy figures in an unstated direction. The authors distinguish their study from four prior IPFS-centralization studies (references [6], [10], [27], [38]) by stating those studies are "limited to snapshots of centralization at specific moments," implying (as a claim about those other papers, not independently verified here) that only this paper's three-year trace captures a centralization trend rather than a point estimate. The paper does not attempt any content analysis of downloaded CIDs and deletes all downloaded CIDs immediately after the (out-of-scope) deduplication analysis, so the study does not characterize what content is being centralized, only how many peers host it and how often it is accessed. No hardware, geographic, or network-condition variation is reported for the crawler and DHT-logging nodes themselves (a single crawler node and two virtual DHT peer IDs), so the measured request and CID volumes reflect what one vantage point observed, a scope the paper does not explicitly flag as a limitation but that bears on how the 21-million-requests/day and 1-million-requests/day figures should be read.
+
+### Requirements it places on the rest of the system
+This is a measurement paper about an existing deployed system, not a mechanism proposal; it places no design requirement on a system being built. Its results place a requirement on how a design should reason about IPFS-as-a-component: a design that intends to rely on IPFS's DHT- and Bitswap-based content discovery for availability should not assume replication is high by default — the measured 29.20% of CIDs replicated more than once (and only 2.71% more than five times) means a design must either accept this baseline low-availability profile for content addressed only by CID, or add an explicit replication-enforcement mechanism, since IPFS itself does not enforce or reward replication. A design intending to use IPFS as a genuinely decentralized storage layer should account for the measured trend toward peer-population concentration (Gini coefficient 0.53 to 0.78 over three years, cloud-node peer share 50.02% to 87.33%) as a property of the deployed network today, not an assumption to be waived by protocol design alone.
+
+### Contradicts
+No numeric conflict with another entry in this corpus is confirmed; SHI-WWW-25 is one measurement in a sequence the brief also asks to compare against Balduf et al. (2023, ACM IMC) and Wei et al. (2024, NSDI), neither of which has a matching entry key in this batch — a comparison entry for either paper is not yet available to check against directly. This paper states its own cloud-node-share estimate is higher than the estimate reported by Balduf et al. [6], attributed by the authors to a difference in measurement method (direct internal-traffic observation here versus DHT-crawl-based topology reconstruction there) rather than to disagreement about the underlying network state.
+
+### References worth retrieving
+- competing/independent-measurement: Leonhard Balduf, Maciej Korczyński, Onur Ascigil, Navin V Keizer, George Pavlou, Björn Scheuermann, Michał Król. "The cloud strikes back: Investigating the decentralization of IPFS." ACM Internet Measurement Conference, 2023. (Prior centralization estimate this paper's own figure is directly compared against and found higher.)
+- competing/independent-measurement: Yiluo Wei, Dennis Trautwein, Yiannis Psaras, Ignacio Castro, Will Scott, Aravindh Raman, Gareth Tyson. "The Eternal Tussle: Exploring the Role of Centralization in IPFS." USENIX NSDI, 2024.
+- foundational (same authors, prior work): Ruizhe Shi, Ruizhi Cheng, Bo Han, Yue Cheng, Songqing Chen. "A Closer Look into IPFS: Accessibility, Content, and Performance." Proceedings of the ACM on Measurement and Analysis of Computing Systems 8(2), 2024.
+- foundational: Leonhard Balduf, Sebastian Henningsen, Martin Florian, Sebastian Rust, Björn Scheuermann. "Monitoring data requests in decentralized data storage systems: A case study of IPFS." IEEE ICDCS, 2022. (Source of the crawler methodology this paper's Bitswap logging approach is built on.)
+- foundational: Juan Benet. "IPFS - content addressed, versioned, P2P file system." arXiv, 2014. (Original IPFS design.)
+- foundational: Petar Maymounkov, David Mazières. "Kademlia: A Peer-to-Peer Information System Based on the XOR Metric." IPTPS, 2002. (Underlies IPFS's DHT.)
+- competing: Dennis Trautwein, Yiluo Wei, Yiannis Psaras, Moritz Schubotz, Ignacio Castro, Bela Gipp, Gareth Tyson. "IPFS in the Fast Lane: Accelerating Record Storage with Optimistic Provide." IEEE INFOCOM, 2024. (Content-publication optimization cited as related IPFS-optimization work.)
+- foundational: Alfonso De la Rocha, David Dias, Yiannis Psaras. "Accelerating content routing with bitswap: a multi-path file transfer protocol in ipfs and filecoin," cited for the claim that Bitswap now outperforms DHT-based discovery in efficiency.
+- attack/critique: Srivatsan Sridhar, Onur Ascigil, Navin Keizer, François Genon, Sébastien Pierre. Content censorship attack exploiting IPFS's decentralized nature, with a proposed detection technique.
+- attack/critique: Bernd Prünster, Alexander Marsalek, Thomas Zefferer. "Total Eclipse..." (Eclipse-attack vulnerability of IPFS, cited under IPFS security and privacy.)
+- foundational: Erik Daniel, Florian Tschorsch. "Exploring the design space of privacy-..." 2024. (Bitswap-message-traceability privacy work cited as related.)
+
+### Verbatim extracts
+- "29.20% of CIDs are replicated more than once, and 2.71% ... more than five times"
+- "average lookup time decreases from 1817 ms at a replication level of 1 to 397 ms at a replication level of 20"
+- "Gini Coefficient starts at 0.53 ... reaching 0.78 by mid-2024"
+- "only 5% of the peers are responsible for hosting 80.55% of the content"
+- "cloud nodes comprised 50.02% of the peer set and hosted 52.32% of the files"
+- "these figures dramatically increased to 87.33% of the peer set and 97.43% of the total files"
+- "limited to snapshots of centralization at specific moments"
+
+---
+
 ## [SHI-WWW-26] Eclipse Attacks on Ethereum's Peer-to-Peer Network
 
 **Citation:** Ruisheng Shi, Yuxuan Liang, Zijun Guo, Qin Wang, Lina Lan, Chenfeng Wang, Zhuoyi Zheng. "Eclipse Attacks on Ethereum's Peer-to-Peer Network." ACM Web Conference (WWW), 2026. DOI 10.1145/3774904.3792231.
@@ -18151,6 +20825,78 @@ None found. LI-EPRINT-25 in this batch measures a related but distinct property 
 - "the DB grows at an average rate of 200 nodes per month" (line 429)
 - "a node rejects repeated incoming connections from the same IP within 30 seconds" (paraphrase of §2.3 reference at line 685)
 - "no final fix has been released yet" (conclusion, disclosure status)
+
+---
+
+## [SHOKROLLAHI-TIT-06] Raptor Codes
+
+**Citation:** Amin Shokrollahi. "Raptor Codes." IEEE Transactions on Information Theory, Vol. 52, No. 6, 2006. Pages 2551-2567. DOI: 10.1109/TIT.2006.874390.
+**Retrieved:** full text via https://infoscience.epfl.ch/record/78037
+**Source URL:** https://infoscience.epfl.ch/record/78037
+**Domain:** C
+
+### Note on this extraction
+The source text on disk has heavy PDF-extraction corruption specifically inside mathematical formulas and Greek-letter/subscript expressions (rendered as garbled sequences like "/40/108/111/103/40/49/41/41" in place of the intended notation) throughout the paper, including in Table I (the degree-distribution table) and every theorem statement's precise constants. The surrounding prose, the introduction, the finite-length worked example, the systematic-code section's plain-text discussion, and the bibliography are legible. Every number below is either taken from legible prose or is a qualitative asymptotic-order claim reconstructed from the abstract's still-parseable structure; no number requiring reconstruction of a corrupted formula's exact numeric constant is recorded.
+
+### What it does
+A Raptor code lets a sender transmit a file of k symbols as a potentially unbounded stream of encoded output symbols, such that a receiver who collects any sufficiently large subset of that stream, regardless of which specific symbols were lost in transit, can reconstruct all k original symbols with high probability. This removes the need for the sender to know which packets were lost (as a retransmission protocol like TCP requires) and lets one encoded stream serve many receivers experiencing different, independent loss patterns, since any receiver's collected subset above the threshold size suffices independently of every other receiver's losses.
+
+Mechanism. A Raptor code concatenates two coding stages. The outer stage is a fixed-rate erasure code (the "pre-code"), applied once to the k input symbols to produce a larger set of intermediate symbols; the paper analyzes pre-codes built from Tornado codes, right-regular LDPC (Low-Density Parity-Check) codes, Repeat-Accumulate codes, and Hamming codes, among others. The inner stage is an LT-code (Luby Transform code, the paper's earlier prior-art fountain code), applied to the intermediate symbols: every output symbol is formed by sampling a degree d from a chosen probability distribution, picking d intermediate symbols uniformly at random, and summing their values (over the relevant field). The receiver's decoder recovers first the intermediate symbols from enough collected output symbols via belief-propagation (BP) decoding of the LT stage, then recovers the original k input symbols by running the pre-code's own decoder on the recovered intermediate symbols. Because the pre-code corrects any intermediate symbols the LT stage failed to recover, the LT stage's own degree distribution no longer has to guarantee full coverage of every intermediate symbol on its own, which is what lets the encoding and decoding cost of a Raptor code stay bounded independent of k, unlike a plain LT-code, whose decoding cost the paper states must grow with k for any decoder with an error probability that is at most inversely polynomial in the number of input symbols.
+
+Systematic Raptor codes (Section VIII): the plain Raptor construction above does not reproduce the input symbols among its output symbols (it is not "systematic"), which the paper states is a disadvantage for practical applications requiring systematic codes, and states that simply transmitting the input symbols before the coded output symbols is "easily seen to be flawed" because it does not preserve a high probability of decodability from an arbitrary collected subset. The paper's alternative construction chooses the mapping between the encoder's algebra and the actual input symbols so that, after applying the algorithm once, the first k output positions coincide with the original k input symbols, while the rest of the stream continues to behave like the non-systematic construction with respect to loss recovery.
+
+Finite-length design (Section VII): rather than relying only on the paper's asymptotic (k → ∞) analysis, this section gives a concrete worked construction for k ≥ 64,536 input symbols, in which the first pre-coding stage is an extended Hamming code, chosen specifically because its minimum distance eliminates decoding failure from "stopping sets" (subsets of undecodable intermediate symbols under BP decoding) of size 1 and 2, with larger stopping sets resolved with good probability by the same stage; a second pre-coding stage then applies a random LDPC-style code to the Hamming-coded symbols before the LT stage.
+
+### Measured results
+This is a coding-theory paper whose central results are proved asymptotic bounds and analytically derived finite-length error bounds, not measurements from a testbed with stated hardware and trial counts; where the paper cites empirical performance, it is a deployment claim about a commercial product, not a controlled experiment run for this paper.
+
+| Result | Value / claim | Conditions |
+|---|---|---|
+| Encoding cost per output symbol (asymptotic, universal Raptor code family) | grows as the logarithm of 1/ε (order-of-growth claim; the exact constant is in a corrupted formula and not recorded here) | For a given integer k and any real ε > 0, in the class of "universal Raptor codes" the paper's abstract introduces |
+| Decoding cost to recover all k input symbols (asymptotic, same family) | grows as k times the logarithm of 1/ε | Same family and parameters |
+| Sufficient collected-symbol count for high-probability recovery | any subset of size k(1+ε) output symbols, for the stated k and ε | Same family; "high probability" is stated qualitatively in the abstract, not with a numeric success rate |
+| Deployed Raptor implementation throughput | "several gigabits per second" | Commercial implementation by Digital Fountain, on a 2.4 GHz Intel Xeon processor; stated by the author as a deployment fact, attributed to implementer Soren Lassen in the acknowledgments, not as a benchmark this paper ran with stated trial count |
+| Finite-length worked-example construction | k ≥ 64,536 input symbols; extended Hamming code as the first pre-code stage; a plotted upper bound (Fig. 5, not numerically legible in this extraction) on block error probability as a function of collected-subset size s | Specific construction in Section VII.E, degree distribution taken from Table I (not numerically legible here) |
+| 3GPP mobile-broadcast standard adoption | a small-length Raptor code design was selected as the mandatory standard for Multimedia Broadcast/Multicast Services (MBMS) over 3G wireless networks, cited to 3GPP TS 26.346 | Design requirement stated by the paper: works for 500 to 8,196 input symbols, must be systematic, must have a simple description; pre-code uses a regular LDPC code as a first stage and a Hamming-like code as a second stage |
+
+### Parameters
+- k: number of input symbols to be encoded; the paper's asymptotic results hold for k → ∞, and its worked finite-length example is constructed specifically for k ≥ 64,536.
+- ε: the target overhead fraction, defined so that k(1+ε) collected output symbols suffice for high-probability recovery of the k input symbols; the paper's universal-Raptor-code family is parameterized by this value for "any real ε > 0."
+- Output-symbol degree distribution Ω: chosen to balance encoding/decoding cost against the coverage guarantee of the LT stage; Table I in the paper gives several distributions optimized for different k values (numeric entries not legible in this extraction), all using the same fixed ε value across the table.
+- Pre-code choice and its rate: the paper treats the outer pre-code as a free design choice (Tornado code, right-regular LDPC code, Repeat-Accumulate code, Hamming code, or an LT-code with an appropriate output-symbol count); Proposition 3 states that for a "pre-code-only" (PCO) Raptor code — one using only the trivial output distribution and relying entirely on the pre-code — the overhead approaches its lower bound only as the pre-code's rate approaches zero, which the paper states forces either the running time or the space consumption of the code away from being constant in k; this is a stated design tradeoff, not an arbitrary limitation.
+- Systematic-position permutation: the paper notes that in practice, the algebraically natural positions where input symbols reappear in the output stream are not the first k positions, and recommends permuting the encoder's internal vectors so the systematic positions become the first k positions.
+
+### Stated limitations
+The paper's own asymptotic error-probability bounds (Section VI) are stated by the author to be "rather poor" for practical use, which motivates the separate finite-length analysis of Section VII built specifically to give low decoding-error probabilities at practical lengths. Plain LT-codes without pre-coding are stated to require an average output-symbol degree that grows with the number of input symbols to guarantee a decoding-error probability that is at most inversely polynomial in that number, i.e., LT-codes alone cannot achieve constant per-symbol cost at that reliability level; this is the specific limitation Raptor codes are built to remove via pre-coding. PCO (pre-code-only) Raptor codes, the paper's other extreme design point, are stated to have a shortcoming: achieving overhead close to the theoretical lower bound forces the pre-code's rate toward zero, which forces the code's running time or space consumption away from being constant. Design for "very small lengths" (in the low thousands of input symbols) is stated to need additional techniques beyond the general method of Section VII, including a different decoding algorithm (an "Inactivation Decoder," described as a maximum-likelihood-equivalent decoder engineered for low computational overhead, cited to a patent rather than proved in this paper); the paper defers a detailed description of the design choices behind the specific small-length code adopted as the 3GPP MBMS standard to a document published elsewhere. The paper states Raptor codes are not systematic in their basic form, requiring the separate Section VIII construction to reproduce input symbols directly among the code's output.
+
+### Requirements it places on the rest of the system
+- The channel model assumed throughout is the binary erasure channel: symbols are either received intact or not received at all (erased), never corrupted; a system whose transport can deliver corrupted (not merely missing) data needs an additional integrity or error-detection mechanism upstream of this code, since Raptor decoding as specified here does not correct corrupted symbols, only recovers from missing ones.
+- The receiver must be able to collect output symbols from the encoded stream in an order-independent way and identify each collected symbol's position/index in the stream (needed to run the LT and pre-code decoders against the correct degree-distribution sampling); the paper's decoding algorithms assume this indexing is available, not that it must be separately supplied by a transport layer, but a system integrating this code needs to carry that per-symbol index alongside the payload.
+- A system that wants close-to-lower-bound overhead with constant decoding cost (the paper's "good asymptotic performance" family, Section VI) must accept the associated pre-code design constraints the paper works out (an appropriately chosen pre-code rate and LT degree distribution together, not either alone); a system that instead wants the simplest possible construction (PCO Raptor codes) must accept that the pre-code's rate needs to approach zero to approach optimal overhead, at the cost of running time or space growing with k.
+- A system wanting reproduction of the original input symbols directly in the transmitted stream (systematic operation, relevant to any application serving that stream to a client that expects to read the first-received data directly) must adopt the Section VIII systematic construction and its associated permutation of internal encoding positions, not the plain (non-systematic) Raptor construction.
+- The finite-length worked example (k ≥ 64,536) and the cited 3GPP-standardized small-length design (500-8,196 input symbols) are each pre-code/degree-distribution designs tuned to their respective length range; the paper does not state that a single fixed design covers both without redesign, so a system spanning a wide range of object sizes needs either multiple tuned designs or a re-derivation of Table I's optimization for its own target k.
+
+### Contradicts
+None found within this corpus.
+
+### References worth retrieving
+- foundational: M. Luby. "LT-codes." Proc. 43rd Annual IEEE Symposium on Foundations of Computer Science (FOCS), 2002, pp. 271-280. (The prior-art fountain code this paper's pre-coding stage is built on top of; source of the LT degree-distribution design this paper cites as achieving the information-theoretic lower bound of its own Proposition 1.)
+- foundational: J. Byers, M. Luby, M. Mitzenmacher, A. Rege. "A digital fountain approach to reliable distribution of bulk data." ACM SIGCOMM, 1998, pp. 56-67. (Origin of the "digital fountain" concept this paper's codes implement.)
+- foundational: M. Luby, M. Mitzenmacher, A. Shokrollahi, D. Spielman. "Efficient erasure correcting codes." IEEE Transactions on Information Theory 47(2), 2001, pp. 569-584. (Tornado codes, one of the candidate pre-codes this paper analyzes.)
+- foundational: R. G. Gallager. "Low Density Parity-Check Codes." MIT Press, 1963. (Origin of the LDPC codes used as a candidate pre-code family and as the decoding-algorithm analogy for LT-codes.)
+- competing: P. Maymounkov. "Online Codes." Preprint, 2002. (Independently discovered the precoding idea for linear-time fountain codes; the paper states Maymounkov's results are similar to parts of its own Section VI, making this the direct comparison point for the asymptotic-performance construction.)
+- foundational: R. Karp, M. Luby, A. Shokrollahi. "Finite length analysis of LT codes." Proc. IEEE International Symposium on Information Theory, Chicago, 2004. (Cited as "the upcoming paper" describing the dynamic-programming method this paper uses for LT-decoder error-probability calculation in Section VII.B.)
+- foundational/standard: 3rd Generation Partnership Project (3GPP). "Multimedia Broadcast/Multicast Services (MBMS); Protocols and Codecs (Release 6)." 3GPP TS 26.346 V6.3.0, 2005. (The standard document specifying the small-length Raptor code design adopted for 3G mobile broadcast; the eventual RaptorQ successor, RFC 6330, is not itself cited in this 2006 paper but is the modern reference point the brief's why_needed note identifies as this paper's line of descent.)
+- foundational: P. Elias. "Coding for two noisy channels." Proc. 3rd London Symposium on Information Theory, 1955, pp. 61-76. (Origin of the binary erasure channel model this paper's whole analysis is built on.)
+
+### Verbatim extracts
+- "any subset of symbols of size" (k)(1+ε) "is sufficient to recover the original" k "symbols with high probability"
+- "the bounds obtained from the asymptotic analysis of Section VI are rather poor"
+- "easily seen to be flawed"
+- "reaches speeds of several gigabits per second, on a 2.4-GHz Intel Xeon processor"
+- "the number of input symbols" k "is larger than or equal to 64536"
+- "it had to work well for numbers of input symbols between 500 and 8196"
+- "recently been selected as Global Standard for Reliable Broadcast of Multimedia to 3G Mobile Devices"
 
 ---
 
@@ -18746,6 +21492,74 @@ None found among the papers in this batch (W1-5). This paper predates and is fou
 
 ---
 
+## [SRIVATSA-WWW-05] TrustGuard: Countering Vulnerabilities in Reputation Management for Decentralized Overlay Networks
+**Citation:** Mudhakar Srivatsa, Li Xiong, Ling Liu. "TrustGuard: Countering Vulnerabilities in Reputation Management for Decentralized Overlay Networks." WWW, 2005. DOI 10.1145/1060745.1060808.
+**Retrieved:** full text via Srivatsa's PhD thesis ("Security Architecture and Protocols for Overlay Network Services," Georgia Institute of Technology, 2007), Chapter 5, which states the TrustGuard framework in expanded form with the same three guards, the same cost model, and the same simulation setup described below. The file on disk is the thesis, not the four-page WWW 2005 conference paper; no copy of the conference paper itself was located in this pass.
+**Source URL:** https://www.mathcs.emory.edu/~lxiong/pubs/trustguard-www05.pdf (conference paper, not retrieved this pass); thesis text extracted from local file sources/text/SRIVATSA-WWW-05.txt
+**Domain:** F
+
+### What it does
+TrustGuard raises the effort a malicious node needs to expend to hold a favorable reputation score, by adding three guards on top of an existing transaction-based reputation system (the thesis builds its guards on top of PeerTrust). The strategic oscillation guard computes a node's trust value from three weighted components instead of a plain average: current-period feedback, a running history of past reputation, and the derivative (rate of change) of recent behavior, combined as TV_n(t) = alpha * R_n(t) + beta * (history term) + gamma * (derivative term), with alpha, beta, gamma summing to 1. Weighting recent fluctuation and history penalizes a node that behaves well only long enough to build trust and then defects. The fake-transaction guard requires two nodes to exchange an unforgeable transaction proof before either can file feedback about that transaction, so a node cannot flood feedback about transactions that never happened; proof exchange uses an optimistic fair-exchange protocol with a trusted third party invoked only on dispute, so the trusted third party need not be online for every transaction. The dishonest-feedback guard assigns each incoming feedback a credibility weight before summing it into a node's reputation-based trust value R_n; the thesis defines two credibility measures, one from the rater's own trust value (TVM) and one from a personalized similarity between the evaluator and the rater computed over the set of nodes both have rated in common (PSM, personalized similarity measure).
+
+### Measured results
+All experiments in Chapter 5 run a discrete-event simulator with N = 1024 nodes, a random p percent of them designated malicious; the specific figures below name where p differs from the default.
+
+| Result | Conditions |
+|---|---|
+| Cost paid by malicious nodes under adaptive vs. non-adaptive trust models is "close to zero" for the non-adaptive model across all oscillation periods and history sizes tested | N=1024, model I oscillation, varying maxH (history size) |
+| Relative cost extracted by malicious nodes for history size maxH = 5, 10, 15 stands in ratio 0.63 : 1 : 3.02 | Model I, oscillation period 10 time units, alpha=0.2, beta=0.8 (maxH=5) / alpha=0.1, beta=0.9 (maxH=15), beta1=0.05, beta2=0.2 |
+| Cost extracted from malicious nodes under strategic-oscillation models I, II, III, IV stands in ratio 1 : 2.28 : 2.08 : 1.36 | N=1024, oscillation period equal to maxH (worst case for the guard) |
+| Fading-memories technique records a node's behavior over its last 256 (2^8) time intervals using 8 stored values | m = 8 fading-memory levels, compared against a non-fading adaptive model with maxH = 10 under 100-time-unit oscillation |
+| Relative cost paid by malicious nodes falls to 0.9, 0.85, 0.78, 0.66 (from 1.0 at T_off = 0) as the trusted third party's offline duration T_off rises to 0.05, 0.1, 0.2, 0.3 of maxH | N=1024; to hold the cost drop under 10%, T_off must stay under 5% of maxH |
+| Trust computation error for the naive average and TVM (trust-value-weighted) credibility measures rises roughly linearly with the fraction of malicious nodes and is stated as "extremely sensitive" to collusion even at a small malicious fraction; PSM "remains effective even with both large fraction of malicious nodes and collusion" | N=1024, malicious fraction swept 0 to 0.8, non-collusive and collusive settings compared (Figures 101, 102) |
+| Transaction success rate stays close to 100% for both TVM and PSM despite their non-zero trust-computation error, because relative ranking of nodes still separates good from bad | N=1024, 20% malicious nodes, collusive and non-collusive settings (Figure 104) |
+| The trusted third party used for fair exchange of transaction proofs "does not become a performance bottleneck" | Stated only for N = 1024; the thesis states scalability to larger N is unstudied |
+
+The thesis reports these results as plotted figures (91-104) and one table (Table 18, T_off vs. cost) rather than as a single reported number set; the ratios above are the only figures stated as numbers in the prose rather than read off a plot.
+
+### Parameters
+- N = 1024 nodes in every reported simulation.
+- p = fraction of malicious nodes, varied per experiment (20% used for the fake-transaction and transaction-success-rate experiments; swept 0-0.8 for the dishonest-feedback robustness experiments).
+- Trust value combination weights alpha (current feedback), beta (history), gamma (derivative/fluctuation), summing to 1; example settings used: alpha=0.7 for the optimistic/pessimistic summarization comparison; alpha=0.2, beta=0.8 and alpha=0.1, beta=0.9 for the two history-size experiments.
+- History size maxH, tested at 5, 10, and 15 time units, and separately at 10 vs. fading-memories m=8 (encoding 256 time-unit history).
+- beta1 = 0.05, beta2 = 0.2 (derivative-component sub-weights) used in the maxH experiments.
+- T_off (trusted-third-party offline duration), swept as a fraction of maxH: 0, 0.05, 0.1, 0.2, 0.3.
+- Four strategic-oscillation behavior models: regular-period oscillation (I), exponentially distributed interval oscillation (II), exponentially distributed random-level dwell (III), and continuous sinusoidal change (IV).
+
+### Stated limitations
+The thesis states the TrustGuard framework depends on a trusted third party for fair exchange of transaction proofs; that party is a potential performance bottleneck and single point of failure, and if compromised, an adversary could forge transactions system-wide. The stated "does not become a bottleneck" result covers only N=1024; the thesis states scalability of the trusted third party to larger systems as unstudied. The personalized similarity measure needs each pair of nodes being compared to have interacted with a large-enough common set of other nodes to compute a similarity value; the thesis states this can fail when relationships between nodes are sparse, and offers only a Birthday-paradox argument (at N=1024, two nodes each rating 32 random others share a common rated node with probability 1/2) as partial mitigation, plus a suggestion to combine PSM with TVM. The thesis states its scope is limited to strategic oscillation, fake transactions, and dishonest/collusive feedback; it explicitly excludes other adversarial behavioral strategies from analysis. The thesis states modeling and analysis of further shilling-attack types is left to future work.
+
+### Requirements it places on the rest of the system
+TrustGuard requires an underlying overlay network that is already secure against message misrouting and that ties every node identity to a single principal through digital certification or a secure join procedure; the thesis states this assumption explicitly and cites Douceur's Sybil attack result that a node able to spoof multiple identities amplifies its effective strength proportionally to how many identities it holds. TrustGuard requires that transactions produce an unforgeable, exchangeable proof object before feedback can be filed, so the object model beneath it must support generating and verifying such proofs. It requires the existence of at least one trusted third party reachable by both transacting nodes to arbitrate proof exchange on dispute; that party need not be continuously online, but its offline duration directly reduces the cost extracted from malicious nodes (measured above). It requires a place to persist per-node feedback history proportional to maxH (or its fading-memory encoding) reachable by whichever node computes another's trust value; the thesis builds this storage on PeerTrust. PSM credibility weighting requires an evaluator to be able to enumerate, for any two nodes, the set of other nodes both have transacted with and to retrieve each side's past feedback on that common set.
+
+### Contradicts
+None found within this batch. The TVM credibility measure's collusion vulnerability (trust-value-weighted feedback is "extremely sensitive to collusive attempts") is a claim about EigenTrust-style trust-transitivity credibility (Kamvar, Schlosser, Garcia-Molina, cited as [48] in the thesis), not a disagreement with any other paper in this corpus.
+
+### References worth retrieving
+- Kamvar, Schlosser, Garcia-Molina, "EigenRep: Reputation Management in P2P Networks" — competing (transitive-trust reputation with pre-trusted nodes, the thesis argues pre-trusted nodes are not always available)
+- Douceur, "The Sybil Attack," IPTPS 2002 — foundational (identity-amplification bound the thesis assumes overlay security must defeat)
+- Damiani, Vimercati, Paraboschi, Samarati, Violante, XRep (Gnutella reputation protocol) — competing
+- Cornelli, Damiani, di Vimercati, Paraboschi, Samarati, P2PRep — competing (stated as having no detailed trust metric or evaluation)
+- Yu, Singh, "A social mechanism of reputation management in electronic communities" — competing (gossip-protocol trust propagation, ad hoc rather than control-theory based)
+- Yu, Singh, Sycara, "Developing trust in large-scale peer-to-peer systems" — competing
+- Whitby, Josang, Indulska, "Filtering out unfair ratings" — competing (statistical filtering alternative to PSM/TVM)
+- Richardson, Agarwal, Domingos, "Trust management for the Semantic Web" — foundational (path-algebra trust propagation)
+- Guha, Kumar, Raghavan, Tomkins, "Propagation of trust and distrust" — foundational
+- Lam, Riedl, "Shilling recommender systems for fun and profit" — attack (shilling-attack taxonomy TrustGuard is tested against for random shilling only)
+- Xiong, Liu, "PeerTrust: Supporting reputation-based trust for peer-to-peer electronic communities" — foundational (storage layer TrustGuard is built on)
+- Micali, "Simple and fast optimistic protocols for fair electronic exchange" — foundational (the fair-exchange protocol TrustGuard's fake-transaction guard uses)
+- Dellarocas, "The digitization of word-of-mouth: Promises and challenges of online feedback mechanisms" — foundational
+
+### Verbatim extracts
+"we require TrustGuard to ensure that any node behaving well for an extended period of time attains a good reputation"
+"the cost paid by malicious nodes using models I, II, III and IV are in the ratio of 1 : 2.28 : 2.08 : 1.36"
+"the cost paid by malicious nodes for maxH equal to 5, 10 and 15 are in the ratio of 0.63 : 1 : 3.02"
+"the PSM approach remains effective even with both large fraction of malicious nodes and collusion"
+"the TTP does not become a performance bottleneck with 1024 nodes in the system"
+"it might get hard to find sufficient number of raters towards a common target node"
+
+---
+
 ## [STEFANOV-CCS-13] Path ORAM: An Extremely Simple Oblivious RAM Protocol
 **Citation:** Emil Stefanov, Marten van Dijk, Elaine Shi, Christopher W. Fletcher, Ling Ren, Xiangyao Yu, Srinivas Devadas. "Path ORAM: An Extremely Simple Oblivious RAM Protocol." ACM CCS, 2013. DOI 10.1145/2508859.2516660.
 **Retrieved:** full text via https://eprint.iacr.org/2013/280.pdf (arXiv:1202.5150 original construction, later published at CCS 2013)
@@ -19100,6 +21914,75 @@ None found against another entry in this batch.
 
 ---
 
+## [STUTZBACH-IMC-06] Understanding Churn in Peer-to-Peer Networks
+**Citation:** Daniel Stutzbach, Reza Rejaie. "Understanding Churn in Peer-to-Peer Networks." ACM Internet Measurement Conference (IMC), 2006. DOI 10.1145/1177080.1177105.
+**Retrieved:** full text via https://dl.acm.org/doi/10.1145/1177080.1177105 (matched: title, authors, and IMC'06 venue line confirmed in first 2500 characters of the file)
+**Source URL:** https://dl.acm.org/doi/10.1145/1177080.1177105
+**Domain:** A
+
+### What it does
+The paper measures how long peers stay connected to a peer-to-peer system (session length) and how that time is distributed, correcting for measurement errors that the paper shows earlier churn studies did not correct for. It defines two correction methods against two biases. The first bias, biased peer selection, arises when a study repeatedly probes a fixed set of peers chosen because they were previously observed, which over-samples peers that return regularly; the paper avoids it for Gnutella and Kad by crawling the entire visible population (Gnutella: full-network snapshots; Kad: every peer in a chosen DHT zone, unbiased because Kad IDs are drawn uniformly at random and are uncorrelated with session length) rather than polling a fixed peer list. The second bias, censored long sessions, arises because any measurement window of finite length τ cannot observe the true length of a session that outlasts the window; the paper's "create-based method" (taken from Saroiu et al.) restricts session-length measurement to sessions that begin in the first half of the window, so every measured session has an equal, unbiased chance of ending within the remaining τ/2, while sessions still running at the window's end are counted (their existence recorded) without their exact length being asserted.
+
+### Measured results
+
+| Result | Conditions |
+|---|---|
+| Session-length distributions fit a Weibull distribution with shape/scale parameters k=0.34, λ=21.3 (Red Hat); k=0.38, λ=42.4 (Debian); k=0.59, λ=41.9 (FlatOut) | 3 BitTorrent tracker-log datasets: Red Hat (3 months, starting Mar. 21, 2003), Debian (2 months, starting Feb. 22, 2005), FlatOut (2 months, starting Nov. 11, 2004); log-normal fit tried first but overestimated sessions over 1 day for Red Hat and Debian |
+| BitTorrent session-length tail index alpha = 2.5 (Red Hat), 2.7 (Debian), 2.1 (FlatOut), all outside the 0<alpha<2 heavy-tailed range | Fit by a line to the log-log transform of the CCDF tail of each of the 3 BitTorrent datasets; the paper concludes BitTorrent session lengths are not heavy-tailed, contrary to prior reports |
+| BitTorrent inter-arrival times fit a Weibull distribution with scale parameter k=0.79 (Debian), k=0.53 (Red Hat), k=0.62 (FlatOut), a better fit than exponential | Same 3 BitTorrent datasets; exponential model predicted 9% of inter-arrivals under 10 minutes vs. 33% observed in FlatOut, and predicted 0.38% over 10 hours vs. 1.5% observed |
+| Splitting the Red Hat dataset into 1-hour segments, exponential and Weibull distributions each fit in >93% of segments at the p=5% Anderson-Darling test level; splitting Debian into 6-minute segments, only 28% fit exponential and 38% fit Weibull | Red Hat: a few dozen events/segment on average; Debian: a few hundred events/segment (1-hour split) then a few dozen (6-minute split); FlatOut excluded as too sparse to segment meaningfully |
+| Roughly 40% (Gnutella), 55% (Kad), 60% (BitTorrent Red Hat/Debian) probability that a randomly selected active peer has been up more than 5 hours; roughly 15% for BitTorrent FlatOut | Uptime-of-coexisting-peers measurement (CCDF, Figure 6) on the 5 Gnutella, 4 Kad, and 3 BitTorrent datasets described below |
+| Roughly 10-20% of Gnutella and Kad peers per snapshot, and roughly 1-3% of BitTorrent Red Hat/Debian peers, have uptime exceeding 1 day (Gnutella/Kad) or 2 weeks (BitTorrent) | Same uptime measurement as above |
+| Median remaining uptime for Gnutella peers stays between 50% and 100% of elapsed uptime regardless of elapsed value; for Kad, uptime predicts remaining uptime strongly only up to about 4 hours elapsed, after which the median grows only slowly | Figure 7, computed from the 5 Gnutella and 4 Kad datasets |
+| In Gnutella, about 50% of peers already up 8 hours stay up at least 8 more hours, but the bottom 20% of that population show much shorter remaining uptime, i.e. high variance around the median predictor | Figure 8, one representative trace per system (Gnutella 1, Kad 1, BitTorrent Red Hat), conditioned on already-observed uptime of 1, 2, and 8 hours |
+| Consecutive session lengths of the same peer are strongly correlated in Gnutella (by IP address) and Kad (by node ID); BitTorrent shows no such correlation | Section 6.2, all 5 Gnutella, 4 Kad, and 3 BitTorrent datasets, pairing each peer's session i with session i+1 |
+| Peer availability across two consecutive days is strongly correlated in Gnutella and Kad; BitTorrent shows no such correlation except that a peer up the full 24 hours on day 1 tends to stay up the full 24 hours on day 2 | Each 2-day dataset split into two 1-day windows (Gnutella, Kad); consecutive day-pairs used for the longer BitTorrent logs |
+| More than half of peers in both systems studied for this metric appear only once per day; a small number appear up to 60 times per day | Figure 12, appearances-per-day distribution across the Gnutella, Kad, and BitTorrent datasets |
+| 22% (Red Hat), 70% (Debian), 27% (FlatOut) of BitTorrent tracker-log sessions ended ungracefully and were excluded from session-length analysis | Measured directly from the 3 BitTorrent tracker logs |
+| The Red Hat tracker log contains 5 unexplained multi-minute-to-8-hour gaps, Debian 2, FlatOut 1; shortest gap 20 minutes, longest 8 hours, all other inter-event gaps under 4 minutes | Direct inspection of the 3 BitTorrent tracker logs' event timestamps |
+
+Datasets: Gnutella, 5 sets of full-network crawls, each a 48-hour period of back-to-back snapshots at roughly 7-minute intervals, collected Oct.-Dec. 2004, using the Cruiser crawler. Kad, 4 datasets, each a 48-hour crawl of one DHT zone (zone sizes given as ID-prefix masks, e.g. 0x594/10), collected Apr. 2005, using Cruiser's Kad module. BitTorrent, 3 tracker logs: Red Hat (3 months, Mar. 2003), Debian (2 months, Feb. 2005), FlatOut game demo (2 months, Nov. 2004).
+
+### Parameters
+- Measurement-window split point: session-length measurement restricted to sessions beginning in the first half of each measurement window (the create-based method), giving unbiased measurement for session lengths up to τ/2.
+- Weibull shape/scale parameters fit per dataset (BitTorrent session length): Red Hat k=0.34, λ=21.3; Debian k=0.38, λ=42.4; FlatOut k=0.59, λ=41.9.
+- Weibull scale parameter fit per dataset (BitTorrent inter-arrival time): Debian k=0.79; Red Hat k=0.53; FlatOut k=0.62.
+- Heavy-tail index alpha fit per dataset (BitTorrent session length): Red Hat 2.5, Debian 2.7, FlatOut 2.1.
+- Anderson-Darling goodness-of-fit significance level: p=5%.
+- Gnutella crawl interval: approximately 7 minutes; measurement window: 48 hours (5 datasets).
+- Kad measurement window: 48 hours per zone (4 zones/datasets), one zone specified as an ID prefix and mask (e.g. 0x594/10).
+
+### Stated limitations
+The paper states it cannot make unbiased measurements of any session length longer than half the measurement window (τ/2); it can only record that such a session existed and continued past the window's end, not its exact length. It states the Debian uptime distribution is skewed by a large population of long-lived seed peers operated by the Debian organization itself, so that dataset's uptime results are not treated as representative of ordinary peer behavior. It states that whether the slight downward curvature seen in the Gnutella and Kad session-length CCDFs reflects a true non-heavy-tailed distribution or is a measurement artifact from under-counting long sessions cannot be ruled out with the data collected. It states it has not addressed how peer behavior correlates with time of day, geographical location, or file preference, and leaves that to future work. It states it is still developing heuristics to distinguish a peer missed during one crawl snapshot from a peer that genuinely departed, and that this affects the precision of long-lived-peer characterization.
+
+### Requirements it places on the rest of the system
+A component that assumes session lengths are exponentially or Poisson-distributed, to derive a churn rate or a routing-table refresh interval, is contradicted by this paper's fitted Weibull/log-normal distributions across all three systems measured; substituting the measured distribution requires re-deriving any such rate from the corresponding shape/scale parameters above rather than from a single mean. A protocol that selects "stable" peers by uptime observed so far can rely on the reported correlation between current uptime and remaining uptime only in Gnutella (strong at all uptime values) and in Kad up to about 4 hours of observed uptime; past that point in Kad, and throughout BitTorrent's non-seed sessions, uptime so far is a weak predictor and a protocol needs a different signal. A bootstrap or peer-discovery mechanism that caches long-lived peers can rely on the paper's stated 20-30% of peers having uptime exceeding one day at any snapshot moment, but only under the same peer-selection method the paper used (uniform-random selection among currently active peers, or observation-count weighting), because naive periodic sampling of a fixed peer set is shown to bias toward short-lived peers.
+
+### Contradicts
+The paper's own Section 6.1 states that Guo et al. (Internet Measurement Conference, 2005) characterized BitTorrent downtime ("sleeping time") as exponentially distributed, and states this conclusion may be an artifact of incorrectly handling long sessions rather than a true property of the distribution. The paper also states that Guo et al.'s finding of an exponential lingering-time ("seeding time") distribution is inconsistent with the curvature the paper itself observes and states the data is better modeled by a Weibull distribution. None found against any other entry in this batch.
+
+### References worth retrieving
+- Saroiu, Gummadi, Gribble, "Measuring and Analyzing the Characteristics of Napster and Gnutella Hosts," Multimedia Systems Journal 9(2), 2003 — foundational (source of the create-based method this paper extends)
+- Gummadi, Dunn, Saroiu, Gribble, Levy, Zahorjan, "Measurement, Modeling, and Analysis of a Peer-to-Peer File-Sharing Workload," SOSP 2003 — competing (independent session-length measurement the paper contrasts its own median/heavy-tail findings against)
+- Guo, Chen, Xiao, Tan, Ding, Zhang, "Measurements, Analysis, and Modeling of BitTorrent-like Systems," IMC 2005 — competing (the paper disputes its exponential downtime/lingering-time conclusions)
+- Bhagwan, Savage, Voelker, "Understanding Availability," IPTPS 2003 — competing (studies cross-peer availability correlation, stated as complementary to this paper's single-peer-across-time correlation result)
+- Rhea, Geels, Kubiatowicz, "Handling Churn in a DHT," USENIX 2004 — competing (a churn-resilience mechanism whose assumed churn model this paper's measurements can validate or contradict)
+- Li, Stribling, Kaashoek, Morris, Gil, "A Performance vs. Cost Framework for Evaluating DHT Design Tradeoffs under Churn," INFOCOM 2005 — foundational (DHT churn-cost tradeoff analysis this measurement paper's distribution feeds)
+- Stutzbach, Rejaie, Sen, "Characterizing Unstructured Overlay Topologies in Modern P2P File-Sharing Systems," IMC 2005 — foundational (same authors' prior topology-bias finding this paper cites for the crawl-degree correlation)
+- Maymounkov, Mazières, "Kademlia: A Peer-to-Peer Information System Based on the XOR Metric," IPTPS 2002 — foundational (defines the Kad-derived DHT this paper measures)
+- Liang, Kumar, Ross, "The KaZaA Overlay: A Measurement Study," Computer Networks Journal, 2005 — competing (independent P2P measurement using the closed-population probing method this paper argues is biased)
+
+### Verbatim extracts
+"reported median session lengths varies from one minute to one hour"
+"we must conclude that session lengths in BitTorrent are not heavy-tailed"
+"the session length distribution is neither Poisson nor Pareto"
+"roughly 10%-20% of peers per snapshot in Gnutella and Kad have an uptime longer than one day"
+"the uptime of Kad peers is a stronger predictor of remaining uptime up to around 4 hours"
+"session lengths in BitTorrent do not exhibit a clear correlation"
+"20%-30% of peers at any moment have an uptime longer than one day"
+
+---
+
 ## [SUBRAMANYA-NEURIPS-19] DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node
 **Citation:** Suhas Jayaram Subramanya, Devvrit, Rohan Kadekodi, Ravishankar Krishnaswamy, Harsha Vardhan Simhadri. "DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node." NeurIPS, 2019.
 **Retrieved:** full text via https://proceedings.neurips.cc/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html
@@ -19164,6 +22047,113 @@ None found. No claim in this entry disagrees with another key in this corpus as 
 - "fetching a small number of random sectors from an SSD takes almost the same time as one sector"
 - "the in- and out-edges of each node in the merged index are limited to about 𝓁/k = 5% of all points"
 - "a more detailed comparison of these different techniques needs to be done"
+
+---
+
+## [SUN-ASONAM-20] TrustGCN: Enabling Graph Convolutional Network for Robust Sybil Detection in OSNs
+**Citation:** Yue Sun, Zhi Yang, Yafei Dai. "TrustGCN: Enabling Graph Convolutional Network for Robust Sybil Detection in OSNs." IEEE/ACM ASONAM, 2020. DOI 10.1109/ASONAM49781.2020.9381325.
+**Retrieved:** full text via https://ieeexplore.ieee.org/document/9381325 (matched: title, authors Yue Sun/Zhi Yang/Yafei Dai, Peking University, ASONAM 2020 header confirmed in first 3000 characters of the file)
+**Source URL:** https://ieeexplore.ieee.org/document/9381325
+**Domain:** F
+
+### What it does
+TrustGCN detects fake accounts (Sybils) in an online social network (OSN) by combining a graph convolutional network (GCN, a neural network that classifies a node by iteratively aggregating feature vectors from its graph neighbors) with a social-graph-based trust score, so that a Sybil cannot manipulate its local neighborhood to evade the GCN classifier the way it can evade an unweighted GCN. The mechanism runs in two stages. The trust-propagation stage runs a short random walk of K iterations (the paper sets K=4) starting from a set of nodes already known to be real ("trust seeds"), computing at each iteration a landing-probability vector over all nodes, separately tracking a positive landing probability T+ and a negative landing probability T- that flips sign whenever the walk crosses a negative edge (an edge recording a rejected friend request); ending the walk early, before it converges, keeps trust concentrated in the real-user region because that region mixes fast while few edges cross into the Sybil region. The trust-guided-convolution stage multiplies the graph's signed adjacency matrix by the combined landing-probability vector T = T+ + T- to produce a weighted adjacency matrix, then runs the standard GCN's neighbor-feature-aggregation step over this weighted graph instead of the original one, so a neighbor with a low trust score contributes little to the feature vector computed for the node being classified, whether or not that neighbor was added or manipulated by the attacker in the current time step.
+
+### Measured results
+The paper reports its comparisons as line plots (Figures 7 and 9) with no accuracy, precision, recall, or F1 percentage stated as a number in the running text; only the graph and dataset construction are stated numerically.
+
+| Quantity | Value | Conditions |
+|---|---|---|
+| Graph size | about 60,000 users, 2.2 million positive edges, 0.4 million negative edges | Signed friend-request graph built from a regional Peking University (PKU) network on the Renren OSN |
+| Ground-truth Sybils | 5,500 accounts | Fake accounts previously identified by Renren's own security team |
+| Labeled fraction | 5% of ground-truth nodes chosen at random as training labels; the remaining 95% predicted | Same PKU dataset |
+| Average rejection rate | about 0.3 for real users vs. about 0.3 stated as "high" for Sybils (the paper's own text states real users have a low rejection rate of 0.3 and Sybils a high rejection rate of 0.3, without giving the Sybil-side number distinctly; treat this figure as approximate, read from Figure 4, not as an exact reported statistic) | Same PKU dataset |
+| GCN training | batch size 512, learning rate 0.01, Adam optimizer, TensorFlow implementation | Same PKU dataset |
+| TrustGCN propagation depth | K = 4 random-walk iterations | Same PKU dataset, same GCN hyperparameters as the plain-GCN experiment |
+
+Qualitative findings the paper states without an accompanying number: plain GCN accuracy "drops dramatically" under the collusion attack as the count of fake positive links among Sybils grows; GCN is "more vulnerable" to the promotion attack (Sybils sending or receiving requests to/from a small number of compromised real accounts) than to collusion or self-rejection, with accuracy dropping "significantly lower"; TrustGCN "significantly enhances resilience" to all three attacks compared to plain GCN; TrustGCN shows "slight accuracy drop" as positive collusion links increase, attributed to inactive Sybils that have not yet generated enough negative (rejected) links to be distinguished, a population the paper states TrustGCN can still recall once those accounts become active.
+
+### Parameters
+- K (random-walk / power-iteration termination step count for trust propagation): 4, stated as on the order of O(log n) steps in general, with n the node count.
+- Batch size: 512.
+- Learning rate: 0.01, Adam optimizer.
+- Labeled-data fraction: 5% of ground-truth Sybil and real nodes.
+- Attack-strategy parameters, defined but not given specific swept values in the retrieved text: alpha (fraction of Sybils participating in an attack), beta (fraction of collusion, self-rejection, or promotion links among participating Sybils, meaning differs per attack type), gamma (probability that a compromised real user accepts a promotion request).
+
+### Stated limitations
+The paper states that graph-based Sybil defenses in general (the class TrustGCN extends) cannot use node feature information for classification and are usually used to produce a ranking rather than a binary classification, because a substantial fraction of Sybils still rank low even when not separated cleanly from real accounts. The paper states TrustGCN shows a slight accuracy drop as the number of positive collusion links grows, because Sybils that have not yet launched their attack present with few negative links and get misclassified as real, and states this is mitigated only after those accounts start generating requests and TrustGCN can recall them, not before. The paper states its underlying structural assumption — that Sybils accumulate more rejected than accepted friend requests, producing a negative or sparse cut between the Sybil and non-Sybil regions of the graph — as an assumption the mechanism depends on, not a property it proves holds in every OSN.
+
+### Requirements it places on the rest of the system
+TrustGCN requires a signed graph in which edges record friend-request acceptance and rejection outcomes (or, for the unsigned-graph variant, a graph where the number of edges Sybils can forge to real users is limited); a system that only records final friendships and discards rejected-request events cannot supply this signal. It requires a pre-identified set of "trust seed" nodes already known to be real, from which the random walk starts; the mechanism gives no method for producing that seed set and depends on it being externally supplied and honest. It requires the real-user subgraph to be fast-mixing internally and to expose a comparatively sparse or negative cut toward the Sybil region, because the random walk's early termination is what keeps trust concentrated on the real side — a network where Sybils' rejection rate does not exceed real users' rejection rate breaks the mechanism's separating assumption. It requires per-node feature vectors (the paper uses activity features such as friend-request frequency, acceptance fraction, and clustering coefficient) in addition to the graph structure, since the GCN aggregation step operates on both edges and features jointly.
+
+### Contradicts
+The target registry's stated reason for retrieving this paper ("why_needed") asserts it gives "a measured accuracy comparison against SybilRank and SybilBelief on the same graph." The retrieved full text contains no such comparison: SybilBelief appears only once, as bibliography entry [10], never as an experimental baseline, and SybilRank is not mentioned anywhere in the text. The paper's only quantitative comparison is TrustGCN against plain GCN (Figure 9), read from line plots with no accuracy numbers stated in the prose. This is a mismatch between the registry's description and the paper's actual content, not a mismatch of the retrieved document's identity — the retrieved file is confirmed to be TrustGCN itself. No disagreement found against any other entry in this batch.
+
+### References worth retrieving
+- Yu, Kaminsky, Gibbons, Flaxman, "Sybilguard: Defending against sybil attacks via social networks," SIGCOMM 2006 — foundational (the random-walk social-graph defense TrustGCN's trust-propagation stage extends)
+- Yu, Gibbons, Kaminsky, Xiao, "Sybillimit: A near-optimal social network defense against sybil attacks," IEEE S&P 2008 — foundational
+- Cao, Sirivianos, Yang, Pregueiro, "Aiding the detection of fake accounts in large scale social online services" (SybilRank), NSDI 2012 — competing (the graph-ranking approach the registry expected as a measured baseline but that this paper's retrieved text does not compare against)
+- Gong, Frank, Mittal, "Sybilbelief: A semi-supervised learning approach for structure-based sybil detection," IEEE TIFS 9(6), 2014 — competing (cited only in the bibliography, not used as a measured experimental baseline in the retrieved text)
+- Danezis, Mittal, "Sybilinfer: Detecting sybil nodes using social networks," NDSS 2009 — competing
+- Boshmaf, Ripeanu, Beznosov, "Integro: Leveraging victim prediction for robust fake account detection in osns," NDSS 2015 — competing (feature-based detection baseline discussed in related work)
+- Xue, Yang, Yang, Wang, Chen, Dai, "Votetrust: Leveraging friend invitation graph to defend against social network sybils," INFOCOM 2013 — foundational (source of the PKU/Renren Sybil dataset used here)
+- Yang, Wilson, Wang, Gao, Zhao, Dai, "Uncovering social network sybils in the wild," ACM TKDD 8(1), 2014 — foundational (source of the activity-level features TrustGCN uses)
+- Dai, Li, Tian, Huang, Wang, Zhu, Song, "Adversarial attack on graph structured data," ICML 2018 — attack (gradient-based GCN adversarial-perturbation method TrustGCN's threat model is adapted from)
+- Zugner, Akbarnejad, Gunnemann, "Adversarial attacks on neural networks for graph data," arXiv 2018 — attack
+- Douceur, "The sybil attack," Peer-to-Peer Systems / IPTPS 2002 — foundational
+
+### Verbatim extracts
+"TrustGCN significantly outperforms GCN in the robustness"
+"the number of ties that the adversary can forge between Sybils and honest nodes is restricted"
+"real users have a low rate of 0.3 to be rejected by others, whereas Sybils have a high rejection rate"
+"we terminate the power iterations after small number of K iterations"
+"TrustGCN has slight accuracy drop with the increasing number of positive collusion links"
+"graph-based defenses cannot leverage the feature information for high classification accuracy"
+
+---
+
+## [SUN-CSCW-98] Operational Transformation in Real-Time Group Editors: Issues, Algorithms, and Achievements
+**Citation:** Chengzheng Sun, Clarence (Skip) Ellis. "Operational Transformation in Real-Time Group Editors: Issues, Algorithms, and Achievements." ACM CSCW, 1998. Pages 59-68. DOI 10.1145/289444.289469.
+**Retrieved:** full text via https://dl.acm.org/doi/10.1145/289444.289469 (matched: title, authors, CSCW'98 venue line confirmed in first 3000 characters of the file; the extracted text has heavy OCR character corruption throughout, e.g. ligatures rendered as stray characters, but the technical content is recoverable from context)
+**Source URL:** https://dl.acm.org/doi/10.1145/289444.289469
+**Domain:** D
+
+### What it does
+Operational transformation (OT) keeps every replica of a document that several people edit at once converged on the same text, while preserving what each person's edit was meant to do, without requiring the sites to agree on a single serial order before executing an edit. The paper surveys four OT algorithms in the order they were built to fix each other's failures, then proposes a fifth. GROVE's dOPT algorithm executes each arriving operation immediately, transforming it in turn against every independent (concurrent) operation already in a per-site log, using a transformation function T whose only required property is that transforming two independent operations against each other in both orders yields document states that agree — Oa followed by T(Ob,Oa) matches Ob followed by T(Oa,Ob). This single condition on T fails whenever an incoming operation is concurrent with two or more operations that are themselves ordered relative to each other (the "dOPT puzzle"), because T is applied to operation pairs regardless of whether both operations are actually defined on the same document state. REDUCE fixes this by tracking, for every operation, its definition context DC(O) (the sequence of prior operations the document state it was generated against reflects) and its execution context EC(O) (the sequence of prior operations already executed at the site about to execute it), and by adding a second transformation primitive, exclusion transformation (ET), alongside the original inclusion transformation (IT): IT(Oa,Ob) folds in Ob's effect on Oa, ET(Oa,Ob) strips Ob's effect back out, and the Generic Operational Transformation (GOT) control algorithm applies a case-driven sequence of IT and ET calls to bring an operation's execution context into agreement with its definition context before applying it, so that IT is only ever invoked on two operations already confirmed to share a document state. Jupiter (Xerox PARC) instead routes every edit through one central server, so only two-way (client-server) communication ever needs reconciling, and requires only the single dOPT-style transformation property (TP1); this narrower requirement lets Jupiter track valid transformation paths with a 2-dimensional state-space graph rather than REDUCE's per-operation context bookkeeping. adOPTed generalizes this to arbitrary peer-to-peer (N-way) communication among N sites using an N-dimensional interaction-model graph, and proves that the transformation function must additionally satisfy a second condition, TP2 — transforming an operation O along either of two different paths of concurrent operations must yield the same result, T(T(O,Oa),Ob')=T(T(O,Ob),Oa') — and that TP1 and TP2 together are necessary and sufficient for convergence under N-way communication. The paper's own contribution, GOTO (GOT Optimized), shows that if a system's transformation functions already satisfy both TP1 and TP2, the GOT control algorithm's case-3 handling (the case dOPT could not handle) can be restructured to reduce the number of IT/ET calls needed — by transposing pairs of operations within the execution context before applying inclusion transformation — while still achieving both convergence and intention-preservation without needing REDUCE's separate undo/do/redo scheme.
+
+### Measured results
+This is a survey and algorithm-design paper; the retrieved text contains no benchmark timings, node counts, or throughput figures. Its only quantitative comparison is a transformation-step count on one worked example: transforming operation O into its executable form under the GOTO algorithm's case-3 handling takes 3 IT/ET transformation calls, versus 4 IT/ET calls for the same operation under the original GOT algorithm, on the specific 3-operation execution-context example shown in the paper's Figure 6.
+
+### Parameters
+Not applicable in the conventional sense — the paper defines algorithm structures and correctness properties (TP1, TP2, the definition-context/execution-context equivalence relation) rather than tunable numeric parameters. The one structural parameter across algorithms is the dimensionality of the data structure each control algorithm uses to track valid transformation paths: 1-dimensional (a linear history buffer) for GOT and GOTO, 2-dimensional (a state-space graph) for Jupiter, and N-dimensional (an interaction-model graph, N = number of cooperating sites) for adOPTed.
+
+### Stated limitations
+The paper states that although the necessary transformation preconditions (TP1, TP2, and the context-equivalence conditions) are now understood, no method exists to verify whether a given application-specific transformation function actually satisfies them, and states that some transformation functions that appear correct do not. It states that most prior work addressed only syntactic consistency — whether all sites converge to the same document state — and states that semantic consistency, whether the converged state makes sense to the users in the application context, remains largely unexplored. It states that the notion of "intention" used throughout the paper and its predecessor work covers only a narrow, operation-level piece of what a human user's intention actually means in a collaborative context, and states that characterizing and preserving group-level human intentions is a separate open problem the system alone cannot solve. It states that existing transformation algorithms handle only fine-grained primitive operations such as Insert and Delete, and states that supporting higher-level compound operations such as Move and Replace as atomic units, while still preserving consistency, is unresolved. It states that little research has studied how real users actually work with these systems in practice, beyond early usage studies of GROVE itself. It states that formal specification and verification of OT algorithms and properties is still needed to rigorously prove correctness and to analyze time and space complexity, citing one partial formal model (a calculus for concurrent update) as a first step.
+
+### Requirements it places on the rest of the system
+Every algorithm surveyed requires a full, causally-ordered replicated log or history buffer of every operation executed at a site (GROVE's Log, REDUCE's History Buffer), and it requires a scheme guaranteeing causal delivery order before any transformation is attempted — every algorithm here is layered on top of state-vector timestamping (attributed to GROVE) used specifically to ensure causality-preservation, which OT itself does not provide. GOT, GOTO, and adOPTed require every site to be able to reconstruct, for an arriving operation, its definition context (the operation sequence its originating site had already executed) — this context information must travel with the operation or be derivable from a timestamp, or GOT's case analysis cannot determine which transformation case applies. adOPTed's N-dimensional interaction-model graph and Jupiter's 2-dimensional state-space graph both require unbounded per-operation bookkeeping proportional to the graph's dimensionality unless bounded by a garbage-collection scheme (the paper cites one devised for REDUCE's history buffer); a system that cannot garbage-collect old entries accumulates this structure without bound. Jupiter's simplification (requiring only TP1, not TP2) is available only if the deployment is restricted to two-way client-server communication with a single central server relaying every transformed operation; a fully decentralized peer-to-peer topology cannot rely on this simplification and needs a transformation function proven to satisfy both TP1 and TP2, per adOPTed's and GOTO's requirement.
+
+### Contradicts
+None found. This paper is itself the source that later distinguishes convergence, causality-preservation, and intention-preservation as the three separate correctness properties commonly (and sometimes loosely) attributed to "OT correctness" as a single property; a claim that satisfying TP1 alone guarantees full OT correctness in an N-way system is contradicted by this paper's own statement that TP1 and TP2 together are necessary for convergence under N-way communication, and that neither property captures intention-preservation at all.
+
+### References worth retrieving
+- Ellis, Gibbs, "Concurrency control in groupware systems," ACM SIGMOD 1989 — foundational (defines the dOPT algorithm and the GROVE system this paper's whole discussion builds from)
+- Sun, Yang, Zhang, Chen, "A consistency model and supporting schemes for real-time cooperative editing systems," Australasian Computer Science Conference, 1996 — foundational (source of the intention-preservation consistency criterion, REDUCE)
+- Sun, Jia, Zhang, Yang, Chen, "Achieving convergence, causality-preservation, and intention-preservation in real-time cooperative editing systems," ACM TOCHI 5(1), 1998, pp.63-108 — foundational (the full REDUCE/GOT paper this survey condenses; states the IT/ET pre/post-conditions and the GOT control algorithm this paper's GOTO extends)
+- Nichols, Curtis, Dixon, Lamping, "High-latency, low-bandwidth windowing in the Jupiter collaboration system," ACM UIST 1995 — foundational (defines the Jupiter algorithm and its 2-dimensional state-space graph)
+- Ressel, Nitsche-Ruhland, Gunzenhauser, "An integrating, transformation-oriented approach to concurrency control and undo in group editors," ACM CSCW 1996 — foundational (defines adOPTed, TP1, TP2, and the N-dimensional interaction-model graph)
+- Karsenty, Beaudouin-Lafon, "An algorithm for distributed groupware applications," ICDCS 1993 — competing (an alternative correction to the dOPT puzzle for the two-site special case, cited as an alternative to REDUCE's approach)
+- Coward, "A calculus for concurrent update," Research Report CS-95-06, University of Waterloo, 1995 — foundational (the CCU formal model derived from dOPT, cited as a first step toward formal verification of OT)
+- Ellis, "Team Automata for Groupware Systems," ACM Conference on Supporting Group Work, 1997 — foundational (a second formal model for groupware-component interaction, cited alongside CCU)
+- Prakash, Knister, "A framework for undoing actions in collaborative systems," ACM TOCHI 4(1), 1994 — foundational (the collaborative-undo framework OT is stated to be useful for supporting)
+
+### Verbatim extracts
+"convergence: when the same set of operations have been executed at all sites, all copies of the shared document are identical"
+"TP1 and TP2 are the necessary and sufficient conditions for ensuring convergence in systems which allow N-way communication"
+"some seemingly correct transformation functions do not really satisfy TP1 and TP2"
+"three IT/ET transformations... are needed under the GOTO control algorithm, whereas four IT/ET transformations are needed under the GOT control algorithm"
+"intention-violation is an inconsistency problem of a different nature from the divergence problem"
+"the correctness of this inclusion transformation relies on the condition that both Oa and Ob are defined on the same document state"
 
 ---
 
@@ -19503,6 +22493,24 @@ None found against another entry in this batch. The paper's own related-work sec
 "It only needs to visit about 0.4-1.0% nodes to achieve an accuracy of 95%."
 "We find that using 4-6 planes with about 10-12 elements on each plane can be very effective."
 "Due to the space limit, more results and our suggestions on configuring the system will be presented elsewhere."
+
+---
+
+## [TERPSTRA-SIGCOMM-07] MISMATCH — retrieved text is not the target paper
+**Target citation (registry):** Wesley W. Terpstra, Jussi Kangasharju, Christof Leng, Alejandro P. Buchmann. "BubbleStorm: Resilient, Probabilistic, and Exhaustive Peer-to-Peer Search." ACM SIGCOMM, 2007. DOI 10.1145/1282380.1282387.
+**File on disk:** sources/text/TERPSTRA-SIGCOMM-07.txt
+
+### Why this is a mismatch, not the paper
+The file's own title page reads "BubbleStorm: Analysis of Probabilistic Exhaustive Search in a Heterogeneous Peer-to-Peer System," carrying the identifier "TUD-CS-2007-2" — a Technische Universitat Darmstadt technical report, not the ACM SIGCOMM 2007 proceedings paper. Three points of mismatch, checked in the first 3000 characters and confirmed by reading the full document structure:
+
+1. **Title differs.** Target: "BubbleStorm: Resilient, Probabilistic, and Exhaustive Peer-to-Peer Search." File: "BubbleStorm: Analysis of Probabilistic Exhaustive Search in a Heterogeneous Peer-to-Peer System."
+2. **Author list differs.** Target lists four authors including Jussi Kangasharju. The file lists three: Wesley W. Terpstra, Christof Leng, Alejandro P. Buchmann. Kangasharju appears in the file only inside a bibliography entry ([18], a different paper the file cites), never as an author of the file itself.
+3. **Content does not match what the target paper is described as containing.** The registry's own why_needed field for this key states the target paper is "evaluated at one million simulated peers under up to 90% simultaneous departure and 50% simultaneous crash." The file on disk contains no such evaluation: its Section 5 is titled "ANALYSIS" and consists entirely of mathematical proofs (subsections Latency, Correctness Probability, Load, Optimality) with no simulation, no node-count figure, and no mention of "million," "90%," or "50%" anywhere in the text. This is a purely analytical companion report, not the simulation-bearing conference paper the target record describes.
+
+Per the extraction rules, nothing was extracted from this file as evidence for KEY TERPSTRA-SIGCOMM-07. No number, parameter, or mechanism claim below should be attributed to the SIGCOMM 2007 BubbleStorm paper.
+
+### What the mismatched file actually is, for the retrieval log
+A TU Darmstadt technical report (TUD-CS-2007-2) by Terpstra, Leng, and Buchmann presenting the same bubblecast communication primitive and random-multigraph topology as the BubbleStorm system, with a purely analytical treatment (latency, correctness-probability, load, and optimality proofs) and no simulation section. It is plausibly an earlier or parallel analysis-only writeup from the same research group and system, but it is not verified to be the SIGCOMM 2007 paper, and the SIGCOMM paper's simulation results (1 million peers, up to 90% departure, up to 50% crash) are not present in it. A correct retrieval of KEY TERPSTRA-SIGCOMM-07 should fetch the actual SIGCOMM 2007 proceedings paper (DOI 10.1145/1282380.1282387) or its PDF at the candidate URL https://zoo.cs.yale.edu/classes/cs426/2014/bib/terpstra07bubblestorm.pdf, neither of which was the source of the file examined in this pass.
 
 ---
 
@@ -20365,6 +23373,74 @@ None found within this corpus. The paper's own within-study comparison shows a c
 
 ---
 
+## [VANDENHOOFF-SOSP-15] Vuvuzela: Scalable Private Messaging Resistant to Traffic Analysis
+**Citation:** Jelle van den Hooff, David Lazar, Matei Zaharia, Nickolai Zeldovich. "Vuvuzela: Scalable Private Messaging Resistant to Traffic Analysis." ACM SOSP, 2015. DOI 10.1145/2815400.2815417.
+**Retrieved:** full text via https://css.csail.mit.edu/vuvuzela/vuvuzela.pdf (matched: title, authors, MIT CSAIL affiliation, SOSP'15 header and the same DOI confirmed in first 3000 characters of the file)
+**Source URL:** https://css.csail.mit.edu/vuvuzela/vuvuzela.pdf
+**Domain:** G
+
+### What it does
+Vuvuzela hides both the content and the metadata (who is communicating with whom, and when) of messages exchanged between users, against an adversary who observes and tampers with all network traffic and controls every server in the system except one. It routes every message through a fixed chain of relay servers and mixes traffic with cryptographically generated noise so that the observations available to a compromised majority of servers satisfy a formal (epsilon, delta)-differential-privacy guarantee: for any two possible action sequences a user might have taken (her real actions and a plausible "cover story"), the probability of any adversary observation differs by at most a factor of e^epsilon, plus an additive term delta. Two users exchange a message by rendezvousing at a shared 128-bit dead-drop identifier derived from a Diffie-Hellman shared secret that changes every round, so a passive observer cannot link a dead-drop access to either party; a client that deposits a message and finds one already waiting completes an exchange, and a client with no partner deposits a decoy so all requests look alike. Each server in the relay chain, except the last, generates its own fixed quantity of noise dead-drop accesses (drawn from a Laplace distribution, the standard noise mechanism of differential privacy) and shuffles (mixes) every request before forwarding it to the next server, so that after passing one honest server, no adversary controlling the remaining servers can link a request to its sender; the only information the paper proves an adversary with all but one server compromised can extract from one round is the count of dead drops accessed exactly once and the count accessed exactly twice, both of which are already perturbed by the injected noise. A second protocol, dialing, lets a user who does not yet share a secret with another user initiate a conversation: invitations are grouped into invitation dead drops keyed by a hash of the recipient's public key, every user's client polls its invitation dead drop every round regardless of whether it expects a real invitation (constant cover traffic), and the number of invitation dead drops is tunable to trade invitation latency against per-client download bandwidth.
+
+### Measured results
+
+| Result | Conditions |
+|---|---|
+| Throughput approximately 68,000 conversation messages/second at 37-second end-to-end latency, for 1 million online users | Prototype in Go (about 2,700 lines), 3 Vuvuzela relay servers plus 1 untrusted entry server, each an Amazon EC2 c4.8xlarge VM (36 Intel Xeon E5-2666 v3 cores, 60 GB RAM, 10 Gbps network, Linux 3.14, Go 1.5); 5 additional VMs simulating user clients; conversation messages 256 bytes (incl. 16-byte encryption overhead); mu=300,000 noise mean for the conversation protocol |
+| At 2 million online users: throughput about 84,000 messages/second, end-to-end latency 55 seconds, 3.2 million total messages processed per round (2 million real plus roughly 1.2 million noise requests) | Same setup as above; at 10 users (near-zero real load) the baseline latency floor is 20 seconds, entirely attributable to the fixed noise load of about 1.2 million requests per round injected regardless of real user count |
+| Dialing-protocol end-to-end latency scales from 13 seconds (10 users) to 50 seconds (2 million users) | Same 3-server chain, mu=13,000 noise mean for dialing, 5% of users dialing each round, conversation protocol running concurrently at mu=300,000 |
+| Best-case round latency from cryptography alone, 2 million users: about 28 seconds ((3.2x10^6 x 3)/(3.4x10^5)); measured full-protocol latency is within 2x of this lower bound | Each 36-core server performs about 340,000 Curve25519 Diffie-Hellman operations/second; 3 servers, 1 DH operation per message per server, sequential processing required (a server cannot start a round until the previous server finishes, to avoid leaking the permutation) |
+| Server bandwidth: average 166 MB/sec, excluding invitation-dead-drop downloads | 1 million users, same setup |
+| Latency scales roughly quadratically (O(s^2)) with the number of relay servers s in the chain | 1 million active users, mu=300,000, chain length varied from 1 to 6 servers |
+| Client bandwidth for the conversation protocol: negligible (one 256-byte message sent and received per round, rounds tens of seconds apart) | Same setup |
+| Client bandwidth for the dialing protocol: about 7 MB per round (about 39,000 noise invitations at mu=13,000 with 3 servers, plus up to 50,000 real invitations at 1M users with 5% dialing), averaging 12 KB/sec at 10-minute dialing rounds | 1M users, mu=13,000, 3 servers, 10-minute dialing round |
+| Client conversation throughput: 4 messages/minute/client via pipelining (sending a new message each round without waiting for the prior round's response) | 1M users |
+| Conversation protocol supports epsilon'=ln2, delta'=10^-4 for 70,000 rounds at mu=150,000 (b=7,300); 250,000 rounds at mu=300,000 (b=13,800); 500,000 rounds at mu=450,000 (b=20,000) | Derived from Theorems 1-2 (Laplace-noise differential-privacy composition bound), d=10^-5 in the composition bound, parameter swept for each mu to find the largest supportable k |
+| Dialing protocol supports epsilon'=ln2, delta'=10^-4 for 1,200 rounds at mu=8,000 (b=500); 3,500 rounds at mu=13,000 (b=7,700); 8,000 rounds at mu=20,000 (b=1,130) | Same methodology as the conversation-protocol noise sweep, applied to the dialing protocol's differing sensitivity (each user action changes at most 2 dead-drop counts by 1 each, versus up to 2 in m1 and 1 in m2 for conversation) |
+| Estimated deployment cost: about $10,000/month per Vuvuzela server, dominated by bandwidth, using September 2015 EC2 pricing; under $1/year/user if amortized over 1 million users | Cost estimate, not a measured runtime result; the paper states bulk bandwidth pricing could be roughly an order of magnitude lower |
+
+### Parameters
+- (epsilon, delta)-differential-privacy target used for the paper's own recommended configuration: epsilon = ln 2, delta = 10^-4, for 200,000 rounds (about 2x plausible-deniability bound per observation).
+- Noise distribution: Laplace(mu, b), floored at 0 (negative samples clipped to 0) and ceiling-rounded; mu is the mean number of noise dead-drop accesses added per server per round, b is the scale parameter (standard deviation = b*sqrt(2)).
+- Conversation-protocol closed-form relations (Theorem 1): epsilon = 4/b, delta = exp((2-mu)/b); noise needed for a target (epsilon, delta): b = 4/epsilon, mu = 2 - 4 ln(delta)/epsilon.
+- Multi-round composition (Theorem 2, k rounds): epsilon' = sqrt(2k ln(1/d)) * epsilon + k*epsilon*(e^epsilon - 1), delta' = k*delta + d, for any free parameter d > 0; mu scales proportionally to sqrt(k), linearly with 1/epsilon', and proportionally to log(1/delta'), and is independent of total user count.
+- Dialing-protocol closed-form relations: epsilon = 2/b, delta = (1/2)*exp((1-mu)/b); about half the noise messages of conversation for the same (epsilon', delta').
+- Deployment used in evaluation: 3 Vuvuzela relay servers plus 1 untrusted entry server (chain length s swept 1-6 in the server-count experiment); message size 256 bytes (240-byte payload + 16-byte encryption overhead); invitation size 80 bytes (32-byte payload + 48-byte overhead); dialing round length assumed 10 minutes in the client-bandwidth analysis; 5% of users dialing per round in the mixed-load experiment.
+
+### Stated limitations
+The paper states Vuvuzela's fixed-chain design forces every server to process every message, producing significant per-server bandwidth cost, and states this as the main obstacle to practical deployment; it states a Tor-like design spreading bandwidth over many servers is future work, with the security definition and privacy proof for that setting still to be worked out. It states Vuvuzela's differential-privacy approach is conservative because it must add enough noise to protect Alice and Bob even if the adversary knows everything about every other user in the system, and states that assuming some fraction of users are honest (via coupled-worlds or noiseless-database privacy) could permit less noise, left as future work. It states the dialing protocol does not provide forward secrecy for metadata: invitations are encrypted under a recipient's long-term public key, so an adversary who later compromises that private key can decrypt previously recorded (publicly accessible) invitations to learn who called that user in the past; it states the conversation protocol does provide forward secrecy because server keys change every round. It states fixed message sizes suit short text but not large file transfer, and states private large-file transfer as an open area. It states differential privacy protects individuals, not groups: if an adversary isolates a suspected group of users from everyone else and observes an unusually high count of twice-accessed dead drops, the adversary confirms that some pair within the group is communicating, though not which specific pair. It states any single relay server can mount a denial-of-service attack by blocking messages, which the threat model treats as unavoidable given that the adversary is assumed to control the network and given that at least one server must be honest for the design to work at all; it states a DoS attack alone leaks no additional metadata unless it forces users onto a less-secure fallback protocol. It states the design requires clients to already know each other's public keys before starting a conversation, and states that looking up a key on demand over the network would itself leak who is being contacted; key discovery is stated as a separate problem the paper does not solve.
+
+### Requirements it places on the rest of the system
+Vuvuzela requires at least one of the servers in its relay chain to be honest and to actually perform two functions in the protocol: generating that server's share of noise dead-drop accesses, and shuffling (mixing) the batch of requests before forwarding — the security proof (Section 6.1) is conditioned on this one-honest-server step existing, so any deployment or operational change that lets the same operator control every server in the chain removes the guarantee entirely. It requires a PKI, or an equivalent prior key-exchange step, supplying each user with her contacts' long-term public keys before dialing, since looking a key up on demand discloses the lookup target; the paper states this requirement explicitly and does not supply the missing key-discovery mechanism. It requires clients to run continuously (or at least on a schedule uncorrelated with their real communication pattern) because Vuvuzela cannot hide the fact that a client is connected, only what it does once connected — a client that starts only before a conversation and stops right after discloses the conversation's timing regardless of any guarantee inside the protocol. It requires every user, active or not, to generate cover traffic every round (both the constant per-server noise and each client's own decoy dead-drop access when idle), so the mechanism's bandwidth and latency cost is present at all times regardless of whether any two users are actually exchanging messages that round — a system layering Vuvuzela underneath itself must accept this floor cost rather than treating Vuvuzela as pay-as-you-go. Composing Vuvuzela with a component that reduces or reroutes the fixed noise load, or that lets any single server skip mixing to save bandwidth, breaks the differential-privacy proof described above.
+
+### Contradicts
+None found against any other entry in this batch. The paper's own Related Work section states two claims about prior systems that a synthesis document should attribute to Vuvuzela's authors rather than treat as independently confirmed here: that Herbivore and Dissent scale to at most about 5,000-user broadcast groups because of superlinear (quadratic-scale) cost, and that AnoA's privacy framework analyzes only a single round rather than many rounds of composition.
+
+### References worth retrieving
+- Wolinsky, Corrigan-Gibbs, Ford, Johnson, "Dissent," cited as [36] — competing (the strong-privacy baseline the abstract explicitly contrasts against for its superlinear per-client-broadcast cost)
+- Corrigan-Gibbs, Boneh, Mazières, "Riposte: An anonymous messaging system handling millions of users," cited as [12] — competing (scales anonymity sets to millions but is stated to still rely on broadcasts and to limit writes to a few hundred per second)
+- Goel, Robson, Polte, Sirer, "Herbivore," cited as [21] — competing (broadcast-group anonymity system limited to about 5,000 users per group)
+- Dingledine, Mathewson, Syverson, "Tor: The second-generation onion router," cited as [16] — competing (scalable but explicitly not protected against traffic analysis, the paper's motivating contrast)
+- Chaum, "The dining cryptographers problem: unconditional sender and recipient untraceability" (DC-nets), cited as [8] — foundational
+- Chaum, "Untraceable electronic mail, return addresses, and digital pseudonyms" (mixnets), cited as [9] — foundational
+- Danezis, Dingledine, Mathewson, "Mixminion," cited as [15] — competing
+- Sassaman, Cohen, Mathewson, "The Pynchon Gate," cited as [34] — competing (private-information-retrieval-based system requiring O(n^2) computation for n users)
+- Dwork, Roth, "The algorithmic foundations of differential privacy," cited as [18] — foundational (source of Theorem 3.20, the adaptive-composition bound Vuvuzela's Theorem 2 directly applies)
+- Mathewson, Dingledine, "Practical traffic analysis: Extending and resisting statistical disclosure," cited as [26] — attack (cited as showing that cover-traffic schemes without Vuvuzela's variable-minimization approach still leak information after multiple rounds of observation)
+- Backes, Kate, Manoharan, Meiser, [Mohammadi], "AnoA," cited as [2] — competing (differential-privacy-style framework limited to single-round analysis)
+- Bassily, Groce, Katz, Smith, "Coupled-worlds privacy," cited as [3] — foundational (candidate mechanism named for the future-work reduction of conservative noise)
+
+### Verbatim extracts
+"experiments show that it can achieve a throughput of 68,000 messages per second for 1 million users with a 37-second end-to-end latency"
+"Vuvuzela is secure against adversaries that observe and tamper with all network traffic, and that control all nodes except for one server"
+"we usually configure Vuvuzela to provide epsilon = ln 2 and delta = 10-4 for 200,000 rounds"
+"a Vuvuzela server would cost about $10,000/month, dominated by bandwidth costs"
+"Vuvuzela does not achieve forward secrecy for metadata in the dialing protocol"
+"Differential privacy makes guarantees about individual users, but not about groups"
+"performance scales roughly quadratically with the number of servers in the chain"
+
+---
+
 ## [VISHNUMURTHY-P2PECON-03] KARMA: A Secure Economic Framework for Peer-to-Peer Resource Sharing
 **Citation:** Vivek Vishnumurthy, Sangeeth Chandrakumar, Emin Gün Sirer. "KARMA: A Secure Economic Framework for Peer-to-Peer Resource Sharing." Workshop on Economics of Peer-to-Peer Systems (P2PEcon), 2003.
 **Retrieved:** full text via https://www.cs.cornell.edu/people/egs/papers/karma.pdf
@@ -20428,6 +23504,76 @@ None found. No other entry in this batch measures or discusses the karma/bank-se
 - "Commutativity of addition guarantees that ... bank members will agree on the same bank account balance."
 - "This scheme needs O(N^2) messages to be transmitted at the end of each epoch"
 - "P(X > 32) = P(X > (1+4)6.4) < (e^4/5^5)^6.4 = 5.6 × 10^-12"
+
+---
+
+## [VISWANATH-EUROSYS-12] Canal: Scaling Social Network-Based Sybil Tolerance Schemes
+
+**Citation:** Bimal Viswanath, Mainack Mondal, P. Krishna Gummadi, Alan Mislove, Ansley Post. "Canal: Scaling Social Network-Based Sybil Tolerance Schemes." EuroSys, 2012. DOI 10.1145/2168836.2168867.
+**Retrieved:** full text via https://dl.acm.org/doi/10.1145/2168836.2168867
+**Source URL:** https://dl.acm.org/doi/10.1145/2168836.2168867
+**Domain:** F
+
+### What it does
+Canal makes a specific class of Sybil-tolerance scheme (Ostra, SumUp, Bazaar, TrustDavis) practical to run on large, frequently changing social networks by replacing an exact maximum-flow computation with an approximate one computed through precomputed landmark paths, trading bounded accuracy loss for several orders of magnitude less per-request computation. A Sybil-tolerance scheme, as the paper defines it, does not attempt to label an identity as Sybil or non-Sybil; instead it models the social network as a graph in which every edge carries a capacity of transferable credit, and it decides whether to allow one interaction (a message, a vote, a marketplace transaction) by checking whether enough credit-carrying capacity exists along paths between the two participating identities — a maximum-flow computation between two nodes. When capacity along the used paths is consumed by an allowed interaction and later restored (refunded on a message not flagged as spam, or on a transaction not later reported fraudulent), the same graph continues to bound how much benefit any single identity, Sybil or not, can extract, without ever classifying identities. The paper states that on unmodified social-network graphs this per-interaction flow computation costs seconds of central-processing-unit (CPU) time on multi-million-edge graphs (Table 1: 220 seconds average on a 234-million-edge graph), too slow for the online, per-interaction decisions these schemes require.
+
+Canal replaces the exact flow computation with landmark routing: a background process repeatedly selects a set of landmark nodes at k hierarchical levels — 2^i landmarks at level i, for a total of 2^(k+1) − 1 landmarks in a k-level landmark universe — and computes, for every node in the graph, a breadth-first-search-derived path to its nearest landmark at each level, storing this as a (node, landmark, next_hop) map per level. Any two nodes are guaranteed to share at least the single level-0 landmark; nearby nodes are additionally likely to share landmarks at higher levels, giving shorter stitched paths for nearby pairs. Answering a flow request between two nodes locates every landmark the two nodes share across the currently cached landmark universes, stitches together the precomputed paths through each shared landmark (removing any resulting cycles and any set of paths that reuse the same link, since capacity along a link can be consumed only once per request), and consumes capacity greedily along one path after another until the requested amount is met or every available path is exhausted; this is an approximation because it searches only paths passing through a currently held landmark, not every path the graph admits. Because a landmark universe is a background process's snapshot of the graph, and repeatedly used low-level landmarks would concentrate use on the edges around them, Canal continuously builds new landmark universes in parallel with request processing and discards the oldest cached universe once a configured number of universes accumulate, bounding how long any single node acts as a landmark and folding graph changes into newer universes without ever blocking request processing to rebuild from scratch.
+
+### Measured results
+
+| Measurement | Conditions | Result |
+|---|---|---|
+| Average time for one exact max-flow computation (push-relabel algorithm) between 50 random node pairs | Five real social-network graphs, dual 12-core Intel Xeon X5650 2.66 GHz, 48 GB RAM | Renren (33 K nodes, 1.4 M links): 0.352 s. Facebook (63 K, 1.6 M): 0.445 s. YouTube (1.1 M, 5.8 M): 2.91 s. Flickr (1.6 M, 30 M): 15.2 s. Orkut (3.1 M, 234 M): 220 s. |
+| Landmark universe (level-0, single universe-creator process) construction time | Same five graphs | Renren 225 ms, Facebook 292 ms, YouTube 4,131 ms, Flickr 13,296 ms, Orkut 41,787 ms. |
+| Median and 95th-percentile latency to answer a request for 1 credit of capacity | 5,000 random node pairs per graph, 8 level-5 landmark universes cached, one available credit initialized per link | Below 1 millisecond (median and 95th percentile) for all five graphs. |
+| Same, for a request of 5 credits | Same setup | Below 2.5 milliseconds (median and 95th percentile) for all five graphs. |
+| Bazaar integration: median transaction latency, original vs. Canal-augmented implementation | 90-day trace, 5 UK eBay categories (419 K to 1.3 M users, 1.2 M to 5.5 M links), 30 level-2 landmark universes | Clothes: 6,290 ms → 0.2 ms (2,329× speedup). Home: 5,340 ms → 0.1 ms (785×). Collectables: 1,180 ms → 0.08 ms (1,404×). Electronics: 1,660 ms → 0.09 ms (1,522×). Computing: 1,410 ms → 0.1 ms (1,084×). All five categories: 95th-percentile latency below 4 ms with Canal. |
+| Bazaar integration: accuracy (fraction of transactions where the original implementation found sufficient available credit and Canal also found it) | Same trace, 30 level-3 landmark universes | Clothes 94.2%, Home 97.0%, Collectables 97.6%, Electronics 95.4%, Computing 95.9%. Over 95% accuracy reached for the Home category with 20 level-3 landmark universes. |
+| Ostra integration: average time to find a path with available capacity, original vs. Canal | Ostra's original evaluation graph (446 K nodes, 3.4 M links, largest strongly connected component of a YouTube social graph), 128 simulated spam-sending nodes each sending 500 messages, credit limit 3 per link, 1% false-classification probability by legitimate users, 30 level-3 landmark universes | 35.4 ms → 190 microseconds (186× speedup). |
+| Ostra integration: accuracy | Same setup, varying landmark-universe count and level | Over 99% accuracy once at least 5 landmark universes are cached. |
+| Link reuse when processing 5,000 random capacity requests | Same five graphs, 8 level-5 landmark universes | 99th-percentile link is reused fewer than 14 times across the 5,000 requests, on every graph tested. |
+| Fixed memory to hold the graph state (excluding landmark universes) | Orkut graph (3.1 M nodes, 234 M links) | Almost 20 GB. |
+
+### Parameters
+| Parameter | Value(s) used |
+|---|---|
+| Landmark universe level (k) | Varied 0–12 in microbenchmarks; 5-level universes used for the latency and hotspot experiments; 2-level universes for the Bazaar latency experiment; 3-level universes for the Bazaar and Ostra accuracy experiments |
+| Number of cached landmark universes | Varied 5–30 across experiments; 8 for the latency and hotspot experiments; 30 for the Bazaar and Ostra speedup/accuracy experiments; over 95% Bazaar accuracy reached at 20 level-3 universes; over 99% Ostra accuracy reached at 5 universes (level unspecified in that comparison) |
+| Universe creator processes (parallel construction) | 22 |
+| Max-flow algorithm used as the exact baseline | Push-relabel |
+| Ostra simulated attacker count | 128 nodes, 500 spam messages each |
+| Ostra credit limit per link | 3 |
+| Ostra false-positive rate (legitimate users misclassified) | 1% |
+| Hardware | Dual 12-core Intel Xeon X5650, 2.66 GHz, 48 GB RAM, single machine |
+| Trials per experiment | 5 random trials, averaged, unless stated otherwise |
+
+### Stated limitations
+The paper states Canal trades accuracy for speed by design: because it searches only paths passing through a currently cached landmark, it can fail to find capacity that an exact flow computation would find, wrongly denying an interaction (a false negative) that the underlying scheme would otherwise allow; the accuracy figures above (94.2%–99%+) bound how often this occurs under the tested configurations, not eliminate it. The paper states its current implementation runs on a single machine and requires the full graph plus landmark universes to fit in that machine's memory (almost 20 GB for the largest, 234-million-link graph tested); it states a distributed, cluster-based implementation is left to future work and identifies two unresolved costs of that extension: the communication and barrier-synchronization overhead of the bulk-synchronous-parallel model the authors propose using, and the need for transactional updates to the shared data store to handle node failures correctly, neither of which the paper measures. The paper states a Sybil identity chosen as a landmark can degrade the liveness of paths stitched through it (because links near a compromised landmark may carry no capacity) but states this does not compromise safety, since Canal never grants capacity that is not actually present on the graph; it argues, without a targeted-attack experiment, that continuously rotating hundreds of landmarks limits how much a landmark-targeting attacker can concentrate this effect. The paper's own bibliography notes that a premise Sybil-tolerance schemes share with Sybil-detection schemes — that non-Sybil regions of a social graph are fast-mixing — is itself contested by measurements the paper cites but does not itself run: it cites one study finding measured mixing times substantially higher than previously assumed, and another finding that peripheral identities in real social graphs cluster densely and connect to the rest of the graph through a small cut.
+
+### Requirements it places on the rest of the system
+Canal requires the Sybil-tolerance scheme it accelerates to already express its access-control decision as a maximum-flow, or bounded-flow, query over a capacity-labeled graph — the credit-network abstraction the paper shows Ostra, SumUp, and Bazaar share; a scheme whose decision is not reducible to that form gains nothing from Canal. It requires every capacity change (an interaction consuming or refunding capacity, or a new user or link joining the graph) to reach the background universe-creation process so that newer landmark universes reflect current state; the paper's mechanism for bounding staleness is the fixed-size rotating cache of universes, not a guarantee that any single universe reflects the graph at the moment a request is answered. It requires a locking mechanism at the level of individual graph links, so that concurrent path-stitcher processes consuming capacity along different landmark-derived paths cannot double-consume the same link's capacity; the paper reports its own implementation holds at most one link lock per path-stitcher process at a time specifically to avoid deadlock. It requires enough machine memory to hold the full graph state plus as many landmark universes as are cached simultaneously, since the current implementation is single-machine; the paper reports linear growth in per-universe memory with landmark-universe level as the concrete cost of raising accuracy.
+
+### Contradicts
+None found. This entry does not supersede and is not superseded by any other entry in this corpus.
+
+### References worth retrieving
+- foundational: Mislove, A., Post, A., Gummadi, K. P., Druschel, P. "Ostra: Leveraging trust to thwart unwanted communication." (one of the three systems Canal is built to accelerate; carries the original 35.4 ms/3.4M-link baseline this paper reproduces)
+- foundational: Post, A., Shah, V., Mislove, A. "Bazaar: Strengthening user reputations in online marketplaces." (the other system whose original 6-second/5.5M-link baseline and eBay trace this paper reuses directly)
+- foundational: Tran, N., Min, B., Li, J., Subramanian, L. "Sybil-resilient online content voting." (SumUp, the third Sybil-tolerance scheme in the credit-network family, cited but not directly re-evaluated with Canal in this paper)
+- foundational: do B. DeFigueiredo, D., Barr, E. T. "TrustDavis: A non-exploitable online reputation system." (fourth scheme in the same family, cited but not directly re-evaluated)
+- competing/attack: Mohaisen, A., Yun, A., Kim, Y. "Measuring the mixing time of social graphs." (the independent measurement the paper itself cites as evidence against the fast-mixing assumption underlying Sybil-detection and, partially, Sybil-tolerance schemes)
+- competing/attack: Viswanath, B., Post, A., Gummadi, K. P., Mislove, A. "An analysis of social network-based Sybil defenses." ACM SIGCOMM, 2010. (the paper the authors cite for the small-cut/dense-periphery-cluster finding that challenges assumption 2 of Sybil detection)
+- foundational: Goldberg, A. V., Tarjan, R. E. "A new approach to the maximum-flow problem." (the push-relabel algorithm this paper uses as the exact-computation baseline throughout)
+- foundational: Gomory, R. E., Hu, T. "Multi-terminal network flows." (the precomputed all-pairs max-flow technique the paper explicitly argues cannot be applied to Sybil-tolerance's dynamically changing graphs, and states why)
+- foundational: Mislove, A., Marcon, M., Gummadi, K. P., Druschel, P., Bhattacharjee, B. — the paper that supplied the YouTube social-graph dataset (446 K nodes, 3.4 M links) reused for the Ostra re-evaluation.
+
+### Verbatim extracts
+- "Canal provides up to a three-order-of-magnitude speedup while maintaining safety and accuracy"
+- "the median and 95th percentile latency for pushing one credit is below 1 millisecond"
+- "we observe speedups of between 785-fold and 2,329-fold"
+- "Canal provides over 99% accuracy once at least five landmark universes are used"
+- "the mixing time for many real-world networks is substantially higher than was previously thought"
+- "identities in the periphery are often organized into densely connected clusters"
 
 ---
 
@@ -20598,6 +23744,186 @@ None found. This document makes no experimental claims that could disagree with 
 "this is not currently enforced so the vouchers are only advisory"
 "Active relay functionality is considered deprecated for security reasons, at least in public relays."
 "Implementations should not accept reservations over already relayed connections."
+
+---
+
+## [W3C-DIDCORE-22] Decentralized Identifiers (DIDs) v1.0
+
+**Citation:** W3C Decentralized Identifier Working Group (Manu Sporny, Amy Guy, Markus Sabadello, Drummond Reed, editors). "Decentralized Identifiers (DIDs) v1.0." W3C Recommendation, 2022.
+**Retrieved:** full text via https://www.w3.org/TR/did-core/ — VERSION CAVEAT, see below.
+**Source URL:** https://www.w3.org/TR/did-core/
+**Domain:** E
+
+**Version caveat:** The document at this URL, as fetched, is titled "Decentralized Identifiers (DIDs) v1.1" and is marked a W3C Candidate Recommendation, not the "v1.0" W3C Recommendation of 2022 the registry entry cites. The W3C `/TR/did-core/` URL is a living "latest version" pointer and has moved past the cited document. The retrieved text's own changelog ("Changes since the DID v1.0 Recommendation") lists the deltas: editorial rewording, an updated fragment-resolution algorithm, media-type consolidation to `application/did`, a new JSON-LD context for v1.1, and moving the DID-resolution function definitions out of this document into a separate DID-RESOLUTION specification. The core data model (the properties table below), the DID and DID URL syntax, and the security- and privacy-considerations content are stated by that same changelog to be otherwise carried forward, not rewritten, so those sections are extracted below as applying to both v1.0 and v1.1. Nothing below is drawn from a `resolve()`/`resolveRepresentation()` function-signature section, because v1.1 removed that section from this document; a v1.0-specific claim about that interface is not extracted from this text and would require the v1.0 archived Recommendation.
+
+### What it does
+A Decentralized Identifier (DID) provides a global identifier for a subject (a person, organization, thing, or abstract entity) that resolves to a document describing how to interact with and cryptographically verify control over that subject, without depending on a central registry, identity provider, or certificate authority. A DID is a Uniform Resource Identifier (URI) of the form `did:<method-name>:<method-specific-id>`. The method name selects a DID method specification, an independently defined and independently versioned specification that states how DIDs of that type are created, resolved, updated, and deactivated against some concrete verifiable data registry (for example a blockchain, a distributed ledger, or a distributed hash table); this specification defines the identifier syntax and the document data model that every DID method must produce, not the registry or the resolution algorithm itself. Resolving a DID yields a DID document: a set of key/value properties comprising an `id` (the DID itself, required), an optional `controller` (one or more DIDs authorized to make changes), an optional `alsoKnownAs` set of alternate identifiers, an optional `service` set (endpoints for interacting with the subject), an optional `verificationMethod` set (public key material), and five optional verification-relationship properties — `authentication`, `assertionMethod`, `keyAgreement`, `capabilityInvocation`, `capabilityDelegation` — each of which points into `verificationMethod` entries to state which keys are authorized for which purpose. A DID URL extends the DID syntax with an optional path, query, and fragment to address a specific resource inside or reachable from a DID document (for example one verification method by its fragment identifier); dereferencing a DID URL is defined as first resolving the DID it contains, then applying the DID URL's path/query/fragment against the resulting document or an external resource it names.
+
+### Measured results
+None. This is a normative specification, not an experimental paper; it defines syntax, a data model, and conformance requirements and reports no implementation count, benchmark, or field measurement. The document's own exit criteria (Candidate Recommendation stage) require at least two independent conforming implementations per machine-testable normative feature, but the retrieved text does not report the results of that implementation survey — it states the requirement, not the outcome.
+
+### Parameters
+Not applicable in the sense of a tunable numeric parameter; the specification instead sets required and optional fields. Extracted as the closest equivalent — the DID document's core-property requirement table:
+
+| Property | Required? |
+|---|---|
+| `id` | yes |
+| `controller` | no |
+| `alsoKnownAs` | no |
+| `service` | no |
+| `verificationMethod` | no |
+| `authentication` | no |
+| `assertionMethod` | no |
+| `keyAgreement` | no |
+| `capabilityInvocation` | no |
+| `capabilityDelegation` | no |
+
+Within a `verificationMethod` map, `id` and `type` and `controller` are each required.
+
+### Stated limitations
+The specification states that mapping a human-friendly identifier (a name, domain name, phone number, or social-media handle) to a DID, in a way that can be verified and trusted, is explicitly out of scope; it states this trade-off follows Zooko's Triangle and defers the problem to separate specifications. The specification states there is no common DID recovery mechanism that applies across all DID methods; recovery mechanics (quorum-based, time-locked, or otherwise) are left to each DID method, and cross-method recovery (one DID method recognizing control asserted by a DID registered under a different method) is stated as not guaranteed. Non-repudiation of a DID document update is stated to hold only conditionally: it requires the underlying verifiable data registry to supply verifiable timestamps and requires that the subject had adequate opportunity to revert a malicious update under that DID method's authorization mechanism; the specification does not itself supply either property. Verifying a signature made with a since-revoked key in a "trustless" system (one where every trust judgment derives from cryptographic assertions alone) is stated to require the DID method to expose both `versionId`/`versionTime` on the proof and both `updated`/`nextUpdate` DID-document metadata timestamps; without all four, such verification is not stated to be possible under this specification alone. The specification states that encrypting data inside a DID document is not an appropriate long-term protection for that data, because advances in cryptography or computing power are expected to eventually make currently encrypted data recoverable in clear text to whoever can already see the ciphertext.
+
+### Requirements it places on the rest of the system
+A DID cannot be resolved or updated without a separate, independently specified DID method that defines the concrete verifiable data registry and the create/resolve/update/deactivate operations for that method; this specification supplies the identifier syntax and document data model the method's output must conform to, not the operations themselves. A DID resolver is required as a system component that accepts a DID and returns a conforming DID document; a DID URL dereferencer is a further required component that accepts a DID URL and returns the resource it identifies, built on top of DID resolution. Achieving non-repudiation of document updates requires the DID method's verifiable data registry to supply verifiable timestamps, a property this specification does not itself provide and does not require every method to provide. Verifying a proof made under a revoked key inside a trustless system requires the DID method to expose `versionId` or `versionTime` on the proof, and both `updated` and `nextUpdate` in the resolved document's metadata; a DID method lacking these fields cannot support that verification path. Mapping a human-friendly name to a DID requires a separate specification (the document cites `DNS-DID` as one example) layered on top of this one; this specification supplies no mechanism for that mapping and states the security and correlation risks of building one are the responsibility of whichever specification does.
+
+### Contradicts
+None found. This entry supersedes no other entry in this corpus and no other corpus entry addresses DID Core directly.
+
+### References worth retrieving
+- foundational: [[CID]] — the Controlled Identifier Document specification this version of DID Core is stated to be layered on top of (a restructuring introduced in v1.1; not present as a dependency in the original v1.0 Recommendation).
+- foundational: [[?DID-RESOLUTION]] — the specification the DID-resolution function definitions were moved into for v1.1; needed to extract the resolve()/resolveRepresentation() input-output contract that v1.0 stated inline and v1.1 does not.
+- competing/related: [[?DID-EXTENSIONS]] — the repository of registered DID method names, verification method types, and DID parameters; needed to check any specific DID method's conformance claims against the registry this specification defers to.
+- competing: [[?DID-RUBRIC]] — the "Decentralized Characteristics Rubric" the document cites as a tool for comparing DID methods' persistence guarantees; likely the source of any cross-method comparison data, if such data exists.
+- foundational: [[?RFC3552]] — the IETF threat-model document this specification states its Security Considerations section elaborates on.
+- foundational: [[RFC8141]] — Uniform Resource Names (URNs), cited for the security considerations a DID controller using a DID as a persistent resource identifier is advised to also follow.
+
+### Verbatim extracts
+- "no central authority to mandate which DID method specification is to be used"
+- "There are currently no common recovery mechanisms that apply to all DID methods."
+- "Encrypting all or parts of a DID document is not an appropriate means to protect data in the long term."
+- "the problem of mapping human-friendly identifiers to DIDs...is outside the scope"
+- "A DID resolver is a system component that takes a DID as input and produces a...DID document as output"
+
+---
+
+## [W3C-VCDM-25] Verifiable Credentials Data Model v2.0
+
+**Citation:** W3C Verifiable Credentials Working Group (Manu Sporny, Ted Thibodeau Jr., Ivan Herman, Michael B. Jones, Gabe Cohen, editors). "Verifiable Credentials Data Model v2.0." W3C Recommendation, 2025.
+**Retrieved:** full text via https://www.w3.org/TR/vc-data-model-2.0/ — VERSION CAVEAT, see below.
+**Source URL:** https://www.w3.org/TR/vc-data-model-2.0/
+**Domain:** E
+
+**Version caveat:** The document at this URL, as fetched, is titled "Verifiable Credentials Data Model v2.1," one revision past the "v2.0" W3C Recommendation the registry entry cites, for the same reason as W3C-DIDCORE-22: the `/TR/` URL is a living pointer to the latest version. The retrieved text's own revision history lists the deltas since the immediately preceding step ("v2.0 Second Candidate Recommendation"): editorial clarification, aligning error-condition fields across companion Working Group specifications, and clarified requirements for self-asserted credentials. No structural change to the credential data model, the status mechanism, or the zero-knowledge-proof securing-mechanism section is listed between v2.0 and this retrieved v2.1 text, so the data model, status, and privacy content below are extracted as applying to v2.0. A v2.0-specific wording claim is not extracted from this text where the changelog marks a difference.
+
+### What it does
+A verifiable credential expresses a set of claims made by an issuer about a subject in a form a verifier can cryptographically check, without the verifier contacting the issuer at presentation time. The specification defines a three-party data flow: an issuer creates a credential and secures it with a cryptographic proof; a holder receives, stores, and later presents the credential (or a derived subset of it) to a verifier, optionally bundling multiple credentials into one verifiable presentation; a verifier checks the proof and, separately, checks any credentialStatus entry the credential carries. A credential's data model core is: `id`, `type` (must include `VerifiableCredential`), `issuer`, `validFrom`/`validUntil`, `credentialSubject` (the claims), and an optional `credentialStatus` object or set of objects. Two families of securing mechanism attach a cryptographic proof to this data: embedded proofs, of type `DataIntegrityProof`, add a `proof` property directly inside the credential's JSON-LD document, carrying a `cryptosuite` name, a `verificationMethod` identifying the signing key, a `proofPurpose`, and a `proofValue`; enveloping proofs (JOSE/COSE, referenced normatively from the companion `VC-JOSE-COSE` specification) instead wrap the whole credential as an opaque signed or encrypted object referenced by a `data:` URL. `credentialStatus` names a status mechanism (the specification's own example type is `BitstringStatusList`) by pointing a verifier at a separate published bitstring credential, in which the credential's `statusListIndex` selects one bit that encodes revocation or suspension state (`statusPurpose` states which); the specification defines only the pointer property and requires that whatever status-list mechanism a `credentialStatus` type names must not let the issuer learn, from a verifier fetching status, which specific individual's status was checked.
+
+Zero-knowledge-proof securing mechanisms (an example instantiated with the BBS signature scheme, cross-referenced to a separate `VC-DI-BBS` specification) let a holder derive, from one issuer-signed base credential, a second proof that discloses only a chosen subset of the claims (selective disclosure) and that differs in value on every presentation so that separate presentations of the same underlying credential cannot be linked to each other by their signature bytes (unlinkable disclosure). The specification states that most such mechanisms require the issuer to sign the base credential in a form that supports the derivation, so a holder cannot retrofit unlinkable disclosure onto a credential the issuer signed with an ordinary (non-derivable) signature.
+
+### Measured results
+None. This is a normative data-model and vocabulary specification; it defines properties, syntax, and conformance requirements and reports no experiment, benchmark, deployment count, or implementation-count outcome. Exit-criteria implementation-count requirements are referenced by the surrounding W3C process but their results are not part of this document's text.
+
+### Parameters
+Not applicable as tunable numeric values; the closest equivalents are the required/optional status of core properties and the two named securing-mechanism specifications this document normatively points to:
+
+| Property | Required? |
+|---|---|
+| `id` (credential) | no (but MUST follow identifier rules in Section 5 if present) |
+| `type` | yes, MUST include `VerifiableCredential` |
+| `issuer` | yes |
+| `validFrom` / `validUntil` | no |
+| `credentialSubject` | yes |
+| `credentialStatus` | no; MAY be a single object or a set of objects |
+| `credentialStatus.type` | required, if `credentialStatus` present |
+| `credentialStatus.id` | optional, if `credentialStatus` present |
+
+Normatively referenced securing mechanisms: `VC-DATA-INTEGRITY` (embedded `DataIntegrityProof`, cryptosuite examples include `bbs-2023`), `VC-JOSE-COSE` (enveloping proofs).
+
+### Stated limitations
+The specification states it does not define the data model, format, or protocol of any concrete credential-status scheme; `BitstringStatusList` appears only as an example, and the actual behavior of status checking (what a verifier fetches, and how often) is deferred entirely to whichever status-type specification a credential's `credentialStatus.type` names. It states that reconciling conflicting information across multiple `credentialStatus` entries on one credential is part of the verifier's own business logic and is out of scope of this specification. It states that how a verifier decides which issuers to trust, and for what data or purposes, is out of scope, deferring to external trust-list mechanisms (it cites ETSI trust lists and the Adobe Approved Trust List as existing examples, not as part of this specification). It states not every zero-knowledge-proof mechanism supports every one of selective disclosure, unlinkable disclosure, and non-correlatable holder identification, and that which of the three a given mechanism provides is defined by that mechanism's own specification, not by this data model. It states that a credential is, in general, expected to leak personally identifiable information when shared, in the same way a physical credential does, and that avoiding this leakage requires deliberately choosing a credential type and securing mechanism designed against correlation, not a property this specification supplies by default.
+
+### Requirements it places on the rest of the system
+A credentialStatus check requires a separately specified and separately hosted status mechanism (the specification names `BitstringStatusList` only as an example) that the verifier fetches; that mechanism is required, by this specification's own normative language, not to let the issuer learn which specific individual's status a verifier is checking — ruling out any status design in which a verifier's status check reaches the issuer's own server per individual lookup ("phoning home"), or in which the fetch pattern itself lets the issuer deduce verifier interest in a specific individual ("pseudonymity reduction"). Selective and unlinkable disclosure require the issuer to sign the base credential with a securing mechanism that itself supports derivation (the specification's own worked example uses the BBS cryptosuite `bbs-2023`); a credential signed with an ordinary non-derivable signature cannot be selectively disclosed after the fact by the holder alone. Identifying an issuer, subject, or verification method requires an identifier scheme that supports resolution and verification of associated key material; the specification's own examples resolve issuer and verification-method identifiers as DIDs (Decentralized Identifiers) and normatively cross-references the DID specification for that resolution, without itself constraining a credential to using DIDs specifically. Avoiding identifier-based correlation requires the holder's software to detect long-lived identifiers (subject IDs, email addresses, government-issued identifiers) inside a credential before sharing it and, where the issuer's securing mechanism supports it, to substitute a holder-generated or selectively-hidden identifier instead — a capability this specification requires securing-mechanism authors to make available, not one the base data model provides on its own.
+
+### Contradicts
+None found within this corpus.
+
+### References worth retrieving
+- foundational: `VC-DATA-INTEGRITY` — the Data Integrity specification defining the embedded `DataIntegrityProof` mechanism and its cryptosuite registry; needed for the actual signature-verification algorithm this document only references.
+- foundational: `VC-JOSE-COSE` — the enveloping-proof specification (JOSE/COSE-based securing); needed for the alternative signature envelope this document only references.
+- competing/extension: `VC-DI-BBS` — the BBS-based Data Integrity cryptosuite specification providing the unlinkable selective-disclosure mechanism whose worked example appears in this document; the primary place to find measured proof-size or verification-cost figures for BBS-secured credentials, none of which are in this document.
+- foundational: `[[?DID]]` — the Decentralized Identifiers specification this document's issuer and verification-method examples resolve against (see W3C-DIDCORE-22 in this corpus).
+- competing: `VC-JSON-SCHEMA` — the credential-schema validation mechanism referenced for the `credentialSchema` property, not itself defined in this document.
+- foundational: `[[FIPS-186-5]]`, `[[NIST-SP-800-57-Part-1]]` — cited normatively for key-reuse restrictions on signing keys used to secure credentials.
+- related: `[[?VC-EXTENSIONS]]` — the registry of available credential-status schemes this document defers to instead of defining one itself.
+- related: `[[?ETSI-TRUST-LISTS]]` — cited as one existing external trust-list mechanism for issuer trust decisions this specification leaves out of scope.
+
+### Verbatim extracts
+- "Defining the data model, formats, and protocols for status schemes is out of the scope"
+- "Credential status specifications MUST NOT enable tracking of individuals"
+- "How verifiers decide which issuers to trust...is out of scope for this recommendation"
+- "for the holder to make use of zero knowledge mechanisms...the issuer is required to secure" it
+- "individuals are advised to assume that a verifiable credential...will leak personally identifiable information when shared"
+
+---
+
+## [WACHS-CANS-14] A Censorship-Resistant, Privacy-Enhancing and Fully Decentralized Name System
+
+**Citation:** Matthias Wachs, Martin Schanzenbach, Christian Grothoff. "A Censorship-Resistant, Privacy-Enhancing and Fully Decentralized Name System." International Conference on Cryptology and Network Security (CANS), 2014. DOI 10.1007/978-3-319-12280-9_9.
+**Retrieved:** full text via https://grothoff.org/christian/gns.pdf
+**Source URL:** https://grothoff.org/christian/gns.pdf
+**Domain:** E
+
+### What it does
+The GNU Name System (GNS) resolves human-memorable names to cryptographic keys and other records without a global registry, a certificate authority, or a blockchain. Each user holds one or more zones; a zone is an ECDSA (Elliptic Curve Digital Signature Algorithm) public/private key pair over Curve25519 plus a set of records (label, type, value, expiration time), stored locally in a namestore database the zone owner controls. A user designates one zone as a master zone and resolves names starting from it, in place of a DNS (Domain Name System) root zone. A user delegates a subdomain to another user's zone by adding a PKEY record naming that zone's public key under a locally chosen label; resolving a multi-label name follows the chain of PKEY delegations one zone at a time. Public records are additionally published into a distributed hash table (DHT) so other users can resolve names that cross into zones they do not hold locally. A record can instead be marked private and kept only in the local namestore. The scheme sets label assignment per delegating user rather than globally, so the same string can point to different zones for different observers; a NICK record lets a zone owner suggest a default label so other users adopt it as a default when they add a delegation to that zone, without making the label globally unique. The "+" placeholder in a name is replaced by the resolving client with the label of the zone from which resolution started, so a link authored in one zone still resolves to the correct target when a different zone imports it under a different local label (a relative-name mechanism). The ".zkey" pseudo top-level domain names a zone directly by encoding its public key as a DNS label, giving an absolute identifier for a zone that has no memorable delegation path yet.
+
+Query privacy: for a zone with private key x and public key P = xG (G the elliptic-curve generator), and a label represented as l, the publisher computes h = x·l mod n, publishes the record block under the DHT key Q(l,P) = H(hG), and encrypts the record block with a key derived by a hash-based key derivation function (HKDF) from (l, P). A peer who knows both l and P computes Q(l,P) = H(lP) = H(lxG) = H(hG) to find the block, then decrypts it. A peer holding only the DHT key material without knowing both l and P cannot compute the query or decrypt the reply.
+
+Revocation: a zone owner creates a revocation notice in advance of key loss or compromise. On use, the notice is flooded peer-to-peer (every peer forwards every previously unseen valid notice to all neighbors) rather than looked up on demand, because an on-demand revocation check would add latency and bandwidth to every zone access and would reveal to observers which zone a user is resolving. A proof-of-work requirement on the revocation notice bounds flooding abuse, paid once by the revoker rather than checked by resolvers. Peers that were partitioned from the network, or newly joined, exchange only the difference between their revocation sets using Eppstein's set-reconciliation method, so healing costs bandwidth proportional to the size of that difference rather than to the full revocation set.
+
+### Measured results
+None. The paper presents a design and a security analysis; it reports no experiment, testbed, node count, or timing measurement. Section 1 states usability experiments with GNS as future work ("experiments to find out which usability problems arise with GNS," line 474) and does not report results from them.
+
+### Parameters
+| Parameter | Value stated |
+|---|---|
+| Signature scheme | ECDSA over Curve25519 |
+| DHT used in the reference implementation | R5N (Randomized Recursive Routing for Restricted-Route Networks) |
+| GNS reply payload limit | up to 63 kB |
+| DNS packet size limit noted for comparison | often 512 bytes |
+| Maximum trusted computing base (TCB) per individual name | fewer than about 125 entities, following from DNS label length restrictions carried into GNS names |
+| Revocation notice size | a few bytes |
+| BOX record fields | 16-bit port, 16-bit protocol identifier, 32-bit embedded record type, embedded record value |
+
+### Stated limitations
+GNS cannot return an equivalent of DNS's NXDOMAIN (non-existent domain) response, because doing so would require a query round trip that GNS's privacy construction avoids; the client therefore cannot distinguish "record absent" from "record not yet found" and faces indefinite lookup latency for records that do not exist. The paper introduces the BOX record specifically to reduce, not eliminate, indefinite latency for the SRV/TLSA case by placing dependent records under one lookup. A confirmation attack cannot be prevented: an adversary who already knows both a zone's public key and a specific label can perform the same query as any peer and thereby confirm that a specific record exists and read it. A user's ability to reach a name at all depends on having previously obtained a delegation from someone who already knows the target zone, so first discovery of an unfamiliar zone requires an out-of-band channel (the paper gives no in-band bootstrap for an entirely unknown zone). GNS does not address censorship below the naming layer, such as IP-address blocking of a server that a resolved name points to; the paper states this is out of scope and recommends pairing GNS with Tor for that threat. The paper states it cannot give a numeric estimate of the damage from a successful social-engineering attack on a user's delegations, because "the system is not deployed yet" and no measurement of the resulting GNS delegation graph exists.
+
+### Requirements it places on the rest of the system
+Resolution of any name outside a user's own zones requires a prior delegation the user (or one of their contacts, transitively) obtained out of band; the system supplies no mechanism for a first, trust-free discovery of an arbitrary unfamiliar zone. Publication of any record intended for other users requires a DHT that the paper explicitly treats as untrusted for integrity — every published record must carry its own signature and expiration, because the paper's threat model allows the DHT to degrade availability and performance but relies on the signature scheme, not the DHT, for authenticity. The revocation mechanism requires a peer-to-peer overlay beneath the DHT capable of flooding to all neighbors, and requires that a proof-of-work check gate acceptance of revocation notices to bound denial-of-service flooding. Resolving a name that crosses zones requires the resolving client to hold, or be able to fetch through the DHT, every zone's public record in the delegation chain, so delegation-chain length translates directly into the number of DHT lookups an application must complete before a name resolves, and each additional zone in a chain adds to the trusted computing base a resolving user takes on for that name.
+
+### Contradicts
+None found within this corpus. The paper's own account of Namecoin (a proof-of-work timeline naming system) states that Namecoin's ledger-consensus approach fails under its own adversary model — an adversary with more computational power than all other participants combined can construct an alternative valid timeline — a structural consequence, not a value judgment about Namecoin.
+
+### References worth retrieving
+- foundational: Stiegler, M. "An introduction to petname systems." (petname-system origin)
+- foundational: Rivest, R.L., Lampson, B. "SDSI – a simple distributed security infrastructure." (SDSI/SPKI, the delegation model GNS builds on)
+- foundational: Wilcox-O'Hearn, Z. "Names: Decentralized, secure, human-meaningful: Choose two." (Zooko's triangle)
+- competing: Nakamoto, S. "Bitcoin: A peer-to-peer electronic cash system." (ledger-consensus naming's underlying mechanism)
+- competing: "The Dot-BIT project, A decentralized, open DNS system based on Bitcoin technology." (Namecoin)
+- competing: Ford, B.A. "UIA: A Global Connectivity Architecture for Mobile Personal Devices." (the other SDSI-derived personal-naming system, compared directly in Related Work)
+- competing: D. J. Bernstein. "DNSCurve: Usable security for DNS." (confidentiality-only DNS alternative, compared directly)
+- attack: Anonymous. "The collateral damage of internet censorship by DNS injection." ACM SIGCOMM CCR. (measured cross-border DNS censorship effect the paper cites as motivation)
+- attack: Deccio, C., Sedayao, J., Kant, K., Mohapatra, P. "Quantifying DNS namespace influence." (DNS trust-chain-depth measurement, source of the "over a hundred DNS zones" claim GNS compares its TCB against)
+- foundational: Evans, N., Grothoff, C. "R5N: Randomized Recursive Routing for Restricted-Route Networks." (the DHT GNS is built on; its Eclipse-attack resistance is asserted here by citation, not re-derived)
+- competing: Ulrich, A., Holz, R., Hauck, P., Carle, G. "Investigating the OpenPGP Web of Trust." (independent measurement of the mesh structure of a deployed delegation graph, the closest existing analog to a GNS delegation graph)
+
+### Verbatim extracts
+- "no name system can provide globally unique and memorable names and be secure"
+- "the worst an adversary can do here is reduce performance and availability, but not impact integrity"
+- "in GNS NXDOMAIN is not possible, largely due to GNS's provisions for query privacy"
+- "an adversary that is unable to guess both the zone's public key and the label cannot determine" it
+- "for an individual name it is always less than about 125 entities"
+- "GNS is not intended as an answer to this kind of censorship"
 
 ---
 
@@ -20894,6 +24220,18 @@ None found within this corpus at the time of writing. Cross-check candidate: WOL
 
 ---
 
+## [WANG-INFOCOM-17] MISMATCH — NOT THE CITED PAPER
+
+**Registry citation (target):** Binghui Wang, Le Zhang, Neil Zhenqiang Gong. "SybilSCAR: Sybil Detection in Online Social Networks via Local Rule Based Propagation." IEEE INFOCOM, 2017. DOI 10.1109/INFOCOM.2017.8057066.
+
+**File on disk is:** Binghui Wang, Jinyuan Jia, Le Zhang, Neil Zhenqiang Gong. "Structure-based Sybil Detection in Social Networks via Local Rule-based Propagation." IEEE Transactions on Network Science and Engineering (TNSE), "to appear" 2018 (extended journal version).
+
+**Evidence of mismatch:** The retrieved text's own header states "TO APPEAR IN IEEE TRANSACTIONS ON NETWORK SCIENCE AND ENGINEERING, 2018" and lists four authors, adding Jinyuan Jia to the three-author byline the registry cites. The retrieved document's own bibliography, reference [49], separately cites "B. Wang, L. Zhang, and N. Z. Gong, 'SybilScar: Sybil detection in online social networks via local rule based propagation,' in IEEE INFOCOM, 2017" as prior, distinct work — confirming the file on disk is the later three-additional-author journal extension of the target paper, not the target paper itself.
+
+**Disposition:** No content extracted from this file under the WANG-INFOCOM-17 key. The two documents describe the same system (SybilSCAR) and likely carry overlapping or expanded measurements (the retrieved text's abstract reports a 41.7M-node, 1.2B-edge Twitter dataset and a stated top-10K accuracy figure of 95.8% for SybilSCAR versus 0.33% for SybilRank and 77.5% for SybilBelief), but these figures are not recorded here because they were read from the TNSE 2018 extension, not from the INFOCOM 2017 paper the registry key names, and the two publications' result sets are not established here to be identical. Retrieving the actual IEEE INFOCOM 2017 conference paper (10.1109/INFOCOM.2017.8057066) is needed to fill this key. The TNSE 2018 extension itself is a legitimate, separately citable source and is a strong candidate for a corrected or additional registry entry under its own key.
+
+---
+
 ## [WANG-SIGCOMM-11] An Untold Story of Middleboxes in Cellular Networks
 
 **Citation:** Zhaoguang Wang, Zhiyun Qian, Qiang Xu, Zhuoqing Morley Mao, Ming Zhang. "An Untold Story of Middleboxes in Cellular Networks." ACM SIGCOMM, 2011. Pages 374-385 (as paginated in text pp. 374-386). DOI 10.1145/2018436.2018479.
@@ -21022,6 +24360,71 @@ This paper is not the Walkie-Talkie paper. The retrieval registry's justificatio
 - "we do not know if there exist better attacks for these defenses"
 - "This level is not generally of practical interest except for serving as a bound"
 - "a clever clustering strategy for class-level information could achieve lower bandwidth overheads"
+
+---
+
+## [WEATHERSPOON-IPTPS-02] Erasure Coding Vs. Replication: A Quantitative Comparison
+
+**Citation:** Hakim Weatherspoon, John D. Kubiatowicz. "Erasure Coding vs. Replication: A Quantitative Comparison." International Workshop on Peer-to-Peer Systems (IPTPS), 2002. DOI 10.1007/3-540-45748-8_31.
+**Retrieved:** full text via https://link.springer.com/chapter/10.1007/3-540-45748-8_31
+**Source URL:** https://link.springer.com/chapter/10.1007/3-540-45748-8_31
+**Domain:** C
+
+Note on source text: the extracted text substitutes glyph codes (e.g. "/BD" through "/BL") for the digits 0–9 throughout the equations and worked examples, a font-encoding artifact of the PDF extraction. The mapping was recovered by cross-checking decoded values against values the prose states in plain English (for example, the decoded repair-epoch value matches the paper's own words "four months" at the same location) and is internally consistent across every worked example in the paper. All numeric parameters below are reported as decoded under this mapping.
+
+### What it does
+The paper compares two ways to keep a data block durable in a peer-to-peer storage system that periodically sweeps and repairs lost redundancy: whole-block replication, and (n,k) erasure coding, which splits a block into k fragments and recodes them into n ≥ k fragments such that any k of the n fragments reconstruct the block. It states a closed-form model for the storage, bandwidth, and disk-seek cost of each approach as a function of system size, repair-epoch length, and redundancy factor, and it derives an equation for the mean time to failure (MTTF) of a single block under periodic sweep-and-repair, given a per-disk lifetime distribution. It then uses the model to run three fixed-parameter comparisons between a replicated and an erasure-coded system: (1) hold system MTTF and repair epoch fixed and compare bandwidth, storage, and disk seeks; (2) hold storage overhead and repair epoch fixed and compare block MTTF; (3) hold block MTTF and storage overhead fixed and compare repair bandwidth.
+
+Mechanically: fragments (or replicas) of a block are placed on independently, uniformly randomly selected disks; a global sweep-and-repair process periodically reconstructs each block from any k surviving fragments and redistributes fresh fragments to replace lost ones, with the interval between sweeps of the same block defined as the repair epoch. Replication is modeled as the special case (k=1, n=r) of the same erasure-coding framework, so a system storing r whole replicas of a block is treated as an (1, r) code.
+
+### Measured results
+All results are analytical, from the paper's closed-form cost model, not from a simulation or a deployed system; no node count, topology, dataset, or runtime is reported anywhere in the paper.
+
+Availability example (Section 4): with 1,000,000 machines, 10% of them unavailable at any time, storing 2 whole replicas gives 2 nines of availability (0.99). A rate-1/2 code split into 32 fragments, at equal total storage and bandwidth to the 2-replica case, gives over 8 nines of availability (0.99999999).
+
+| Comparison (fixed variables) | Replicated system parameters | Erasure-coded system parameters | Result |
+|---|---|---|---|
+| Fix system MTTF (1000 years) and repair epoch (4 months), N = 2^24 users, block size 8 kB, disk block size 8 kB, u = 10^19 total blocks | r = 22 replicas | rate-1/2 code, n = 64 fragments | Replicated system uses 11× the bandwidth, 11× the storage, and 11× the disk seeks of the erasure-coded system for the same block count and repair epoch. |
+| Fix storage overhead (factor of 2) and repair epoch (4 months) | r = 2 replicas | rate-1/2 code, n = 64 fragments | Replicated block MTTF = 74 years. Erasure-coded block MTTF = 10^20 years, at the same storage overhead and repair epoch. |
+| Fix block MTTF (10^6 years), storage overhead (factor of 4), u = 1,000 blocks, system MTTF (1000 years) | r = 4 replicas, repair epoch = 1 month | rate-1/4 code, n = 64 fragments (k=16), repair epoch = 28 months | Replicated system uses 28× the repair bandwidth of the erasure-coded system at the same block MTTF and same storage overhead. |
+| Fix block MTTF (10^20 years), storage overhead (factor of 4), u = 10^19 blocks, system MTTF (1000 years) | r = 4 replicas, repair epoch → "almost instant and continuous" (not numerically bounded by the paper) | rate-1/4 code, n = 64 fragments (k=16), repair epoch = 12 months | Erasure coding sustains the required durability with a 12-month repair epoch; the paper states the equivalent replicated system would have to repair continuously, without giving it a finite repair-epoch value. |
+
+### Parameters
+| Parameter | Symbol | Value(s) used |
+|---|---|---|
+| Block size | q | 8 kB |
+| Disk block size | dbsz | 8 kB |
+| Number of users | N | 2^24 |
+| Repair epoch (both systems, example 1) | e | 4 months |
+| Target system MTTF | MTTF_system | 1000 years (examples 1, 3, 4); 10^20 years is used as a target block MTTF in example 4, not a system MTTF |
+| Replicas, example 1 | r | 22 |
+| Code, example 1 | rate, n | rate 32/64 = 1/2, n = 64 |
+| Disk lifetime distribution | — | drawn from Patterson & Hennessy, augmented by discarding any disk still in service after 5 years, along with its data |
+| Failure model | — | disks fail independently and identically distributed; failed disks are replaced immediately with new, blank disks |
+
+### Stated limitations
+The independent-and-identically-distributed failure assumption is stated by the authors as "the most troubling assumption" of the analysis; correlated failures across storage servers (natural disaster, denial-of-service, shared administrative boundary) are not modeled, and the paper proposes only two unevaluated mitigations: routing-overlay-based geographic diversity in fragment placement, or measurement-driven selection of maximally independent node sets. The sweep-and-repair process is described as simplistic because it reconstructs every block on a periodic schedule regardless of whether that specific block needs repair, consuming repair resources proportional to total data volume rather than to actual loss. Reads in an erasure-coded system contact more distinct servers than in a replicated system and read "logical" fragments smaller than a whole replica; the paper argues (without measurement) that this is mitigated by aggregating clients across many servers and by message/disk-block aggregation, and states this aggregation assumption is implicit in its bandwidth and disk-seek metrics rather than separately modeled. The paper explicitly separates durability from latency: it recommends erasure coding be used only for durability and that replica-based caching, constructed and destroyed as soft state, be used for read latency, and states this combination as an unevaluated design recommendation rather than a measured result.
+
+### Requirements it places on the rest of the system
+The model requires a placement mechanism that distributes each block's fragments or replicas onto independently and uniformly randomly selected disks; the durability numbers are conditioned on that independence, which the authors state they cannot themselves guarantee without an unevaluated geographic-diversity mechanism from an overlay network such as CAN, Chord, Pastry, or Tapestry. The scheme requires a data-integrity layer able to positively identify a corrupted fragment before reconstruction; the paper states that without such identification, reconstructing a block from a mix of corrupted and correct fragments enumerates the combinations of which k of n fragments are correct, and recommends a secure verification hash per fragment be added at the cost of extra bandwidth and storage the paper does not quantify. Erasure-coded reads require a client to contact k distinct servers concurrently, more distinct servers per read than the replicated case requires, so a deployment needs enough concurrently reachable, available servers per block to complete k-out-of-n reads without added latency; the paper does not measure this latency, only bandwidth and storage.
+
+### Contradicts
+None found.
+
+### References worth retrieving
+- foundational: Chen, Y., Edler, J., Goldberg, A., Gottlieb, A., Sobti, S., Yianilos, P. "Prototype implementation of archival intermemory." IEEE ICDE, 1996. (first system with erasure-code-based durability; the paper states it lacks a repair mechanism)
+- competing: Bolosky, W., Douceur, J., Ely, D., Theimer, M. "Feasibility of a serverless distributed file system deployed on an existing set of desktop PCs." Sigmetrics, 2000. (source of the per-workstation data-rate measurement used as a model input)
+- competing: Kubiatowicz, J., et al. "OceanStore: An architecture for global-scale persistent storage." ASPLOS, 2000. (the hybrid replication-for-caching plus coding-for-durability design the paper's Discussion section recommends without evaluating)
+- competing: Druschel, P., Rowstron, A. "Storage management and caching in PAST, a large-scale, persistent peer-to-peer storage utility." ACM SOSP, 2001. (a purely replication-based system cited as a comparison point)
+- foundational: Rhea, S., Wells, C., Eaton, P., Geels, D., Zhao, B., Weatherspoon, H., Kubiatowicz, J. "Maintenance free global storage in OceanStore." IEEE Internet Computing, 2001. (source of the durability-derivation method reused and verified in Section 5.2)
+- attack/critique: none identified in this bibliography; the paper is itself an analytical model with no adversarial evaluation.
+
+### Verbatim extracts
+- "erasure-resilient systems use an order of magnitude less bandwidth and storage"
+- "the most troubling assumption of the previous sections are that failures are independent"
+- "mechanisms for durability should be separated from mechanisms for latency reduction"
+- "the sweep and repair is simplistic because it assumes that all data...is reconstructed"
+- "a replicated system...would have to repair all blocks almost instantly and continuously"
 
 ---
 
@@ -21760,6 +25163,69 @@ The paper explicitly states that a specific popular claim about the Fediverse �
 
 ---
 
+## [XIA-IMC-22] Challenges in Decentralized Name Management: The Case of ENS
+**Citation:** Pengcheng Xia, Haoyu Wang, Zhou Yu, Xinyu Liu, Xiapu Luo, Guoai Xu, Gareth Tyson. "Challenges in Decentralized Name Management: The Case of ENS." ACM Internet Measurement Conference (IMC), 2022. DOI 10.1145/3517745.3561469.
+**Retrieved:** full text, but the file on disk is arXiv:2104.05185v1 (12 Apr 2021), titled "Ethereum Name Service: the Good, the Bad, and the Ugly," by six of the seven target authors (Pengcheng Xia, Haoyu Wang, Zhou Yu, Xinyu Liu, Xiapu Luo, Guoai Xu — Gareth Tyson absent). The dataset, research questions, methodology, and reported figures below are identical in kind to the published abstract's claims (a large-scale ENS event-log study reporting traditional-DNS-inherited issues plus ENS-specific smart-contract issues); this is the pre-publication version of the same study, not an unrelated paper. Numeric values below may differ from the camera-ready IMC 2022 text if the dataset window was extended before publication; treat the specific counts as sourced to the 2021-04-12 arXiv snapshot, cut off at Ethereum block 10,746,639 (2020-08-28 03:03:42 UTC).
+**Source URL:** https://arxiv.org/abs/2104.05185
+**Domain:** E
+
+### What it does
+Measures adoption, usage, and security of the Ethereum Name Service (ENS), a naming system built as Ethereum smart contracts that maps human-readable names to blockchain addresses and other records, so that a person can send funds to a name instead of a raw 40-hexadecimal-character address. ENS separates the naming function into three smart-contract roles: a registry (holds name-to-owner and name-to-resolver mappings, plus a per-name record cache time-to-live), a registrar (assigns names to owners under a registration rule — historically a Vickrey auction, later a fixed-fee permanent registrar), and a resolver (holds the name-to-record mapping, with eight defined record types: address, reverse-resolution name, content hash for IPFS/Swarm/Tor, key-value text, raw DNS wire-format record, ECDSA public key, contract ABI, and delegated authorization). ENS stores each name as a hash ("namehash," built by recursively hashing each label with keccak256) rather than as plaintext, so the paper's authors reconstruct plaintext names by matching candidate hashes against Dune Analytics' ENS name dictionary, a generated wordlist of 460,000-plus English words, and the Alexa top-100K domain list.
+
+### Measured results
+| Measurement | Value | Conditions |
+|---|---|---|
+| Dataset window | up to Ethereum block 10,746,639 | 2020-08-28 03:03:42 UTC cutoff |
+| Registered ENS names found | 465,827 | decoded from registry event logs |
+| Distinct Ethereum addresses that ever used ENS | 107,617 | same dataset |
+| Names restored to plaintext | 373,950 total, 323,255 of them .eth (86.6% of all .eth names) | via namehash-dictionary matching against Dune Analytics data, a 460K-word list, and Alexa top-100K |
+| Event logs collected | ~2 million registry logs, ~3.4 million registrar logs, ~200,000 resolver logs, plus over 3,000 decoded transactions for text-record values | from 14 manually labeled ENS core smart contracts plus 8 additional third-party resolvers |
+| Explicit brand-squatting names | 15,179 .eth names, held by 1,532 addresses | heuristic: one address holds 2+ known-brand names (matched against Alexa top-100K 2LDs) whose real DNS domains belong to different owners; 42.7% of these names still active at study time |
+| Typo-squatting names | 18,483 .eth names targeting 13,450 distinct Alexa domains | generated via dnstwist (12 variant methods: bitsquatting, omission, replacement, addition, vowel-swap, homoglyph, insertion, hyphenation, various, transposition, repetition) applied to Alexa top-100K, producing 755,908,096 candidate variants, then hash-matched against ENS; 52% of matched names still active |
+| Total unique squatting names (explicit + typo) | 33,662 names, ever owned by 6,548 addresses | union of the two prior heuristics |
+| Names with records among the 33,662 squatting names | 4,474 (3,775 still active); 85% of those set only a blockchain-address record | remaining records mostly point to sale listings (Opensea links, IPFS sale pages) |
+| "Guilt-by-association" expanded suspicious names | 279,193 additional .eth names | all further names held by addresses already flagged as squatters; over 40% of these addresses hold more than 10 such names, accounting for over 96% of the 279,193 total |
+| Top-10 squatter addresses' combined share | ~17% of all ENS names ever registered | same dataset |
+| Malicious dWeb/onion/URL records found | 19 malicious content-hash-linked sites (17 distinct second-level names): 7 gambling, 5 adult, 7 scam | out of 5,879 unique dWeb hashes, 34 onion hashes, 620 URLs found in records; URLs scored via VirusTotal (flagged malicious if ≥2 of ~70 engines agree), screenshots via Eyewitness, content classified via Google Cloud Vision/Natural-Language APIs; no malicious traditional-DNS websites found among the 620 URLs |
+| Scam blockchain addresses registered as ENS names | 3 | manual cross-check against scam-address sources; no comprehensive ground-truth dataset existed, so this is a lower bound |
+| Expired names with records still attached ("record persistence") | 16,017 expired .eth names (plus 3,116 subdomains) retain resolvable records after expiry | ENS does not clear a name's records on expiry; example: thisisme.eth, expired 2020-05-04, still had 706 subdomains with live Ethereum-address records observed after re-registration by the authors for protection |
+| Initial-auction (Vickrey) highest recorded bid | 201,709 ETH bid on ethfinex.eth, final auction price 0.01 ETH | Vickrey auction mechanics: highest bidder wins, pays the second-highest bid |
+| Most valuable permanent-registrar name | darkmarket.eth, over 20,000 ETH paid by winner | separate from Vickrey auction period |
+
+### Parameters
+- Malicious-URL threshold: a URL is marked malicious if flagged by 2 or more of VirusTotal's ~70 anti-virus engines (following prior studies' methodology, cited but not re-derived here).
+- Squatting heuristic threshold: one address controlling 2 or more known-brand-matched 2LDs whose real DNS owners differ triggers explicit-squatting classification.
+- Alexa-name filtering: names of Alexa top-100K entries and typo variants shorter than 4 characters are excluded (119,764 Alexa names and 15,701 typo-squatting variants removed) to reduce false positives from short, generic strings.
+- dnstwist variant generation: 12 method classes applied to the Alexa top-100K domain list, no stated cap on variants per domain (google.com alone produced 1,982 variants).
+
+### Stated limitations
+The authors restored only 86.6% of .eth names to plaintext, which they say limits detection of combosquatting variants (names that embed a brand plus extra tokens) among the unrestored 13.4%, though they state this restoration gap does not affect the explicit- and typo-squatting counts, which are computed on hash values directly rather than on restored plaintext. Distributed-denial-of-service and other traditional DNS attack classes are stated as not studied, due to time and cost, and left as future work. The malicious-dWeb count (19) is stated as a lower bound, because IPFS and Swarm content is not required to be persistently pinned online, so some content-hash targets could not be reached during the analysis window. The scam-address count (3) is stated as limited by the absence of any comprehensive ground-truth list of scam blockchain addresses at the time of the study.
+
+### Requirements it places on the rest of the system
+A ledger-based naming system that stores names as hashes (to bound identifier length and block enumeration during auction periods) requires an external plaintext-name dictionary — built from a wordlist, a domain list, or a data dump the naming project itself publishes — for any downstream service, moderation tool, or measurement pipeline to resolve a hash back to a human-readable string; absent that dictionary, a name is opaque even to the chain that stores it. A design that never clears a name's resolver records on expiry requires whichever wallet or client resolves that name to independently check the name's registration status (active vs. expired) before trusting any resolved address, because the mapping itself gives no signal that ownership has lapsed. A design permitting unrestricted third-party resolver deployment (the paper finds and decodes 8 additional resolvers beyond ENS's own two) requires any measurement or moderation system to enumerate resolver contracts dynamically rather than assume a fixed, closed set.
+
+### Contradicts
+None found. No other entry in this batch measures ENS or any blockchain naming system.
+
+### References worth retrieving
+- Foundational: Hari, Lakshman, "The Internet Blockchain: A Distributed, Tamper-Resistant Transaction Framework for the Internet," ACM HotNets 2016 — early proposal for blockchain-based DNS replacement.
+- Foundational: Kalodner, Carlsten, Ellenbogen, Bonneau, Narayanan, "An Empirical Study of Namecoin and Lessons for Decentralized Namespace Design," WEIS 2015 — first empirical measurement of a blockchain naming system (Namecoin), which the paper cites as the precedent for its own methodology.
+- Competing: Guan, Garba, Li, Chen, Kaaniche, "AuthLedger: A Novel Blockchain-Based Domain Name Authentication Scheme," ICISSP 2019 — alternative design reducing certificate-authority trust rather than replacing DNS resolution outright.
+- Competing: He, Su, Gao, Yue, "TD-Root: A Trustworthy Decentralized DNS Root Management Architecture Based on Permissioned Blockchain," Future Generation Computer Systems 102, 2020 — permissioned-blockchain alternative to ENS's fully public-chain design.
+- Attack/critique: Szurdi, Kocso, Cseh, Spring, Felegyhazi, Kanich, "The Long 'Taile' of Typosquatting Domain Names," USENIX Security 2014 — the typo-squatting methodology (dnstwist-style variant generation) this paper's ENS analysis is adapted from.
+- Attack/critique: Kintis, Miramirkhani, Lever, Chen, Romero-Gómez, Pitropakis, Nikiforakis, Antonakakis, "Hiding in Plain Sight: A Longitudinal Study of Combosquatting Abuse," ACM CCS 2017 — the combosquatting class this paper states its restoration gap may miss.
+- Competing: Patsakis, Casino, Lykousas, Katos, "Unravelling Ariadne's Thread: Exploring the Threats of Decentralised DNS," IEEE Access 8, 2020 — survey of blockchain-DNS threats (malware, registrar mechanisms, phishing) covering multiple systems, a broader-scope comparison point to this paper's ENS-only measurement.
+
+### Verbatim extracts
+- "the same names with names of Alexa list in total" — squatting-match criterion (paraphrased context above).
+- "465, 827 registered names and 107, 617 Ethereum addresses that ever used ENS."
+- "16, 017 expired .eth names have records within them or their subdomains."
+- "we get 19 (17 second-level ENS names) malicious dWeb URLs."
+- "these top-10 addresses have ever held around 17% of all names."
+- "DNS and the aforementioned solutions still cannot achieve human-readability, security and decentralization simultaneously."
+
+---
+
 ## [XIE-ARXIV-26] Revisiting and Expanding the IPv6 Network Periphery: Global-Scale Measurement and Security Analysis
 
 **Citation:** Zixuan Xie, Zitao Yang, Shurui Fang, Zhaoyang Li, Wenxing Xie, Nannan Fu, Liangyu Dong, Xiang Li. "Revisiting and Expanding the IPv6 Network Periphery: Global-Scale Measurement and Security Analysis." arXiv preprint (CoRR); under review, IEEE Transactions on Information Forensics and Security, 2026. DOI 10.48550/ARXIV.2604.19487.
@@ -21816,6 +25282,72 @@ None found within this corpus as a direct measurement disagreement. The paper's 
 "this result should not be interpreted as evidence that LLM exposure is negligible"
 "99% of Internet paths involve fewer than 32 hops"
 "banner-to-CVE matching may overestimate real exploitability"
+
+---
+
+## [XIONG-TKDE-04] PeerTrust: Supporting Reputation-Based Trust for Peer-to-Peer Electronic Communities
+**Citation:** Li Xiong, Ling Liu. "PeerTrust: Supporting Reputation-Based Trust for Peer-to-Peer Electronic Communities." IEEE Transactions on Knowledge and Data Engineering, 2004. DOI 10.1109/TKDE.2004.1318566.
+**Retrieved:** full text
+**Source URL:** https://www.mathcs.emory.edu/~lxiong/pubs/peertrust-tkde04.pdf
+**Domain:** F
+
+### What it does
+Computes a numeric trust score for a peer in a peer-to-peer electronic-commerce community, so that another peer can decide whether to transact with it, from five factors rather than a raw sum of ratings: the feedback a peer receives, the total number of transactions it performed (the scope over which feedback is averaged), the credibility of each feedback source, a transaction context factor (weights transactions by size or type), and a community context factor (adds a community-wide adjustment such as a reward for submitting feedback). The general metric is T(u) = alpha times the sum over peer u's I(u) transactions of [S(u,i) times Cr(p(u,i)) times TF(u,i)], plus beta times CF(u), where S(u,i) is the normalized satisfaction (0 to 1) peer u received in its i-th transaction, Cr(p(u,i)) is the credibility of the peer who filed that feedback, TF is the transaction context factor, CF is the community context factor, and alpha and beta are normalized weights. The paper defines a basic form with TF fixed at 1, alpha at 1, and beta at 0, isolating feedback and source credibility as the two parameters it argues are necessary in any P2P community.
+
+Two credibility measures are defined for weighting a feedback source. Trust Value Metric (TVM) uses the feedback source's own recursively computed trust value as its credibility weight, so peer w must compute other peers' trust values before it can compute peer u's. Personalized Similarity Metric (PSM) instead has peer w compute, for each feedback source v, the root-mean-square difference between w's own ratings and v's ratings over the set of peers both w and v have transacted with, and uses that similarity as v's credibility weight specific to w — a peer who habitually disagrees with w's judgments is downweighted by w even without w knowing v is malicious. Each metric has two implementation strategies: dynamic trust computation (DTC), which retrieves fresh feedback data and recomputes on every trust query, and approximate trust computation (ATC), which caches previously computed trust or credibility values and updates them incrementally. The trust data itself (each transaction's feedback record, keyed by the rated peer's identifier) is stored in a distributed hash table — the paper's prototype uses P-Grid — with a peer's feedback replicated across multiple designated peers reachable in O(log N) hops; a peer computing another peer's trust value issues DHT lookups to retrieve the distributed feedback records rather than querying a central server. Because a DHT storage peer can return false or random data, the paper proposes either majority voting across replicas or encryption of trust data along the routing path as a countermeasure, without measuring either.
+
+### Measured results
+All results are from a Mathematica 4.0 discrete-event simulator, community size N = 128 unless stated as the varied parameter, malicious-peer fraction k = 25% unless varied, malicious-action rate mrate = 100% unless varied, results averaged over 5 simulation runs, feedback is binary (0 or 1 per transaction).
+
+| Result | Conditions |
+|---|---|
+| Trust-computation root-mean-square (RMS) error vs. percentage of malicious peers k (0 to ~70%), non-collusive setting: conventional (unweighted average) approach degrades roughly linearly as k rises; PeerTrust TVM (both DTC and ATC) stays low for k < 50% but reaches 100% error (complete misclassification of good vs. malicious peers) once k exceeds 50%; PeerTrust PSM (both DTC and ATC) stays low across the tested range | mrate fixed at 100%, N = 128, 6,400 total transactions (average 100 per peer) before a good peer evaluates all others |
+| Same RMS-error-vs.-k measurement, collusive setting (malicious peers coordinate fake transactions and reciprocal good ratings): conventional and TVM approaches become highly sensitive to collusion even at small k; PSM stays effective, attributed to low feedback similarity between a peer inside a collusive group and one outside it | same setup, malicious peers additionally form a collusive group |
+| Trust-computation RMS error vs. malicious rate (mrate, the fraction of a malicious peer's transactions it actually cheats on): conventional approach's error rises with mrate; TVM and PSM show a slight performance drop as mrate falls below 100% (occasional cooperation by malicious peers slightly confuses the metric), more pronounced in the collusive setting | k fixed at 25% |
+| Transaction success rate (fraction of transactions where both peers cooperate) vs. number of transactions (0 to 6,000), non-collusive setting: all trust-based schemes (TVM, PSM, conventional) raise success rate above a no-trust baseline; conventional approach reaches success rate near 100% despite its nonzero RMS trust-computation error, because relative ranking of peers still separates good from bad even when absolute trust values are inaccurate | peer selection scheme: initiator picks the peer with highest computed trust value among 5% of peers who respond to a transaction request (res = 5%) |
+| Same success-rate measurement, collusive setting: conventional and TVM approaches reach a transaction success rate of 0 (system rendered useless by collusion); PSM approaches retain a positive success rate | same setup |
+| Trust-computation cost, measured in DHT network hops per trust computation, vs. number of peers (log-log plot): TVM/ATC and PSM/ATC scale as O(log N) because each computation issues DHT lookups to retrieve replicated feedback and uses cached values for credibility; TVM/DTC requires O(N) hops per computation and does not scale; PSM/DTC requires higher cost than PSM/ATC but still scales, because peer w must additionally look up feedback from every peer who has interacted with u (up to ~100, the recent-transaction-window size I) to compute similarity-based credibility dynamically | I (transactions per peer in recent window) = 100, r (DHT replication degree) = 4, P-Grid used as the DHT |
+| Cache-bootstrapping cost vs. number of trust computations performed (0 to 30): TVM/ATC has no extra bootstrapping cost, because it starts from a default trust value and fills its cache incrementally as it computes other peers' trust values; PSM/ATC incurs extra cost during the first several computations while the credibility cache fills, converging to TVM/ATC's cost once filled | ncache = N - 1 = 127 cache units |
+
+### Parameters
+| Parameter | Symbol | Default value used | Range tested |
+|---|---|---|---|
+| Community size | N | 128 peers | varied in the scalability experiment (log-log plot), specific tested values not stated numerically beyond the plot |
+| Percentage of malicious peers | k | 25% | 0 to ~70% |
+| Malicious-action rate | mrate | 100% | 0 to 100% |
+| Peer response rate to a transaction request | res | 5% | fixed |
+| Transactions per peer in recent time window | I | 100 | fixed |
+| Transactions per peer in adaptive (smaller) time window | I_a | 20 | fixed |
+| Cache units per peer in ATC implementations | ncache | N - 1 = 127 | fixed |
+| DHT replication degree | r | 4 | fixed |
+| Experiment repetitions averaged | nExp | 5 | fixed |
+| Trust metric weight for feedback-based evaluation | alpha | 1 (basic metric) | not varied in experiments |
+| Trust metric weight for community context | beta | 0 (basic metric) | not varied in experiments |
+
+### Stated limitations
+The authors state PeerTrust does not fully prevent an attack from a peer that has been compromised after establishing a good history, calling this a risk requiring deeper investigation. They state their adaptive time window reduces but cannot fully prevent a one-time attack by a peer that has behaved reliably up to that point. They state PeerTrust does not address identity whitewashing (a peer discarding a bad-history identity and rejoining as new), citing Friedman's two general countermeasure classes (make identity change costly, or make exit-and-reentry unprofitable to the peer) as future work rather than a mechanism the paper implements. They state the community context factor (beta term) is a mechanism sketch — a reward for submitting feedback is offered as one example — without an experimental evaluation of it. TVM is stated to fail above k = 50% malicious peers because a majority of dishonest raters can recursively certify each other's low trustworthiness as high, and the paper does not propose a fix within TVM itself, only the alternative PSM metric. The paper's own experiments show TVM/DTC does not scale (O(N) hops), which the authors report as a cost tradeoff rather than a limitation to be resolved.
+
+### Requirements it places on the rest of the system
+The feedback-and-credibility trust computation requires an underlying distributed hash table (DHT) that maps a peer's identifier to designated storage peers in O(log N) hops; the paper's own prototype used P-Grid, but states Chord, Pastry, and CAN could substitute. The DHT must support a configurable replication degree (tested at r = 4) so that majority voting across replicas can detect a storage peer returning false or random feedback data — the paper states this as the primary countermeasure to DHT-storage-peer misbehavior, without measuring its detection rate. Feedback submission requires a per-transaction protocol in which both participating peers file a rating after each transaction; the trust score is undefined for a peer with zero recorded transactions, since Cr(p(u,i)) and S(u,i) require at least one transaction record to average over. The PSM credibility measure requires that peer w and peer v (the feedback source being weighted) share a nonempty set of peers each has independently transacted with (IS(v,w) = IS(v) intersect IS(w)); if two peers' transaction histories never overlap, PSM has no basis to compute a similarity-based credibility for one from the other's ratings. Secure trust data transmission is stated to require peers to hold public/private key pairs so that content is signed and man-in-the-middle tampering during DHT routing is detectable, but the paper does not specify a key-issuance or identity-binding mechanism — it assumes public keys already exist per peer.
+
+### Contradicts
+None found. No other entry in this batch measures PeerTrust or replicates its comparison against EigenTrust with independent numbers — the paper's own text (Related Work) states EigenTrust's pre-trusted-peer assumption is a shortcoming without citing a quantitative comparison of the two systems on the same simulated community.
+
+### References worth retrieving
+- Foundational: Aberer, Despotovic, "Managing Trust in a Peer-to-Peer Information System," CIKM 2001 — an earlier P2P complaint-based reputation system the paper states is highly sensitive to skewed community distribution and peer misbehavior.
+- Competing: Kamvar, Schlosser, Garcia-Molina, "The EigenTrust Algorithm for Reputation Management in P2P Networks," WWW 2003 — transitive-trust eigenvector reputation algorithm; the paper states it as needing pre-trusted peers and heavy coordination/synchronization, a claim to verify against EigenTrust's own text rather than accept as this paper's characterization.
+- Competing: Cornelli, Damiani, di Vimercati, Paraboschi, Samarati, "Choosing Reputable Servents in a P2P Network" (P2PRep), WWW 2002 — reputation-sharing protocol on top of Gnutella; the paper states P2PRep has no formalized trust metric and no experimental validation.
+- Competing: Josang, Ismail, "The Beta Reputation System," 15th Bled Electronic Commerce Conference, 2002 — models reputation as a posterior probability via the beta distribution; the paper cites its finding that limited-duration feedback outperforms infinite-duration feedback.
+- Attack/critique: Friedman, Resnick, "The Social Cost of Cheap Pseudonyms," Journal of Economics & Management Strategy, 2001 — analyzes identity whitewashing, the vulnerability the paper explicitly leaves unresolved.
+- Foundational: Stoica, Morris, Karger, Kaashoek, Balakrishnan, "Chord: A Scalable Peer-to-Peer Lookup Service for Internet Applications," ACM SIGCOMM 2001 — one of the DHT substrates the paper's data-location layer is stated to be compatible with.
+- Foundational: Aberer, "P-Grid: A Self-Organizing Access Structure for P2P Information Systems," CoopIS 2001 — the specific DHT used in the paper's prototype implementation.
+
+### Verbatim extracts
+- "the error becomes 100% when k is greater than 50%, which indicates they completely make wrong evaluations."
+- "PeerTrust TVM/DTC requires O(N) network hops for each computation."
+- "peers can easily discard their old identity and adopt a new one through reentry."
+- "the pre-trusted peers may not be available in all cases."
+- "we use the number of network hops for each trust computation as the metric."
 
 ---
 
@@ -22361,6 +25893,77 @@ with a number reported here.
 
 ---
 
+## [YU-SIGCOMM-06] SybilGuard: Defending Against Sybil Attacks via Social Networks
+**Citation:** Haifeng Yu, Michael Kaminsky, Phillip B. Gibbons, Abraham Flaxman. "SybilGuard: Defending Against Sybil Attacks via Social Networks." ACM SIGCOMM, 2006. DOI 10.1145/1159913.1159945.
+**Retrieved:** full text
+**Source URL:** https://dl.acm.org/doi/pdf/10.1145/1159913.1159945
+**Domain:** F
+
+### What it does
+Bounds, without a central identity authority, how many fake identities (sybil nodes) a malicious user can get an honest node to accept, so that the fraction of accepted identities under adversary control stays small even when the adversary creates unlimited sybil identities. The mechanism runs over a social network in which an undirected edge between two nodes indicates a human-established, strong trust relationship (SybilGuard's example: colleagues or relatives who trust each other not to launch a sybil attack). A malicious user can create unlimited sybil identities but can only obtain a bounded number of edges into the honest region ("attack edges," denoted g), because each such edge requires convincing one distinct honest human. Each node computes a random route: a walk of fixed length w in which, unlike a standard random walk that samples a fresh random edge at each hop, each node applies a pre-computed random permutation mapping each incoming edge to a unique outgoing edge. This gives two properties: convergence (two random routes entering the same node along the same edge always exit along the same edge, so many routes crossing one node collapse onto few paths) and back-traceability (the outgoing edge determines the incoming edge, so a route segment can be traced backward). An honest node acting as verifier accepts another node acting as suspect if the verifier's random route and the suspect's random route intersect at a common node — because random routes that both start in a fast-mixing honest region converge to a small number of distinct paths through it, two honest nodes' routes are highly likely to intersect, while a route that must cross one of the g attack edges to reach the sybil region is unlikely to do so within w hops. Each node performs random routes along all d of its edges (not just one), and the redundancy technique requires a majority of a verifier's d routes to accept a suspect before final acceptance, limiting the fraction of a node's routes an adversary can subvert even after crossing an attack edge. Registry tables propagate each node's public key along its random routes so a verifier can look up whether a claimed intersection is genuine; a witness table lets a suspect prove which nodes lie on its own random routes.
+
+Route length w must satisfy two opposing constraints: large enough that two independent honest routes intersect with high probability, and small enough that a route entering the sybil region cannot fan out to too many sybil identities before terminating. The paper proves (Theorem 1) that for a connected, non-bipartite social network, the probability that a length-w random walk from a uniformly random honest node traverses any of the g attack edges is upper-bounded by gw/n (n = total node count); setting w = Theta(sqrt(n) * log(n)) and requiring g = o(sqrt(n)/log(n)) makes this probability o(1). The sqrt(n log n) route length is justified by fast-mixing theory: a fast-mixing graph (mixing time T = Theta(log n)) reaches its stationary distribution after Theta(T) steps, so a length-w walk contains Theta(sqrt(n)) roughly independent samples from that distribution, and by a birthday-paradox argument two such walks intersect with probability 1 - o(1). Because a node cannot know n directly (sybil nodes would inflate any naive count), each node instead estimates w locally: it performs a short (paper uses 3-hop and 10-hop variants) standard random walk to a node B (assumed, with high probability, honest because the walk is short), then both nodes perform random routes to find the intersection distance as one sample; the node takes the median m of multiple such samples and sets w = 2.1 * m, where 2.1 is derived analytically from birthday-paradox collision-probability requirements to give a 95% collision probability regardless of n.
+
+### Measured results
+All results use Kleinberg's synthetic small-world social-network model (no real social-network dataset was used, because the only public ones available at publication were too small for the paper's probabilistic claims). Three instantiated graphs: 1,000,000 nodes at average degree 24 (the primary graph, used for all results unless stated otherwise), 10,000 nodes at average degree 24, and 100 nodes at average degree 12.
+
+| Result | Value | Conditions |
+|---|---|---|
+| Fraction of random routes that do not form loops within their first 2,500 hops | 99.3% | million-node graph; with the redundancy technique (routes along all d edges), every node has at least one non-loop route within 2,500 hops |
+| Same, 10,000-node graph | 99.7% within first 200 hops | 200 hops exceeds the needed route length for this graph |
+| Same, 100-node graph | 90% within first 50 hops | 50 hops exceeds the needed route length for this graph |
+| Route length w yielding 99.96% probability of at least 10 distinct route intersections between verifier and suspect (no attackers) | w = 300 | million-node graph, redundancy used (routes along all directions, majority-vote acceptance) |
+| Same threshold, 10,000-node graph | w = 30 gives 99.29% | — |
+| Same threshold, 100-node graph | w = 15 gives 99.97% | — |
+| Accurate w needed for 95% of node pairs to intersect (empirically measured, uniformly random second endpoint) | w = 1,906 | million-node graph |
+| Estimated w via the local sampling procedure, deviation from the accurate value | within 1,906 +/- 300 after 30 samples; within 1,906 +/- 150 after 100 samples | 3-hop random walk used to pick the sampling node B |
+| Accurate w, 10,000-node graph | 197, estimate within 197 +/- 30 after 35 samples | — |
+| Accurate w, 100-node graph | 24, estimate within 24 +/- 7 after 40 samples | — |
+| Probability that a majority of an honest node's routes stay entirely within the honest region | almost 100% for g up to 2,000 attack edges, drops to 99.8% at g = 2,500 | million-node graph, w = 1,906, random placement of attack edges (uniformly random sybil-attacker nodes accumulating attack edges); "cluster" placement (breadth-first from a seed) gave slightly better, not materially different, results |
+| Same measurement at g = 2,500 (roughly 100 sybil-attacker nodes, average 25 attack edges each) | 0.2% of honest nodes unprotected | million-node graph |
+| Same measurement, 10,000-node graph | g = 204 leaves 0.4% of nodes unprotected | — |
+| Same measurement, 100-node graph | g = 11 leaves 5.1% of nodes unprotected | — |
+| Probability an honest verifier accepts an honest suspect, worst case (routes are "pruned" — treated as unusable once they cross into the sybil region), with redundancy and majority voting | 99.8% at g = 2,500 attack edges | million-node graph, w = 1,906; without redundancy (single route, single intersection sought), the result is described as much worse |
+| Same measurement, 10,000-node graph at g = 204 | 99.6% | — |
+| Same measurement, 100-node graph at g = 11 | 87.7% | this is a per-verifier acceptance probability, not the fraction of nodes globally rejected — each honest node is accepted, on average, by 87.7% of the honest nodes acting as verifiers |
+| Fraction of w-estimation samples corrupted by sybil influence (route or short walk entering the sybil region) | rises roughly linearly with g, stays below 20% even at g = 2,500 | million-node graph; below 20% for g <= 204 (10,000-node graph) and g <= 11 (100-node graph) |
+| Number of registry-table entries a single attack edge can pollute system-wide | approximately w^2/2 | derived analytically, not simulated; with g attack edges, total polluted entries gw^2/2 remains less than half of the n*d*w total table entries even as gw approaches n |
+
+### Parameters
+- Route length w: derived per topology, not fixed a priori — theoretical form Theta(sqrt(n) * log(n)); measured accurate values 1,906 (n = 1,000,000), 197 (n = 10,000), 24 (n = 100).
+- Number of random routes per node, d: equal to the node's own degree in the social network (average 24 for the million- and 10,000-node graphs, average 12 for the 100-node graph) — SybilGuard performs one route per edge.
+- Acceptance threshold for intersections: at least 10 distinct intersecting routes required for acceptance in the "with redundancy" measurements; majority voting requires more than d/2 of a verifier's d routes to individually accept before the verifier accepts.
+- w-estimation multiplier: w = 2.1 * median(samples), the constant 2.1 derived from birthday-paradox analysis to guarantee a 95% collision probability regardless of n.
+- Sampling walk length for local w estimation: tested at 3 hops and 10 hops; results are reported as similar between the two.
+- Attack-edge range tested: g from 0 to 2,500 (million-node graph), 0 to 204 (10,000-node graph), 0 to 11 (100-node graph) — chosen so that roughly 100 sybil-attacker nodes produce 2,500 attack edges on the million-node graph, i.e., an average of 25 successfully-deceived honest humans per attacker.
+
+### Stated limitations
+The paper states its evaluation used a synthetic social-network model (Kleinberg's small-world generalization of Watts-Strogatz) rather than a real social-network dataset, because the publicly available real datasets at the time were too small to evaluate the paper's probabilistic guarantees; the authors state they were, at time of publication, still working to obtain real social-network data to validate the results. The mechanism assumes the honest region of the social network is fast-mixing (mixing time T = Theta(log n)); the paper does not measure whether real social networks satisfy this assumption, citing only that many randomly-grown topologies including small-world networks are known to be fast-mixing in prior theoretical work. Theorem 1's bound (gw/n) is stated as an average-case guarantee across all honest nodes; nodes topologically closer to attack edges have a higher probability of an intersecting route entering the sybil region, though the paper's simulations show the redundancy technique keeps this effect small in practice. The paper explicitly states it does not attempt to solve public-key distribution or identity binding to a physical human — it assumes an out-of-band mechanism already binds each social-network node to a public key. The protocol assumes the adversary has full knowledge of the social network topology (a conservative assumption the authors state they deliberately grant the adversary), but is limited to g attack edges regardless of that knowledge. SybilGuard is stated to only bound the number and size of sybil groups accepted, and to additionally partition accepted nodes into equivalence groups so an application can prevent, for example, two nodes in the same group from both holding a replica of the same file — but the paper states this equivalence-group refinement is optional and its resource-waste analysis is deferred to prior work (Bazzi and Konjevod) rather than measured here.
+
+### Requirements it places on the rest of the system
+The mechanism requires an out-of-band process that establishes one edge per genuine, strong-trust human relationship and binds each edge endpoint to a public key; SybilGuard itself performs no identity verification and states explicitly it does not solve public-key distribution. It requires the social graph's honest region to be fast-mixing (mixing time Theta(log n)) — a topology violating this assumption invalidates the sqrt(n log n) route-length derivation and the birthday-paradox intersection argument, since both depend on a length-w walk drawing near-independent stationary-distribution samples. It requires each node to know (or locally estimate) n, the total honest population size, to size w correctly; the paper's own local-estimation procedure is itself dependent on the short calibration walk landing on an honest node with high probability, which in turn depends on the honest region being large relative to the sybil region reachable within a short walk. Any application consuming SybilGuard's accept/reject decision must tolerate a non-zero, topology-dependent false-rejection rate against honest nodes (measured down to 87.7% mutual-acceptance probability on the 100-node graph) and must not assume acceptance decisions are symmetric or globally consistent across different verifiers, since two verifiers can partition an identical suspect into different equivalence groups.
+
+### Contradicts
+No direct measurement conflict. ZHANG-TDSC-23 (in this corpus) lists SybilGuard among the "mainstream" graph-based sybil-defense methodologies whose formal guarantee requires the number of attack edges an adversary obtains to stay small on average (SybilGuard's own Theorem 1 requires g = o(sqrt(n)/log n) for its o(1) intrusion-probability bound to hold), and cites independent measurements — sybil friend requests accepted at 26% on RenRen, up to 80% for Facebook socialbots — as evidence that real adversaries obtain far more attack edges than this bound assumes. This does not contradict any number SybilGuard itself measured (SybilGuard's own experiments only vary g up to 2,500 on a million-node graph, a regime consistent with its own assumption), but it does bear on whether SybilGuard's guarantee holds against real-world attackers rather than the synthetic attack-edge counts SybilGuard tested.
+
+### References worth retrieving
+- Foundational: Douceur, "The Sybil Attack," IPTPS 2002 — the original proof that sybil attacks cannot be prevented without a trusted authority or resource-asymmetry assumption; the paper this one builds its motivation on.
+- Foundational: Kleinberg, "The Small-World Phenomenon: An Algorithmic Perspective," STOC 2000 — the synthetic social-network generative model used for all of SybilGuard's simulation graphs.
+- Attack/critique: Danezis, Lesniewski-Laas, Kaashoek, Anderson, "Sybil-Resistant DHT Routing," ESORICS 2005 — an alternative social-graph-based sybil-resistance mechanism specific to DHT routing, a direct competing design at the same venue-era.
+- Competing: Cheng, Friedman, "Sybilproof Reputation Mechanisms," ACM SIGCOMM Workshop on Economics of Peer-to-Peer Systems, 2005 — reputation-mechanism approach to sybil resistance rather than a graph-topology approach.
+- Foundational: Bazzi, Konjevod, "On the Establishment of Distinct Identities in Overlay Networks," ACM PODC 2005 — cited as the source of the equivalence-group resource-waste argument SybilGuard relies on without re-deriving.
+- Attack/critique: Newsome, Shi, Song, Perrig, "The Sybil Attack in Sensor Networks: Analysis and Defenses," IPSN 2004 — an independent sybil-attack analysis in a different deployment setting (sensor networks), useful as a cross-domain comparison of attack-defense tradeoffs.
+
+### Verbatim extracts
+- "malicious users can create many identities but few trust relationships."
+- "the probability that a length-w random walk...will ever traverse any of the g attack edges is upper bounded by gw/n."
+- "using w = 2.1m, where the constant 2.1 is derived from our analysis of Birthday Paradox distributions."
+- "SybilGuard ensured that...the number and size of sybil groups are properly bounded for 99.8% of the honest users."
+- "we do not intend or need to solve the public key" (distribution problem — sentence continues past the 15-word quote limit).
+- "Currently we are working on obtaining real social network data to further validate SybilGuard."
+
+---
+
 ## [YU-SP-08] SybilLimit: A Near-Optimal Social Network Defense against Sybil Attacks
 **Citation:** Haifeng Yu, Phillip B. Gibbons, Michael Kaminsky, Feng Xiao. "SybilLimit: A Near-Optimal Social Network Defense against Sybil Attacks." IEEE Symposium on Security and Privacy, 2008. DOI 10.1109/SP.2008.13.
 **Retrieved:** full text via http://www.comp.nus.edu.sg/~yuhf/sybillimit-tr.pdf
@@ -22735,6 +26338,159 @@ None found. This paper is commonly read as evidence that decentralized moderatio
 
 ---
 
+## [ZHANG-TDSC-23] Enhancing Sybil Detection via Social-Activity Networks: A Random Walk Approach
+**Citation:** Xiaoying Zhang, Hong Xie, Pei Yi, John C. S. Lui. "Enhancing Sybil Detection via Social-Activity Networks: A Random Walk Approach." IEEE Transactions on Dependable and Secure Computing, vol. 20, no. 2, 2023. DOI 10.1109/TDSC.2022.3151701.
+**Retrieved:** full text
+**Source URL:** https://ieeexplore.ieee.org/document/9714899
+**Domain:** F
+
+### What it does
+Detects fake accounts (sybils) in an online social network by ranking users on a computed trust score, so that an operator can flag low-ranked users for review, using both the friendship graph and each user's activity history rather than the friendship graph alone. The paper defines a social-and-activity network (SAN): a two-layer hyper-graph combining an undirected friendship graph G = (V, E) (V is the user set, E the set of friendship edges) with an activity layer recording each user's individual activities (for example, a tweet) and directed mention edges from an activity to the users it addresses (for example, a retweet or an @-mention). The paper's stated motivation is that prior graph-based sybil detectors (SybilRank and its relatives) all assume sybils can establish only a small number of friendship edges into the honest region — an assumption the paper cites empirical measurements (Yang et al. on RenRen, Sridharan et al. on Twitter, Boshmaf et al. on Facebook socialbots) as contradicting, since real sybils obtain many accepted friend requests. The paper's sybil attack model extends the classic friendship-edge attack with two activity-based attacks: an incoming interaction attack (honest users interacting with sybils) and an outgoing interaction attack (sybils interacting with honest users to appear active).
+
+Sybil_SAN detects sybils by coupling three random walks: one on the friendship graph, one on a user-to-activity bipartite graph (a walker at a user node moves to an activity that user created), and one on an activity-to-user "following" graph (a walker at an activity node moves to a user that activity mentions). A per-user mixing parameter lambda_i (0 to 1) determines, for each user, what fraction of a walker's next step is drawn from the friendship graph versus the activity-following path; the paper sets lambda_i lower (favoring activity-based propagation) for users with more friends, reasoning that highly active users' friendships are less informative than their selective interactions. Trust score propagation starts from a seed set S of nodes pre-labeled honest (or, in an extension, also including known sybils) and iterates a coupled transition matrix P_cr until the score vector converges to a stationary distribution; the paper proves this stationary distribution is the unique solution of a linear system and gives an iterative algorithm (repeated matrix-vector multiplication until successive iterates differ by at most a threshold epsilon) rather than solving the linear system directly, because direct solution is computationally expensive. Each user's raw trust score is normalized by the number of distinct sources feeding it (its friendship-edge count plus its incoming-interaction-path count), to avoid mistaking a low-degree honest user for a sybil or a heavily-targeted sybil for honest. Two random-walk depth parameters, n (number of walks on the activity-following graph) and k (walks on the user-activity graph, where the walk length is 2k+1), are tunable; the paper reports setting n=1, k=0 as the accuracy-maximizing default, because accuracy decreases as either increases (attributed to neighbors carrying more trustworthy signal than users several hops away).
+
+The paper identifies and then patches two structural limitations of the base Sybil_SAN algorithm through analysis of a synthetic example graph: a user who creates no activity traps the user-activity walker at that node indefinitely, and trust does not propagate from a sybil's activities back to the honest region because there is no path from sybil-authored activity to honest-authored activity in the following-graph direction. Two extensions are defined to fix these: Sybil_SAN_VUA adds virtual edges from any activity-free user to the activities created by trusted seeds, preventing the trap; Sybil_SAN_VAU adds virtual edges from any activity that mentions no user to the trusted seed users, restoring the missing propagation path.
+
+### Measured results
+Two evaluation settings are used: synthetic data (real Twitter friendship/activity data as the honest region, a synthesized disconnected-cluster sybil region attached to it) and a real Twitter dataset built by crawling around known sybil accounts. Accuracy is measured as Area Under the ROC Curve (AUC): the probability a randomly chosen honest user ranks above a randomly chosen sybil in the computed trust ordering; AUC = 1.0 is perfect, AUC = 0.5 is equivalent to a random ranking.
+
+**Synthetic-data setup.** Honest region: a public Twitter dataset with 543,785 nodes, 28,397,413 reciprocal following edges, and 214,267,090 total interactions (retweets and mentions) among users. Sybil region: M identical clusters generated by the Preferential Attachment model, N_s total sybil nodes, N_A friendship attack edges distributed across clusters, alpha (fraction of honest-region interactions directed into the sybil region) and beta (fraction of sybil-region interactions directed into the honest region) controlling activity-attack intensity, w (interactions per sybil pair, uniform on [0, w]) controlling intra-sybil-cluster activity density. Default parameters: N_s = 10,000, w = 2, N_A = 200,000, alpha = 0.00001, beta = 0.0001, M = 5. Seeds: 50 honest seeds (1 highest-degree node plus 49 random honest nodes) and 10 random sybil seeds per run, averaged over multiple runs with different seed draws.
+
+| Sweep | Result |
+|---|---|
+| Friendship attack edges N_A varied | Sybil_SAN's AUC drops only slightly as N_A increases; at N_A ~= 3 x 10^6 (about 300 attack edges per sybil node), Sybil_SAN's AUC stays above 0.8 while SWalk, SScar, SR-U, SR-W all fall below 0.4; the Inter baseline stays roughly stable near 0.7 across this range because it misclassifies inactive honest users as sybils regardless of N_A |
+| Incoming interaction attack alpha varied from 1e-6 to 1e-3 | Sybil_SAN's AUC drops only slightly as alpha increases and stays above the other five algorithms throughout; SR-U and SScar are flat because alpha does not affect the friendship graph they use; SR-W and Inter's AUC drops as alpha rises (more trust incorrectly propagated to sybils); real-world alpha is cited (from a separate study, reference [22]) as approximately 4.2e-5, within the tested range |
+| Number of sybils N_s varied | AUC of every algorithm rises as N_s increases (with N_A fixed, more sybils means sparser attack edges per sybil); Sybil_SAN has the highest AUC across the range |
+| Outgoing interaction attack beta varied | Sybil_SAN's AUC (and SR-W's and Inter's) rises as beta increases, because sybils sending more interactions to honest users creates more detectable signal; SWalk does not benefit from this signal and can fail to detect such sybils; Sybil_SAN outperforms all baselines throughout |
+| Sybil-region cluster count M varied | AUC decreases as M increases (a sybil region split into more disconnected clusters is harder to detect); Sybil_SAN still outperforms all baselines at every M tested |
+| Intra-sybil interaction density w varied | All algorithms except SWalk stay stable across tested w; a denser sybil region reaches its seed sybil node faster and so is detected slightly more easily; Sybil_SAN still outperforms all baselines |
+
+**Real-dataset setup.** Built from 991 known public fake Twitter accounts: 2-level breadth-first crawl of followers and followers-of-followers around those accounts, filtered against a public Twitter network dataset to retain 6,644 crawled users with resolvable friendship data, nodes with degree below 3 removed, undirected reciprocal-follow edges kept, largest connected component extracted, up to 3,000 recent activities per user collected. Final network: 450,242 users (409,694 honest, 40,548 sybil), 222,944,310 friendship links, 17,581,069 of which are attack edges; 102,693,769 total activities, 714,392 of which are incoming interaction attacks; 70,074,436 of the 102,693,769 activities (about 70%) are mention-type edges. Ground truth: accounts suspended by Twitter treated as sybil, accounts still active treated as honest (deleted accounts removed) — the authors state this labeling is noisy, since some unsuspended accounts may still be undetected sybils.
+
+| Algorithm | AUC on real dataset |
+|---|---|
+| SR-W (SybilRank on activity-weighted friendship graph) | 0.48 |
+| SR-U (SybilRank on unweighted friendship graph) | 0.52 |
+| Inter (SybilRank on activity-pruned "strong friendship" graph) | 0.62 |
+| SScar (SybilSCAR, belief-propagation baseline) | 0.15 |
+| SWalk (robust random-walk baseline) | 0.44 |
+| Sybil_SAN (this paper) | 0.73, an improvement of at least 17.7% (over Inter, the next-best baseline) |
+
+**Limitation-diagnosis experiments (small synthetic graph, 5 nodes: 3 honest, 2 sybil).** As k (user-activity walk depth) rises from 0 to 2, base Sybil_SAN's AUC drops sharply and flattens near 0.33 (below the 0.5 random-ranking baseline) for k >= 2; varying n (activity-following walk depth) from 1 to 10 at k = 5 leaves this degraded AUC flat, showing n cannot compensate. On the same small graph, Sybil_SAN_VUA's AUC is flat at 1.0 across k = 0 to 5; Sybil_SAN_VAU's AUC decreases as k rises but stays above base Sybil_SAN's AUC at every k. On a scaled-up graph (100 copies of the 5-node structure chained together, with a controllable fraction of copies "extended" by adding one activity node that removes the base algorithm's structural trap): at 0% extended copies, base Sybil_SAN's AUC falls sharply as k increases, reaching about 0.3 for k > 3; at 100% extended copies, its AUC stays near 1.0 across all tested k; intermediate extension fractions interpolate between these two curves.
+
+### Parameters
+| Parameter | Meaning | Value used | Range tested |
+|---|---|---|---|
+| gamma | jumping/restart constant for the random walks | 0.15 | fixed |
+| n | number of walks on the activity-following graph | 1 (default) | 1 to 10 |
+| k | number of walks on the user-activity graph (walk length 2k+1) | 0 (default) | 0 to 5 |
+| lambda_i (no activity) | mixing weight for users with zero activities | 1 (all trust via friendship graph) | fixed |
+| lambda_i (has activity, synthetic data) | mixing weight for active users | 0.05 * 0.9^log2(\|N(v_i)\|) | derived from friendship-degree, decreasing in degree |
+| lambda_i for i > \|V\| (synthetic, activity-type-balanced) | mixing weight applied to activity-type nodes | 0.5 | fixed, because synthetic data has roughly equal counts of the two interaction types |
+| lambda_i for i > \|V\| (real dataset) | same, adjusted for the real interaction-type mix | 0.3 | fixed, because about 70% of real interactions are mention-type |
+| Honest seeds per run | trust-propagation seed count | 50 (1 top-degree + 49 random honest) | fixed |
+| Sybil seeds per run | 10 random sybil nodes | 10 | fixed |
+| N_s (synthetic sybil count) | total sybil nodes generated | 10,000 default | varied in Section 5.4 |
+| N_A (synthetic attack edges) | friendship attack edges | 200,000 default | varied up to ~3 x 10^6 in Section 5.2 |
+| alpha (incoming interaction attack rate) | fraction of honest-to-sybil interactions | 0.00001 default | 1e-6 to 1e-3 |
+| beta (outgoing interaction attack rate) | fraction of sybil-to-honest interactions | 0.0001 default | varied in Section 5.5 |
+| M (sybil cluster count) | number of disconnected sybil clusters | 5 default | varied in Section 5.6 |
+| w (intra-sybil interaction bound) | max interactions per sybil pair | 2 default (empirically justified: crawled Twitter subnetwork showed no sybil pair exceeded 2 interactions) | varied in Section 5.7 |
+| epsilon | convergence threshold for the iterative trust-score computation | not numerically stated in the excerpted text (algorithm terminates when successive iterate difference falls below epsilon) | — |
+
+### Stated limitations
+The authors state that base Sybil_SAN has two structural limitations, discovered via a small worked example rather than the large-scale experiments: a user who creates no activity permanently traps the user-activity-graph walker at that node once it arrives there, and increasing k (user-activity walk depth) increases the chance the walker reaches such a trap, degrading accuracy below the level of a random ranking (AUC ~= 0.33 at k >= 2 on the diagnostic graph); and trust does not propagate from a sybil node's activities back toward the honest region, because the activity-following graph provides no directed path in that direction. Both limitations are stated as fundamental to the base algorithm's walk structure, not fixable by tuning n or k alone (varying n at fixed high k leaves the degraded AUC unchanged). The two extensions (Sybil_SAN_VUA, Sybil_SAN_VAU) are stated to relieve but not fully eliminate these effects; Sybil_SAN_VAU's own AUC still decreases as k increases, even though it stays above the unmodified algorithm. The real-dataset ground-truth labels are stated to be noisy, because some accounts labeled honest (not yet suspended by Twitter) may be undetected sybils, which the authors state as the likely reason detection accuracy on the real dataset (AUC 0.73) is lower than on synthetic data. The paper states its computational complexity is O(t_term(epsilon) * (|V|^2 + |A|^2)) per Lemma 1 — quadratic in both user count and activity count — and states this extra cost from activities is not prohibitive because the core operation (a matrix-vector product) is parallelizable, without providing a wall-clock runtime measurement.
+
+### Requirements it places on the rest of the system
+The mechanism requires a labeled seed set of honest users (and, for the sybil-seed extension, labeled sybil users) established by some process external to Sybil_SAN itself; the paper's own seed-selection procedure computes a credit-diffusion score over a derived "strong friendship" graph and takes the highest-credit users as honest until a target count (50 in the experiments) is manually verified, which itself presumes an operator can verify a small number of accounts by hand. It requires access to per-user activity records (specifically, distinguishing which user authored each activity and which users that activity mentions), not merely the friendship graph — a system that logs only aggregate interaction counts without directional attribution cannot construct the activity-following graph the coupled walk depends on. The per-user mixing parameter lambda_i is set as a function of each user's friendship degree and the empirical mix of interaction types in the dataset (0.5 for the roughly type-balanced synthetic data, 0.3 for the real dataset's mention-heavy mix); applying the paper's stated defaults to a system with a different interaction-type composition would require re-deriving this constant rather than reusing the paper's value. The convergence proof and the O(|V|^2 + |A|^2) complexity bound assume the coupled transition matrix P_cr is applied via repeated matrix-vector multiplication to a fixed graph snapshot; a system where the friendship or activity graph changes during the iteration (for example, under continuous churn) is not covered by the stated convergence analysis.
+
+### Contradicts
+No direct measurement conflict with any other entry's own reported figures. The paper's own text states that the "limited-attack-edges assumption" underlying SybilRank and related graph-only detectors, including SybilGuard (YU-SIGCOMM-06 in this corpus, listed among this paper's cited "mainstream" methodologies) — that a sybil node's average attack-edge count must be O(1/log|V|) to guarantee accurate detection — does not hold in real-world online social networks, citing independent measurements (Yang et al. on RenRen: 26% of sybil friend requests accepted; Boshmaf et al. on Facebook socialbots: up to 80% request-acceptance rate) rather than a value judgment of its own. SybilGuard's own reported experiments (YU-SIGCOMM-06) never test attack-edge counts in this higher, empirically-observed regime, so the two entries do not report conflicting measurements of the same quantity; ZHANG-TDSC-23 instead argues SybilGuard's own tested regime (up to g = 2,500 attack edges on a million-node graph, average 25 edges per attacker) is smaller than what real attackers are shown to obtain.
+
+### References worth retrieving
+- Foundational: Cao, Sirivianos, Yang, Pregueiro, "Aiding the Detection of Fake Accounts in Large Scale Social Online Services," USENIX NSDI 2012 — SybilRank, the friendship-graph-only baseline (SR-U) this paper directly compares against and extends.
+- Competing: Jia, Wang, Gong, "Random Walk Based Fake Account Detection on Online Social Networks," DSN 2017 — SWalk, the robust random-walk baseline compared against, using the authors' own published open-source parameters.
+- Competing: Wang, Zhang, Gong, "SybilSCAR: Sybil Detection in Online Social Networks via Local Rule based Propagation," INFOCOM 2017 — SScar, the belief-propagation baseline compared against.
+- Competing: Gong, Frank, Mittal, "SybilBelief: A Semi-Supervised Learning Approach for Structure-Based Sybil Detection," IEEE TIFS 2014 — a further structure-based competing detector cited in the mainstream-methodology list.
+- Competing: Yu, Gibbons, Kaminsky, Xiao, "SybilLimit: A Near-Optimal Social Network Defense Against Sybil Attacks," IEEE S&P 2008 — successor to SybilGuard, part of the mainstream methodology this paper critiques for the limited-attack-edges assumption.
+- Attack/critique: Yang, Wilson, Wang, Gao, Zhao, Dai, cited in this paper as the RenRen measurement finding sybils obtain a much higher accepted-friend-request rate than the limited-attack-edges assumption predicts — direct empirical grounds for this paper's attack model.
+- Attack/critique: Boshmaf, Muslukhov, Beznosov, Ripeanu, "The Socialbot Network: When Bots Socialize for Fame and Money," ACSAC 2011 — measured up to 80% friend-request acceptance by automated socialbots on Facebook, cited as further evidence against the limited-attack-edges assumption.
+- Foundational: Alvisi, Clement, Epasto, Lattanzi, Panconesi, "SoK: The Evolution of Sybil Defense via Social Networks," IEEE S&P 2013 — cited survey unifying the social-graph Sybil defense literature; already flagged in the brief as a high-value bibliography to mine.
+
+### Verbatim extracts
+- "non-sybil users tend to be more selective in retweeting/replying to, and mentioning other users."
+- "each sybil node can launch at most O(1/log(|V|)) attack links on average."
+- "around 26% of such requests were accepted" (RenRen friend-request study).
+- "socialbots managed to get an average request acceptance of up to 80%."
+- "our Sybil_SAN improves the AUC over the Inter by 17.7%."
+- "the accuracy of Sybil_SAN drops significantly...and the accuracy can be even lower than randomly sorting."
+
+---
+
+## [ZHAO-JSAC-04] Tapestry: A Resilient Global-Scale Overlay for Service Deployment
+**Citation:** Ben Y. Zhao, Ling Huang, Jeremy Stribling, Sean C. Rhea, Anthony D. Joseph, John D. Kubiatowicz. "Tapestry: A Resilient Global-Scale Overlay for Service Deployment." IEEE Journal on Selected Areas in Communications, vol. 22, no. 1, 2004. DOI 10.1109/JSAC.2003.818784.
+**Retrieved:** full text
+**Source URL:** https://people.eecs.berkeley.edu/~adj/publications/paper-files/tapestry_jsac.pdf
+**Domain:** A
+
+### What it does
+Routes a message from any node to the nearest live copy of an object or to a specific node, using only local routing state at each hop, so that an application built on Tapestry gets efficient, self-repairing message delivery without knowing where in the network an object's replicas actually sit. Tapestry exposes a decentralized object location and routing (DOLR) interface with four calls: PublishObject (advertise an object's presence at the local node), UnpublishObject (best-effort removal of that advertisement), RouteToObject (route a message to some live copy of an object by its globally unique identifier, GUID), and RouteToNode (route to a specific node's application handler). Each node maintains a neighbor map: a set of routing-table levels where level i, digit d holds the address of a nearby live node whose identifier shares the first i digits with the local node and has digit d at position i+1; a message is forwarded at each hop to a neighbor matching one additional identifier digit of the destination, so routing reaches any existing node in a bounded number of hops proportional to the number of identifier digits. When no node exists with a required digit match, "surrogate routing" deterministically maps the requested identifier to the nearest live node with a similar identifier, so the process of following NextHop calls from any starting point converges to one unique "root" node per identifier, even though that root need not have the identifier itself.
+
+Object location works by having each server holding a copy of an object route a publish message toward the object's root; every node the publish message passes through stores a pointer (not a copy of the object) mapping the object's GUID to the direction the publish message came from, so a router at any node that later needs to find the object can hop toward progressively closer pointers rather than sending all requests directly to the root. Fault tolerance rests on four mechanisms operating together: (1) each routing-table entry keeps two backup neighbor pointers sharing the same identifier prefix, so a single neighbor failure has an immediate substitute; (2) an object can be published under multiple distinct GUIDs mapped to different root nodes, so failure or partition of one root does not remove all location pointers for the object; (3) periodic soft-state republishing of both routing-table entries and object location pointers repairs stale or lost state without a separate reliable-delivery mechanism; (4) periodic keep-alive beacons between neighbors detect link and node failure, triggering routing-mesh repair. A node departing voluntarily notifies the set of nodes holding backpointers to it and supplies each with a replacement neighbor, and republish traffic is directed to both the departing node and its replacement during the transition. Optional locality optimization publishes additional object pointers to a small number of backup nodes along the publish path and to the nearest network-distance neighbors of the current hop, along a bounded number of initial hops, trading extra per-object storage for lower routing distance to the object at short network distances.
+
+### Measured results
+| Result | Conditions |
+|---|---|
+| Message processing latency, single overlay hop | ~0.1 ms constant overhead on a Pentium IV 2.4 GHz, ~0.2 ms on a Pentium III 1 GHz, for small messages; cost becomes linear in message size above 2 kB (data-copy dominated) | two nodes on the same machine (network delay eliminated), stream of 10,001 messages per tested message size |
+| Maximum sustainable routing throughput, average 4-kB message | 7,100 messages/s on the P-IV 2.4 GHz, 3,200 messages/s on the P-III 1 GHz | same local microbenchmark; two 2.4-GHz P-IVs over 100 Mb/s Ethernet reach maximum link bandwidth at 4-kB message size |
+| Relative Delay Penalty (RDP), routing to a node (ratio of overlay round-trip routing latency to shortest IP round-trip ping) | median value starts near the low end and decreases as ping distance grows (specific numeric axis values not extractable from this OCR text; reported as decreasing toward an approach-to-one trend) | 400 Tapestry nodes on 62 PlanetLab machines, stable network, 90th percentile/median/minimum plotted |
+| RDP, routing to an object (one-way overlay latency vs. one-way ping) | good (low RDP) at large network distances, diverges from optimal at short distances due to extraneous hops forming a larger fraction of a short ideal latency | same 62-PlanetLab-machine, 400-node deployment; 10,000 randomly named objects placed on one server (planetlab-1.stanford.edu), all 399 other nodes route to each object by GUID, results binned in 5-ms ping-distance bins |
+| RDP improvement from locality optimization (extra object pointers along backup nodes and nearest network neighbors, bounded to a small number of initial hops) | adding two extra pointers per object (one backup, one nearest neighbor, one hop) substantially reduces observed RDP variance at short network distances | Simple OceanStore Simulator (SOSS), transit-stub topology of 1,092 nodes, 25 objects placed on each of 1,090 nodes, each node routes to 100 random objects |
+| Single node insertion latency | scales sublinearly with network size, consistent with each node's routing state scaling logarithmically with network size | networks constructed at varying size N, single node inserted and deleted 20 times per data point |
+| Single node insertion control-traffic bandwidth | scales logarithmically with network size | same setup; identifier base reduced to 4 to better expose the logarithmic trend at network sizes of 16 and above |
+| Parallel node insertion convergence time | median convergence time scales roughly linearly with the number of simultaneously inserted nodes; the 90th-percentile value fluctuates more sharply at insertion ratios of 10% or more, attributed to scheduling-delay compounding from node virtualization | stable base network of 200 nodes, each parallel-insertion ratio repeated 20 times |
+| Success rate, routing to nodes/objects under two simultaneous drastic membership-change events (20% of nodes killed, then a 50%-of-network join 15 minutes later) | request success rate dips briefly after each event and returns to nearly 100% within about a minute | SOSS simulation, starting network of 830 nodes |
+| Success rate under continuous churn, two churn intensities | success rate stays close to 100% ("rarely dipped slightly below") in both churn conditions | SOSS simulation, starting at 830 nodes, peaking at 858 during churn; churn 1: Poisson node-insertion interarrival mean 20 s, exponential node-failure with mean lifetime 4 min; churn 2: interarrival 10 s, mean lifetime 2 min |
+| Success rate, routing to nodes under failure, join, and churn on the real PlanetLab deployment | short dips in success rate following massive failure or join events, and during constant churn (interarrival 5 s, mean lifetime 60 s), recovering afterward; the paper's conclusion states roughly 5% of queries fail on the faulty wide-area PlanetLab deployment overall | PlanetLab tests start at 520 nodes, peak at 541; UDP transport used and each node instance run in its own JVM to support the larger node count |
+| Overall routing efficiency summary | median RDP (stretch) for node routing starts around a factor of three at nearby distances and approaches one as distance grows; median RDP for object location stays below a factor of two in the wide area; simple locality optimizations bring overall median object-location RDP under a factor of two | summary claim in the paper's conclusion, aggregating the PlanetLab and SOSS results above |
+
+### Parameters
+- Identifier base: reduced to 4 in the node-insertion-bandwidth experiment specifically to make the logarithmic bandwidth-vs.-network-size trend visible at network sizes of 16 nodes and above; the general routing-mesh design uses a configurable base with each neighbor-map level holding one entry per possible digit value.
+- Backup neighbor links per routing-table entry: 2 (stated as the number kept by "current implementations," beyond the primary neighbor).
+- PlanetLab deployment sizes: 62 machines / 400 nodes for the stable-network RDP experiments; 520 nodes rising to 541 for the churn experiments.
+- SOSS simulation sizes: up to 1,000 Tapestry instances on one machine; 830 nodes rising to 858 for churn tests; 1,092-node transit-stub topology for the locality-optimization experiment.
+- Churn parameters (two settings tested): (interarrival 20 s, mean lifetime 4 min) and (interarrival 10 s, mean lifetime 2 min) for SOSS; (interarrival 5 s, mean lifetime 60 s) for the PlanetLab churn test.
+- Locality-optimization knobs: number of backup nodes along the publish path, number of nearest network-distance neighbors, and number of initial hops over which the optimization is applied — tested at multiple combinations in Fig. 15, with the specific numeric labels not extractable from the OCR text; the paper reports one backup, one nearest neighbor, one hop as sufficient to substantially cut RDP variance.
+
+### Stated limitations
+The paper states that its own experiments show a small portion (approximately 5%) of queries fail on the real, faulty wide-area PlanetLab deployment, in contrast to the near-optimal behavior seen in the controlled SOSS simulation under equivalent fault conditions — an explicit gap between simulated and real-network resilience that the authors attribute to PlanetLab's constant real-world load and node/link failures rather than the protocol design itself. Increasing the number of JVM instances used to support more nodes on PlanetLab is stated to increase scheduling delays, which the authors state results in request timeouts as network size and virtualization increase. Node virtualization (running multiple Tapestry instances per physical machine to reach larger simulated node counts) is stated to inflate RDP for short-latency paths, because scheduling delays between co-located virtual instances make some measurements unrealistically favorable while others show inflated delay under load. Object-location RDP is stated to diverge from the optimal IP latency specifically at short network distances, because extraneous overlay hops represent a proportionally larger fraction of a short ideal path — the paper's own explanation for a measured effect, not a design defect it claims to have resolved beyond the described locality optimization. On security, the paper states Tapestry addresses the sybil attack (citing Douceur's IPTPS 2002 paper) only by relying on a trusted public-key infrastructure for nodeID assignment — an external dependency, not a mechanism Tapestry itself provides — and states that a further generalized mechanism against collusion-based routing-redirection attacks is proposed elsewhere (Castro et al., reference [35]) rather than built into Tapestry as described in this paper.
+
+### Requirements it places on the rest of the system
+Sybil resistance for the routing overlay's nodeID space is stated to require an external trusted public-key infrastructure that assigns node identifiers; Tapestry's own routing and repair mechanisms provide no defense against an entity obtaining many identifiers on their own. Confidentiality and message-integrity protection (message authentication codes, secure channels) are stated as supported at the neighbor-link layer only when a public key for the remote node is supplied by a higher layer — Tapestry's core routing and object-location logic does not itself establish or verify these keys. The self-repair mechanism requires each node to periodically emit soft-state republish traffic for both its own routing-table entries and any objects it hosts; a node or object owner that stops republishing has its location pointers age out, so any component relying on Tapestry for durable object findability must independently guarantee periodic republishing continues, or the object becomes unreachable through no fault of the overlay. The redundant-GUID fault-tolerance technique (assigning an object multiple GUIDs mapped to different roots) requires the application layer to generate and track those multiple GUIDs itself — Tapestry's DOLR API publishes and locates by a single GUID per call, so multi-root redundancy is a caller-side convention, not a property automatically supplied by PublishObject. The locality-pointer optimization requires an underlying network-distance metric (round-trip ping time in the paper's implementation) to rank "nearest" neighbors; a deployment without a usable network-distance measurement cannot apply this optimization as described.
+
+### Contradicts
+None found. No other entry in this batch measures Tapestry, PlanetLab-deployed structured overlays, or reports independent RDP figures for the same overlay.
+
+### References worth retrieving
+- Foundational: Plaxton, Rajaraman, Richa, "Accessing Nearby Copies of Replicated Objects in a Distributed Environment," ACM SPAA 1997 — the prefix-routing mesh construction (Plaxton mesh) Tapestry's routing table design directly extends.
+- Foundational: Zhao, Kubiatowicz, Joseph, "Tapestry: An Infrastructure for Fault-Tolerant Wide-Area Location and Routing," UC Berkeley Tech. Report CSD-01-1141, 2001 — the earlier technical-report version whose fault-tolerance mechanisms this journal paper states it expands with full experimental detail.
+- Competing: Stoica, Morris, Karger, Kaashoek, Balakrishnan, "Chord: A Scalable Peer-to-Peer Lookup Service for Internet Applications," ACM SIGCOMM 2001 — the ring-topology structured-overlay alternative, already a seed in this corpus (STOICA-SIGCOMM-01).
+- Competing: Rowstron, Druschel, "Pastry: Scalable, Distributed Object Location and Routing for Large-Scale Peer-to-Peer Systems," Middleware 2001 — a contemporaneous prefix-routing DHT with a similar routing-table design, direct point of comparison for Tapestry's hop-count and state tradeoffs.
+- Competing: Ratnasamy, Francis, Handley, Karp, Shenker, "A Scalable Content-Addressable Network," ACM SIGCOMM 2001 — the CAN coordinate-space overlay, a structurally different routing approach among the era's major DHTs.
+- Attack/critique: Douceur, "The Sybil Attack," IPTPS 2002 — the paper Tapestry cites for the sybil-attack threat model it addresses only via an external PKI dependency, already a corpus seed via YU-SIGCOMM-06's citation of the same work.
+- Attack/critique: Castro, Druschel, Ganesh, Rowstron, Wallach, "Security for Structured Peer-to-Peer Overlay Networks," OSDI 2002 — the generalized collusion-resistant routing mechanism this paper cites as a complement to its own PKI-based sybil defense.
+- Foundational: Zhao, Huang, Stribling, Joseph, Kubiatowicz, "Exploiting Routing Redundancy via Structured Peer-to-Peer Overlays," IEEE ICNP 2003 — cited as ongoing work demonstrating Tapestry's viability as a resilient routing substrate, a direct follow-up measurement study to retrieve.
+
+### Verbatim extracts
+- "this prescription of 'closest node' that provides the locality properties of Tapestry."
+- "objects can be assigned multiple GUIDs mapped to different root nodes for fault tolerance."
+- "Tapestry improves object availability and routing...by building redundancy into routing tables."
+- "Tapestry addresses this by using a trusted public-key infrastructure (PKI) for nodeID assignment."
+- "a small portion (~5%) of queries fail on the faulty wide-area deployment."
+- "the median RDP for object location is below a factor of two in the wide area."
+
+---
+
 ## [ZHONG-EMNLP-23] Poisoning Retrieval Corpora by Injecting Adversarial Passages
 **Citation:** Zexuan Zhong, Ziqing Huang, Alexander Wettig, Danqi Chen. "Poisoning Retrieval Corpora by Injecting Adversarial Passages." EMNLP, 2023. DOI 10.18653/V1/2023.EMNLP-MAIN.849.
 **Retrieved:** full text via https://arxiv.org/abs/2310.19156
@@ -23042,6 +26798,69 @@ None found. The commonly cited summary that "federated learning across instances
 "we plan to explore reputation schemes and alternative peer selection strategies"
 "achieving average per-server macro-F1 scores of 0.71, 0.73, and 0.58"
 "56% of the instances in our dataset have the most similar instance in their set of the top 5"
+
+---
+
+## [ZIEGLER-ISF-05] Propagation Models for Trust and Distrust in Social Networks
+**Citation:** Cai-Nicolas Ziegler, Georg Lausen. "Propagation Models for Trust and Distrust in Social Networks." Information Systems Frontiers, 2005. DOI 10.1007/S10796-005-4807-3.
+**Retrieved:** the file on disk (sources/text/ZIEGLER-ISF-05.txt) is Cai-Nicolas Ziegler's 2005 doctoral dissertation, "Towards Decentralized Recommender Systems" (Albert-Ludwigs-Universitat Freiburg), not the standalone journal article. This is a title mismatch under the corpus verification rule (Rule 3): the dissertation's title, single authorship in its front matter, and 130-plus-page scope differ from the target's two-author journal article. However, the dissertation's own front matter states explicitly, in its "Published Work" section: "The contents of Chapter 5 have appeared in [Ziegler and Lausen, 2004c] and have been extended in [Ziegler and Lausen, 2005]" — and the dissertation's own bibliography cites "Ziegler, C.-N. and Lausen, G. 2005. Propagation models for trust and distrust in social networks. Information Systems Frontiers. Kluwer Academic Publishers. To appear," which is this exact target paper. Chapter 5 ("Trust Propagation Models," pages 59-92) is therefore the author's own documented source text for the target article, co-authored with Lausen, covering exactly the target paper's stated content: the Advogato max-flow trust metric, the Appleseed spreading-activation trust metric, a comparison of the two, and incorporating distrust into Appleseed. The extraction below is drawn from Chapter 5 on that basis; treat any given number as sourced to the dissertation chapter, which the authors state was extended (not shortened) for the journal publication, so the published version may contain additional or revised results beyond what is captured here.
+**Source URL:** unresolved for the standalone journal article at extraction time; dissertation source used: https://www.researchgate.net/publication/200110851 (candidate URL for the target record)
+**Domain:** F
+
+### What it does
+Computes a ranked measure of trust one agent should place in every other reachable agent in a social network, so that an application (the dissertation's own motivating use is decentralized recommendation) can select a neighborhood of trustworthy peers without needing a globally computed reputation score. The paper defines a directed trust graph with agents as nodes and each edge (x, y) carrying a weight W(x, y) in [0, 1] (later extended to [-1, +1] to express distrust) stating how much agent x trusts agent y; a partial function per agent means only explicitly declared trust statements exist as edges, and this trust information is assumed to be publicly accessible on a per-agent basis (modeled after machine-readable personal homepages, as in the FOAF vocabulary), not centrally stored. The paper first outlines Advogato's max-flow trust metric (Levien and Aiken) as a baseline: a trust seed s is assigned an integer capacity n; each successive hop level's per-node capacity equals the previous level's capacity divided by the average out-degree of trust edges leaving that level; the resulting node-capacitated, single-source/multiple-sink graph is converted (via a node-splitting construction) to an edge-capacitated single-source/single-sink graph, and Ford-Fulkerson maximum integer network flow from the seed to the super-sink determines which nodes receive flow and are therefore classified trusted (a boolean output, not a ranking).
+
+Appleseed, the paper's own contribution, instead adapts spreading-activation models from cognitive psychology (Quillian, 1968): energy (interpreted as trust) is injected at the source node and recursively divided among a node's outgoing edges in proportion to each edge's weight relative to the node's total outgoing weight; a global spreading factor d (0 to 1) determines what fraction d*in(x) of a node's incoming trust energy in(x) it forwards to successors, while retaining (1-d)*in(x) as that node's own accumulated trust rank — this differs from unmodified spreading activation (which forwards energy without loss) and is what gives Appleseed a trust-decay property (nodes farther from the source accrue less rank) and prevents "rank sinks" (cycles that would otherwise accumulate unbounded trust, analogous to PageRank's rank-sink problem). Two further mechanisms correct base spreading-activation behavior for trust semantics: backward trust propagation adds a virtual full-trust edge from every visited node back to the trust source, which (a) mitigates unfair relative-trust distribution among nodes whose predecessors issued differing numbers of trust statements, (b) eliminates the need for special-case handling of zero-outdegree "dead end" nodes, since every node now has at least the backward edge, and (c) favors trust proximity, penalizing nodes farther from the source; and nonlinear trust normalization, which normalizes each node's outgoing energy allocation by edge weight raised to a power q rather than linearly, reducing the disproportionate influence of nodes with few but weakly-weighted outgoing trust statements. Algorithm 5.3 (function Trust_alpha) computes the trust vector iteratively: at each round, each currently-reached node distributes d times its current energy influx to successors by normalized edge weight, retains (1-d) times its influx as accumulated rank, and the process repeats until the maximum change in any node's accumulated rank across one iteration falls below a convergence threshold T_c. The paper proves (informally) that this iterative process is guaranteed to converge because the total energy in the system is conserved (equal to the initial injection) and each node retains a strictly positive fraction of what it receives.
+
+For distrust, the paper extends the edge-weight domain to [-1, +1] and defines that a node with negative accumulated trust influx (having been net-distrusted) does not forward any energy to its successors at all (function out(x) = d*in(x) if in(x) >= 0, else 0) — this specific design choice is stated to prevent two structurally unwanted inference patterns the paper identifies by name: distrust-of-distrust incorrectly implying trust (the double-negation problem), and a distrusted node's own trust assertions incorrectly propagating positive trust to its trustees. The paper proves the distrust-extended algorithm (Trust_alpha-minus) still converges, by showing the total positive energy distributed at each step under a distrust-augmented graph cannot exceed the corresponding trust-only graph's distribution.
+
+### Measured results
+All experiments used a Java implementation, tested against trust-assertion data crawled from the Advogato online community website (its own certification-based trust system, mapped from four qualitative levels — Observer, Apprentice, Journeyer, Master — to quantitative weights 0.25, 0.5, and so on), which the crawler extracted as 3,224,101 total trust assertions from more than 8,000 members; some individual members had issued over 2,000 assertions each, giving an overall average out-degree across the full crawled dataset of 397.69 assertions per node (a figure the authors state is unrepresentative of realistic per-node trust behavior), so sub-networks with specific, controlled average out-degrees were extracted for the individual experiments below rather than using the raw crawl directly.
+
+| Experiment | Setup | Result |
+|---|---|---|
+| Spreading-factor impact (Experiment 1) | Social sub-network, average out-degree 6, 384 nodes reached from the trust source; initial injection in_0 = 200, convergence threshold T_c = 0.01, linear weight normalization; compared d = 0.1, d = 0.5, d = 0.85, ranks binned into 11 nonlinear histogram cells | At d = 0.1, the largest count of nodes receives high rank (trust(x) >= 25) and almost none receive mid-range rank (0.2 to 1); the count of nodes below rank 0.05 is highest at d = 0.1. At d = 0.85, no nodes reach rank >= 25, more nodes fall in the mid-range (0.1 to 10), and the count below 0.05 is lowest. The paper concludes higher d distributes trust more evenly across the reachable graph; it recommends d = 0.85 as a general default. |
+| Convergence rate (Experiment 2) | Sub-network with average out-degree 5, 572 nodes assigned trust ranks; d = 0.85, T_c = 0.01, linear normalization; two runs with initial injection in_1 = 200 and in_2 = 800 (4x higher) | Run 1 (in_0 = 200) converges in 38 iterations; run 2 (in_0 = 800) converges in 45 iterations — a 4x larger initial injection adds only 7 iterations. The paper states this demonstrates convergence speed is largely insensitive to injected trust quantity and network size within the tested range. |
+| Network impact of distrust (Experiment 3) | Two network structures tested: 623 nodes (average in/out-degree 9) and 329 nodes (average in/out-degree 6); five weight assignments per structure at 0%, 25%, 50%, 75%, and 100% of edge weights made negative (distrust); Appleseed parameters held fixed across all five runs: backward propagation enabled, in_0 = 200, d = 0.85, T_c = 0.01, linear normalization, no cap on nodes unfolded | Overall accorded trust rank (summed across all reached nodes) falls sharply as the distrust fraction rises: at 0% distrust, 198.521 (329-node network) and 197.407 (623-node network); at 25% distrust, 39.102 and 39.389 respectively; at 50% distrust, 0.248 and 6.447 respectively; the paper states the sum continues to fall and eventually goes negative as distrust approaches 100%. Number of iterations to convergence also decreases as the distrust fraction rises. The paper states these effects only marginally affect the relative ranking of nodes (ranks are interpreted relative to each other, not absolutely), and that lost trust energy can be compensated by increasing the initial injection in_0. |
+
+### Parameters
+| Parameter | Meaning | Recommended/default value | Range tested |
+|---|---|---|---|
+| d (spreading factor) | fraction of a node's incoming trust energy forwarded to successors (1-d is retained as that node's own rank) | 0.85 | 0.1, 0.5, 0.85 tested in Experiment 1 |
+| in_0 (initial trust injection) | total energy injected at the trust source at the start of computation | 200 (used as the default in most experiments) | 200 and 800 tested in Experiment 2 |
+| T_c (convergence threshold) | maximum per-node rank change between iterations below which the algorithm terminates | 0.01 | fixed across all reported experiments; the paper states larger thresholds could be chosen to terminate earlier in networks where the true bottleneck is per-node network fetch latency rather than computation |
+| q (normalization exponent) | power applied to edge weights during nonlinear trust normalization | q = 1 (linear normalization) used in all reported quantitative experiments | q not swept experimentally in the excerpted material; only q = 1 (linear) results are reported numerically |
+| M (maximum unfolded nodes, implementation extension) | caps the number of nodes the algorithm will expand, to bound per-query network-fetch cost | suggested at roughly 3x the number of agents expected to be classified trustworthy | not swept in a reported experiment |
+| Maximum trust path length (implementation extension) | caps how many hops from the source the algorithm will follow | suggested around 3 hops, citing the "six degrees of separation" heuristic | not swept in a reported experiment |
+| d_s (seed-only spreading factor, implementation extension) | forces the trust source itself to retain none of its own injected energy | d_s = 1.0 | not swept in a reported experiment |
+
+### Stated limitations
+The paper states Appleseed penalizes "eager trusters" — agents who issue many trust statements have each individual statement diluted in weight relative to an agent who issues few — and states this is a known limitation shared with eigenvector-based trust metrics (PageRank, EigenTrust), contrasted explicitly against Advogato, whose capacity-based design does not exhibit this penalty (Table 5.1, feature F.2). The paper states Appleseed is not directly comparable to Advogato on an accuracy or recall metric because Advogato had, at the time of writing, been deployed without any published quantitative evaluation results of its own; the comparison the paper provides (Table 5.1: attack-resistance, eager-truster penalization, deterministic computation, output type) is a qualitative feature-by-feature comparison, not a measured accuracy, precision, or recall figure computed on a shared trust graph. The paper states that in networks dominated by distrust, the overall accorded trust energy no longer equals the initially injected amount and can become negative in sum, though it states this affects only the aggregate energy total and only marginally affects the relative ranking used for peer selection. The paper states local group trust metrics generally, including Appleseed, are confined to specific problem domains and are less versatile than scalar (path-based) trust metrics, though scalar metrics are stated elsewhere in the same chapter to have exponential time complexity, which the paper cites as the reason it advocates local group metrics for large-scale decentralized settings instead. The heuristic trust-injection alignment method (adjusting in_0 so a synthetic indicator edge's computed rank converges toward its assigned weight) is stated to be imperfect and only approximately aligns computed ranks with explicit trust weights for a source's direct successors, not for the graph generally.
+
+### Requirements it places on the rest of the system
+Appleseed requires every agent's trust statements to be retrievable on demand during trust-graph traversal (the paper's own implementation fetches each visited agent's machine-readable trust assertions "just in time" from a personal homepage), so the mechanism requires either a publishing convention for per-agent trust data (the paper adopts a FOAF-like public-homepage model) or an equivalent lookup service; the paper states the actual computational bottleneck in practice is this per-node network fetch latency, not the Appleseed algorithm's own iteration cost. The convergence proof assumes a static trust graph during one computation; the paper does not analyze behavior under concurrent trust-statement updates mid-computation. The distrust extension requires the graph to distinguish an explicit distrust statement (a negative edge weight) from the mere absence of a trust statement (no edge at all) — the paper explicitly states these two are not semantically equivalent, so a system that cannot represent "no opinion" separately from "distrust" cannot supply the input this mechanism needs. Selecting a spreading factor d and a convergence threshold T_c is left to the deploying system; the paper's recommended defaults (d = 0.85, T_c = 0.01) were derived from experiments on sub-networks of the Advogato community's own certification graph (out-degree 5 to 9) and are not derived for or validated against social-network topologies with substantially different connectivity statistics.
+
+### Contradicts
+None found within this batch. No other entry measures Advogato, Appleseed, or a max-flow versus spreading-activation trust-metric comparison independently.
+
+### References worth retrieving
+- Foundational: Levien, Aiken, "Attack-Resistant Trust Metrics for Public Key Certification," USENIX Security Symposium 1998 — the original attack-resistant trust-metric formulation Advogato and this paper's bottleneck-property definition both build on.
+- Foundational: Levien, Aiken, "An Attack-Resistant, Scalable Name Service," draft submission to Financial Cryptography 2000 — the paper credited as introducing the specific Advogato maximum-flow trust metric this paper compares against.
+- Foundational: Levien, "Attack-Resistant Trust Metrics," PhD thesis, UC Berkeley, 2004 — the fuller treatment of the bottleneck property and Advogato's design this paper cites for detail beyond its own summary.
+- Competing: Guha, "Open Rating Systems," Stanford Knowledge Systems Laboratory technical report, 2003 — the eigenvector-based (PageRank-style) global group trust metric this paper's distrust-incorporation approach is directly compared against, including Guha's two candidate distrust-integration methods this paper argues both have specific drawbacks.
+- Competing: Guha, Kumar, Raghavan, Tomkins, "Propagation of Trust and Distrust," WWW 2004 — companion paper to Guha's technical report, cited for the claim that distrust statements are useful for users to debug their own web of trust.
+- Competing: Kamvar, Schlosser, Garcia-Molina, "The EigenTrust Algorithm for Reputation Management in P2P Networks," WWW 2003 — the eigenvector-based distributed trust metric this paper cites as suffering the same eager-truster-penalization issue as Appleseed, and as an application area (peer-to-peer file authenticity) Appleseed could support.
+- Foundational: Ford, Fulkerson, "Flows in Networks," 1962 — the maximum integer network flow algorithm (Ford-Fulkerson) underlying Advogato's trust computation.
+- Foundational: Reiter, Stubblebine, two 1997 papers on path-based trust metrics (cited as [Reiter and Stubblebine, 1997a] and [1997b]) — the network-flow-based trust reliability work Levien states he adapted and extended into Advogato.
+- Attack/critique: Jøsang, Gray, Kinateder, "Analysing Topologies of Transitive Trust," Workshop on Formal Aspects of Security and Trust, 2003 — analyzes the "enemy of your enemy" double-negation problem this paper's distrust model is explicitly designed to avoid.
+
+### Verbatim extracts
+- "The contents of Chapter 5 have appeared in [Ziegler and Lausen, 2004c] and have been extended in [Ziegler and Lausen, 2005]."
+- "manipulation on the part of bad nodes does not affect the trust value" (the bottleneck property, quoting Levien).
+- "Advogato encourages agents issuing numerous trust statements, while Appleseed penalizes overly abundant trust certificates."
+- "distrust is regarded as just the other side of the coin" (quoting Gans et al., a view the paper argues against).
+- "distrust statements are very useful for users to debug their web of trust" (quoting Guha).
+- "we claim that the actual bottleneck of group trust computation is not the Appleseed metric itself, but downloads."
 
 ---
 
