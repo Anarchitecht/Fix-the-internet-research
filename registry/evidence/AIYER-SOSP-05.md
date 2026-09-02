@@ -1,0 +1,68 @@
+## [AIYER-SOSP-05] BAR Fault Tolerance for Cooperative Services
+
+**Citation:** Amitanand S. Aiyer, Lorenzo Alvisi, Allen Clement, Mike Dahlin, Jean-Philippe Martin, Carl Porth. "BAR Fault Tolerance for Cooperative Services." ACM SOSP, 2005. DOI 10.1145/1095810.1095816.
+**Retrieved:** full text via https://www.cs.utexas.edu/~lorenzo/papers/aiyer05bar.pdf — the retrieved document is titled "Extended Technical Report TR-05-10," dated April 5, 2005, authored by the same six people with Martin listed first rather than Aiyer. It shares the SOSP paper's title, abstract claims, and headline evaluation figures (a BART state-machine prototype and a PIB backup of one gigabyte to 21 nodes in 20 minutes, both stated in the abstract). Content below is drawn from this technical-report text; it should be treated as the extended version of the SOSP 2005 paper rather than a page-identical copy of the published proceedings version.
+**Source URL:** https://www.cs.utexas.edu/~lorenzo/papers/aiyer05bar.pdf
+**Domain:** I
+
+### What it does
+
+The paper gives a way to build a cooperative service, one where independently administered nodes collaborate with no central authority controlling their actions, that keeps its safety and liveness guarantees when some participants deviate from the protocol for self-interested reasons and others deviate for any other reason including malice or malfunction. It introduces the Byzantine-Altruistic-Rational (BAR) model, which sorts participants into three categories: altruistic nodes, which always follow the protocol; rational nodes, which follow the protocol exactly when doing so maximizes their own stated utility function and deviate only when deviation increases that utility; and Byzantine nodes, which may deviate arbitrarily for any reason, including malfunction or intent to harm the system. A protocol is Incentive-Compatible Byzantine Fault Tolerant (IC-BFT) if following it exactly is each rational node's best response; it is Byzantine-Altruistic-Rational Tolerant (BART) if it keeps its safety and liveness guarantees even when a rational node deviates for individual gain, without requiring that deviation be irrational for that node. The mechanism securing rational nodes is accountability: every member holds a unique cryptographic public-key identity issued by a trusted admission authority, so a node's signed messages can be checked against the protocol's rules, and a self-contradictory pair of signed messages from one node (for example, a signed promise to store a file's exact bytes followed later by a signed response returning different bytes) is a self-contained cryptographic Proof of Misbehavior (POM) usable to sanction that node. The architecture is three layers: a bottom layer providing IC-BFT primitives (Terminating Reliable Broadcast and a Byzantine-tolerant Replicated State Machine); a middle layer partitioning work among nodes so that a request either receives a well-formed signed response, a provably ill-formed response, or, after enough nodes agree a timeout has elapsed, a "no evidence" outcome; and a top application layer defining what a legal response means and what sanction follows a proof of misbehavior. PIB, the paper's example application, is a cooperative backup service in which each node commits storage capacity in exchange for an equal amount of capacity on other nodes, splits files into chunks, erasure-codes the chunks across storer nodes to tolerate storer failures with less total storage than full replication, and periodically audits other nodes' held chunks against their declared storage quota.
+
+### Measured results
+
+| Measurement | Figure | Conditions |
+|---|---|---|
+| Replicated-state-machine throughput (abstract) | "executes 20 requests per second" | Stated in the abstract; no separate conditions given there |
+| Replicated-state-machine throughput (evaluation section) | "about 15 operations a second for small groups of users" | Section 8, described as an adequate level for the application's requirements; this figure and the abstract's "20 requests per second" are not reconciled in the text |
+| PIB backup time | 1 gigabyte of data backed up to 21 nodes in 20 minutes, recoverable despite the failure of 7 of those nodes | Non-optimized PIB prototype, transferring at 1-2 MB/s |
+| Consensus latency vs. group size | Under 50 ms for 4 peers, under 100 ms for 20 peers; scales roughly linearly with peer count | Pentium-IV 2.4 GHz machines, 1 GB memory, Debian Linux 3.0, 100 Mbps Ethernet, Java 1.4; each configuration run 10 times, 50 consensus operations averaged per trial, median plus 10th/90th percentile reported |
+| Comparison to PBFT | PBFT completes a consensus operation in 15 ms on less powerful hardware than the paper's testbed | Cited as a related-work figure, not reproduced by the authors on their own testbed; the paper attributes part of the gap to implementation language and the rest to the paper's protocol requiring full digital signatures rather than faster MAC-based authentication |
+| Recovery time for a node unreachable for one hour | Under two minutes to catch up | 4-node configuration, one node made unreachable for an hour, then allowed to return; the protocol does not let a returning node skip directly to later broadcast instances |
+| Effect of leader-rotation policy | Round-robin sender rotation keeps running time close to the best case; fixing one sender lets a Byzantine sender that stays just inside the timeout threshold ("Fixed, unlucky") degrade performance far more than a well-behaved fixed sender ("Fixed, lucky") | Measured as running time against number of consensus operations, up to 25 operations, compared across three leader policies |
+| Store/retrieve time for 100 MB under different erasure-coding parameters | Store and retrieve both complete faster under coding than under pure replication; four X/N configurations compared: 1/8, 7/14, 14/21, 1/1 | Encoding parameter X/N notation meaning X chunks needed to reconstruct out of N stored; 1/1 is pure replication with no coding gain |
+| Storage overhead for backup with erasure coding | A 10-node system tolerating f = 2 storer failures requires each node to contribute 1.3 GB of local storage to back up 1 GB of data | Worked numeric example given for the arithmetic (erasure) coding scheme, x-f out of x encoding |
+| Quorum size for state-machine responsiveness | Reduced from n - f - 1 to ceil((n + f + 1) / 2) required responsive nodes | Consequence of strengthening the liveness assumption to bound a response's arrival time; f is the number of Byzantine nodes |
+
+### Parameters
+
+- Byzantine node bound: at most (n - 2) / 3 of all nodes may be Byzantine; the remaining nodes may be rational.
+- Terminating Reliable Broadcast (TRB) initial network timeout: 10 seconds.
+- PIB maximum response time: one week (stated as not relied upon by the reported experiments).
+- PIB lease duration (the period for which stored data is guaranteed retrievable): one month (also stated as not relied upon by the reported experiments).
+- Work-allocation rate limit for PIB: a node may trigger requests and responses totaling at most double its storage quota per coarse timeout interval; exceeding it can generate a Proof of Misbehavior.
+- Erasure-coding parameter x - f out of x: worked example uses a 10-node group with f = 2 tolerated storer failures, requiring 1.3 GB of local storage per 1 GB backed up; the reported 1-gigabyte backup experiment uses a 21-node group tolerating 7 failures (a 14-out-of-21 configuration, per Figure 7's labeling).
+- Target deployment populations named for the system model: 30 co-workers backing up personal machines, 500 students in a dormitory, 50 nonprofit organizations using low-cost refurbished machines.
+
+### Stated limitations
+
+The paper states its performance is inferior to Byzantine fault-tolerant protocols not built for the BAR model: PBFT achieves 15 ms per consensus operation on weaker hardware, a gap the authors attribute partly to implementation language and mainly to their protocol's dependence on full digital signatures rather than faster message-authentication-code primitives, because rational-node accountability requires messages that a third party can later verify came from a specific signer. The paper states the store-time inefficiency in the PIB prototype (data written to disk multiple times before being sent over the network) is uncorrected and planned for a later version. The paper states it assumes rational nodes do not collude and do not have the computational power to break the public-key-signature and secure-hashing assumptions the protocol relies on; a colluding-rational or cryptography-breaking adversary is outside the analysis. The paper states PIB, unlike the underlying state-machine layer, requires synchrony for both safety and liveness, so data trusted to PIB is guaranteed retrievable only until its lease expires and only while message-delivery timing bounds hold. The system model requires a trusted authority to admit members and issue each one a unique cryptographic identity; the paper states this identity assumption is what makes bounding the number of Byzantine nodes and applying long-term sanctions to misbehaving identities possible, and that it is reasonable only for its target closed-membership communities (co-workers, a dormitory's students, or a nonprofit's PC recipients), not for an open-membership network.
+
+### Requirements it places on the rest of the system
+
+A trusted admission authority must exist to issue each participant exactly one cryptographic public-key identity and to control who may join; the protocol's entire accountability mechanism, and therefore its incentive-compatibility guarantee for rational nodes, depends on this identity being both unique per participant and expensive to obtain more than once. Message delivery must be synchronous, with a known bound on delivery time, for the protocol's liveness guarantee to hold; safety holds even without synchrony, but liveness and the ability of non-Byzantine nodes to answer late requests within a bounded time do not. Participants must be able to produce and verify standard digital signatures and secure cryptographic hashes, and the protocol assumes no participant, Byzantine or rational, has the computational power to forge either. The protocol assumes rational nodes act individually and do not coordinate their deviations (no rational collusion); a mechanism assuming this cannot compose with any component that groups multiple identities under shared control. External sanction mechanisms (financial penalties, suspension, social consequences) are optional extensions the paper notes increase flexibility but are not required for the core protocol to function; only the identity-bound internal sanctions (denial of service to the offending node, deletion of that node's stored data) are load-bearing.
+
+### Contradicts
+
+None found within this corpus.
+
+### References worth retrieving
+
+- Feldman, Papadimitriou, Chuang, Stoica, "Free-riding and whitewashing in peer-to-peer systems," PINS 2004 — competing/foundational; already held in this corpus (see FELDMAN-JSAC-06's mismatch note — that entry's registry target is the 2006 JSAC extended version, not yet separately retrieved).
+- Cohen, "Incentives build robustness in BitTorrent," IPTPS 2003 — competing; the paper's related-work section cites a later critique (Shneidman) showing BitTorrent's tit-for-tat is not actually incentive-compatible.
+- Cox, Noble, "Samsara: honor among thieves in peer-to-peer storage," SOSP 2003 — competing; a storage-incentive system the paper directly contrasts, stating Samsara's random-spot-check verification probabilistically deletes a node's data on a single failed check, increasing the chance data is unavailable exactly when needed.
+- Lillibridge, Elnikety, Birrell, Burrows, Isard, "A cooperative Internet backup scheme," USENIX ATC 2003 — competing; another backup-incentive system the paper states does not bound the damage Byzantine nodes can inflict on stored data.
+- Douceur, "The Sybil attack," IPTPS 2002 — foundational (the identity-forgery attack the paper's strong-identity assumption is built to prevent).
+- Castro, Liskov, "Practical Byzantine fault tolerance and proactive recovery," ACM TOCS 20(4), 2002 — foundational/competing (PBFT, the Byzantine-only baseline the paper's evaluation compares latency against).
+- Gummadi, Dunn, Saroiu, Gribble, Levy, Zahorjan, "Measurement, modeling, and analysis of a peer-to-peer file-sharing workload," SOSP 2003 — foundational (independent measurement of participant behavior in a deployed p2p system).
+- Eliaz, "Fault tolerant implementation," Review of Economic Studies 69, 2002 — foundational (k-Fault-Tolerant Nash Equilibrium, the paper states this is the only prior formal model combining rational and Byzantine agents, applied to auctions rather than distributed systems).
+- Shneidman, cited via reference [62] in the paper's related work as demonstrating BitTorrent's tit-for-tat is not incentive compatible — attack/critique, retrieve to check the specific claim against BitTorrent.
+
+### Verbatim extracts
+
+- "executes 20 requests per second and our PIB prototype can back up a gigabyte of data in 20 minutes"
+- "at most n-2 over 3 nodes are Byzantine; the rest of the nodes can be rational"
+- "a self-contained cryptographic Proof Of Misbehavior (POM) by a node"
+- "we assume that rational nodes do not collude"
+- "data trusted to PIB is guaranteed to be retrievable only until the lease"
+- "our non-optimized PIB prototype can backup in 20 minutes a gigabyte"

@@ -1,0 +1,26 @@
+## [BONEH-ASIACRYPT-01] MISMATCH — retrieved text is not the ASIACRYPT 2001 paper
+**Citation (registry target):** Dan Boneh, Ben Lynn, Hovav Shacham. "Short Signatures from the Weil Pairing." ASIACRYPT (journal version: Journal of Cryptology, 2004), 2001. DOI 10.1007/3-540-45682-1_30.
+**Retrieved:** MISMATCH — NOT USABLE AS EVIDENCE FOR THIS KEY
+**Source URL:** unknown (candidate URLs in the registry are https://doi.org/10.1007/3-540-45682-1_30, https://doi.org/10.1007/S00145-004-0314-9, and https://crypto.stanford.edu/~dabo/pubs/papers/BLSsignatures.ps; the file on disk was not fetched from the Stanford .ps candidate and does not match any of the three)
+**Domain:** E
+
+### What the file on disk actually is
+The text at `sources/text/BONEH-ASIACRYPT-01.txt` is headed "ON THE IMPLEMENTATION OF PAIRING-BASED CRYPTOSYSTEMS, A DISSERTATION SUBMITTED TO THE DEPARTMENT OF COMPUTER SCIENCE... OF STANFORD UNIVERSITY... FOR THE DEGREE OF DOCTOR OF PHILOSOPHY, Ben Lynn, June 2007" — Ben Lynn's own 2007 Stanford PhD dissertation, with Dan Boneh listed as principal advisor. This is a different document from the target: single-authored (Ben Lynn only, not Boneh, Lynn, and Shacham jointly), dated 2007 rather than 2001, and titled and structured as a dissertation on pairing implementation techniques rather than the short conference paper introducing the BLS signature scheme.
+
+- The bibliography at the end of the file (checked in the last 1,500 characters of the document) runs to at least 66 numbered references on elliptic-curve and pairing implementation topics (curve generation, compressed pairings, discrete-log algorithms), consistent with a dissertation's related-work chapter, not a conference paper's shorter reference list.
+- The dissertation's own abstract states its scope directly: it covers elliptic-curve and pairing background, methods for obtaining efficiently computable and cryptographically secure Tate and Weil pairings, and implementation optimizations reducing pairing computation "from several minutes to several milliseconds." It states that "applications of pairings are largely beyond our scope" and mentions the short-signature construction only as one example application, not as its subject.
+- Ben Lynn is a co-author of the actual target paper, and the dissertation was supervised by Dan Boneh and very likely discusses and reuses material from the BLS construction (its abstract mentions "a digital signature scheme with the shortest known signature lengths at typical security levels"), which is almost certainly why an automated retrieval step matched this document to the BONEH-ASIACRYPT-01 target — author-name overlap and topical proximity, not the actual paper.
+
+Per Rule 3 and Rule 1 of this extraction pass, no measured fact, parameter, or mechanism description has been recorded from this file under the BONEH-ASIACRYPT-01 key. Any figure specific to the 2001 ASIACRYPT paper (signature length, the aggregate/short-signature construction, its exact security reduction) must come from the actual short-signature paper, not from this dissertation, even where the dissertation's own content might overlap with or restate BLS material — extracting from the wrong document risks attributing dissertation-specific analysis, parameter choices, or benchmark numbers (which reflect a 2007 implementation and different hardware) to the 2001 paper's own claims.
+
+### What should happen next
+Re-retrieve the actual "Short Signatures from the Weil Pairing" paper before any synthesis step cites BONEH-ASIACRYPT-01. Candidates not yet confirmed in this pass: the Stanford author page copy at `https://crypto.stanford.edu/~dabo/pubs/papers/BLSsignatures.ps` (listed in the registry as a candidate URL but not the source of the file actually on disk), the Springer DOI `10.1007/3-540-45682-1_30` for the ASIACRYPT 2001 proceedings version, or the Journal of Cryptology 2004 version (DOI `10.1007/S00145-004-0314-9`), which is the fuller, journal-refereed treatment and may be easier to source than the conference proceedings.
+
+### Contradicts
+Contradicts the registry's expectation that this file contains "the only common signature scheme whose signatures on different messages by different keys can be combined into one constant-size aggregate" (the registry's `why_needed` field for this key) — the retrieved dissertation is a broader implementation study of pairing-based cryptosystems generally and is not organized around, or a substitute source for, that specific claim about the BLS scheme's aggregation property.
+
+### References worth retrieving
+Not evaluated — bibliography mining was not performed against this mismatched text, since it is not the target paper. Once the correct BLS paper is retrieved, its own (short) bibliography should be mined directly rather than substituting the dissertation's much longer implementation-focused reference list.
+
+### Verbatim extracts
+Not applicable — no claim in this entry rests on content from the mismatched file beyond the identifying passages quoted above, which establish the mismatch itself: "A DISSERTATION SUBMITTED TO THE DEPARTMENT OF COMPUTER SCIENCE... FOR THE DEGREE OF DOCTOR OF PHILOSOPHY, Ben Lynn, June 2007" and "Applications of pairings are largely beyond our scope."
