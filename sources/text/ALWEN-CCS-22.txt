@@ -1,0 +1,4072 @@
+Server-Aided Continuous Group Key Agreement
+Joël Alwen
+alwenjo@amazon.com
+AWS-Wickr
+New York, NY, USA
+Dominik Hartmann
+dominik.hartmann@rub.de
+Ruhr-University Bochum
+Bochum, Germany
+Eike Kiltz
+eike.kiltz@rub.de
+Ruhr-University Bochum
+Bochum, Germany
+Marta Mularczyk
+mulmarta@amazon.com
+AWS-Wickr
+New York, NY, USA
+ABSTRACT
+Continuous Group Key Agreement (CGKA) – or Group Ratchet-
+ing – lies at the heart of a new generation of scalable End-to-End
+secure (E2E) cryptographic multi-party applications. One of the
+most important (and first deployed) CGKAs is ITK which under-
+pins the IETF’s upcoming Messaging Layer Security E2E secure
+group messaging standard. To scale beyond the group sizes possi-
+ble with earlier E2E protocols, a central focus of CGKA protocol
+design is to minimize bandwidth requirements (i.e. communication
+complexity).
+In this work, we advance both the theory and design of CGKA
+culminating in an extremely bandwidth efficient CGKA. To that end,
+we first generalize the standard CGKA communication model by
+introducing server-aided CGKA (saCGKA) which generalizes CGKA
+and more accurately models how most E2E protocols are deployed
+in the wild. Next, we introduce theSAIK protocol; a modification of
+ITK, designed for real-world use, that leverages the new capabilities
+available to an saCGKA to greatly reduce its communication (and
+computational) complexity in practical concrete terms.
+Further, we introduce an intuitive, yet precise, security model for
+saCGKA. It improves upon existing security models for CGKA in
+several ways. It more directly captures the intuitive security goals
+of CGKA. Yet, formally it also relaxes certain requirements allowing
+us to take advantage of the saCGKA communication model. Finally,
+it is significantly simpler making it more tractable to work with
+and easier to build intuition for. As a result, the security proof of
+SAIK is also simpler and more modular.
+Finally, we provide empirical data comparing the (at times, quite
+dramatically improved) complexity profile of SAIK to state-of-the
+art CGKAs. For example, in a newly created group with 10K mem-
+bers, to change the group state (e.g. add/remove parties) ITK re-
+quires each group member download 1.38MB. However, with SAIK,
+members download no more than 2.7KB.
+Contents
+Abstract 1
+Contents 1
+1 Introduction 2
+1.1 Our Contributions 2
+1.2 Related Work 4
+2 Notation 4
+3 Multi-Message Multi-Recipient PKE 5
+3.1 Security with Adaptive Corruptions 5
+3.2 Construction 5
+4 Server-Aided CGKA 6
+4.1 Syntax 6
+4.2 Intuitive Security Properties 6
+4.3 Authenticated Key Service (AKS) 6
+4.4 Formal Model Intuition 6
+4.5 Semantic Agreement 7
+4.6 Simplifications 8
+5 The SAIK Protocol 8
+5.1 Intuition for the ITK Protocol 9
+5.2 Intuition for the SAIK Protocol 9
+6 Security of SAIK 10
+7 Evaluation 11
+8 Extensions 12
+8.1 Better Security Predicates 12
+8.2 Primitives with Imperfect Correctness 12
+Acknowledgments 14
+References 14
+A Additional Preliminaries 16
+A.1 Universal Composability 16
+A.2 Assumptions 16
+A.3 Multi-Recipient Multi-Message PKE(mmPKE)
+Definitions 16
+A.4 Data Encapsulation Meachanism(DEM) 17
+A.5 Message Authentication Codes (MAC) 17
+B Security of the mmPKE Scheme 17
+C Nominal Groups 19
+D Details of the (sa)CGKA Security Model 20
+E The Authenticated Key Service Functionality (AKS) 22
+F Details of SAIK 22
+F.1 Ratchet Trees 22
+F.2 SAIK State and Algorithms 22
+F.3 Extraction Procedure for the Server 23
+F.4 Propose-Commit Syntax 26
+G One-Wayness Security of mmPKE 27
+H Security of SAIK 27
+H.1 Proof Outline 28
+H.2 SAIK Guarantees Consistency 29
+H.3 SAIK Guarantees Confidentiality 29
+H.4 SAIK Guarantees Authenticity 34
+H.5 Left-Balanced Trees 36
+
+Alwen, et al.
+1 INTRODUCTION
+End-to-end (E2E) secure applications have become one of the most
+widely used class of cryptographic applications on the internet with
+billions of daily users. Accordingly, the E2E protocols upon which
+these applications are built have evolved over several distinct gen-
+erations, adding functionality and new security guarantees along
+the way. Modern protocols are generally expected to support fea-
+tures like multi-device accounts, continuous refreshing of secrets
+and asynchronous communication. Here, asynchronous refers to
+the property that parties can communicate even when they are
+not simultaneously online. To make this possible, the network pro-
+vides an (untrusted) mailboxing service for buffering packets until
+recipients come online.
+The growing demand for E2E security motivates increasingly
+capable E2E protocols; in particular, supporting ever larger groups.
+For example, in the enterprise setting organizations regularly have
+natural sub-divisions with far more members than practically sup-
+ported by today’s real-world E2E protocols. Support for large groups
+opens the door to entirely new applications; especially in the realm
+of machine-to-machine communication such as in mesh networks
+and IoT. The desire for large groups is compounded by the fact that
+many applications treat each device registered to an account as
+a separate party at the E2E protocol level. For example, a private
+chat between Alice and Bob who each have a phone and laptop
+registered to their accounts is actually a 4-party chat from the point
+of view of the underlying E2E protocol.
+Next Generation E2E Protocols. The main reason current pro-
+tocols (at least those enjoying state-of-the-art security, e.g. post
+compromise forward security) only support small groups is that
+their communication cost grows linearly in the group size. This
+has imposed limits on real-world group sizes (generally at or below
+1000 members).
+Consequently, a new generation of E2E protocols is being devel-
+oped both in academia (e.g. [1, 3–5, 7, 9, 26, 31]) and industry [14].
+Their primary design goal is to support extremely large groups (e.g.
+10s of thousands of users) while still meeting, or exceeding, the
+security and functionality of today’s state-of-the-art deployed E2E
+protocols. Technically, the new protocols do this by reducing their
+communication complexity to logarithmic in the group size; albeit,
+only under favorable conditions in the execution. This informal
+property is sometimes termed the fair-weather complexity.
+To date, the most important of these new E2E protocols is the
+IETF’s upcoming secure group messaging (SGM) standard called the
+Messaging Layer Security (MLS) protocol. MLS is in the final stages
+of standardization and its core components are already seeing initial
+deployment [25].
+Continuous Group Key Agreement. To the best of our knowledge,
+all next gen. E2E protocols share the following basic design para-
+digm. At their core lies a Continuous Group Key Agreement (CGKA)
+protocol; a generalization to the group setting of the Continuous
+Key Agreement 2-party primitive [ 4, 28] underlying the Double
+Ratchet.
+Intuitively, a CGKA protocol provides E2E secure group manage-
+ment for dynamic groups, i.e., groups whose properties may change
+mid-session. By properties we mean things like the set of members
+currently in the group, their attributes, the group name, the set of
+moderators, etc. Any change to a group’s properties initiates a fresh
+epoch in the session. A CGKA protocol ensures all group members
+in an epoch agree on the group’s current properties. Members will
+only transition to the same next epoch if they agree on which prop-
+erties were changed and by whom. Each epoch is equipped with its
+own symmetric epoch key known to all epoch members but indis-
+tinguishable from random to anyone else. Higher-level protocols
+typically (deterministically) expand the epoch key into a complete
+key schedule which in turn can be used to, say, protect application
+data sent between members (e.g. messages or VoiP data).
+MLS too, is (implicitly) based on a CGKA, originally dubbed
+TreeKEM [17]. Since its inception, TreeKEM has undergone several
+substantial revisions [11, 12] before reaching its current form [9, 13].
+For clarity, we refer to its current version at the time of this writing
+as Insider-Secure TreeKEM (ITK) (using the terminology of [9] where
+that version was analyzed). ITK has already seen its first real world
+deployment as a core component of Cisco’s Webex conferencing
+protocol [25].
+Why Consider CGKA?. CGKA is interesting because of the fol-
+lowing two observations. First, CGKA seems to be the minimal
+functionality encapsulating almost all of the cryptographic chal-
+lenges inherent to building next generation E2E protocols. Second,
+building typical higher-level E2E applications (e.g. SGM or confer-
+ence calling) from a CGKA can be done via relatively generic, and
+comparatively straightforward mechanisms. Moreover, the result-
+ing application directly inherits many of its key properties from the
+underlying CGKA; notably their security guarantees and their com-
+munication and computational complexities. In this regard, CGKA
+is to, say, SGM what a KEM is to hybrid PKE. For the case of SGM,
+this intuitive paradigm and the relationship between properties of
+the CGKA and resulting SGM was made formal in [6]. In particular,
+that work abstracts and generalizes MLS’s construction from ITK.
+1.1 Our Contributions
+This work makes progress on the central challenge in CGKA proto-
+col design: reducing communication complexity so as to support
+larger groups (without compromising on security or functionality).
+Server-Aided CGKA. We begin by revisiting one of the most basic
+assumptions about CGKA in prior work; namely that participants
+communicate via an insecure broadcast channel. Instead, we note
+that in almost all modern deployments of E2E protocols parties
+actually communicate via an untrusted mailboxing service imple-
+mented using an (often highly scalable) server. In light of this, we
+modify the standard communication model to make the server
+explicit. We define a generalization of CGKA called server-aided
+CGKA (saCGKA). In contrast to CGKA, an saCGKA protocol in-
+cludes an Extract procedure run by the server to convert a “full
+packet” uploaded by a sender into an individualized “sub-packet”
+for a particular recipient. CGKA corresponds to the special case
+where the full and individual packets are the same. Intuitively, the
+server remains untrusted and security should hold no matter what it
+does. However, should it choose to follow the Extract procedure, the
+saCGKA protocol additionally ensures correctness and availability.
+
+Server-Aided Continuous Group Key Agreement
+Security for CGKA. We define a new security notion for (sa)CGKA
+capturing the same intuitive guarantees as those shown for ITK [9]
+for example. Like other notions based on the history graph para-
+digm of [6], our notion is parameterized by safety predicates that
+together decide the security of a given epoch key in a given execu-
+tion.
+However, at a technical level our notion departs significantly
+from past ones. Essentially, it relaxes the requirement that group
+members in an epoch agree on and authenticate the history of net-
+work traffic leading to the epoch. Instead, the new notion “only”
+ensures they agree on and authenticate thesemantics of the history;
+i.e. the “meaning” of the traffic rather than exact packet contents.
+This has several interesting consequences. First, it more directly
+captures our intuitive security goals. E.g. it avoids subtle questions
+about what intuition is really captured when, say, an AEAD ci-
+phertext in a packet can be decrypted to different plaintexts using
+different keys.1 Second, the relaxation creates wiggle room we can
+use to prove security despite group members no longer having
+the same view of network traffic. Finally, it allows us to relax the
+security of the encryption scheme used in our construction from
+CCA to replayable CCA (RCCA) [23].2
+Further, the new saCGKA security notion is significantly simpler
+(though just as precise) compared to past ones. Indeed, past notions
+have been criticised for being all but inaccessible to non-domain
+experts due to their complexity. In an effort to improve this, our new
+notion omits/simplifies various security features of a CGKA as long
+as A) they can be formalized using known techniques and B) they
+can be easily achieved by known, practical and straightforward
+extensions of a generic CGKA protocol (including SAIK) satisfying
+our notion. Thus we obtain a definition focused on the basic prop-
+erties of an (sa)CGKA with the idea that a protocol satisfying our
+notion can easily be extended to a “full-fledged” (sa)CGKA using
+standard techniques.
+The SAIK Protocol. Next, we introduce a new saCGKA protocol
+called Server-Aided ITK (SAIK), designed for real-world use. For
+example, it relies exclusively on standard cryptographic primitives
+and can be implemented using the API of various off-the-shelf
+cryptographic libraries. To obtain SAIK, we start with ITK and
+make the following modifications.
+Multi-message multi-recipient PKE.. First, we replace ITK’s use
+of standard (CCA secure) PKE by multi-message multi-recipient
+PKE (mmPKE) [ 36]. mmPKE has the functionality of a parallel
+composition of standard PKE schemes (both in terms of ciphertext
+sizes and computation cost of encryption). Constructing mmPKE
+directly can result in a significantly more efficient scheme.
+We introduce a new security notion for mmPKE, more aligned
+with the needs of (the security targeted by)SAIK. It both strengthens
+and weakens past notions: On the one hand, proving SAIK secure
+demands that we equip the mmPKE adversary of [36] with adaptive
+key compromise capabilities. On the other hand, thanks to the
+relaxation to semantic agreement, we “only” require RCCA security
+rather than full-blown CCA used in previous’ works [7, 9].
+1This can happen for widely used AEADs like AES-GCM [27].
+2This makes sense as RCCA was designed to relax the “syntactic non-malleability“ of
+CCA to a form of “semantic non-malleability”.
+We prove that the mmPKE construction of [36] satisfies our new
+notion based on a form of gap Diffie-Hellman assumption, the same
+as in [36]. The reduction is tight in that the security loss is inde-
+pendent of the number of parties (i.e. key pairs) in the execution
+(although it does depend on the number of corrupted key pairs).
+Moreover, we extend the proof to capture mmPKE constructions
+based on “nominal groups” [2]. Nominal groups abstract the alge-
+braic structure over bit-strings implicit to the X25519 and X448
+scalar multiplication functions and corresponding twisted Edwards
+curves.[35]. In practical terms, this means our proofs also apply to
+instantiations of [36] based on the X25519 and X448 functions.
+Authentication. Second, we modify the mechanisms used by ITK
+to ensure members transitioning to a new epoch authenticate the
+sender announcing a new epoch. Rather than sign the full packet
+like in ITK, the sender in SAIK only signs a small tag which “binds“
+all salient properties of the new epoch, i.e., its secrets, the set of
+group members, the history of applied operations, etc. In fact, we
+use a tag that already exists in ITK (called the “confirmation tag”).
+Performance Evaluation. Finally, we compare the communication
+complexity of SAIK, ITK and the CGKA of [ 31] called CmPKE.
+We break down the communication cost into sender and receiver
+bandwidth, i.e., the size of a packet uploaded, resp., downloaded
+(by one receiver) from the server. This metric reflects the resources
+needed from an individual client.
+We note that the sender bandwidth of CmPKE grows linearly in
+the group size, while for SAIK and ITK it varies depending on both
+the group size and the history of preceding operations. Meanwhile,
+the receiver bandwidth is independent of both the size and the
+history for CmPKE, grows logarithmically in the group size for
+SAIK and varies with both the size and history for ITK.
+We find that compared to ITK, SAIK always requires less band-
+width (regardless of history and group size). However, compared
+to CmPKE, SAIK requires slightly more receiver bandwidth but
+anywhere from the same to far less sender bandwidth. Concretely,
+in a group with 10K parties, CmPKE’s sender bandwidth is 0.8MB
+while SAIK and ITK’s bandwidths range between 3.6KB - 0.8MB and
+4.4KB - 1.5MB, respectively (depending on the history). Meanwhile
+for receivers CmPKE and SAIK require 0.8KB and 2KB respectively
+while ITK requires between 4.4KB - 1.5MB.
+In addition, we also compare the total bandwidth considered
+in [31], i.e., the size of the uploaded packet and all downloaded
+packets together. This metric reflects the resources required from
+the server, or equivalently from all clients together. We find that
+SAIK requires more total bandwidth than CmPKE but much less
+than ITK.
+Outline. The paper is structured as follows. Sec. 2 (and App. A)
+covers preliminaries. Sec. 3 focuses on mmPKE. Sec. 4 describes the
+new security model for saCGKA with details outsourced to App. D.
+Sec. 5 describes theSAIK protocol with details found in App. F. Sec. 6
+formally states SAIK’s security. Sec. 7 contains empirical evaluation
+and comparison of SAIK to previous constructions. Finally, Sec. 8
+contains extensions to stronger security guarantees. Finally, SAIK’s
+security proof is formalized in App. H.
+
+Alwen, et al.
+1.2 Related Work
+Next generation CGKA protocols. The study of next generation
+CGKA protocols for very large groups was initiated by Cohn-
+Gorden et al. in [26]. This was soon followed by the first version of
+TreeKEM [37] which evolved to add stronger security [11, 37, 39]
+and more flexible functionality [12] culminating in its current form
+ITK [9] reflected in the current draft of the MLS RFC [13].
+Reducing the communication complexity of TreeKEM and its
+descendants is not a new goal. Tainted TreeKEM [3] exhibits an
+alternate complexity profile optimized for a setting where the group
+is managed by a small set of moderators. Recently, [1] introduced
+new techniques for ‘multi-group” CGKAs (i.e. CGKAs that explicitly
+accommodate multiple, possibly intersecting, groups) with better
+complexity than obtained by running a “single-group” CGKA for
+each group. Other work has focused on stronger security notions for
+CGKA both in theory [7] and with an eye towards practice [5, 9].
+Supporting more concurrency has also been a topic of focus as
+witnessed by the protocols in [ 12, 19, 40]. Recently [30] present
+CGKA with novel membership hiding properties.
+Cryptographic models of CGKA security. Defining CGKA security
+in a simple yet meaningful way has proven to be a serious challenge.
+Many notions fall short in at least one of the two following senses.
+Either they do not capture key guarantees desired (and designed
+for) by practitioners (such as providing guarantees to newly joined
+members) or they place unrealistic constraints on the adversary.
+Above all, they do not consider fully active adversaries. For in-
+stance, in [3], the adversary is not allowed to modify packets while
+in [5, 6], new packets can be injected but only when authenticity
+can be guaranteed despite past corruptions (thus limiting what is
+captured about how session’s regain security after corruptions).
+Meanwhile, the work of [20] permits a large class of active attacks
+but only in the context of the key derivation process of ITK. So
+while their adversaries can arbitrarily modify secrets in an honest
+party’s key derivation procedure, they can not deliver arbitrary
+packets to honest parties. This is a significant limitation, e.g., it
+does not capture adversaries that deliver packets with ciphertexts
+for which they do not know the plaintexts.
+Indeed, a good indication that such simplifications can be prob-
+lematic can be found in [9]. They present an attack on TreeKEM
+(that can easily be easily adapted to the CGKAs in the above works
+except for [20]) which uses honest group members as decryption
+oracles to clearly violate the intuitive security expected of a CGKA.
+Yet, each of the above works (except for [ 20]) proves security of
+their CGKA using only IND-CPA secure encryption.
+In contrast to the above works, [ 7] aimed to capture the full
+capabilities a realistic adversary might have. Thus, they model a
+fully active adversary that can leak parties local states at will and
+even set their random coins. In [9] this setting is extended to capture
+insider security. That is adversaries which can additionally corrupt
+the PKI. This captures the standard design criterion for deployed
+E2E applications that key servers are not considered trusted third
+parties. Unfortunately, this level of real-world accuracy has resulted
+in a (probably somewhat inherently) complicated model.
+Symbolic models of CGKA security. Complementing the above
+line of work, several versions of TreeKEM have been analyzed using
+a symbolic approach and automated provers [ 18]. Their models
+consider fully active attackers and capture relatively wide ranging
+security properties which the authors are able to convincingly
+tackle by using automated proofs.
+The CGKA of [ 31]. The work [31] presents a variant of CGKA,
+called here filtered CGKA (fCGKA), along with a protocol called
+CmPKE. In fCGKA, like in saCGKA, receivers download personal-
+ized sub-packets. However, fCGKA achieves this differently — an
+uploaded fCGKA packet has a particular form, namely, a header
+delivered to all receivers, followed by a number of ciphertexts, one
+for each receiver. Note that fCGKA is a special case of saCGKA
+where the Extract procedure outputs the header and the receiver’s
+ciphertext.
+The fCGKA security notion in [31] is essentially the model of [9].
+The only difference is that [9] requires agreement on the history
+of the network packets leading to a given epoch. To adapt this to
+the fCGKA syntax, [31] requires instead agreement on the history
+of packet headers. Compared to our saCGKA notion, this is still
+syntactic agreement and e.g., requires CCA security. See Sec. 4.5.
+Regarding the communication cost,CmPKE is designed to reduce
+the total bandwidth, i.e., for an operation, it minimizes the size of the
+sent packet and all downloaded packets together. In contrast, SAIK
+is designed to reduce themaximum bandwidth, i.e., it minimizes the
+size of each sent or downloaded packet. Accordingly, CmPKE has
+smaller total bandwidth than SAIK. In fact, the maximum size of a
+downloaded packet is also smaller for CmPKE. However, the size
+of a sent packet is usually much bigger for CmPKE. In summary,
+SAIK is designed to support clients with poor bandwidth, i.e., it
+minimizes the size of a single uploaded or downloaded packet. Thus,
+while the server load is a bit higher, the network requirements for
+clients are usually much lower.
+mmPKE.. mmPKE was introduced by Kurosawa [34] though their
+security model was flawed as pointed out and fixed by Bellare et.al
+[15, 16]. Yet, those works too lacked generality as they demanded
+malicious receivers know a secret key for their public key. This
+restriction was lifted by Poettering et.al. in [36] who show that well-
+known PKE schemes such as ElGamal[29] are secure even when
+reusing coins across ciphertexts. Indeed, reusing coins this way can
+also reduce the computational complexity of encapsulation and the
+size of ciphertexts for KEMs as shown in the Multi-Recipient KEM
+(mKEM) of [24, 33, 38] for example. All previous security notions
+(for mmPKE and mKEM) allow an adversary to provide malicious
+keys (with or without knowing corresponding secret keys), but
+only [31] allows for adaptive corruption of honest keys, which is
+necessary for ITK’s security against adaptive adversaries.
+2 NOTATION
+For𝑛 ∈ Z , we define [𝑛] :={1, 2,...,𝑛 }. We write 𝑥
+$
+← 𝑋 for
+sampling an element𝑥 uniformly at random from a (finite) set𝑋
+as well as for the output of a randomized algorithm, i.e.𝑥
+$
+←𝐴(𝑦)
+denotes the output of the probabilistic algorithm𝐴 on input𝑦 using
+fresh random coins. For a deterministic algorithm 𝐴, we write
+𝑥 =𝐴(𝑦). Adding an element𝑦 to a set𝑌 is denoted by𝑌 +←𝑦 and
+appending an entry𝑧 to a list𝐿 is written as𝑍 + +←𝑧. Appending a
+whole list𝐿2 to a list𝐿1 is denoted by𝐿1++𝐿2. For a vectorﬁ𝑥, we
+
+Server-Aided Continuous Group Key Agreement
+denote its length as|ﬁ𝑥| andﬁ𝑥[𝑖] denotes the𝑖-th element ofﬁ𝑥 for
+𝑖∈[|ﬁ𝑥|]. Note that we use vectors as in programming, i.e. we don’t
+require any algebraic structure on them. For clarity, we use len to
+denote the length of collections.
+3 MULTI-MESSAGE MULTI-RECIPIENT PKE
+We first recall the syntax of mmPKE from [ 16]. At a high level,
+mmPKE is standard encryption that supports batching a number of
+encryption operations together, in order to improve efficiency.3
+Definition 3.1 (mmPKE). A Multi-Message Multi-Receiver Public
+Key Encryption (mmPKE) scheme mmPKE =(KG, Enc, Dec, Ext)
+consists of the following four algorithms:
+KG
+$
+→( ek, dk): Generates a new key pair.
+Enc(ﬁek,ﬁ𝑚)
+$
+→ 𝐶: On input of a vector of public keys ﬁek and a
+vector of messagesﬁ𝑚 of the same length, outputs a multi-
+recipient ciphertext𝐶 encrypting each message inﬁ𝑚 to the
+corresponding key inﬁek.
+Ext(𝐶,𝑖) →𝑐𝑖: A deterministic function. On input of a multi-
+recipient ciphertext𝐶 and a position index 𝑖, outputs an
+individual ciphertext𝑐𝑖 for the𝑖-th recipient.
+Dec(dk,𝑐)→ 𝑚∨⊥ : On input of an individual ciphertext𝑐 and a
+secret key dk, outputs either the decrypted message𝑚 or,
+in case decryption fails,⊥.
+3.1 Security with Adaptive Corruptions
+Our security notion for mmPKE, called mmIND-RCCA, requires
+indistinguishability in the presence of active adversaries who can
+adaptively corrupt secret keys of recipients. The notion builds upon
+the (strengthened) IND-CCA security of mmPKE from [36], but
+there are two important differences: First, [36] does not consider
+corruptions. Second, instead of CCA, we define the slightly weaker
+notion of Replayable CCA (RCCA). Roughly, RCCA [23] is the same
+as CCA except modifying a ciphertext so that it encrypts the exact
+same message is not considered an attack. RCCA security is implied
+by CCA security.
+We note that an almost identical security definition was pre-
+sented in parallel by Hashimoto et.al.[31]. However, they only con-
+sider multi-recipient PKE (mPKE), where all recipients receive the
+same message.
+mmIND-RCCA is similar to RCCA security of regular encryption
+in the multi-user setting. The main difference is that the challenge
+ciphertext is computed by encrypting one of two vectors of mes-
+sagesﬁ𝑚∗
+0 andﬁ𝑚∗
+1 under a vector of public keysﬁek
+∗
+. The vectorﬁek
+∗
+is chosen by the adversary and can contain keys generated by the
+challenger as well as arbitrary keys. The adversary also gets access
+to standard decrypt and corrupt oracles for each recipient. To dis-
+able trivial wins, we require thatﬁ𝑚∗
+0 andﬁ𝑚∗
+1 have equal lengths and
+that if the𝑖-th key inﬁek
+∗
+is corrupted, then the𝑖-th components of
+ﬁ𝑚∗
+0 andﬁ𝑚∗
+1 are identical. Moreover, we require that the for each𝑖,
+the lengths of the𝑖-th components ofﬁ𝑚∗
+0 andﬁ𝑚∗
+1 are the same.
+The last requirement means that a secure mmPKE scheme may
+leak the lengths of components of encrypted vectors. We note that
+3The majority of works on mmPKE uses a different syntax, where there is no Ext and
+instead Enc outputs a vector of individual ciphertexts. Since Ext is deterministic, the
+syntaxes are equivalent.
+SAIK is also secure when instantiated with an mmPKE scheme that
+leaks more (see App. G), e.g. whether two messages in a vector are
+the same. The formal definitions are in App. A.3.
+3.2 Construction
+The mmPKE of [ 36] is straightforward. It requires a data encap-
+sulation scheme DEM, a hash𝐻 and a group G of prime order𝑝
+generated by𝑔.4 Recall that ElGamal encryption of𝑚 to public key
+𝑔𝑥 requires sampling coins𝑟 to obtain ciphertext(𝑔𝑟, DEM(𝑘𝑚,𝑚))
+where𝑘𝑚 =𝐻(𝑔𝑟𝑥,𝑔𝑥). The mmPKE variant reuses coins𝑟 from the
+first ElGamal ciphertext to encrypt all subsequent plaintexts. Thus,
+the final ciphertext has the form(𝑔𝑟, DEM(𝑘1,𝑚 1), DEM(𝑘2,𝑚 2),
+...) where𝑘𝑖 = 𝐻(𝑔𝑟𝑥𝑖,𝑔𝑥𝑖) for all 𝑖. We call the construction
+DH-mmPKE[G ,𝑔,𝑝, DEM,𝐻]; a formal description is in App. B.
+Optimizing for Short Messages. Normally, when messages𝑚 can
+have arbitrary size, a sensible mmPKE would use a KEM\DEM style
+construction to avoid having to re-encrypt 𝑚 multiple times. In
+other words, for each𝑚 in the encrypted vector, we choose a fresh
+key𝑘′𝑚 for an AEAD and encrypt𝑚 with𝑘′𝑚. Then use the mmPKE
+of [36] to encrypt 𝑘′𝑚 to each public key receiving 𝑚. However,
+since the secrets encrypted in SAIK have the same length as AEAD
+keys, in our case it is more efficient to encrypt the secrets directly.
+Tight security bound. In App. B, we prove the following upper
+bound on the advantage of any adversary against themmPKE from
+[36]. Our bound is tighter than the bound that follows from the
+straightforward adaptation of the bound from [36] (i.e. using the
+hybrid argument and guessing the uncorrupted key). In particular,
+that bound would depend (linearly) on the total number of public
+keys, which may get very large. In contrast, our bound depends
+only on the number of corrupted keys and the length of encrypted
+vectors.
+Theorem 3.2. Let G be a group of prime order 𝑝 with generator
+𝑔, let DEM be a data encapsulation mechanism and let mmPKE =
+DH-mmPKE[G ,𝑔,𝑝, DEM,𝐻]. For any adversaryA and any 𝑁∈
+N , there exist adversariesB1 andB2 with runtime roughly the same
+asA’s s.t.
+AdvmmIND-RCCA
+mmPKE,𝑁 (A)≤ AdvIND-RCCA
+DEM (B2)
++ 2𝑛·(𝑒2𝑞𝑐AdvDSSDH
+(G ,𝑔,𝑝)(B1)+ 𝑞𝑑1
+𝑝 +𝑞ℎ
+𝑝),
+where𝐻 is a random oracle, 𝑒 is the Euler number,𝑛 is the length of
+the challenge vector, and𝑞𝑑1 ,𝑞𝑐 and𝑞ℎ are the number of queries to
+the decrypt and corrupt oracles and the random oracle, resp.
+Remark 1. Some practical applications of Diffie-Hellman, most no-
+tably Curve25519 and Curve448 [35], implement a Diffie-Hellman
+operation that is not exponentiation in a prime-order group. Such
+operations can be formalized as so-called nominal groups [2]. In
+App. C, we generalize and prove Theorem 3.2 for nominal groups.
+In particular, this means that DH-mmPKE is secure if instantiated
+with Curve25519 and Curve448.
+4In SAIK we can instantiate DEM with an off-the-shelf AEAD such as AES-GCM and
+𝐻 with HKDF.
+
+Alwen, et al.
+4 SERVER-AIDED CGKA
+In this section, we first explain the saCGKA syntax, i.e., the interface
+exposed by saCGKA protocols to higher-level applications. Then,
+we give intuitive security properties saCGKA protocols should
+provide and an overview of our saCGKA security model. For details,
+see App. D. Finally, we highlight the additional flexibility provided
+by semantic agreement of saCGKA and list simplifications it makes
+compared with previous works on active CGKA security [7, 9, 31].
+4.1 Syntax
+A saCGKA protocol allows a dynamic group of parties to agree on
+a continuous sequence of symmetric group keys. An execution of a
+saCGKA protocol proceeds in epochs. During each epoch, a fixed
+set of current group members shares a single group key. A group
+member can modify the group state, that is, create a new epoch,
+by sending a single message to the mailboxing service. Afterwards,
+each group member can download a possibly personalized message
+and, if they accept it, transition to the new epoch. Three types of
+group modifications are supported: adding a member, removing a
+member and updating, i.e., refreshing the group key.
+4.2 Intuitive Security Properties
+saCGKA protocols are designed for the setting with active adver-
+saries who fully control the mailboxing service and repeatedly
+expose secret states of parties. Note that, unless some additional un-
+corruptible resources such as a trusted signing device are assumed,
+the above adversary subsumes the typical notion of malicious in-
+siders (or actively corrupted parties in MPC).
+To talk about security of saCGKA, we use the language ofhistory
+graphs introduced in [6]. A history graph is a symbolic represen-
+tation of group’s evolution. Nodes represent epochs and directed
+edges represent group modifications. For example, when Alice in
+epoch𝐸 wants to add Bob, she creates an epoch𝐸′ with an edge
+from𝐸 to𝐸′. The graph also stores information about parties’ cur-
+rent epochs, the adversary’s actions, etc.
+In a perfect execution, the history graph would be a chain. How-
+ever, even for benign reasons, this may not be the case. For example,
+if two parties simultaneously create epochs, then a fork in the graph
+is created. Moreover, an active adversary can deliver different mes-
+sages to different parties, causing them to follow different branches.
+Further, it can trick parties into joining fake groups it created by
+injecting invitation messages. Epochs in fake groups form what
+we call detached trees. So, in full generality, the graph is a directed
+forest. Using history graphs we can list intuitive security properties
+of saCGKA.
+Consistency Any two parties in the same epoch𝐸 agree on the
+group state, i.e., the set of current members, the group key,
+the last group modification and the previous epoch. One
+consequence of consistency is agreement on the history:
+the parties reached𝐸 by executing the same sequence of
+group modifications since the latter one joined.
+Confidentiality An epoch is confidential if the adversary has no
+information about its group key. Corruptions may destroy
+confidentiality in certain epochs. saCGKA security is pa-
+rameterized by a confidentiality predicate which identifies
+confidential epochs in an execution.
+Authenticity Authenticity for a party𝐴 in an epoch𝐸 is preserved
+if the following holds: If a party in𝐸 transitions to a child
+epoch𝐸′ and identifies𝐴 as the sender creating𝐸′, then𝐴
+indeed created𝐸′. An active adversary may destroy authen-
+ticity in certain cases. saCGKA security is parameterized
+by an authenticity predicate which decides if authenticity
+of a party𝐴 in epoch𝐸 is preserved.
+The confidentiality and authenticity predicates generalize forward-
+secrecy and post-compromise security.
+4.3 Authenticated Key Service (AKS)
+Most CGKA protocols, including ITK and SAIK, rely on a type of
+PKI called here the Authenticated Key Service (AKS). The AKS au-
+thentically distributes so-called one-time key packages (also called
+key bundles or pre-keys) used to add new members to the group
+without interacting with them. For simplicity, we use an idealized
+AKS which guarantees that a fresh, authentic, honestly generated
+key package of any user is always available.
+4.4 Formal Model Intuition
+We define security of saCGKA protocols in the UC framework.
+That is, a saCGKA protocol is secure if no environment A can
+distinguish between the real world where it interacts with parties
+executing the protocol and the ideal world where it interacts with
+the ideal saCGKA functionality and a simulator. Readers familiar
+with game-based security should think ofA as the adversary (see
+also [8] for some additional discussion).
+The real world. In the real-world experiment, the following ac-
+tions are available toA: First, it can instruct parties to perform
+different group operations, creating new epochs. When this hap-
+pens, the party runs the protocol, updates its state and hands to
+A the message meant to be sent to the mailboxing service. The
+mailboxing service is fully controlled byA. This means that the
+next action it can perform is to deliver arbitrary messages to parties.
+A party receiving such a message updates its state (or creates it in
+case of new members) and hands toA the semantic of the group
+operation it applied. Moreover,A can fetch from parties group
+keys computed according to their current states and corrupt them
+by exposing their current states.5
+The ideal world. In the ideal-world experimentA can perform
+the same actions, but instead of the protocol, parties use the ideal
+CGKA functionality,Fcgka. Internally,Fcgka maintains and dynam-
+ically extends a history graph. WhenA instructs a party to perform
+a group operation, the party inputs Send toFcgka. The function-
+ality creates a new epoch in its history graph and hands toA an
+idealized message. The message is chosen by an arbitrary simulator,
+which means that it is arbitrary. WhenA delivers a message, the
+party inputs Receive toFcgka. On such an inputFcgka first asks the
+simulator to identify the epoch into which the receiver transitions.
+5To make this section accessible to readers not familiar with UC, we avoid technical
+details, which sometimes results in inaccuracies. E.g., parties are corrupted by the
+(dummy) adversary, notA. We hope this doesn’t distract readers familiar with UC.
+
+Server-Aided Continuous Group Key Agreement
+The simulator can either indicate an existing epoch or instruct
+Fcgka to create a new one. The latter ability should only be used if
+A injects a message and, accordingly, epochs created this way are
+marked as injected. Afterwards,Fcgka hands toA the semantics of
+the message, computed based on the graph. A corruption in the real
+world corresponds in the ideal world toFcgka executing the pro-
+cedure Expose and the simulator computing the corrupted party’s
+state. WhenA fetches the group key, the party inputs GetKey to
+Fcgka, which outputs a key from the party’s epoch. The way keys
+are chosen is discussed next.
+Security guarantees in the ideal world. To formalize confiden-
+tiality,Fcgka is parameterized by a predicate confidential, which
+determines the epochs in the history graph in which confidentiality
+of the group key is guaranteed. For such a confidential epoch,Fcgka
+chooses a random and independent group key. Otherwise, the sim-
+ulator chooses an arbitrary key. To formalize authenticity,Fcgka is
+parameterized by authentic, which determines if authenticity is
+guaranteed for an epoch and a party. As soon as an injected epoch
+with authentic parent appears in the history graph, Fcgka halts,
+making the worlds easily distinguishable. Finally,Fcgka guarantees
+consistency by computing the outputs, such as the set of group
+members outputted by a joining party, based on the history graph.
+This means that the outputs in the real world must be consistent
+with the graph (and hence also with each other) as well, else, the
+worlds would be distinguishable.
+Observe that the simulator’s power to choose epochs into which
+parties transition and create injected epochs is restricted by the
+above security guarantees. For example, an injected epoch can only
+be created if the environment exposed enough states to destroy
+authenticity. For consistency,Fcgka also requires that a party can
+only transition to a child of its current epoch. Another example is
+that if a party in the real world outputs a key from a safe epoch,
+then the simulator cannot make it transition to an unsafe epoch.
+Personalizing messages. saCGKA protocols may require that the
+mailboxing service personalizes messages before delivering them.
+In our model, such processing is done by A. It can deliver an
+honestly processed message, or an arbitrary injected message. The
+simulator decides if a message is honestly processed, i.e., leads to a
+non-injected epoch, or is injected, i.e., leads to an injected epoch.
+Note that this notion has an RCCA flavor. For example, delivering an
+otherwise honestly generated message but with some semantically
+insignificant bits modified can lead the receiver to an honest epoch.
+Adaptive corruptions. Our model allowsA to adaptively decide
+which parties to corrupt, as long as this does not allow it to trivially
+distinguish the worlds. Specifically,A can trivially distinguish if
+a corruption allows it to compute the real group key in an epoch
+whereFcgka already outputted toA a random key. Our statement
+quantifies overA’s that do not trivially win.
+We note that, in general, there can exist protocols that achieve
+the following stronger guarantee: Upon a trivial-win corruption,
+Fcgka gives to the simulator the random key it chose and the sim-
+ulator comes up with a fake state that matches it. However, this
+requires techniques which typically are expensive and/or require
+additional assumptions, such as a random oracle programmable
+by the simulator or a common-reference string. We note that the
+disadvantage of the simpler weaker is restricted composition in the
+sense that any composed protocol can only be secure against the
+class of environments restricted in the same way.
+Relation to game-based security. It may be helpful to think about
+distinguishing between the real and ideal world as a typical security
+game for saCGKA. The adversary in the game corresponds to the
+environmentA. The adversary’s challenge queries correspond to
+A’s GetKey inputs on behalf of parties in confidential epochs and
+its reveal-session key queries correspond toA’s GetKey inputs in
+non-confidential epochs. To disable trivial wins, we require that
+if the adversary queries a challenge for some epoch, then it can-
+not corrupt in a way that makes it non-confidential. Apart from
+the keys in challenge epochs being real or random, the real and
+ideal world are identical unless one of the following two bad events
+occurs: First, the adversary breaks consistency, that is, it causes
+the protocol to output in the real world something different than
+Fcgka in the ideal world. Second, the adversary breaks authenticity,
+that is, it makes the protocol accept a message that violates the
+authenticity requirement in the ideal world, makingFcgka halt for-
+ever. Therefore, distinguishing between the worlds implies breaking
+consistency, authenticity or confidentiality.
+Advantages of simulators. Using a simulator simplifies the notion,
+because the ideal world does not need to encode parts of the protocol
+that are not relevant for security. For example, in our model the
+epochs into which parties transition are arbitrary, as long as security
+holds. This means that in the ideal world we do not need a protocol
+function that outputs some unique epoch identifiers. Our ideal
+world is agnostic to the protocol, which is conceptually simple.
+4.5 Semantic Agreement
+An important difference between our model and those of [7, 9, 31]
+is that in [ 7, 9, 31] epochs are (uniquely) identified by messages
+creating them. This is problematic for saCGKA, because different
+receivers transition to a given epoch using different messages. Cru-
+cially, this means an injected message cannot be used to identify the
+injected epoch into which its receiver transitions. We deal with this
+in a clean way by allowing the simulator to identify epochs. That is,
+epoch identifiers are arbitrary as long as consistency, authenticity
+and confidentiality hold.
+The work [31], which proposes a new CGKA where, similar to
+SAIK, receivers get personalized packets, encountered the same
+problem with the existing models [7, 9]. In their new model, filtered
+CGKA (fCGKA), an epoch is identified by the sequence of packet
+headers leading to it. The header is a part of the uploaded packet that
+is downloaded by all receivers. A protocol can be secure according
+to the fCGKA model only if the header it defines has the properties
+of a cryptographic commitment to the semantics of the packet.
+saCGKA generalizes fCGKA (and [7, 9]) and provides additional
+flexibility. For instance, it enables CGKAs which, likeSAIK, assume
+PKE with the weaker RCCA security, while fCGKA still requires the
+stronger notion of CCA. We believe that in the future more CGKA
+protocols will take advantage of saCGKA’s flexibility. For example,
+one may consider using a different packet-authenticator for each
+receiver with the goal of providing some level of unlinkability – an
+
+Alwen, et al.
+adversary seeing only packets downloaded by participants cannot
+tell if they are in the same epoch (or group) or not.
+4.6 Simplifications
+In order to make the security notion tractable, we made the follow-
+ing simplifications compared to the models of [7, 9, 31].
+Immediate transition In our model, a party performing a group
+operation immediately transitions to the created epoch. In
+reality, a party would only send the message creating the
+epoch and wait for an ACK from the mailboxing service
+before transitioning. If it receives a different message before
+the ACK, it transitions to that epoch instead. This mitigates
+the problem that if many parties send at once then they
+end up in parallel epochs and cannot communicate.
+A protocol Prot implementing immediate transition can be
+transformed in a black-box manner into a protocolProt’ that
+waits for ACK as follows: To perform a group operation,
+Prot’ creates a copy of the current state ofProt and runs Prot
+to obtain the provisional updated state and the message. The
+message is sent and all provisional states are kept in a list.
+If some message is ACK’ed, the corresponding provisional
+state becomes the current one, and if another message is
+received, it is processed using the current state. In any case,
+all provisional states are cleared upon transition.
+Simplified PKI The models of [9, 31] consider a realistic imple-
+mentation of the AKS where parties generate key packages
+themselves and upload them to an untrusted server, au-
+thenticated with long-term so-called identity keys. These
+long-term keys are authenticated via a PKI which allows
+the adversary to leak registered keys and even to register
+their own arbitrary keys on behalf of any participant. The
+works [9, 31] define fine-grained security in this setting,
+i.e., their security predicates take into account which PKI
+keys delivered to parties were corrupted.
+In contrast, our model avoids the complexity of keeping
+track of the PKI keys inFcgka, at the cost of more coarse-
+grained guarantees. For example, it no longer captures the
+(subtle) security guarantees provided by (the tree-signing
+of) ITK to parties invited to fake groups created by the ad-
+versary (tree signing trivially works for SAIK). We stress
+that our model does capture most active attacks, e.g. inject-
+ing valid-looking packets that add parties with arbitrary
+injected key packages.
+Deleting group keys To build a secure messaging protocol on
+top (sa)CGKA, it is important that (sa)CGKA removes from
+its state all information about the group key 𝐾 immedi-
+ately after outputting it. The reason is that the messaging
+protocol will symetrically ratchet𝐾 forward for FS. If the
+initial𝐾 was kept in the (sa)CGKA state upon corruption,
+the adversary could recompute all symmetric ratchets in
+the current epoch, breaking FS. OurFcgka does not enforce
+that𝐾 is deleted, in order to avoid additional bookkeeping.
+All natural protocols, including SAIK, can trivially delete𝐾,
+as it is stored as a separate variable that is computationally
+independent of the rest of the state.
+No randomness corruptions Our model does not capture the
+adversary exposing or modifying randomness used by the
+protocol. Capturing such attacks for (sa)CGKA causes a
+significant headache when defining the formal security no-
+tion. For instance, the model needs to special-case scenarios
+where the adversary leaks the state of a party 𝐴, uses it
+with randomness𝑟 to compute and inject a message to a
+party𝐵, and then makes𝐴 use𝑟 to re-compute the injected
+message.
+One can easily adapt the special-casing of [7, 9, 31] to our
+model. We chose not to do this for simplicity and because
+well-designed protocols, including ITK and SAIK, naturally
+have protections against bad randomness.(Looking ahead,
+these protocols mix a fresh “commit” secret for the new
+epoch with the “init” secret from the old epoch, which
+mitigates sampling the fresh secret with bad randomness.)
+Therefore, capturing the additional attack vector typically
+does not fundamentally improve the analysis.
+Simplified syntax To improve efficiency,ITK and CmPKE of [31]
+use the so-called propose-commit syntax, originally pro-
+posed by MLS. This means that parties first send messages
+that propose adding or removing other members, or updat-
+ing their own keys. This does not affect the group state
+immediately. Rather, a party can collect a list of proposals
+and send a commit message which applies the proposed
+changes and creates a new epoch. The advantage of this is
+avoiding the expensive operation of epoch creation after
+every group modification (modifications typically come in
+batches; for instance, lots of members are added immedi-
+ately after group creation).
+Unfortunately, using this syntax requires lots of additional
+bookkeeping fromFcgka, such as keeping track of two
+types of history-graph nodes, one for proposals and one for
+commits (see [9, 31]). Most protocols based on ITK, such as
+SAIK, can be easily adapted to the propose-commit syntax
+and benefit from the efficiency gain. The change is minimal
+and security proofs are clearly not affected.
+No correctness guarantees Our model does not capture correct-
+ness, i.e., the simulator can always make a party reject a
+message. Therefore, a protocol that does nothing is secure
+according to the notion. This greatly simplifies the defini-
+tion and the fact that a protocol is correct typically easily
+follows by inspection (which is often the core argument in
+the proof of correctness). This means that the protocol used
+by the mailboxing service to extract personalized packets
+is not part of the security notion – a fully untrusted service
+may anyway deliver arbitrary packets. We note that the
+above protocol is still a part of saCGKA.
+5 THE SAIK PROTOCOL
+SAIK inherits most of its mechanisms from ITK, the CGKA of MLS.
+We briefly recallITK in Sec. 5.1. Readers familiar withITK can jump
+directly to Sec. 5.2 which gives intuition how SAIK improves on
+ITK. The detailed description of SAIK can be found in App. F.
+
+Server-Aided Continuous Group Key Agreement
+5.1 Intuition for the ITK Protocol
+Ratchet trees. The operation of ITK relies on a data structure
+called ratchet trees. A ratchet tree𝜏 is a tree where leaves are as-
+signed to group members, each storing its owner’s identity and
+signature key pair. Moreover, most non-root nodes in𝜏, store en-
+cryption key pairs. Nodes without a key pair are called blank.
+ITK maintains the following tree invariant: Each member knows
+the secret keys of the nodes on the path from their leaf to the root, and
+only those, as well as all public keys in 𝜏. This allows to efficiently
+encrypt messages to subgroups: If a node 𝑣 is not blank, then a
+message𝑚 can be encrypted to all members in the subtree of a
+node𝑣 by encrypting it under 𝑣’s public key. If 𝑣 is blank, then
+the same can be achieved by encrypting𝑚 under each key in𝑣’s
+resolution, i.e., the minimal set of non-blank nodes covering all
+leaves in𝑣’s subtree (Note that leaves are never blank, so there is
+always a resolution covering all leaves).
+Ratchet tree evolution. Each group modification corresponds to
+a modification of the ratchet tree𝜏. Most importantly, an update
+performed by a member id corresponds to refreshing all key pairs
+with secret keys known to id, i.e., those in the nodes on the path
+from id’s leaf to the root. id generates the new key pairs and, to
+maintain the tree invariant, communicates the secret keys to some
+group members. This is done efficiently as follows.
+(1) Let𝑣1,...,𝑣 𝑛 denote the nodes on the path from id’s leaf
+𝑣1 to the root 𝑣𝑛. id generates a sequence of path secrets
+𝑠2,...,𝑠 𝑛:𝑠2 is a random bitstring,𝑠𝑖+1 = Hash(𝑠𝑖, ‘path’).
+(2) id generates a fresh key pair for𝑣1. For each𝑖∈[ 2,𝑛− 1],
+the new key pair of𝑣𝑖 is computed by running the key gen-
+eration with randomness Hash(𝑠𝑖, ‘rand’). The last secret
+𝑠𝑛 will be used in the key schedule, described soon.
+(3) id encrypts each𝑠𝑖+1 to the sibling of𝑣𝑖. This allows parties
+in the subtree of𝑣𝑖 (and only those) to derive𝑠𝑖+1,...,𝑠 𝑛.
+Each add and remove is immediately followed by an implicit
+update. Removing a member id𝑡 corresponds to removing all keys
+known to it, i.e., blanking all nodes on the path from its leaf to the
+root. Adding a member id𝑡 corresponds to inserting a new leaf into
+𝜏. The leaf’s public signature and encryption keys are fetched from
+the AKS. Further, the new leaf becomes an unmerged leaf of all
+nodes on the path from it to the root. A leaf𝑙 being unmerged at a
+node𝑣 indicates that the𝑙’s owner doesn’t know the secret key in
+𝑣, so messages should be encrypted directly to𝑙. When𝑣’s key is
+refreshed during an update, its set of unmerged leaves is cleared.
+Key schedule. Apart from the ratchet tree, all group members
+store a number of shared symmetric keys, unique to the current
+epoch. These are: application secret — the group key exported to the
+E2E application, membership key used to authenticate sent messages
+and the init key — mixed in the next epoch’s secrets for FS.
+The secrets are derived when an epoch is created, i.e. after the
+implicit update following each modification. The update generates
+the last path secret𝑠𝑛, which we now call the commit secret. Then,
+the following secrets are derived. First, the commit sercert and
+the old epoch’s init secrets are hashed together to obtain the joiner
+secret. Then, theepoch secret is obtained by hashing the joiner secret
+with the new epoch’s context, which we explain next. (The context
+is not mixed directly with init and commit secrets, because the
+joiner secret is needed by new members; see below.) Finally, the
+new epoch’s application, membership and init secrets are obtained
+by hashing the epoch secret with different labels.
+The context includes all relevant information about the epoch,
+e.g. (the hash of) the ratchet tree (which includes the member set).
+The purpose of mixing it into the key schedule is ensuring that
+parties in different epochs derive independent epoch secrets.
+Joining. When an id𝑡 joins a group, the party inviting them
+encrypts to them two secrets under a key fetched from the AKS.
+First, this is id𝑡 ’s path secret from the implicit update following the
+add. Second, this is the new joiner secret, from which id𝑡 derives
+other epoch secrets. Importantly, the new member hashes the joiner
+secret with the context, which means that it agrees on the epoch’s
+state with all current members transitioning to it.
+5.2 Intuition for the SAIK Protocol
+mmPKE.. In ITK, a member performing an update generates a se-
+quence of path secrets𝑠1,...,𝑠 𝑛 and encrypts each𝑠𝑖 to each public
+key from a set of recipient public keys𝑆𝑖 using regular encryption.
+In contrast, SAIK redraws its internal abstraction boundaries view-
+ing the sequence of encryptions as a single call to mmPKE. This
+allows it to use the DDH-based mmPKE construction of [ 36]. Com-
+pared to ITK, this cuts the computational complexity of encrypting
+ﬁ𝑚 and the ciphertext size in half (asymptotically as𝑛 grows).
+Authentication. The goal of authentication is to make sure that a
+member accepts a message from id only if id knows 1) the signing
+key for the verification key stored in id’s leaf in the current ratchet
+tree and 2) the current key schedule. In ITK, where every member
+gets the same message, this is achieved by simply signing it and
+MACing with the current membership key. In SAIK, to optimize
+bandwidth, the mailboxing service forwards to each receiver only
+the data it needs. E.g., it does not forward ciphretexts for other
+members. Therefore, we have to achieve authentication differently.
+One trivial solution would be that the sender uploads multiple
+signatures, one for each receiver. However, this clearly does not
+scale. Can we do something better? A crucial observation is that the
+goal of saCGKA is to authenticate created epochs and not message
+bitstrings. That is, we want to guarantee that if Alice thinks that a
+message𝑐 transitions her to an epoch𝐸 created by Bob, then Bob
+indeed created𝐸. It is not an attack if the adversary can make Alice
+accept a message that is not extracted with the honest procedure
+(e.g., it has reordered fields), as long as it transitions her to𝐸.
+Therefore, instead of signing the whole message, inSAIK we can
+sign and MAC only a single short tag that identifies the new epoch
+and is known to all members. In particular, this value is derived in
+the key schedule for the new epoch, alongside the other secrets, by
+hashing the epoch secret with an appropriate label. This way of
+efficient authentication is enabled by our new security notion.
+Extraction procedure for the server. The task of the mailboxing
+server is to extract a personalized packet for a group member Alice
+from a packet 𝐶 uploaded by another member Bob. In SAIK,𝐶
+consists roughly of a single mmPKE ciphertext, a signature, the
+new public keys on the path from the sender to the root node and
+some metadata such as the sender’s identity, the group modification
+being applied etc. The signature and metadata are simply forwarded
+
+Alwen, et al.
+to Alice. For the mmPKE ciphertext, the server runs the mmPKEExt
+procedure with Alice’s recipient index𝑖 and also sends all public
+keys up to the lowest common ancestor (lca) of Alice and Bob in the
+ratchet tree. See Fig. 1 for an illustration. Observe that𝑖 and the lca
+are determined by the current epoch’s ratchet tree and the positions
+of Alice and Bob in it. Therefore, the server can obtain𝑖 and the lca
+in two ways: First, it can store all ratchet trees it needs (identified by
+the transcript hash leading to the epoch for which a tree is stored)
+and them itself. Second, it can ask Alice for 𝑖 and the lca given
+that the sender is Bob. We note that the latter solution requires an
+additional round of interaction which may be problematic for some
+applications.
+𝑖𝑑𝑅 act 𝑠𝑖𝑔 𝑐𝑡0 𝑐𝑡1,...,𝑐𝑡 4,... ek1, ek2, ek3, ek4,..., ekroot
+ek4
+ek3
+𝑐𝑡2 ek2
+ek1 𝑐𝑡1
+⊥
+𝑐𝑡3 𝑐𝑡4
+ek𝑁−1 ek𝑖𝑑𝑅
+... ...
+ekroot
+⇓
+𝑖𝑑𝑅,𝑎𝑐𝑡,𝑠𝑖𝑔,𝑐𝑡 0,𝑐𝑡 4, ek1, ek2, ek3
+Figure 1: Server extraction algorithm. Lowest common an-
+cestor (LCA) pof 𝑖𝑑𝑅 and𝑖𝑑𝑆 is ek4, so all blue public keys
+are included in𝑖𝑑𝑅’s packet. Since the sibling of ek3 is empty,
+there corresponding path secret of ek4 is encrypted to its
+resolution, resulting in the two ciphertext.
+Comparison with techniques of [ 31]. The work [31] introduces a
+technique for efficient packet authentication which is quite similar
+to the technique used by SAIK. In particular, their CGKA uses a
+committing mPKE, cmPKE. A cmPKE differs from mPKE in that
+encryption outputs a tag𝑇 which is a cryptographic commitment
+to the plaintext and is delivered to each receiver. Since in [31] every
+recipient of a commit gets the same message, authenticating 𝑇
+is sufficient for CGKA authentication. We highlight a couple of
+differences between that technique and ours: First, it is not clear
+how to use cmPKE in a tree-based CGKA, where a commit executes
+multiple instances of CmPKE, and hence we end up with multiple
+tags𝑇 , each delivered to a different subset of the group. Second,
+using the hash of the encrypted message as𝑇 does not result in an
+IND-CCA secure CmPKE, since a hash allows to easily tell which of
+two messages is encrypted. Therefore, the construction of [31] uses
+key-committing encryption to both hide and bind the message.
+To summarize, CmPKE introduced by [31] is very useful for the
+CGKA type they consider and may well find more use-cases beyond
+CGKA. On the other hand, SAIK’s solution fits all types o CGKA,
+does not require additional properties to prove CGKA security and
+is more direct. Albeit, it is very CGKA-specific.
+6 SECURITY OF SAIK
+To define the security we prove for SAIK we fix the two safety
+predicates confidential and authentic used byFcgka. We next
+give the intuition; see Fig. 20 in App. H for the pseudocode. We
+define two versions of the predicates: a stronger and a weaker one.
+For better exposition, the stronger version is not achieved by SAIK
+as presented in this work. But at the cost of added complexity SAIK
+can easily be extended to achieve it, as described Sec. 8.1.
+We begin with the simpler stronger version. First of all, both
+predicates give no guarantees for epochs in detached trees until
+they are attached and so we ignore them in this section. Then, the
+definition is built around the notion of secrets which make up the
+protocol state. There are two types of secrets: group secrets, stored
+in the state of all parties, and individual secrets, stored in the states
+of some parties. Each corruption exposes a number of secrets and
+each epoch change replaces a number of secrets by (possibly) se-
+cure ones. The helper predicate *grp-secs-secure(𝐸) decides if
+the group secrets in𝐸 are secure, i.e., not exposed, and the predi-
+cate *ind-secs-secure(𝐸, id) decides if id’s individual secrets in𝐸
+are secure. Thenconfidential(𝐸) equals to *grp-secs-secure(𝐸),
+since the epoch key is itself a group secret. Further,authentic(𝐸, id)
+is true if either*grp-secs-secure(𝐸) or *ind-secs-secure(𝐸, id)
+is true, because both group and id’s secrets are necessary to imper-
+sonate id in𝐸.
+It remains to determine when group and individual secrets are
+exposed. For group secrets, *grp-secs-secure(𝐸) is defined re-
+cursively. The base case states that the group secrets in first epoch
+(when the group was created) are secure if and only if no party is
+corrupted while in that epoch. Intuitively, we assume the group
+was created by an honest party using good randomness. Moreover,
+capturing perfect forward secrecy, corruptions in the descendant
+epochs do not affect the confidentiality of earlier group secrets.
+The induction step states that the group secrets in a non-root
+epoch𝐸 are secure if no party is corrupted in𝐸, the epoch is not
+created by an injected packet from the adversary and either the
+group secrets in𝐸’s parent𝐸𝑝 are secure or all individual secrets
+in𝐸 are secure. Intuitively, this formalizes the requirement that
+the adversary can learn the group secrets in only three ways: A)
+by corrupting a party currently in epoch 𝐸. B) by injecting the
+secrets (though most injections are disallowed by the authenticity
+predicate). C) by computing them the same way an honest receiver
+transitioning to𝐸 would. The latter requires knowing the group
+secrets of𝐸𝑝 and the individual secrets of at least one receiver. Note
+that the possible receivers are those parties that are group members
+in𝐸 and that are not𝐸’s creator (who transitions on sending). Note
+also that the fact that even knowing an epoch creator’s individual
+secrets in𝐸𝑝 we can treat them as secure in𝐸 which captures so
+called post compromise security (aka. healing or backwards security).
+Indeed, in SAIK, part of creating a new epoch requires refreshing
+all ones individual secrets.
+Finally, individual secrets of id in𝐸 are exposed whenever there
+is some other epoch𝐸′ where id’s secrets are the same as in𝐸 and
+where id was corrupted or its secrets were injected on its behalf.
+The secrets of id are the same in two epochs if no epoch between
+them replaces the secrets, i.e., is created by id, removes it or adds it.
+
+Server-Aided Continuous Group Key Agreement
+Weaker guarantees. In the weaker version of the security predi-
+cates, individual secrets of id in𝐸 are not secure in an additional
+scenario, formalized by*exposed-ind-secs-weak. In this scenario,
+an id𝑠 first honestly adds id and the adversaryA injects a message
+adding id to some other epoch. Finally, id joinsA’s epoch and is
+corrupted before sending any message. We explain why SAIK is
+insecure in this case and how it can be modified to be secure in
+Sec. 8.1.
+Security. For the mmPKE scheme we assume a security property
+called mmOW-RCCA, defined in App. G. The notion is strictly
+weaker than mmIND-CCA; in App. G we prove the implication.
+Formally, the AKS is modeled as the functionalityFaks defined in
+App. E. SAIK works in theFaks-hybrids model, i.e.,Faks is available
+in the real world and emulated by the simulator in the ideal world.
+The formal proof of Theorem 6.1 can be found in App. H.
+Theorem 6.1. LetFcgka be the CGKA functionality with predi-
+cates confidential and authentic defined in Fig. 20. Let SAIK be
+instantiated with an mmPKE mmPKE, a signature scheme Sig and
+MAC, and with the HKDF functions modelled as a random oracle
+Hash. LetA be any environment. Denote the output of A from the
+real execution with SAIK and the hybrid functionality Faks from
+Fig. 15 as realSAIK,Faks(A) and the output ofA from the ideal ex-
+ecution withFcgka and a simulator S as idealFcgka,S(A) . There
+exists a simulatorS and adversariesB1 toB4 such that
+Pr[idealFcgka,S(A) = 1]− Pr
+
+realSAIK,Faks(A) = 1
+
+≤
+AdvCR
+Hash(B1)
++𝑞2
+𝑒(𝑞𝑒+ 1) log(𝑞𝑛)· AdvmmOW-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B2)
++ 2𝑞𝑒· AdvEUF-CMA
+Sig (B3)
++𝑞𝑒· AdvEUF-CMA
+MAC (B4)+ 3𝑞ℎ𝑞2
+𝑒(𝑞𝑒+ 1)/2𝜅,
+where𝑞𝑒 ,𝑞𝑛 and𝑞ℎ denote bounds on the number of epochs, the group
+size and the number ofA’s queries to the random oracle modeling
+the Hash, respectively.
+7 EV ALUATION
+We compare the communication complexity or, informally, the
+“bandwidth” of SAIK, ITK and CmPKE from [31]. For the sake of
+this comparison (and to simplify the description), one can think of
+CmPKE as a protocol similar to SAIK but where the ratchet tree is
+an𝑁 -ary tree of height1, where𝑁 is the number of group members.
+This means that CmPKE only needs single-message multi-recipient
+PKE, mPKE (which is a special case of mmPKE). To make a fair
+comparison, we instantiate CmPKE with the same DH-based mPKE
+as SAIK instead of the less efficient but post-quantum secure mPKE
+given in [31].
+Methodology. We compare the communication complexity of a
+single group modification with respect to three metrics:
+• sender bandwidth – the size of the packet uploaded to the
+server,
+• maximum receiver bandwidth – the maximum size of a (per-
+sonalized) packet downloaded by a single receiver, and
+• total bandwidth – the sum of the sizes of the uploaded
+packet and all downloaded packets.
+ekroot
+ek0
+ek00
+ek′
+1 ek′
+2
+ek01
+ek′
+3 ek′
+4
+ek1
+ek10
+ek′
+5 ek′
+6
+ek11
+ek′
+7 ek′
+8
+Figure 2: A ratchet tree for SAIK or ITK without blanks or
+unmerged leaves.
+ekroot
+⊥
+⊥
+ek1 ek2
+⊥
+ek3 ek4
+⊥
+⊥
+ek5 ek6
+⊥
+ek7 ek8
+Figure 3: A ratchet tree for SAIK or ITK with all nodes blank.
+ekroot
+⊥
+⊥
+ek′
+1 ek′
+2
+ek01
+ek′
+3 ek′
+4
+ek1
+⊥
+ek′
+5 ek′
+6
+ek11
+ek′
+7 ek′
+8
+Figure 4: A tree with some blank and non-blank nodes. Here,
+sender bandwidth depends on the position in the tree. For
+example, a packet by the leftmost leaf would contain 5 ci-
+phertexts, while the rightmost leaf would require 6.
+The sender and maximum-receiver bandwidths give an idea about
+the resources a single client needs to invest to perform the group
+modification. In contrast, the total bandwidth gives the idea about
+the resources used by the server (or, equivalently, all clients to-
+gether). However, it makes no assertions about the distribution of
+this bandwidth, i.e. some clients might use a significantly larger
+portion of the total bandwidth than others. (We note that the total
+bandwidth was the (only) metric used in [31].)
+There is one caveat when calculating the bandwidth require-
+ments for SAIK (and ITK) due to the underlying tree structure:
+The bandwidth can vary quite significantly depending on the “tree
+topology”, which is in turn determined by the execution history.
+Roughly, the reason is that add and remove operations may destroy
+the good properties of the tree (by “blanking” nodes), increasing the
+number of public keys to which some message must be encrypted.
+In the best case, called the tree-best-case, there are only log(𝑁)
+public keys (this happens when the ratchet has no blank nodes or
+unmerged leaves, as depicted in Fig. 2). However, in the worst case,
+called the tree-worst-case, there can be𝑁 public keys (this happens
+e.g. when all non-leaf nodes are blank; see Fig. 3). In general, the
+number of public keys can be anything in between; see Fig. 4.
+Therefore, we compare each bandwidth in the tree-best-case and
+the tree-worst-case. Note that any other case results in a bandwidth
+
+Alwen, et al.
+between these cases. We remark that comparing the average over
+all histories of group operations would not be meaningful, since the
+probability of a given execution depends on user and administrator
+behavior, general application policies and runtime conditions, etc. It
+is an important topic of future research to better understand which
+kinds of policies governing when and which parties initiate CGKA
+operations lead to more bandwidth efficient executions for realistic
+deployments. However, it is outside the scope of this work. We note
+that SAIK is very flexible as to kinds of policies that are possible
+and the types of data that can be leveraged to guide executions
+towards efficient behavior. Thus, we conjecture that in practice a
+well designed implementation (of both server and client) will be able
+to ensure that under relatively mild real-time conditions the vast
+majority of executions will spend the overwhelming majority of
+their time tending towards the tree-best-case scenario in bandwidth.
+Results. We estimated the bandwidth for all protocols using the
+formulas in Figs. 5 and 7 with bit lengths indicated in Fig. 8. This is
+further visualized in Fig. 6 for growing group sizes𝑁 . We highlight
+some interesting observations.
+In terms of the sender bandwidth,SAIK is always at least as good
+as the other protocols. For example, in a group of 10K parties, SAIK
+sender’s require between 83% and 55% of the bandwidth of ITK
+(due to the smaller mmPKE ciphertexts compared to PKE). SAIK’s
+tree-worst-case sender bandwidth is the same as CmPKE but its
+tree-best-case bandwidth can be as small as0.52% by using only4KB
+in stead of CmPKE’s 783KB. (Recall that, unlike in CmPKE, in SAIK
+sender bandwidth varies depending on the history of preceding
+operations.)
+In terms of the maximum receiver bandwidth,ITK is much worse
+than SAIK and CmPKE. For example, SAIK receivers (at most) need
+between 62% (tree-best-case execution) to about .2% (tree-worst-
+case execution) of ITK’s. On the other hand, CmPKE is the best for
+receivers. SAIK requires up to 126% of CmPKE’s bandwidth, i.e. an
+increase from∼ 2.4KB to∼ 3.02KB for 10K parties.
+Finally, the total bandwidth is by far the smallest forCmPKE and
+by far the largest forITK. For instance, for 10K parties,SAIK requires
+∼ 1.3 times more total bandwidth, while ITK requires anywhere
+from∼ 2 times (tree-best-case) to∼ 50 times (tree-worse-case)
+more.
+In summary, the results show that SAIK achieves the lowest
+bandwidth required from a single client (i.e.O(log(𝑁)) for SAIK vs.
+O(𝑁) for CmPKE), while CmPKE has the lowest total bandwidth
+(i.e. O(𝑁 log(𝑁)) for SAIK vs. O(𝑁) for CmPKE). (Hence, both
+protocols meet their design goals.) For instance, for 10K parties,
+CmPKE requires a client to upload783KB of data, while in scenarios
+close to the tree-best-case (which we believe to occur most of the
+time), the sender or receiver bandwidth of SAIK is roughly 4KB. On
+the other hand, the total bandwidth is roughly 25MB for CmPKE
+and 30MB for SAIK.
+Server computation. Lastly, we consider the server-side compu-
+tation for SAIK and CmPKE. In CmPKE, the server only picks the
+𝑖-th mPKE ciphertext for the𝑖-th user and forwards all common
+data. For SAIK, we can consider two possibilities: Either the server
+keeps track of the shape of the ratchet tree (which it can do based
+on the header data sent in all packages) and computes the lowest
+common ancestor of sender and receiver in the tree, computes its
+resolution and then forwards the corresponding ciphertext and
+public keys. This takes at most logarithmic time in the size of the
+group (however, no expensive public-key operations are required).
+Alternatively, the user can compute its indices in the tree and send
+them to the server, reducing the server computation to effectively
+the same as in CmPKE at the cost of an additional round of com-
+munication.
+8 EXTENSIONS
+In this section we describe extensions of SAIK which we did not
+include for simplicity.
+8.1 Better Security Predicates
+We sketch the reason whySAIK does not achieve the better security
+predicates and how it can be modified to achieve them.
+Roughly, SAIK achieves the worse security predicates because
+of the following attack: Say id𝑠, the only corrupted party, creates a
+new epoch𝐸 adding a new member id. According to SAIK, in this
+case id𝑠 fetches from the Authenticated Key Service, AKS, (a type
+of PKI setup) a public key ek for mmPKE and a verification key
+spk for Sig, both registered earlier by id. In epochs after𝐸, parties
+use ek to encrypt messages to id (even before id actually joins) and
+spk to verify messages from id. Now the adversaryA can create a
+fake epoch𝐸′ adding id with the same ek and spk. Then, id joins𝐸′
+and is corrupted, leaking dk and ssk. This allowsA to compute the
+group key in𝐸 and inject messages to parties in𝐸. However, the
+expectation is that this is not possible, since no party is corrupted
+in𝐸 (and id𝑠 healed). The better security predicates (formally, the
+predicates in Fig. 20 in App. H) achieve just this: security in an
+honest epoch𝐸 does not depend on whether some member joins a
+fake group in𝐸′.
+The following modification to SAIK achieves better security: We
+note that in SAIK, id registers in the AKS an additional public key
+ek′ which is used to send secrets needed for joining. The correspond-
+ing dk′ is deleted immediately after joining. In the modified SAIK,
+when id𝑠 adds id, it generates for id new key pairs(ek𝑠, dk𝑠) and
+(spk𝑠, ssk𝑠). It sends dk𝑠 and ssk𝑠 to id, encrypted under ek′. Now
+messages to id are encrypted such that both dk and dk𝑠 are needed
+to decrypt them. In particular, to encrypt 𝑚, a sender chooses a
+random𝑟 and encrypts𝑟 under ek and𝑚⊕𝑟 under ek𝑠. Similarly,
+messages from id have two signatures, one verified under spk, and
+one under spk𝑠. As soon as id creates an epoch, it generates a new
+single mmPKE key pair and a single HRS key pair.
+The attack is prevented, because even after corrupting id in𝐸′,
+A does not know dk′ needed to decrypt dk𝑠 and ssk𝑠. Therefore,
+confidentiality and authenticity in𝐸 is not affected.
+8.2 Primitives with Imperfect Correctness
+While the proofs of SAIK security assume primitives with perfect
+correctness, they can be easily modified to work with imperfect
+correctness. While most classically secure primitives have perfect
+correctness, many post-quantum constructions (e.g. from lattices)
+only have statistical correctness. So this extension can be seen as
+a preparation for when SAIK has to be adapted to post-quantum
+security.
+
+Server-Aided Continuous Group Key Agreement
+ITK SAIK CmPKE
+Sender tree-best-case log(𝑁)·( Pk+ Ctx) log(𝑁)· Pk+ mCtx(log(𝑁)) Pk+ mCtx(𝑁)
+tree-worst-case log(𝑁)· Pk+𝑁· Ctx log(𝑁)· Pk+ mCtx(𝑁) Pk+ mCtx(𝑁)
+Maximum tree-best-case log(𝑁)·( Pk+ Ctx) log(𝑁)· Pk+ Ctx Pk+ Ctx
+receiver tree-worst-case log(𝑁)· Pk+𝑁· Ctx log(𝑁)· Pk+ Ctx Pk+ Ctx
+Total tree-best-case 𝑁 log(𝑁)·( Pk+ Ctx) 𝑁 log(𝑁)· Pk+𝑁· Ctx+ mCtx(log(𝑁)) 𝑁·( Pk+ Ctx)+ mCtx(𝑁)
+tree-worst-case 𝑁(log(𝑁)· Pk+𝑁· Ctx) 𝑁 log(𝑁)· Pk+𝑁· Ctx+ mCtx(𝑁) 𝑁·( Pk+ Ctx)+ mCtx(𝑁)
+Figure 5: Sender, receiver and total bandwidth for a group of size 𝑁 expressed as the number of ciphertexts and public keys
+included in the packet (apart from this, packets include only a constant-size header). Pk denotes the size of a public key (the
+same for PKE and mmPKE). mCtx(𝑋) denotes the size of an mmPKE multi-recipient ciphertext with overall number of receivers
+𝑋 . Note that for the DH-based construction 𝑋 fully determines the size (i.e., it is not affected by who gets which message). Ctx
+denotes the size of a PKE ciphertext, equal to the size of an individual ciphertext in the DH-based construction.
+Figure 6: Bandwidth comparison of SAIK, ITK and CmPKE
+(instantiated with 256-bit security). Lower lines denote the
+tree-best-case execution history, while upper lines denote the
+tree-worst-case. All other possible cases are marked as the
+regions between the lines. Plot (a) shows the sender band-
+width on a log scale and plot (b) shows average individual
+receiver bandwidth on a linear scale. Plot (c) shows the total
+bandwidth, i.e. the sum of sender bandwidth and 𝑛 times the
+receiver bandwidth. Note that in the first plot, the lines for
+tree-worst-case SAIK and all-case CmPKE coincide.
+ITK SAIK CmPKE
+Sender best case 3 log(𝑁) 2 log(𝑁) 𝑁
+worst case 2𝑁 𝑁 𝑁
+(Maximum)
+receiver
+best case 3 log(𝑁) log(𝑁) 3
+worst case 2𝑁 log(𝑁) 3
+Total best case 3𝑁 log(𝑁) 𝑁 log(𝑁) 4𝑁
+worst case 2𝑁 2 𝑁 log(𝑁) 4𝑁
+Figure 7: Sender, receiver and total bandwidth for a group
+of size 𝑁 expressed as the (approximate) number of group
+elements. Best/Worst case refers to the state of the tree, while
+we always consider the average receiver bandwidth over all
+receivers.
+Bitsize
+Group element 512
+Hash 512
+Signature 1024
+Header 17784
+Pk 512
+Ctx 1152
+mCtx(𝑁) 512+𝑁· 640
+Figure 8: Bitsizes used to generate Fig. 6. The header consists
+of the sender’s id, the epoch id and some authenticated data
+required by the protocol. The individual ciphertexts consist
+of a group element and an AEAD encryption, while the mPKE
+ciphertext all share the same group element. The header con-
+tains signatures, tags, epoch and sender identifier as well as a
+key package. The latter makes up the bulk of the header, as it
+contains credentials, more public keys and some application
+data. Our estimation is based on MLS.
+
+Alwen, et al.
+This is achieved by adding one game hop where we abort in the
+new game if a correctness error occurs. This loses an additive term
+in the security bound that depends on the correctness parameter
+and the number of possible occurrences. Additionally, the usage of
+primitives with imperfect correctness generally yields imperfect
+correctness guarantees for the application as well (potentially with
+multiplicative correctness error when using multiple primitives).
+For completeness, we give definitions of imperfect correctness of
+the primitives used directly by SAIK in this section.
+Definition 8.1. We call an mmPKE scheme𝛿-correct, if for all
+𝑛 ∈ N ,(ek𝑖, dk𝑖) ∈ KG for 𝑖 ∈ [𝑛],(𝑚1,...,𝑚 𝑛) ∈ M𝑛 and
+∀𝑗∈[ 𝑛]
+Pr
+ 𝑐𝑗← Ext(𝑗,𝐶)
+𝑚𝑗 ≠ Dec(dk𝑗,𝑐𝑗)
+𝐶
+$
+← Enc
+ (ek1,..., ek𝑛),
+(𝑚1,...,𝑚 𝑛)
+
+≤𝛿
+ACKNOWLEDGMENTS
+Dominik Hartmann was supported by the BMBF iBlockchain project.
+Eike Kiltz was supported by the BMBF iBlockchain project, the
+Deutsche Forschungsgemeinschaft (DFG, German research Foun-
+dation) as part of the Excellence Strategy of the German Federal
+and State Governments – EXC 2092 CASA - 390781972, and by the
+European Union (ERC AdG REWORC - 101054911).
+REFERENCES
+[1] Joël Alwen, Benedikt Auerbach, Mirza Ahad Baig, Miguel Cueto Noval, Karen
+Klein, Guillermo Pascual-Perez, Krzysztof Pietrzak, and Michael Walter. 2021.
+Grafting Key Trees: Efficient Key Management for Overlapping Groups. InTheory
+of Cryptography — TCC 2021 . Full version: https://ia.cr/2021/1158.
+[2] Joël Alwen, Bruno Blanchet, Eduard Hauck, Eike Kiltz, Benjamin Lipp, and
+Doreen Riepel. 2021. Analysing the HPKE Standard. In Advances in Cryptology
+- EUROCRYPT 2021 - 40th Annual International Conference on the Theory and
+Applications of Cryptographic Techniques, Zagreb, Croatia, October 17-21, 2021,
+Proceedings, Part I . 87–116. https://doi.org/10.1007/978-3-030-77870-5_4 Full
+Version: https://ia.cr/2020/1499.
+[3] Joël Alwen, Margarita Capretto, Miguel Cueto, Chethan Kamath, Karen Klein,
+Ilia Markov, Guillermo Pascual-Perez, Krzysztof Pietrzak, Michael Walter, and
+Michelle Yeo. 2021. Keep the Dirt: Tainted TreeKEM, an Efficient and Provably
+Secure Continuous Group Key Agreement Protocol. 42nd IEEE Symposium on
+Security and Privacy. (2021). Full Version: https://ia.cr/2019/1489.
+[4] Joël Alwen, Sandro Coretti, and Yevgeniy Dodis. 2019. The Double Ratchet:
+Security Notions, Proofs, and Modularization for the Signal Protocol. In EURO-
+CRYPT 2019, Part I (LNCS) , Yuval Ishai and Vincent Rijmen (Eds.), Vol. 11476.
+Springer, Heidelberg, 129–158. https://doi.org/10.1007/978-3-030-17653-2_5
+[5] Joël Alwen, Sandro Coretti, Yevgeniy Dodis, and Yiannis Tselekounis. 2020.
+Security Analysis and Improvements for the IETF MLS Standard for Group
+Messaging. In CRYPTO 2020, Part I (LNCS) , Daniele Micciancio and Thomas
+Ristenpart (Eds.), Vol. 12170. Springer, Heidelberg, 248–277. https://doi.org/10.
+1007/978-3-030-56784-2_9
+[6] Joël Alwen, Sandro Coretti, Yevgeniy Dodis, and Yiannis Tselekounis. 2021.
+Modular Design of Secure Group Messaging Protocols and the Security of MLS.
+In ACM CCS 2021 (to appear) . Full version: https://ia.cr/2021/1083.pdf.
+[7] Joël Alwen, Sandro Coretti, Daniel Jost, and Marta Mularczyk. 2020. Continuous
+Group Key Agreement with Active Security. In TCC 2020, Part II (LNCS) , Rafael
+Pass and Krzysztof Pietrzak (Eds.), Vol. 12551. Springer, Heidelberg, 261–290.
+https://doi.org/10.1007/978-3-030-64378-2_10
+[8] Joël Alwen, Dominik Hartmann, Eike Kiltz, and Marta Mularczyk. 2021. Server-
+Aided Continuous Group Key Agreement. Cryptology ePrint Archive, Report
+2021/1456. (2021). https://eprint.iacr.org/2021/1456.
+[9] Joël Alwen, Daniel Jost, and Marta Mularczyk. 2020. On The Insider Security of
+MLS. Cryptology ePrint Archive, Report 2020/1327. (2020). https://eprint.iacr.
+org/2020/1327.
+[10] Michael Backes, Markus Dürmuth, Dennis Hofheinz, and Ralf Küsters. 2006.
+Conditional Reactive Simulatability. In ESORICS 2006 (LNCS), Dieter Gollmann,
+Jan Meier, and Andrei Sabelfeld (Eds.), Vol. 4189. Springer, Heidelberg, 424–443.
+https://doi.org/10.1007/11863908_26
+[11] Richard Barnes. 06 August2018 13:01UTC. Subject: [MLS] Remove without
+double-join (in TreeKEM). MLS Mailing List. (06 August2018 13:01UTC). https:
+//mailarchive.ietf.org/arch/msg/mls/Zzw2tqZC1FCbVZA9LKERsMIQXik.
+[12] Richard Barnes. 22 August 2019 22:17UTC. Subject: [MLS] Proposal: Propos-
+als (was: Laziness). MLS Mailing List. (22 August 2019 22:17UTC). https:
+//mailarchive.ietf.org/arch/msg/mls/5dmrkULQeyvNu5k3MV_sXreybj0/.
+[13] R. Barnes, B. Beurdouche, , J. Millican, E. Omara, K. Cohn-Gordon, and R. Robert.
+2020. The Messaging Layer Security (MLS) Protocol (draft-ietf-mls-protocol-latest) .
+Technical Report. IETF. https://messaginglayersecurity.rocks/mls-protocol/draft-
+ietf-mls-protocol.html.
+[14] Richard Barnes, Jon Millican, Emad Omara, Katriel Cohn-Gordon,
+and Raphael Robert. 2018. Message Layer Security (mls) WG.
+https://datatracker.ietf.org/wg/mls/about/. (2018).
+[15] M. Bellare, A. Boldyreva, K. Kurosawa, and J. Staddon. 2007. Multirecipient
+Encryption Schemes: How to Save on Bandwidth and Computation Without
+Sacrificing Security. IEEE Transactions on Information Theory 53, 11 (2007),
+3927–3943. https://doi.org/10.1109/TIT.2007.907471
+[16] Mihir Bellare, Alexandra Boldyreva, and Jessica Staddon. 2003. Randomness Re-
+use in Multi-recipient Encryption Schemeas. In PKC 2003 (LNCS), Yvo Desmedt
+(Ed.), Vol. 2567. Springer, Heidelberg, 85–99. https://doi.org/10.1007/3-540-36288-
+6_7
+[17] Karthikeyan Bhargavan, Richard Barnes, and Eric Rescorla. 2018. TreeKEM:
+Asynchronous Decentralized Key Management for Large Dynamic Groups. (May
+2018). http://prosecco.inria.fr/personal/karthik/pubs/treekem.pdf Published at
+https://mailarchive.ietf.org/arch/msg/mls/e3ZKNzPC7Gxrm3Wf0q96dsLZoD8.
+[18] Karthikeyan Bhargavan, Benjamin Beurdouche, and Prasad Naldurg. 2019.Formal
+Models and Verified Protocols for Group Messaging: Attacks and Proofs for IETF
+MLS. Research Report. Inria Paris. https://hal.inria.fr/hal-02425229
+[19] Alexander Bienstock, Yevgeniy Dodis, and Paul Rösler. 2020. On the Price of
+Concurrency in Group Ratcheting Protocols. Cryptology ePrint Archive, Report
+2020/1171. (2020). https://ia.cr/2020/1171.
+[20] Chris Brzuska, Eric Cornelissen, and Konrad Kohbrok. 2021. Cryptographic
+Security of the MLS RFC, Draft 11. Cryptology ePrint Archive, Report 2021/137.
+(2021). https://ia.cr/2021/137.
+[21] Jan Camenisch, Robert R. Enderlein, Stephan Krenn, Ralf Küsters, and Daniel
+Rausch. 2016. Universal Composition with Responsive Environments. In ASI-
+ACRYPT 2016, Part II (LNCS) , Jung Hee Cheon and Tsuyoshi Takagi (Eds.),
+Vol. 10032. Springer, Heidelberg, 807–840. https://doi.org/10.1007/978-3-662-
+53890-6_27
+[22] Ran Canetti. 2001. Universally Composable Security: A New Paradigm for
+Cryptographic Protocols. In 42nd FOCS. IEEE Computer Society Press, 136–145.
+https://doi.org/10.1109/SFCS.2001.959888
+[23] Ran Canetti, Hugo Krawczyk, and Jesper Buus Nielsen. 2003. Relaxing Chosen-
+Ciphertext Security. InCRYPTO 2003 (LNCS), Dan Boneh (Ed.), Vol. 2729. Springer,
+Heidelberg, 565–582. https://doi.org/10.1007/978-3-540-45146-4_33
+[24] Haitao Cheng, Xiangxue Li, Haifeng Qian, and Di Yan. 2018. CCA Secure
+Multi-recipient KEM from LPN. In ICICS 18 (LNCS), David Naccache, Shouhuai
+Xu, Sihan Qing, Pierangela Samarati, Gregory Blanc, Rongxing Lu, Zonghua
+Zhang, and Ahmed Meddahi (Eds.), Vol. 11149. Springer, Heidelberg, 513–529.
+https://doi.org/10.1007/978-3-030-01950-1_30
+[25] Cisco. 2021. Zero-Trust Security for Webex. (2021). https://www.cisco.com/c/
+en/us/solutions/collateral/collaboration/white-paper-c11-744553.pdf.
+[26] Katriel Cohn-Gordon, Cas Cremers, Luke Garratt, Jon Millican, and Kevin Milner.
+2018. On Ends-to-Ends Encryption: Asynchronous Group Messaging with Strong
+Security Guarantees. In ACM CCS 2018, David Lie, Mohammad Mannan, Michael
+Backes, and XiaoFeng Wang (Eds.). ACM Press, 1802–1819. https://doi.org/10.
+1145/3243734.3243747
+[27] Yevgeniy Dodis, Paul Grubbs, Thomas Ristenpart, and Joanne Woodage.
+2018. Fast Message Franking: From Invisible Salamanders to Encryptment.
+In CRYPTO 2018, Part I (LNCS) , Hovav Shacham and Alexandra Boldyreva (Eds.),
+Vol. 10991. Springer, Heidelberg, 155–186. https://doi.org/10.1007/978-3-319-
+96884-1_6
+[28] Nir Drucker and Shay Gueron. 2019. Continuous Key Agreement with Re-
+duced Bandwidth. In Cyber Security Cryptography and Machine Learning -
+Third International Symposium, CSCML 2019, Beer-Sheva, Israel, June 27-28,
+2019, Proceedings (Lecture Notes in Computer Science) , Shlomi Dolev, Danny
+Hendler, Sachin Lodha, and Moti Yung (Eds.), Vol. 11527. Springer, 33–46.
+https://doi.org/10.1007/978-3-030-20951-3_3
+[29] Taher ElGamal. 1984. A Public Key Cryptosystem and a Signature Scheme Based
+on Discrete Logarithms. In CRYPTO’84 (LNCS), G. R. Blakley and David Chaum
+(Eds.), Vol. 196. Springer, Heidelberg, 10–18.
+[30] Keita Emura, Kaisei Kajita, Ryo Nojima, Kazuto Ogawa, and Go Ohtake. 2022.
+Membership Privacy for Asynchronous Group Messaging. Cryptology ePrint
+Archive, Report 2022/046. (2022). https://ia.cr/2022/046.
+[31] Keitaro Hashimoto, Shuichi Katsumata, Eamonn Postlethwaite, Thomas Prest,
+and Bas Westerbaan. 2021. A Concrete Treatment of Efficient Continuous Group
+Key Agreement via Multi-Recipient PKEs. InProceedings of the 2021 ACM SIGSAC
+Conference on Computer and Communications Security . 1441–1462.
+[32] Daniel Jost, Ueli Maurer, and Marta Mularczyk. 2019. A Unified and Composable
+Take on Ratcheting. InTCC 2019, Part II (LNCS), Dennis Hofheinz and Alon Rosen
+
+Server-Aided Continuous Group Key Agreement
+(Eds.), Vol. 11892. Springer, Heidelberg, 180–210. https://doi.org/10.1007/978-3-
+030-36033-7_7
+[33] Shuichi Katsumata, Kris Kwiatkowski, Federico Pintore, and Thomas Prest. 2020.
+Scalable Ciphertext Compression Techniques for Post-quantum KEMs and Their
+Applications. In ASIACRYPT 2020, Part I (LNCS) , Shiho Moriai and Huaxiong
+Wang (Eds.), Vol. 12491. Springer, Heidelberg, 289–320. https://doi.org/10.1007/
+978-3-030-64837-4_10
+[34] Kaoru Kurosawa. 2002. Multi-recipient Public-Key Encryption with Shortened Ci-
+phertext. In PKC 2002 (LNCS), David Naccache and Pascal Paillier (Eds.), Vol. 2274.
+Springer, Heidelberg, 48–63. https://doi.org/10.1007/3-540-45664-3_4
+[35] A. Langley, M. Hamburg, and S. Turner. 2016. Elliptic curves for security. RFC
+7748, RFC Editor. (2016).
+[36] Alexandre Pinto, Bertram Poettering, and Jacob C. N. Schuldt. 2014. Multi-
+recipient encryption, revisited. In ASIACCS 14, Shiho Moriai, Trent Jaeger, and
+Kouichi Sakurai (Eds.). ACM Press, 229–238.
+[37] Eric Rescorla. 03 May 2018 14:27UTC. Subject: [MLS] TreeKEM: An alternative
+to ART. MLS Mailing List. (03 May 2018 14:27UTC). https://mailarchive.ietf.org/
+arch/msg/mls/WRdXVr8iUwibaQu0tH6sDnqU1no.
+[38] Nigel P. Smart. 2005. Efficient Key Encapsulation to Multiple Parties. In SCN 04
+(LNCS), Carlo Blundo and Stelvio Cimato (Eds.), Vol. 3352. Springer, Heidelberg,
+208–219. https://doi.org/10.1007/978-3-540-30598-9_15
+[39] Nick Sullivan. 29 January 2020 21:39UTC. Subject: [MLS] Virtual interim minutes.
+MLS Mailing List. (29 January 2020 21:39UTC). https://mailarchive.ietf.org/arch/
+msg/mls/ZZAz6tXj-jQ8nccf7SyIwSnhivQ/.
+[40] Matthew Weidner. 2019. Group messaging for secure asynchronous collaboration.
+MPhil Dissertation, 2019. Advisors: A. Beresford and M. Kleppmann. (2019).
+https://mattweidner.com/acs-dissertation.pdf.
+
+Alwen, et al.
+Game mmIND-RCCA
+ExpmmIND-RCCA
+mmPKE,𝑁,𝑏 (A =(A 1,A2))
+for𝑖∈[ 𝑁] do(ek𝑖, dk𝑖)← KG()
+Corr←∅
+(ﬁek
+∗
+,ﬁ𝑚∗
+0,ﬁ𝑚∗
+1, st)←A Dec1,Cor
+1 (( ek𝑖)𝑖∈[𝑁])
+req|ﬁ𝑚∗
+0| =|ﬁ𝑚∗
+1| =|ﬁek
+∗
+|
+𝑐∗ $← Enc(ﬁek
+∗
+,ﬁ𝑚∗
+𝑏)
+𝑏′←A Dec2,Cor
+2 (𝑐∗, st)
+req leak(ﬁ𝑚0) = leak(ﬁ𝑚1)
+req∀𝑗 : ﬁek
+∗
+[𝑗]∈{ ek𝑖 :𝑖∈[ 𝑁]}\ Corr∨𝑚∗
+0[𝑗] =𝑚∗
+1[𝑗]
+return𝑏′
+Oracle Dec1(𝑖,𝑐)
+req𝑖∈[ 𝑁]
+return Dec(ﬁdk[𝑖],𝑐)
+Oracle Cor(𝑖)
+req𝑖∈[ 𝑁]
+Corr +←𝑖
+return dk𝑖
+Oracle Dec2(𝑖,𝑐)
+req𝑖∈[ 𝑁]
+𝑚← Dec(ﬁdk[𝑖],𝑐)
+if∃𝑗 : ﬁek
+∗
+[𝑗] = ek𝑖
+∧𝑚∈{ﬁ𝑚∗
+0[𝑗],ﬁ𝑚∗
+1[𝑗]} then
+return ‘test’
+else return 𝑚
+Figure 9: mmIND-RCCA security game for mmPKE with leak-
+age function leak(ﬁ𝑚) =(len(ﬁ𝑚[1]),..., len(ﬁ𝑚[𝑛])) .
+Supplementary Material
+A ADDITIONAL PRELIMINARIES
+A.1 Universal Composability
+We formalize security in the universal composability (UC) frame-
+work [22]. We moreover use the modification of responsive environ-
+ments introduced by Camenisch et al. [21] to avoid artifacts arising
+from seemingly local operations (such as sampling randomness or
+producing a ciphertext) to involve the adversary.
+The UC framework requires a real-world execution of the proto-
+col to be indistinguishable from an ideal world, to an an interactive
+environment. The real-world experiment consists of the group mem-
+bers executing the protocol (and interacting with the PKI setup).
+In the ideal world, on the other hand, the protocol gets replaced
+by dummy instances that just forward all inputs and outputs to an
+ideal functionality characterizing the appropriate guarantees.
+The functionality interacts with a so-called simulator, that trans-
+lates the real-world adversary’s actions into corresponding ones
+in the ideal world. Since the ideal functionality is secure by defini-
+tion, this implies that the real-world execution cannot exhibit any
+attacks either.
+The Corruption Model. We use the — standard for CGKA/SGM
+but non-standard for UC — corruption model of continuous state
+leakage (transient passive corruptions) [7].6 In a nutshell, this cor-
+ruption model allows the adversary to repeatedly corrupt parties
+by sending corruption messages of the form(Expose, id), which
+causes the party id to send its current state to the adversary (once).
+Restricted Environments. In order to avoid the so-called commit-
+ment problem, caused by adaptive corruptions in simulation-based
+frameworks, we restrict the environment not to corrupt parties at
+certain times. (This roughly corresponds to ruling out “trivial at-
+tacks” in game-based definitions. In simulation-based frameworks,
+such attacks are no longer trivial, but security against them requires
+strong cryptographic tools and is not achieved by most protocols.)
+To this end, we use the technique used in [7] (based on prior work
+by Backes et al. [10] and Jost et al. [32]) and consider a weakened
+variant of UC security that only quantifies over a restricted set
+of so-called admissible environments that do not exhibit the com-
+mitment problem. Whether an environment is admissible or not
+is defined as part of the ideal functionality F: The functionality
+can specify certain boolean conditions, and an environment is then
+called admissible (forF), if it has negligible probability of violating
+any such condition when interacting withF.
+A.2 Assumptions
+The security of our mmPKE construction, same as that of [36], is
+based on a variant of the Computational Diffie-Hellman(CDH) as-
+sumption called the Double-Sided Strong Diffie-Hellman Assumption
+(or just Static Diffie-Hellman Assumption in [36]). We recall it in
+Definition A.1. Intuitively, it states that CDH is hard given access
+to a DDH-oracle for both CDH inputs.
+6Passive corruptions together with full network control allow to emulate active
+corruptions.
+Definition A.1 (Double-Sided Strong Diffie-Hellman Assumption).
+LetG =(G ,𝑝,𝑔) be a cyclic group of prime order𝑝 with generator
+𝑔. We define the advantage of an algorithmA in solving the Double-
+Sided Strong Diffie-Hellman problem( DSSDH) with respect toG as
+AdvDSSDH
+G (A) = Pr
+"
+𝑍 =𝑔𝑥𝑦
+
+𝑥,𝑦
+$
+← Z 2𝑝
+𝑍
+$
+←A O(G ,𝑝,𝑔,𝑔 𝑥,𝑔𝑦),
+#
+with O ={O𝑥(·,·), O𝑦(·,·)}, where O𝑥, O𝑦 are oracles which on
+input𝑈,𝑉 output 1, iff𝑈𝑥 =𝑉 or𝑈𝑦 =𝑉 respectively. The proba-
+bility is taken over the random coins of the group generator, the
+choice of𝑥 and𝑦 and the adversary’s random coins.
+A.3 Multi-Recipient Multi-Message
+PKE(mmPKE) Definitions
+The notion of mmIND-RCCA security for mmPKE is described by
+the experiment in Fig. 9.
+We define the security of an mmPKE in a left-right style in the
+following Definition A.2.
+Definition A.2 (mmIND-RCCA). Let𝑁∈ N . For a schememmPKE,
+we define the advantage of an adversaryA against Indistinguishabil-
+ity Against Replayable Chosen Ciphertext Attacks ( mmIND-RCCA)
+security of mmPKE as
+AdvmmIND-RCCA
+mmPKE,𝑁 (A) = Pr
+h
+ExpmmIND-RCCA
+mmPKE,𝑁, 0 (A) = 1
+i
+− Pr
+h
+ExpmmIND-RCCA
+mmPKE,𝑁, 1 (A) = 1
+i
+,
+where ExpmmIND-RCCA
+mmPKE,𝑁,𝑏 is described in Fig. 9.
+
+Server-Aided Continuous Group Key Agreement
+Algorithm DH-mmPKE[G ,𝑔,𝑝, DEM, Hash]
+KG
+𝑥 $← Z 𝑝
+return(dk =𝑔𝑥, ek =𝑥)
+Dec(dk𝑖,𝑐 =(𝑐0,𝑐𝑖))
+𝑘 = Hash(𝑐dk𝑖
+0 , ek𝑖,𝑖)
+return DEM.D−1(𝑘,𝑐𝑖)
+Enc(ﬁek,ﬁ𝑚)
+𝑟 $← Z 𝑝
+for𝑖∈[|ﬁ𝑚|] do
+𝑘← Hash(ek𝑟
+𝑖, ek𝑖,𝑖)
+𝑐𝑖 = DEM.D(𝑘,𝑚𝑖)
+return(𝑐0 =𝑔𝑟,𝑐 1,...,𝑐 𝑛)
+Ext(𝑖,𝐶 =(𝑐0,...,𝑐 𝑛))
+return(𝑐0,𝑐𝑖)
+Figure 11: The mmPKE scheme based on Diffie-Hellman from
+[36]. The scheme requires a group G of prime order 𝑝 gener-
+ated by𝑔, a data encapsulation mechanism DEM and a hash
+function Hash.
+A.4 Data Encapsulation Meachanism(DEM)
+A DEM is the symmetric equivalent of a PKE scheme. We recall it
+in Definition A.3.
+Definition A.3 (DEM). A data encapsulation mechanism (DEM)
+DEM is described by a (efficiently samplable) keyspaceK and the
+two algorithms D, D−1:
+D(𝑘,𝑚)
+$
+→𝑐: The encryption algorithm takes a key𝑘∈K and a
+message𝑚. It returns a ciphertext𝑐.
+D−1(𝑘,𝑐)
+$
+→𝑚′∨⊥ : The decryption algorithm takes a key𝑘∈K
+and a ciphertext𝑐 and outputs either a decrypted message
+or⊥.
+A DEM DEM is𝛿-correct, if for all messages𝑚 and all keys𝑘∈K
+Pr[D−1(𝑘, D(𝑘,𝑚)) =𝑚]≥ 𝛿
+Analogue to mmPKE, we considerIND-RCCA security for DEMs.
+It is described in Definition A.4.
+Definition A.4. The advantage of an adversary A against the
+IND-RCCA security of a DEM DEM is defined as
+AdvIND-RCCA
+DEM (A) = Pr[ExpIND-RCCA
+DEM,0 (A) = 1]
+− Pr[ExpIND-RCCA
+DEM,1 (A) = 1],
+where ExpIND-RCCA
+DEM,𝑏 (A) is defined in Fig. 10.
+Game IND-RCCA for DEM
+ExpIND-RCCA
+DEM,𝑏 (A)
+𝑘 $←K
+(𝑆𝑡,𝑚∗
+0,𝑚∗
+1) $←A Dec,Enc
+𝑐∗ $← D(𝑘,𝑚𝑏)
+returnADec,Enc(𝑆𝑡,𝑐∗)
+Oracle Dec(𝑐)
+𝑚′ $← D−1(𝑘,𝑐)
+if𝑚′∈{ 𝑚∗
+0,𝑚∗
+1} then
+return test
+else
+return𝑚′
+Oracle Enc(𝑚)
+return D(𝑘,𝑚)
+Figure 10: IND-RCCA security for DEMs.
+A.5 Message Authentication Codes (MAC)
+Message authentication codes are defined in Definition A.5.
+Definition A.5. A message authentication codeMAC =(MAC.tag,
+MAC.vrf) consist of a keyspace K and the following two algo-
+rithms:
+MAC.tag(𝑘,𝑚)
+$
+→ tag: The tagging algorithm takes a key𝑘 and a
+message𝑚 and outputs a tag𝑡.
+MAC.vrf(𝑘,𝑚, tag)
+$
+→{ 0, 1}: The verification algorithm takes a
+key𝑘, a message𝑚 and a tag tag and outputs 0 or 1.
+A mac MAC is correct, if for all𝑘∈K and messages𝑚
+Pr[MAC.vrf(𝑘,𝑚, MAC.tag(𝑘,𝑚)) = 1] = 1
+The security notion for MACs we consider is Unforgeability
+against chosen message attacks (EUF-CMA).
+Definition A.6. A mac MAC is EUF-CMA secure, if for all PPT
+adversariesA the advantage
+AdvEUF-CMA
+MAC (A) =
+Pr
+ 𝑚 ∉𝑄∧
+MAC.vrf(𝑘,𝑚∗, tag∗) = 1
+
+𝑘
+$
+←K
+(𝑚∗,𝑡∗)
+$
+←A Tag,Ver
+
+is negligible, where the Tag oracle computes a tag under key𝑘 on
+a given message𝑚 and adds it to𝑄 and Ver takes a message and
+a tag and outputs the result of the MAC.vrf algorithm on the two
+inputs with𝑘.
+B SECURITY OF THE MMPKE SCHEME
+Theorem 3.2. Let G be a group of prime order 𝑝 with generator
+𝑔, let DEM be a data encapsulation mechanism and let mmPKE =
+DH-mmPKE[G ,𝑔,𝑝, DEM,𝐻]. For any adversaryA and any 𝑁∈
+N , there exist adversariesB1 andB2 with runtime roughly the same
+asA’s s.t.
+AdvmmIND-RCCA
+mmPKE,𝑁 (A)≤ AdvIND-RCCA
+DEM (B2)
++ 2𝑛·(𝑒2𝑞𝑐AdvDSSDH
+(G ,𝑔,𝑝)(B1)+ 𝑞𝑑1
+𝑝 +𝑞ℎ
+𝑝),
+where𝐻 is a random oracle, 𝑒 is the Euler number,𝑛 is the length of
+the challenge vector, and𝑞𝑑1 ,𝑞𝑐 and𝑞ℎ are the number of queries to
+the decrypt and corrupt oracles and the random oracle, resp.
+Proof. We define𝑛 hybrids𝐺0 through𝐺𝑛, where𝐺0 is iden-
+tical to ExpmmIND-RCCA
+mmPKE,𝑁, 0 ,𝐺𝑛 is identical to ExpmmIND-RCCA
+mmPKE,𝑁, 1 and in
+𝐺𝑖, the first𝑖 challenge ciphertexts contain encryptions ofﬁ𝑚1 and
+the others fromﬁ𝑚0. Additionally, for 𝑖∈[ 𝑛], we define the four
+hybrids𝐺𝑖,0 to𝐺𝑖,3.𝐺𝑖,0 and𝐺𝑖,3 are identical to𝐺𝑖 and𝐺𝑖+1 re-
+spectively. In𝐺𝑖,1, we set the𝑖-th DEM key to a random key and
+in𝐺𝑖,2 we swap the plaintext in the𝑖-th challenge ciphertext from
+ﬁ𝑚0[𝑖] toﬁ𝑚1[𝑖]. We will split the proofs into the following lemmas.
+
+Alwen, et al.
+Game𝐺𝑖,1
+Game𝐺𝑖,1
+for𝑖∈[ 𝑁] do(ek𝑖, dk𝑖)← KG
+Corr←∅, HL←∅
+(ﬁek
+∗
+,ﬁ𝑚∗
+0,ﬁ𝑚∗
+1, st)←A Dec1,Cor,H
+1 (𝑔, ek1,..., ek𝑁)
+Parse ﬁek
+∗
+as ˆek𝑖1,..., ˆek𝑖𝑙, ek∗
+𝑙+1,..., ek∗
+𝑛 for𝑙∈[ 𝑛]
+s.t.∀𝑗∈[ 𝑙] : ﬁ𝑚0[𝑖𝑗] ≠ ﬁ𝑚1[𝑖𝑗]∧ ˆek𝑖𝑗 ∈ ﬁek
+req|ﬁ𝑚∗
+0| =|ﬁ𝑚∗
+1| =|ﬁek
+∗
+| =𝑛
+𝑟 $← Z 𝑝,𝑐∗
+0←𝑔𝑟
+for 1≤ 𝑗≤𝑛 do ]𝐾𝑗←𝐻(ek𝑟
+𝑗, ek𝑗,𝑗)
+𝐾∗ $←K
+𝐾𝑖←𝐾∗
+for 1≤ 𝑗≤𝑖 do𝑐∗
+𝑗 = D(𝐾𝑗,ﬁ𝑚∗
+1[𝑗])
+for𝑖≤ 𝑗≤𝑛 do𝑐∗
+𝑗 = D(𝐾𝑗,ﬁ𝑚∗
+0[𝑗])
+𝑐∗←( 𝑐∗
+0,...,𝑐 ∗𝑛)
+𝑏←A Dec2,Cor,H(𝑐∗, st)
+req∀𝑗∈[ 𝑛] : ﬁek
+∗
+[𝑗] ∉{ek :𝑖∈[ 𝑁]\ Corr} =⇒
+𝑚∗
+0[𝑗] =𝑚∗
+1[𝑗]
+return𝑏
+Oracle Dec 1(𝑖,(𝑐0,𝑐𝑖))
+req𝑖∈[ 𝑁]
+𝐾←𝐻(𝑐dk𝑖
+0 , ek𝑖,𝑖)
+return D−1(𝐾,𝑐𝑖)
+Oracle Dec 2(𝑗,𝑐 =(𝑐0,(𝑐𝑘,𝑘)))
+req 𝑗∈[ 𝑁]
+𝐾←𝐻(𝑐
+ﬁdk[𝑗]
+0 ,ﬁek[𝑗],𝑘)
+if 𝑐0 =𝑐∗
+0∧ﬁek
+∗
+[𝑘] = ﬁek[𝑗]∧ 𝑖≤𝑙 then
+𝐾←𝐾∗
+𝑗
+𝑚← D−1(𝐾,𝑐𝑘)
+if∃𝑘 : ﬁek
+∗
+[𝑗] = ek𝑘∧𝑚∈{ﬁ𝑚∗
+0[𝑗],ﬁ𝑚∗
+1[𝑗]}
+then
+return test
+else
+return𝑚
+Oracle Cor(𝑖)
+req𝑖∈[ 𝑁]
+Corr +←𝑖
+return dk𝑖
+Oracle H(𝑍,𝑊,𝑖 )
+if HL[𝑍,𝑊,𝑖 ] =⊥ then
+HL[𝑍,𝑊,𝑖 ] $←K
+return HL[𝑍,𝑊,𝑖 ]
+Figure 12: Description of the hybrid 𝐺𝑖,1
+Lemma B.1. Let𝑛∈ N . For all 1≤𝑖≤𝑛, there exists an adversary
+B1 against the DSSDH assumption s.t. for all adversariesA
+|Pr[𝐺𝑖,0(A)⇒ 1]− Pr[𝐺𝑖,1(A) = 1]|≤
+𝑒2𝑞𝐶· AdvDSSDH
+G (B1)+ 𝑞𝐷1
+𝑝 +𝑞𝐻
+𝑝 ,
+where𝑞𝐻,𝑞𝐶 and𝑞𝐷1 denote the number of hash queries, corruption
+queries and decryption queries in phase 1 respectively made by A.
+Remark 2. Since the changes from𝐺𝑖,2 to𝐺𝑖,3 are the same as from
+𝐺𝑖,0 to𝐺𝑖,1, Lemma B.1 applies there as well.
+Lemma B.2. Let𝑛∈ N . Then for all 1≤ 𝑖≤ 𝑛, there exists an
+adversaryB2 against the IND-RCCA security of DEM s.t. for all
+adversariesA
+|Pr[𝐺A
+𝑖,1⇒ 1]− Pr[𝐺A
+𝑖,2⇒ 1]|≤ AdvIND-RCCA
+DEM (B2)
+Combining the two lemmas and the remark yields Corollary B.3.
+The theorem follows by a standard hybrid argument over𝐺𝑖.
+Corollary B.3. Let𝑛∈ N . Then for all 1≤𝑖≤𝑛, there exist ad-
+versariesB1,B2 against the DSSDH assumption and the IND-RCCA
+security of DEM respectively s.t. for all adversariesA
+|Pr
+h
+𝐺A
+𝑖 ⇒ 1
+i
+− Pr
+h
+𝐺A
+𝑖+1⇒ 1
+i
+|≤ AdvIND-RCCA
+DEM (B2)
++ 2(𝑒2𝑞𝐶· AdvDSSDH
+G (B1)+ 𝑞𝐷1
+𝑝 + 𝑞𝐻
+𝑝)
+with𝑞𝐷1,𝑞𝐶 and𝑞𝐻 from Lemma B.1.
+So all that is left is proving the lemmas. We will start by proving
+Lemma B.1. Consider the formal definition of𝐺𝑖,1 in Fig. 12.
+Next, we describe adversaryB1 against the DSSDH assumption
+in Fig. 13 First, we argue thatB1 simulates the game𝐺𝑖,1 perfectly,
+unless one of the events Bad1 or Bad2 occurs. We will bound the
+probabilities of these events happening. The games differ only in the
+secret key of the𝑖-th message, therefore𝐺𝑖,0 and𝐺𝑖,1 are identical
+toA, unless it queries the hash oracle on(𝑍,𝑈,𝑖 ) as in line 1 of H.
+If the corresponding public key was a key in which the challenge
+was embedded, i.e. Bad3 is false,B1 breaks the DSSDH assumption.
+Bad1 and Bad2 prevent thatA already knows the challenge
+randomness before its challenge query. If it doesn’t know this value,
+all answers of B1 to both oracles are distributed as in the real
+games𝐺𝑖,0 and𝐺𝑖,1. Specifically, the oracles are kept consistent and
+the hash oracle is programmed such that the keys chosen for the
+adversaries challenge are included at the right points.
+Bad3 occurs ifA tries to corrupt a public key for which B1
+doesn’t know the corresponding secret key or A chooses a key
+without the challenge embedded for the𝑖-th message. If the first
+part doesn’t happen, the corruption oracle is simulated perfectly.
+The adversary doesn’t notice the second part in this case, but if it
+occurs,B1 isn’t successful, so it is still a bad case for the simulation.
+Now we bound the probability of these events occurring. Since
+𝑌 is completely hidden from A, it can only find it by guessing.
+Therefore, for an adversaryA making at most𝑞𝐻 (resp.𝑞𝐷1) hash
+(resp. decryption) queries,
+Pr[Bad1 = True]≤ 𝑞𝐻
+𝑝
+Pr[Bad2 = True]≤ 𝑞𝐷1
+𝑝
+For Bad3, consider the probability with which𝑏[𝑗] = 1. This is
+independent for each public key ek𝑗 , so the probability that Bad3
+does not occur is the case that for 𝑞𝐶 public keys ek𝑖1,..., ek𝑖𝑞𝐶
+𝑏[𝑖𝑗] = 0 and for one public key the bit is 1, so
+Pr[Bad3 = False] =(1− 1
+𝑞𝐶
+)𝑞𝐶· 1
+𝑞𝐶
+(1)
+≤ 1
+𝑒2𝑞𝐶
+
+Server-Aided Continuous Group Key Agreement
+Algorithm AdversaryB1 on DSSDH
+AdversaryB1(G ,𝑝,𝑔,𝑈,𝑉 )
+Corr←∅, HL←∅, DL←∅
+for 𝑗∈[ 𝑁] do
+Pick𝑏[𝑗]←{ 0, 1} with Pr[𝑏[𝑗] = 1] = 1
+𝑞𝐶
+𝛼𝑗
+$← Z 𝑝\{ 0}
+if 𝑏[𝑖] = 1 then ek𝑗←𝑉𝛼𝑗 // Embed the challenge
+else ek𝑗←𝑔𝛼𝑗 // Allow corruption
+Phase← 1
+(ﬁ𝑚∗
+0,ﬁ𝑚∗
+1,ﬁek
+∗
+,𝑠𝑡) $←A H,D1,Cor(ek1,..., ek𝑁)
+req|ﬁ𝑚0| =|ﬁ𝑚1| =|ﬁek
+∗
+| =𝑛
+Parse ﬁek
+∗
+as ˆek𝑖1,..., ˆek𝑖𝑙, ek∗
+𝑙+1,..., ek∗
+𝑛 for𝑙∈[ 𝑛]
+s.t.∀𝑗∈[ 𝑙] : ﬁ𝑚0[𝑖𝑗] ≠ ﬁ𝑚1[𝑖𝑗]∧ ˆek𝑖𝑗 ∈ ﬁek
+if 𝑏[𝑖𝑖] = 0 then
+Bad3←𝑇𝑟𝑢𝑒
+abort
+𝑐∗
+0←𝑈
+for 𝑗∈[ 𝑛] do
+𝐾𝑗
+$←K
+𝑐∗
+𝑗← D(𝐾𝑗,ﬁ𝑚𝑏[𝑗])
+if∃𝑘∈[ 𝑁] : ek𝑘 = ﬁek
+∗
+[𝑗]∧ 𝑘 <𝑖∧𝑏[𝑘] = 1 then
+DL[𝑗,𝑈, (𝑐𝑗,𝑗)] =𝐾𝑗
+if 𝑗 >𝑖∧𝑏[𝑗] = 0 then
+HL[𝑈𝛼𝑗, ek∗[𝑗],𝑗]← 𝐾𝑗
+Phase← 2
+𝑏′ $←A H,D2,Cor(𝑐∗
+0,...,𝑐 ∗𝑛,𝑠𝑡)
+return⊥
+Oracle Cor(𝑗)
+Corr +← 𝑗
+if 𝑏[𝑗] = 1 then
+Bad3←𝑇𝑟𝑢𝑒
+abort
+return𝛼𝑗
+Oracle𝐻(𝑍,𝑊,𝑗 )
+if∃𝑘∈[ 𝑁] :𝑊 = ek𝑘∧ ek𝑘 = ek∗[𝑖]∧ 𝑏[𝑘] = 1∧ O𝑣(𝑈𝛼𝑘,𝑍) = 1
+then return 𝑍
+1
+𝛼𝑘
+if Phase = 1∧ O𝑢(𝑊,𝑍) = 1 then
+Bad2← 1
+abort
+if Phase = 2∧𝑗∈[ 𝑛]∧ 𝑊 = ek∗[𝑗]∧ O𝑢(𝑊,𝑍) = 1∧𝑗 >𝑖 then
+return𝐾𝑗
+if∃𝑗∈[ 𝑁],𝑐 ∈ G ,𝑡 ∈K :𝑊 = ek𝑗∧ DL[𝑖,(𝑐,(∗,𝑗))] =𝑡∧
+O𝑣(𝑐𝛼𝑗,𝑍) = 1 then
+return𝑡
+if HL[𝑍,𝑊,𝑗 ] =⊥ then
+HL[𝑍,𝑊,𝑗 ] $←K
+return HL[𝑍,𝑊,𝑗 ]
+Oracle𝐷Phase(𝑖,(𝑐0,(𝑐,𝑗)))
+req𝑖∈[ 𝑁]
+if Phase = 1∧𝑐0 =𝑈 then
+Bad1← 1
+abort
+if∃𝑍∈ G ,𝑡 ∈K : HL[𝑍, ek𝑗,𝑗] =𝑡∧(𝑏[𝑗] = 0 =⇒ 𝑍 = ek
+𝛼𝑗
+𝑗 ∧
+𝑏[𝑗] = 1 =⇒ O𝑣(𝑐𝛼𝑗,𝑍) = 1) then
+𝑚← D−1(𝑡,𝑐)
+if∃𝑘∈[ 𝑁] : ﬁek
+∗
+[𝑗] = ek𝑘∧𝑚∈{ﬁ𝑚∗
+0[𝑗],ﬁ𝑚∗
+1[𝑗]} then
+return test
+else
+return𝑚
+if DL[𝑖,(𝑐0(𝑐,𝑗))] =⊥ then
+DL[𝑖,(𝑐0,(𝑐,𝑗))] $←K
+𝑚← D−1(DL[𝑖,(𝑐0,𝑗)],𝑐)
+if∃𝑘∈[ 𝑁] : ﬁek
+∗
+[𝑗] = ek𝑘∧𝑚∈{ﬁ𝑚∗
+0[𝑗],ﬁ𝑚∗
+1[𝑗]} then
+return test
+else
+return𝑚
+Figure 13: Description of adversaryB1 from Theorem 3.2.
+For(1), we use that ln(1+𝑥)≥ 𝑥
+𝑥+1 for all𝑥≥− 1 and rewrite
+(1− 1
+𝑞𝐶)𝑞𝐶 =𝑒ln(( 1− 1
+𝑞𝐶)𝑞𝐶) =𝑒𝑞𝐶·ln(1− 1
+𝑞𝐶)≥ 𝑒−1/( 1− 1
+𝑞𝐶)≥ 𝑒−2
+for𝑞𝐶 > 1. Combining the probabilities yields the lemma.
+The proof of Lemma B.2 is a straight forward application of
+the IND-RCCA security of the DEM. Since the key at position
+𝑖 is random, an IND-RCCA adversary can simulate encryptions
+for this position with its encryption oracle and embeds its own
+challenge at the𝑖-th challenge ciphertext for the adversaryA. If
+A can distinguish between𝐺𝑖,1 and𝐺𝑖,2 thenB2 distinguishes its
+challenges as well. □
+C NOMINAL GROUPS
+We recall the definition and parameters for nominal groups from [2].
+Definition C.1 (Nominal Group). A nominal groupN =(G,𝑔,𝑝,
+E𝐻,E𝑈, exp) consists of a finite set of elementsG, a base element
+𝑔∈G , a prime𝑝, a finite set of “good” exponentsE𝐻⊂ Z , a set of
+exponentsE𝑈 ⊂ Z \𝑝Z and an efficiently computable exponen-
+tiation function exp :G× Z →G . We write𝑋𝑦 as shorthand for
+exp(𝑋,𝑦) and call elements ofG “group elements”.N has to fulfil
+the following properties:
+(1) G is efficiently recognizable.
+(2) (𝑋𝑦)𝑧 =𝑋𝑦𝑧 for all𝑋∈G ,𝑦,𝑧 ∈ Z
+(3) the function𝜙 defined by𝜙(𝑥) =𝑔𝑥 is a bijection fromE𝑈
+to{𝑔𝑥|𝑥∈[ 𝑝− 1]}.
+A nominal groupN is called rerandomisable, when additionally
+(4) 𝑔𝑥+𝑝𝑦 =𝑔𝑥 for all𝑥,𝑦 ∈ Z
+(5) for all𝑦∈E 𝑈 , the function𝜙𝑦 defined by𝜙𝑦(𝑥) =𝑔𝑥𝑦 is a
+bijection fromE𝑈 to{𝑔𝑥|𝑥∈[ 𝑝− 1]}.
+Property 3 (and 5) ensure that discrete logarithms are unique in
+N inE𝑈 . Additionally, we define the two statistical parameters
+ΔN := Δ[𝐺𝐻,𝐺𝑈],
+
+Alwen, et al.
+Name P-256 P-384 P-512 Curve25519 Curve448
+Security Level 128 192 256 128 224
+𝑃N 2−255 2−383 2−520 2−250 2−444
+ΔN 0 0 0 2−125 2−220
+Size in bits 256 384 512 256 512
+Table 1: Statistical parameters of NIST curves and nominal group curves.
+with𝐺𝐻 is the uniform distribution overE𝐻 and𝐺𝑈 is the uniform
+distribution overE𝑈 and
+𝑃N = max
+𝑌∈G
+Pr
+𝑥
+$
+←E𝐻
+[𝑌 =𝑔𝑥].
+Any cyclic group, such as NIST curves, can be seen as a reran-
+domizable nominal group with the special properties that ΔN = 0
+and𝑃N =𝑝−1. Other popular examples of rerandomizable nominal
+groups are Curve25519 and Curve448. Table 1 lists the parameters
+for these nominal groups.
+For a more detailed explanation of these values, see [2]. Nominal
+groups and prime-order groups behave indistinguishably except
+when group elements are sampled with exponents outside ofE𝐻
+or a collision occurs which wouldn’t have been a collision in a
+prime-order group. Since these two events are statistical in nature
+and occur with low probability, this only adds a negligible additive
+security loss compared to Theorem 3.2.
+The DSSDH assumption is almost identical over nominal groups
+except for the choice of exponents.
+Definition C.2 (Double-Sided Strong Diffie-Hellman Assumption).
+LetN =(G,𝑔,𝑝,E𝐻,E𝑈, exp) be a nominal group. We define the
+advantage of an algorithmA in solving the Double-Sided Strong
+Diffie-Hellman problem( DSSDH) with respect toN as
+AdvDSSDH
+N (A) =
+
+𝑍 =𝑔𝑥𝑦
+
+𝑥,𝑦
+$
+←E 2
+𝑈
+𝑍
+$
+←A O(N,𝑝,𝑔,𝑔 𝑥,𝑔𝑦),
+
+with O ={O𝑥(·,·), O𝑦(·,·)}, where O𝑥, O𝑦 are oracles which on
+input𝑈,𝑉 output 1, iff𝑈𝑥 =𝑉 or𝑈𝑦 =𝑉 respectively. The proba-
+bility is taken over the random coins of the group generator, the
+choice of𝑥 and𝑦 and the adversaries random coins.
+Remark 3. Since𝑥,𝑦 are sampled fromE𝑈 , the second property of
+nominal groups guarantees that the oracles O𝑥 and O𝑦 are well-
+defined.
+Theorem C.3. LetN =(G,𝑔,𝑝,E𝐻,E𝑈, exp) be a nominal group.
+If the DSSDH assumption holds relative to N and if DEM is an
+IND-RCCA secure DEM, then mmPKE from Fig. 11 is mmIND-RCCA
+secure with adaptive corruptions in the random oracle model and leak-
+age function leak revealing the length of each plaintext. Specifically,
+there are adversariesB1,B2 against DSSDH and IND-RCCA of DEM
+respectively, s.t. for all adversariesA against the mmIND-RCCA
+AdvmmIND-RCCA
+mmPKE (A)≤
+2𝑒2𝑞𝐶·𝑛·( AdvDSSDH
+N (B1)+ 𝑞𝐷1
+𝑝 +𝑞𝐻
+𝑝 )
++𝑛· AdvIND-RCCA
+DEM (B2)
++ 2(𝑛+ 1)2· ΔN,+O(𝑞𝐷,𝑞𝐻)· 𝑃N,
+where the runtime of B1 andB2 is roughly the same as A and
+𝑞𝐷1,𝑞𝐻 and𝑞𝐶 denote the number of queries to the decryption oracle
+𝐷 in phase 1, the random oracle 𝐻 and the corruption oracle Cor
+respectively.
+Proof. Mainly, the proof of Theorem 3.2 still applies. That is
+because all operations performed by the adversary are well-defined
+over nominal groups. The main difference occurs when rerandomis-
+ing the keys in each hybrid. Here, not every exponent yields a valid
+group element, i.e. a valid key. Formally, we would add an addi-
+tional hybrid for each chosen key, sampling its exponent fromE𝑈
+instead ofE𝐻 , which adds an additive term in ΔN to the advantage
+function. It is imperative thatN is rerandomisable as otherwise
+embedding the (randomised) challenge would be problematic.
+Secondly, whenever group elements are submitted to one of the
+oracles, there is a (tiny) probability of collisions of group elements.
+As it is comparable to the chances of guessing discrete logarithms
+in prime order groups, which is mostly ignored in proofs, we omit a
+complete analysis as it wouldn’t contribute any meaningful insights.
+In conclusion, after sampling all keys fromE𝑈 and accounting
+for possible collisions in the gap oracles, the proof for nominal
+groups works as shown in Theorem 3.2. □
+D DETAILS OF THE (SA)CGKA SECURITY
+MODEL
+In this section, we formally defineFcgka. The code ofFcgka is in
+Fig. 14.
+Notation. We use the keyword assert cond to restrict the sim-
+ulator’s actions. Formally, if the condition cond is false, then the
+functionality permanently halts, making the real and ideal worlds
+easily distinguishable. Further, we use only allowed if cond to
+restrict the environment. That is, our statements quantify only over
+environments who, when interacting withFcgka and any simula-
+tor, never make cond false7. We write receive from the simulator to
+denote that the functionality sends a dummy value to it, waits until
+it sends a value back and asserts via assert that the received value
+is of the correct format. Lastly, all functions prefixed with a * are
+helper functions and not exposed outside the protocol.
+State.Fcgka maintains a history graph represented as an array
+HG, where HG[epid] denotes the epoch identified by an integer
+epid. We use the standard object-oriented notation for epochs. In
+particular, each epoch𝐸 has a number of attributes listed in Table 2
+(𝐸.inj,𝐸.exp and𝐸.chall are related to corruptions). Apart fromHG,
+Fcgka stores an array CurEp, where CurEp[id] denotes the current
+epoch of the party id.
+7A relaxed restriction would require thatA makes cond false with a small probability
+𝜖. In our caseA knows if it violates cond, so fixing𝜖 = 0 is without loss of generality.
+
+Server-Aided Continuous Group Key Agreement
+FunctionalityFcgka
+Parameters: confidential(epid), authentic(epid, id), idcreator
+Initialization // Executed on first input.
+CurEp[∗], HG[∗]←⊥
+epCtr← 0
+𝐸← *new-ep;𝐸.sndr← idcreator;𝐸.mem←{ idcreator}
+HG[0]← 𝐸
+CurEp[idcreator]← 0
+Input(Send, act), act∈{ ‘up’, ‘add’-id𝑡, ‘rem’-id𝑡} from id
+// Send inputs to sim. and allow it to reject them.
+Send(Send, id, act) to the sim. and receive ack.
+req ack
+// Compute the new epoch 𝐸 created by the action.
+𝐸← *new-ep;𝐸.par← CurEp[id];𝐸.sndr← id
+𝐸.act← act;𝐸.mem← *mem(CurEp[id], act)
+epCtr++; HG[epCtr]← 𝐸
+// Enforce security after possible changes to HG.
+assert *HG-is-consistent∧ *auth-is-preserved
+// Immediately transition id into the created epoch.
+CurEp[id]← epCtr
+// Output the idealized message chosen by adv.
+Receive from the simulator 𝐶.
+return𝐶
+Input GetKey from id
+Send(Key, id) to the simulator and receive 𝐼.
+epid← CurEp[id]
+req epid ≠⊥
+if HG[epid].key =⊥ then
+// Set the key according to confidential.
+if confidential(epid) then
+HG[epid].key $←{ 0, 1}𝜅
+HG[epid].chall← true
+else
+HG[epid].key←𝐼
+return HG[epid].key
+Corruption(Expose, id)
+if CurEp[id] ≠⊥ then // Record exposure.
+HG[CurEp[id]].exp +← id
+// Disallow adaptive corruptions to avoid commitment problem.
+only allowed if epid : HG[epid].chall∧¬ confidential(epid)
+Input(Receive,𝑐) from id
+// Send inputs to sim. and allow it to reject them.
+Send(Receive, id,𝑐) to the simulator and receive ack.
+req ack
+// Ask sim. to interpret the packet.
+Receive from the simulator (sndr′, act′).
+if act′ = ‘rem’-id then
+// Check that sndr′ removed id or auth. not guaranteed.
+honestRem←∃ epid :  HG[epid].par = CurEp[id]
+∧ HG[epid].sndr = sndr′ ∧ HG[epid].act = ‘rem’-id
+assert honestRem∨¬ authentic(HG[CurEp[id]], sndr′)
+CurEp[id]←⊥
+return(sndr′, act′)
+// Ask sim, to identify the epoch epid where id transitions. If epid =⊥, a
+new injected epoch is created.
+Receive from the simulator epid.
+if epid =⊥ then
+𝐸← *new-ep
+𝐸.sndr← sndr′;𝐸.act← act′;𝐸.inj← true
+if CurEp[id] ≠⊥ then
+// If id is a member, compute 𝐸.par and𝐸.mem using its epoch.
+𝐸.par← CurEp[id]
+𝐸.mem← *mem(CurEp[id], act′)
+else
+// If id joined,𝐸 is a detached root with arbitrary member set.
+Receive𝐸.mem from the simulator; set 𝐸.par←⊥ .
+epCtr++; HG[epCtr]← 𝑉
+epid← epCtr
+assert HG[epid] ≠⊥
+// If a current group member transitions to a detached root, attach it.
+if CurEp[id] ≠⊥∧ HG[epid].par =⊥ then HG[epid].par← CurEp[id]
+assert CurEp[id] =⊥∨ HG[epid].par = CurEp[id]
+assert CurEp[id] ≠⊥∨ HG[epid].act = ‘add’-id
+// Enforce security after possible changes to HG.
+assert *HG-is-consistent∧ *auth-is-preserved
+// Transition id and compute its output.
+CurEp[id]← epid
+if HG[epid].act = ‘add’-id then return (HG[epid].sndr, HG[epid].mem)
+else return (HG[epid].sndr, HG[epid].act)
+Helper *new-ep
+return new epoch with sndr =⊥, par =⊥, act =⊥, mem =∅,
+inj = false, key =⊥, exp =∅, chall = false.
+Helper *mem(epid, act)
+𝐺← HG[epid].mem
+if act = ‘add’-id𝑡 then
+𝐺 +← id𝑡
+else if act = ‘rem’-id𝑡 then
+𝐺 -← id𝑡
+if act ≠ ‘up’∧𝐺 = HG[epid].mem then
+return⊥
+return𝐺
+Helper *HG-is-consistent
+// True if HG is a forest and membership is consistent.
+return true iff
+a)∀id s.t. CurEp[id] ≠⊥ : id∈ HG[CurEp[id]].mem
+b) HG has no cycles
+c)∀epid∈[ epCtr] : HG[epid].mem ≠⊥
+d)∀epid∈[ epCtr] s.t. HG[epid].par ≠⊥ :
+HG[epid].mem = *mem(HG[epid].par, HG[epid].act)
+Helper *auth-is-preserved
+// True if there is no authentic epoch created by injected packet.
+Observe that the root epid = 0 cannot be injected by definition.
+returnepid : 1≤ epid≤ epCtr∧ HG[epid].inj
+∧ authentic(HG[epid].par, HG[epid].sndr)
+Figure 14: The ideal CGKA functionality.
+
+Alwen, et al.
+FunctionalityFaks
+Parameter: key-package generation algorithm *AKS-kgen.
+Initialization
+SK[·,·]←⊥
+Input GetSK(𝑃𝐾) from id
+𝑆𝐾← SK[id,𝑃𝐾]
+SK[id,𝑃𝐾]←⊥
+return𝑆𝐾
+Input(GetPK, id′) from id
+(𝑃𝐾,𝑆𝐾)← *AKS-kgen()
+SK[id′,𝑃𝐾]← 𝑆𝐾
+Send(id′,𝑃𝐾) to adv.
+return𝑃𝐾
+Figure 15: The Authenticated Key service Functionality.
+𝐸.par The integer identifier of the parent epoch.
+𝐸.sndr The party who created the epoch by performing a group
+operation.
+𝐸.act The group modification performed when𝐸 was created:
+either ‘up’ for update, or ‘add’-id𝑡 for adding id𝑡 , or
+‘rem’-id𝑡 for removing id𝑡 .
+𝐸.mem The set of group members.
+𝐸.key The shared group key.
+𝐸.inj A boolean flag indicating if the epoch is injected.
+𝐸.exp The set of group members exposed (i.e., corrupted) in this
+epoch.
+𝐸.chall A flag indicating if a random group key has been out-
+putted.
+Table 2: Attributes on an epoch in Fcgka.
+.
+Inputs from parties. The first two inputs, Send and Receive, are
+handled quite similarly. First, all inputted values are sent to the
+simulator (there are no private inputs). Second, the simulator sends
+a flag ack which decides if sending/receiving succeeds (or fails with
+output⊥). Third,Fcgka updates the history graph and enforces that
+this does not destroy authenticity and consistency by checking that
+*auth-is-preserved and *HG-is-consistent are true. Finally,
+Fcgka transitions the sender/receiver to the new epoch (or removes
+its pointer in case it is removed) and computes the output using
+the new graph.
+One aspect that needs more explanation is updating the graph
+when a party id receives𝑐. In this case, the simulator interprets𝑐 for
+Fcgka (which abstracts away ciphertexts) by providing the sender
+sndr′ and the action act′. If act′ removes id, then the only possible
+authenticity check is that either sndr′ removed id in its current
+epoch or the epoch is not authentic for sndr′. If id is not removed,
+the simulator identifies the epoch epid into which id transitions or
+joins. The epoch can be⊥, in which caseFcgka creates a new epoch
+𝐸 with the infected flag inj set. If id is a current group member,
+then𝐸 is a child of its current epoch. Otherwise, if id joins, then
+𝐸 is a detached root. Afterwards,Fcgka checks if epid identifies a
+detached root into which a current group member id transitions. If
+this is the case, the root is attached as a child of id’s current epoch.
+For instance, this implies that any other party transitioning to epid
+must do so from id’s current epoch and the epoch semantic must
+be consistent between it, id and the party who joined into epid.
+The last input to Fcgka is GetKey, which simply outputs the
+group key from the party’s current epoch. The key is set to a random
+or arbitrary value the first time it is retrieved by some party.
+Corruptions. When a party is corrupted,Fcgka simply adds it to
+the exposed set exp of its current epoch. The set is later used by
+the security predicates. ThenFcgka disallows corruptions in case
+extending the exp set switched confidential of some epoch𝐸 with
+𝐸.chall set from true to false.
+E THE AUTHENTICATED KEY SERVICE
+FUNCTIONALITY (AKS)
+The AKS is modeled as the functionalityFaks in Fig. 15. Formally,
+SAIK works in theFaks-hybrids model, i.e.,Faks is available in the
+real world and emulated by the simulator in the ideal world.
+Faks works as follows. When a party id wants to fetch a key
+package of another party id′,Faks generates a new key package
+for id′ using SAIK’s key-package generation algorithm (formally,
+the algorithm is a parameter ofFaks). It sends (the public part of)
+the package to id and to the adversary. (Note that sinceFaks exists
+in the real world, the adversary should be thought of as the UC
+environment.) The secrets for the key package can be fetched byid𝑡
+later, when it decides to join the group. Once fetched, secrets are
+deleted, which means thatFaks cannot be used as secure storage.
+F DETAILS OF SAIK
+In this section we give the details of the SAIK protocol. The pseu-
+docode can be found in Figs. 16 and 17.
+F.1 Ratchet Trees
+A ratchet tree is a left-balanced𝑞-ary tree (a formal definition can
+be found in App. H.5). This generalizes ITK’ binary trees. Using
+𝑞 ≠ 2 can be beneficial in certain situations. A ratchet tree, as well
+as its nodes, have a number of labels listed in Table 3. We also define
+a number of helper methods in Table 6.
+Importantly, the direct path of a leaf𝑢 consists of (the ordered
+list of) all nodes on the path from 𝑢 to the root, without 𝑢. The
+resolution of a node𝑣 is the minimal set of descendant non-blank
+nodes that covers the whole sub-tree rooted at𝑣.
+F.2 SAIK State and Algorithms
+The state of SAIK consists of a number of variables, outlined in
+Table 4. The table also includes short descriptions of the roles of the
+secrets in the key schedule, which is extended by the intermediary
+secrets described in Table 5. The protocol will ensure that states of
+any two parties in the same epoch differ at most in labels of nodes
+of𝛾.𝜏 that describe secret keys and the label 𝛾. leaf. This means
+that they agree on the secrets𝛾. appSec and𝛾. initSec, as well as on
+the public context, computed by the helper method grpCtxt() in
+Table 4.
+SAIK’s algorithms are defined in Figs. 16 and 17. Apart from
+initialization, there are three main algorithms (the rest of the code
+are subroutines) exposed to a user (or a higher-level application).
+They are identified by keywords Send, Receive and Key, respec-
+tively. First, Send is used to create a new epoch. When the user
+inputs Send followed by the intended group modification (update,
+
+Server-Aided Continuous Group Key Agreement
+𝜏. root The root.
+𝑣. isroot True iff𝑣 =𝜏. root.
+𝑣. isleaf True iff𝑣 has no children.
+𝑣. parent The parent node of𝑣 (or⊥ if𝑣. isroot).
+𝑣. children If¬𝑣. isleaf: ordered list of𝑣’s children.
+𝑣. nodeIdx The node index of𝑣.
+𝑣. depth The length of the path from𝑣 to𝜏. root.
+𝑣. ek An mmPKE encryption key.
+𝑣. dk The corresponding decryption key.
+𝑣. vk If𝑣. isleaf: a signature verification key.
+𝑣. sk If𝑣. isleaf: the corresponding signing key.
+𝑣. unmLvs The set of indices of the leaves below𝑣 whose owner
+id does not know𝑣. sk.
+𝑣. id If𝑣. isleaf: the id associated with that leaf.
+Table 3: Labels of a ratchet-tree 𝜏 and its nodes.
+𝛾. grpId The identifier of the group.
+𝛾.𝜏 The ratchet tree.
+𝛾. leaf The party’s leaf in𝜏.
+𝛾. treeHash A hash of the public part of𝜏.
+𝛾. lastAct The last modification of the group state and the
+user who initiated it.
+𝛾. appSec The current epoch’s CGKA key. Exposed to the
+application layer.
+𝛾. initSec The next epoch’s init secret.
+𝛾. membKey The next epoch’s membership secret for authenti-
+cating messages.
+𝛾. grpCtxt() Returns(𝛾. grpId,𝛾. treeHash,𝛾. lastAct).
+𝛾. conf Tag The confirmation tag, which is signed to ensure
+authenticity.
+Table 4: The protocol state of a party id and the helper method
+for computing the context.
+pathSec The path secrets𝑠2,...,𝑠 𝑛 used to derive the key-
+pairs in each node. Sent via themmPKE encryption
+to keep tree invariant intact.
+commitSec The path secret in the root node. Used as seed for
+the key schedule together with initSec from the
+previous epoch
+joinerSec Secret sent to new group members. Together with
+the group context, enables computation of the
+epSec.
+epSec Base secret used to derive all other secrets, i.e.
+appSec, membKey,initSec, conf Tag
+Table 5: Intermediate values computed by the protocol that
+are not part of the state.
+𝜏. clone() Returns a copy of𝜏.
+𝜏. public() Returns a copy of𝜏 with all labels𝑣. sk and
+𝑣. sk set to⊥.
+𝜏. roster() Returns id’s of all parties in𝜏.
+𝜏. leaves() Returns the list of all leaves in the tree, sorted
+from left to right.
+𝜏. leafof(id) Returns the leaf𝑣 with𝑣. id = id.
+𝜏. getLeaf() Returns leftmost𝑣 s.t.¬𝑣. inuse(). If no such
+𝑣 exists, adds a new leaf using addLeaf(𝜏)
+and returns it.
+𝜏. blankPath(𝑣) For all𝑢∈𝜏. directPath(𝑣) calls𝑢.blank().
+𝜏. inSubtree(𝑢,𝑣) Returns true if𝑢 is in𝑣’s subtree.
+𝑣. inuse() Returns false iff all labels are⊥.
+𝑣. blank() Sets all labels of𝑣 to⊥.
+𝜏. lca(𝑢,𝑣) Returns the lowest common ancestor of the
+two leafs.
+𝜏. directPath(𝑣) Returns the path from𝑣’s parent to the root.
+𝜏. mergeLvs(𝑣) Sets 𝑢.unmLvs ← ∅ for all 𝑢 ∈
+𝜏. directPath(𝑣)
+𝜏. unmerge(𝑣) Sets 𝑢.unmLvs +← 𝑣 for all 𝑢 returned by
+𝜏. directPath(𝑣)
+𝑣. resolution() If 𝑣. inuse, return (𝑣) ++ 𝑣. unmLvs.
+Else if 𝑣. isleaf, return (). Else, return
+𝑣. children[1].resolution() ++ ··· ++
+𝑣. children[𝑛].resolution()
+𝑣. resolvent(𝑢) Returns the ancestor of𝑢 in𝑣. resolution()\(𝑣)
+(or⊥ if𝑢 is not a descendant of𝑣).
+Table 6: Helper methods for a ratchet tree 𝜏 and its nodes.
+add or remove), the protocol applies the modification and returns
+a message, which the user can upload to the mailboxing service.
+Second, Receive is used to process messages downloaded from the
+service. Third, with Key user gets the current group key.
+The formal syntax of saCGKA protocols is defined as part of our
+security definition in App. D. In particular, an saCGKA protocol
+must expose the same interface as the ideal CGKA functionality.
+F.3 Extraction Procedure for the Server
+Finally, we describe a procedure *extract(𝐶, id)→ 𝑐 used by the
+mailboxing service to take an uploaded message𝐶 and compute the
+message𝑐 delivered to user id. Formally, this procedure is not part
+of our syntax or security definitions, since for simplicity our model
+does not consider correctness (see Sec. 4.6) and an untrusted service
+
+Alwen, et al.
+SAIK: Algorithms
+Initialization
+if id = idcreator then
+𝛾← *new-state()
+𝛾. grpId,𝛾. initSec,𝛾. membKey,𝛾. appSec $←{ 0, 1}𝜅
+𝛾.𝜏← *new-LBT()
+𝛾. leaf←𝛾.𝜏. leaves[0]
+(𝛾. leaf.vk,𝛾. leaf.sk)← Sig.KG()
+Input(Send, act), act∈{ ‘up’, ‘rem’-id𝑡, ‘add’-id𝑡} from id
+req𝛾 ≠⊥
+// In case of add, fetch id𝑡 ’s keys from AKS (AKS runs *AKS-kgen).
+if act = ‘add’-id𝑡 then
+(ek𝑡, vk𝑡, ek′
+𝑡)← query(GetPk, id𝑡) toFks
+act← ‘add’-id𝑡 -(ek𝑡, vk𝑡, ek′
+𝑡)
+// Create the state and secrets for the new epoch.
+try(𝛾′, pathSecs, joinerSec)← *create-epoch(act)
+// Encrypt the path secrets using the new epoch’s ratchet tree. For
+adds, also encrypt the joiner secret.
+if act∈{ ‘up’, ‘rem’-id𝑡} then
+Ctxt← *encrypt(𝛾′, pathSecs,⊥,⊥,⊥)
+else if act = ‘add’-id𝑡 -(ek𝑡, vk𝑡, ek′
+𝑡) then
+Ctxt← *encrypt(𝛾′, pathSecs, id𝑡, ek′
+𝑡, joinerSec)
+ssk←𝛾.𝜏. leafof(id).ssk
+sig← Sig.sign(ssk,𝛾′.conf Tag)
+if act = ‘rem’-id𝑡 then
+// Authenticate removal message for id𝑡
+sig𝑡← Sig.sign(ssk,(id, ‘rem’-id𝑡))
+tag𝑡← MAC.tag(𝛾. membKey,(id, ‘rem’-id𝑡,𝛾. conf Tag))
+return(id, act, Ctxt, updEKs, sig, sig𝑡, tag𝑡)
+𝛾←𝛾′
+if act = ‘add’-id𝑡 -(ek𝑡, vk𝑡, ek′
+𝑡) then
+// Send additional data for id𝑡 .
+welcomeData←( 𝛾. grpId,𝛾.𝜏. public(), ek′
+𝑡)
+return(id, act, Ctxt, updEKs, sig, welcomeData)
+return(id, act, Ctxt, updEKs, sig)
+Input Key from id
+req𝛾 ≠⊥
+𝑘←𝛾. appSec
+𝛾. appSec←⊥
+return𝑘
+Input(Receive,(id𝑠, ‘removed’, sig𝑡, tag𝑡)) from id
+// Receiver is removed.
+vk←𝛾.𝜏. leafof(id𝑠).vk
+req Sig.vrf(vk,(id𝑠, ‘rem’-id), sig𝑡)
+req MAC.vrf(𝛾. membKey,(id𝑠, ‘rem’-id,𝛾. conf Tag), tag𝑡)
+𝛾←⊥
+return(id𝑠, ‘rem’-id)
+Input(Receive,(id𝑠, act, ctxt, updEKs′, sig)) from id
+// Receiver is a member.
+try𝛾′← *apply-act(𝛾. clone(), id𝑠, act)
+try(𝛾, conf Tag)← *transition(𝛾′, ctxt, updEKs′, id𝑠, act)
+vk←𝛾.𝜏. leafof(id𝑠).vk
+req Sig.vrf(vk, conf Tag, sig)
+if act = ‘add’-id𝑡 -(ek𝑡, vk𝑡) then return (id𝑠, ‘add’-id𝑡)
+else return (id𝑠, act)
+Input(Receive,(id𝑠, act, ctxt1, ctxt2, welcomeData))) from id
+// Receiver joins.
+req𝛾 =⊥
+parse(grpId,𝜏, ek′)← welcomeData
+𝛾← *new-state
+(𝛾. grpId,𝛾.𝜏,𝛾. lastAct)←( grpId,𝜏,(id𝑠, ‘add’-id))
+𝑣←𝛾.𝜏. leafof(id)
+try(dk, sk, dk′)← query GetSk((𝑣.ek,𝑣. vk, ek′)) toFks
+(𝑣.dk,𝑣. sk)←( dk, sk)
+𝛾← *set-tree-hash(𝛾)
+try(𝛾, conf Tag)← *get-secrets(𝛾, dk′, ctxt1, ctxt2, id𝑠)
+return(𝛾.𝜏. roster(), id𝑠)
+SAIK: Helpers for encryption and key generation for Faks
+helper *encrypt(𝛾′, pathSecs, id𝑡, ek′
+𝑡, joinerSec)
+𝐿← *rcvrs-of-path-secs(𝛾′.𝜏, id)
+ﬁ𝑚,ﬁek←()
+for 𝑗 = 1 to len(𝐿) do
+(𝑖,𝑣)← 𝐿[𝑗]
+ﬁ𝑚 + +← pathSecs[𝑖]
+if id𝑡 ≠⊥∧ 𝑣 =𝛾′.𝜏.leafof(id𝑡) then ﬁek + +← ek′
+𝑡
+else ﬁek + +←ﬁ𝑣.ek
+if id𝑡 ≠⊥ then
+ﬁ𝑚 + +← joinerSec
+ﬁek + +← ek′
+𝑡
+return mmPKE.Enc(ﬁek,ﬁ𝑚)
+helper *decrypt-path-secret(𝛾′, id𝑠, ctxt)
+𝑣← lca(𝛾′.𝜏.leafof(id𝑠),𝛾′.leaf).resolvent(𝛾′.leaf)
+return mmPKE.Dec(𝑣.dk, ctxt)
+helper *AKS-kgen()
+(ek, dk)← mmPKE.KG()
+(vk, sk)← Sig.KG()
+(ek′, dk′)← mmPKE.KG()
+return(( ek, vk, ek′),(dk, sk, dk′))
+Figure 16: The algorithms of SAIK.
+
+Server-Aided Continuous Group Key Agreement
+SAIK: Creating epochs
+helper *create-epoch(𝛾, id, act)
+𝛾′←𝛾. clone()
+// Apply the action to the tree. Fails if the action is not allowed.
+try𝛾′← *apply-act(𝛾′, id, act)
+// Re-key the direct path.
+directPath←𝛾′.𝜏.directPath(𝛾′.leaf)
+pathSecs[∗]←⊥
+pathSecs[1] $←{ 0, 1}𝜅
+for𝑖 = 1 to len(directPath)− 1 do
+𝑣← directPath[𝑖]
+𝑟← HKDF.Exp(pathSecs[𝑖], ‘node’)
+(𝑣.ek,𝑣. dk)← mmPKE.KG(𝑟)
+pathSecs[𝑖+ 1]← HKDF.Exp(pathSec[𝑖], ‘path’)
+𝛾′.𝜏.mergeLvs(𝛾′.leaf)
+// Re-key the leaf.
+(𝛾′.leaf.ek,𝛾′.leaf.dk)← mmPKE.KG()
+(𝛾′.leaf.vk,𝛾′.leaf.sk)← Sig.KG()
+// Set all context variables and then derive epoch secrets.
+𝛾′.lastAct←( id, act)
+𝛾′← *set-tree-hash(𝛾′)
+commitSec← pathSecs[len(pathSecs)]
+(𝛾′, joinerSec)← *derive-keys(𝛾′, commitSec)
+return(𝛾′, pathSecs, joinerSec)
+helper *apply-act(𝛾′, id𝑠, act)
+req id𝑠∈𝛾′.𝜏.roster()
+if act = ‘rem’-id𝑡 then
+req id𝑠 ≠ id𝑡∧ id𝑡∈𝛾′.𝜏.roster()
+𝛾′.𝜏.blankPath(𝛾′.𝜏.leafof(id𝑡))
+𝛾′.𝜏.leafof(id𝑡).blank()
+else if act = ‘add’-id𝑡 -(ek𝑡, vk𝑡) then
+req id𝑡 ∉𝛾′.𝜏.roster()
+𝑣←𝛾′.𝜏.getLeaf()
+(𝑣.id,𝑣. ek,𝑣. vk)←( id𝑡, ek𝑡, vk𝑡)
+𝛾.𝜏. unmerge(𝑣)
+helper *transition(𝛾′, ctxt, updEKs′, id𝑠, act)
+// Set keys on the re-keyed path.
+𝑣𝑠←𝛾′.𝜏.leafof(id𝑠)
+directPath←𝛾′.𝜏.directPath(𝑣𝑠)
+(𝑣𝑠.ek,𝑣𝑠.vk)← updEKs′[1]
+𝑖← 1
+while directPath[𝑖] ∉{𝛾′.𝜏.lca(𝛾′.leaf,𝑣𝑠),𝛾′.𝜏.root} do
+// If message contains too few ek’s, reject it.
+req𝑖+ 1≤ len(updEKs′)
+directPath[𝑖].ek← updEKs′[𝑖+ 1]
+𝑖++
+// Decrypt the path secret using the updated tree.
+try pathSec← *decrypt-path-secret(𝛾′, id𝑠, ctxt)
+while𝑖 < len(directPath) do
+𝑣← directPath[𝑖]
+𝑟← HKDF.Exp(pathSecs[𝑖], ‘node’)
+(𝑣.ek,𝑣. dk)← mmPKE.KG(𝑟)
+pathSec← HKDF.Exp(pathSec, ‘path’)
+𝑖++
+commitSec← pathSec
+𝛾′.𝜏.mergeLvs(𝑣𝑠)
+// Set all context variables and then derive epoch secrets.
+𝛾′.lastAct←( id𝑠, act)
+𝛾′← *set-tree-hash(𝛾′)
+(𝛾′, joinerSec)← *derive-keys(𝛾′, commitSec)
+return𝛾′
+helper *get-secrets(𝛾′, dk′, ctxt1, ctxt2, id𝑠)
+try pathSec← mmPKE.Dec(dk, ctxt1)
+try joinerSec← mmPKE.Dec(dk, ctxt2)
+𝑣←𝛾′.𝜏.lca(𝛾′.leaf,𝛾′.𝜏.leafof(id𝑠))
+while 𝑣 ≠𝛾′.𝜏.root do
+𝑟← HKDF.Exp(pathSec, ‘node’)
+(ek,𝑣. dk)← mmPKE.KG(𝑟)
+req 𝑣.ek = ek
+pathSec← HKDF.Exp(pathSec, ‘path’)
+𝑣←𝑣.parent
+𝛾′← *derive-epoch-keys(𝛾′, joinerSec)
+return𝛾′
+SAIK: Key schedule
+helper *derive-keys(𝛾,𝛾′, commitSec)
+joinerSec← HKDF.Ext(𝛾. initSec, commitSec)
+𝛾′← *derive-epoch-keys(𝛾′, joinerSec)
+return𝛾′, joinerSec
+helper *derive-epoch-keys(𝛾′, joinerSec)
+epSec← HKDF.Ext(joinerSec,𝛾′.grpCtxt())
+𝛾′.appSec← HKDF.Exp(epSec, ‘app’)
+𝛾′.membKey← HKDF.Exp(epSec, ‘membership’)
+𝛾′.initSec← HKDF.Exp(epSec, ‘init’)
+𝛾′.conf Tag← HKDF.Exp(epSec, ‘confirmation’)
+return𝛾′
+SAIK: Tree hash
+helper *set-tree-hash(𝛾′)
+𝛾′.treeHash← *tree-hash(𝛾′.𝜏.root)
+return𝛾′
+helper *tree-hash(𝑣)
+if 𝑣.isleaf then
+return Hash(𝑣.nodeIdx,𝑣. ek,𝑣. vk)
+else
+ℓ← len(𝑣.children)
+for𝑖∈[ ℓ] doℎ𝑖← *tree-hash(𝑣.children[𝑖])
+ℎ←( ℎ1,...,ℎ ℓ)
+return Hash(𝑣.nodeIdx,𝑣. ek,𝑣. unmLvs,ℎ)
+Figure 17: Additional helper methods for SAIK.
+
+Alwen, et al.
+can anyway deliver arbitrary messages. It is formally defined in
+Fig. 18.
+SAIK: Extraction
+helper *extract(id, act, Ctxt, updEKs, sig, id𝑠)
+𝑖,𝑗 ← *getExtractionIndices(𝛾, id)
+ctxt← Ext(𝐶,𝑖)
+updEKs′← updEKs[1 : 𝑗]
+return id, act, ctxt, updEKs′, sig
+helper *getExtractionIndices(𝛾, id, id𝑠)
+𝑣lca =𝛾.𝜏. lca(id, id𝑠)
+𝑣𝑠 =𝛾.𝜏. leafofid𝑠
+directPath←𝛾.𝜏. directPath(𝑣𝑠)
+// Compute number of public keys “under” lca.
+𝑗←𝛾.𝜏. leafof(id𝑠).depth−𝑣.depth
+// Count number of encryptions before id’s encryption.
+𝑘 = 0
+for 2≤𝑙≤ 𝑗 do
+𝑘+ = len(𝛾.𝜏. resolution(directPath[𝑙].children\ directPath[𝑙−
+1]))
+𝑆 =𝛾.𝜏. resolution(𝑣lca.children\ directPath[𝑗− 1])
+𝑖 = 1
+while𝑆[𝑖]∩ 𝛾.𝜏. directPath(𝑣𝑅) =∅ do
+𝑖++
+𝑖←𝑖+𝑘
+return𝑖,𝑗
+Figure 18: Helper functions for extraction.
+Recall that𝐶 contains the executed group operation act and the
+sender id𝑠, a multi-recipient ciphertext𝐶𝑡𝑥𝑡 and a vector of updated
+public keys updEKs. Roughly, *extract only needs to computeid’s
+individual mmPKE ciphertext mmPKE.Ext(𝐶𝑡𝑥𝑡,𝑖) and the prefix
+of the first 𝑗 elements of updEKs. This requires that it knows the
+indices𝑖 and 𝑗 for id. We notice that they can be easily computed
+using the public part of the ratchet tree, act and id𝑠. Therefore, the
+indices can be obtained in two ways. First, the service can send act
+and id𝑠 to id, who replies with𝑖 and𝑗. This requires interaction, but
+both id and the service are online at the time. Second, the service
+can store the current ratchet trees and compute𝑖 and 𝑗 itself. The
+disadvantage of this is that it requires keeping a large state — in
+case members are out of sync (e.g. a user is 10 epochs behind), the
+service needs to store one tree for each epoch which has an active
+member in it. Once𝑖 and 𝑗 are known, *extract works as follows.
+If act = ‘up’, set 𝑐𝑡𝑥𝑡 = mmPKE.Ext(𝐶𝑡𝑥𝑡,𝑖) and updEKs′ =
+(updEKs[1],..., updEKs[𝑗]). Output 𝑐 = (id𝑠, act, ctxt, updEKs′,
+sig), where sig is a field of 𝐶. If act = ‘rem’-id, then output 𝑐 =
+(id𝑠, ‘removed’, sig𝑡, tag𝑡) where sig𝑡 and tag𝑡 are taken from 𝐶.
+Finally, if act = ‘add’-id,𝐶 contains welcomeData, which in turn
+contains a ratchet tree. Based on this, compute id’s index𝑖 in𝐶𝑡𝑥𝑡 ,
+the number𝑛 of recipients of𝐶𝑡𝑥𝑡 , and𝑐𝑡𝑥𝑡 1 = mmPKE.Ext(𝐶𝑡𝑥𝑡,𝑖)
+and𝑐𝑡𝑥𝑡 2 = mmPKE.Ext(𝐶𝑡𝑥𝑡,𝑛 + 1). Output𝑐 =(id𝑠, act, ctxt1,
+ctxt2, welcomeData).
+F.4 Propose-Commit Syntax
+As discussed in Sec. 4.6, in order to tame the complexity of (sa)CGKA,
+we use a simplified syntax instead of the more general (and more ef-
+ficient) propose-commit syntax. In this section we explain in detail
+how to transform SAIK to the propose-commit syntax.
+In the propose-commit syntax, an (sa)CGKA protocol takes the
+following inputs from a party id:
+Add proposal: id proposes to add id𝑡 . The protocol outputs a
+proposal packet𝑝.
+Remove proposal: id proposes to remove id𝑡 . The protocol out-
+puts a proposal packet𝑝.
+Update proposal: id proposes to update their key material. The
+protocol outputs a proposal packet𝑝.
+Commit: id inputs a list of proposal packets (𝑝1,...,𝑝 𝑛) (after
+receiving them from other parties). The protocol outputs a
+commit packet𝑐.
+Process: id inputs a commit packet 𝑐 and a list (𝑝1,...,𝑝 𝑛) of
+proposals it commits (after receiving all these packets from
+other parties). The protocol outputs the semantics of applied
+group operations.
+Key: id fetches the current group key.
+Observe that if an application always commits a single proposal
+immediately after creating it, the propose-commit syntax collapses
+to our (sa)CGKA syntax.
+Proposals in SAIK.. SAIK deals with proposals in the same way
+as ITK. First, it computes the proposal content act which identifies
+the proposed modification:
+Add proposal: To addid𝑡 , query(GetPk, id𝑡) toFks, receive(ek𝑡,
+vk𝑡, ek′
+𝑡) and set act = ‘add’-id𝑡 -(ek𝑡, vk𝑡, ek′
+𝑡).
+Remove proposal: To remove id𝑡 , set act = ‘rem’-id𝑡 .
+Update proposal: Sample new key pairs (vk, sk) ←Sig.KG()
+and(ek, dk)← mmPKE.KG() and store dk and sk for later.
+Set act = ‘upd’-(ek, vk).
+The proposal packet is act signed with the sender’s current key
+𝛾. leaf(id).sk and MACed with the current membKey.
+Commit in SAIK.. A commit in SAIK is almost identical to its
+Send input. It proceeds in two steps.
+(1) Applying proposed group modifications to the ratchet tree:
+Currently, SAIK applies only a single modification in the
+*create-epoch helper. The propose-commit SAIK extends
+this step and applies all proposed actions one by one. This is
+done by calling the helper*apply-act(𝛾′, id𝑠, act) for each
+act (after verifying the signature and the MAC). Further,
+we extend the *apply-act helper to deal with update pro-
+posals – such actions simply replace proposer’s leaf public
+keys with the ones inact. In addition, if the update proposal
+is applied by its sender, they replace their leaf’s secret keys
+by dk and sk stored when generating the update.
+(2) Rekeying the sender’s path: The remaining part of Send
+remains mostly unchanged. The only difference is related
+to the possibility of there being many add proposals:
+• In line 9 of Send (excluding comments), the joinerSec
+is currently encrypted to one new member. In the
+propose-commit SAIK, it is instead encrypted to 𝑁
+new members, who are the last 𝑁 recipients of the
+mmPKE ciphertext.
+
+Server-Aided Continuous Group Key Agreement
+• In line 18 of Send, SAIK currently computes the wel-
+come data needed by new members. In the propose-
+commit SAIK, this includes the public keys(ek′
+1,...,
+ek′
+𝑁), of all𝑁 new members, instead of only one.
+Processing a commit in SAIK. The receive procedure of SAIK is
+modified analogous to its send procedure. In case the receiver is
+a member and is not removed, it applies all proposed actions and
+then processes the committer’s path exactly like the current SAIK.
+Finally, to join, a new member finds their public key in the list
+(ek′
+1,..., ek′
+𝑁) contained in the welcome data. Let 𝑖 denote the
+index of that key. They decrypt the joinerSec as the(𝑁−𝑖)-th to
+last recipient of the mmPKE ciphertext. Then they proceed as in
+the current SAIK.
+G ONE-W AYNESS SECURITY OF MMPKE
+In this section, we define One-Wayness under Relaxed Chosen
+Ciphertext Attacks security of mmPKE, mmOW-RCCA. Moreover,
+we prove thatmmOW-RCCA security is implied bymmIND-RCCA
+security for schemes with large message spaces.
+Motivation. We note that one-wayness security for mmPKE
+is less straightforward to define than for standard PKE schemes.
+Roughly, for standard PKE, one-wayness requires that given an
+encryption of a random message chosen by the challenger, no ad-
+versary can find the encrypted message. For mmPKE, the input
+to encryption is not a single message but a vector of messages.
+Moreover, even if the adversary corrupts recipients of some mes-
+sages in the vector, it still should not be able to find the remaining
+messages. Therefore, it is now less clear how the challenge message
+vector should be chosen. The definition presented in this section is
+precisely what is needed for the security proof of ITK. We do not
+claim that it is the “right” notion, as it may not be suited to other
+applications.
+The game. The mmOW-RCCA game is defined in Fig. 19, the
+challenge ciphertext is computed as follows: The adversary sends a
+public-key vector, as well as a message vectorﬁ𝑚 and a set of indices
+𝑆 within this vector. The challenger then inserts the same random
+message𝑚∗ into all positions in ﬁ𝑚 indicated by 𝑆 (the previous
+values ofﬁ𝑚 at these positions are ignored). It encrypts the result
+and sends the ciphertext to the adversary, whose goal is to find𝑚∗.
+Remarks. First, we note that the mmOW-RCCA game has no
+notion of leakage. Instead, the leakage is implicit in how the vector
+encrypted by the challenger is chosen — the “leakage” is everything
+the adversary knows about that vector, such as whether two slots
+contain the same message or not.
+Second, the game allows the adversary to verify if some message
+𝑚′ is the correct solution𝑚∗. This can be done by sending𝑚′ to
+the decrypt oracle and checking if it returns ‘test’. This additional
+ability makes the notion stronger (i.e., more difficult to achieve).
+We show that mmIND-RCCA security is sufficient to achieve it.
+Definition G.1 ( mmOW-RCCA). For an mmPKE with message
+spaceM, the advantage of an adversaryA against One-Wayness un-
+der Replayable Chosen Ciphertext Attacks ( mmOW-RCCA) security
+of mmPKE is defined as
+AdvmmOW-RCCA
+mmPKE,𝑁 (A) = Pr
+h
+ExpmmOW-RCCA
+mmPKE,𝑁 (A)⇒ 1
+i
+,
+where ExpmmOW-RCCA
+mmPKE,𝑁 (A) is defined in Fig. 19.
+Relation to mmIND-CCA. We prove that mmOW-RCCA secu-
+rity is implied by mmIND-RCCA for schemes with large message
+spaces.
+Theorem G.2. Let mmPKE be an mmPKE scheme with message
+spaceM. For any adversaryA, there exists an adversaryB such that
+AdvmmOW-RCCA
+mmPKE,𝑁 (A)≤ AdvmmIND-RCCA
+mmPKE,𝑁 (B)+ 2
+M.
+Proof. The proof closely follows the typical proofs showing
+that IND security implies OW security for standard encryption.
+Given an adversaryA against mmOW-RCCA security, the re-
+ductionB attacking mmIND-RCCA simply runsA on the public
+keys it receives in the mmIND-RCCA experiment and forwards all
+A’s oracle queries to its mmIND-RCCA oracles. WhenA outputs
+the triple(ﬁek,ﬁ𝑚,𝑆),B computes the challenge ciphertext as follows.
+First, it initializesﬁ𝑚∗
+0,ﬁ𝑚∗
+1←ﬁ𝑚. Then, it picks two random messages
+𝑚∗
+0 and𝑚∗
+1 and for each 𝑗∈𝑆 setsﬁ𝑚∗
+0[𝑗]← 𝑚∗
+0 andﬁ𝑚∗
+1[𝑗]← 𝑚∗
+1.
+It sendsﬁek together withﬁ𝑚∗
+0 andﬁ𝑚∗
+1 to the mmIND-RCCA exper-
+iment, receives the challenge ciphertext𝑐∗ and sends it toA. At
+the end of the experiment,A outputs a guess𝑚′. If𝑚′ =𝑚∗
+1, then
+B outputs 1. Else, it outputs 0.
+First, it is easy to see that ifA does not violate anyreq statements
+in the emulation, thenB does not violate any req statements in
+the mmIND-RCCA game. In particular,ﬁ𝑚∗
+0 andﬁ𝑚∗
+1 clearly have the
+same leakage. It is also easy to see that ifA does not trivially win
+by corruptions thenB does not either.
+Second, observe that ifB’s challenger uses the bit𝑏 = 1, then
+B emulatesA’s experiment perfectly, unlessA inputs to Dec2
+something that decrypts to 𝑚∗
+0. The reason is that in this case
+B replies with ‘test’ (forwarded from its oracle), whileA should
+receive𝑚∗
+0. Since𝑚∗
+0 is random and independent ofA’s view, this
+happens with probability at most 1/M. Thus, it is easy to see that
+Pr
+h
+ExpmmIND-RCCA
+mmPKE,𝑁,𝑛, 1(B)⇒ 1
+i
+≤ AdvmmIND-RCCA
+mmPKE,𝑁,𝑛 (A)+ 1
+M.
+IfB is in the experiment with the bit𝑏 = 0, then𝑚∗
+1 is indepen-
+dent ofA’s view, so the probability that it outputs𝑚′ =𝑚∗
+1 and
+hence also thatB outputs 1 is at most 1
+M . □
+H SECURITY OF SAIK
+The security predicates for SAIK are defined in Fig. 20. See Sec. 6
+for the intuition. The stronger version of the predicates that is not
+achieved by SAIK skips the code in boxes, while the weaker version
+includes the whole code. In Sec. 8.1 we sketch how to modify SAIK
+to achieve the stronger version.
+For the mmPKE scheme we assume a security property called
+mmOW-RCCA, defined in App. G. The notion is strictly weaker
+than mmIND-CCA; in App. G we prove the implication.
+Theorem H.1. LetFcgka be the CGKA functionality with predi-
+cates confidential and authentic defined in Fig. 20. Let SAIK be in-
+stantiated with schemes mmPKE, Sig and MAC, and with the HKDF
+functions modelled as a random oracle Hash. LetA be any environ-
+ment. Denote the output ofA from the real execution with SAIK and
+the hybrid functionalityFaks from Fig. 15 as realSAIK,Faks(A) and
+
+Alwen, et al.
+Game mmOW-RCCA
+ExpmmIND-RCCA
+mmPKE,𝑁 (A)
+(A 1,A2)←A
+for𝑖∈[ 𝑁] do(ek𝑖, dk𝑖)← mmPKE.KG()
+Corr←∅
+(ﬁek,ﬁ𝑚,𝑆, st)←A Dec1,Cor
+1 (ek1,..., ek𝑁)
+req|ﬁ𝑚| =|ﬁek|∧ 𝑆⊆[|ﬁ𝑚|]
+𝐸𝐾∗←{ ﬁek[𝑗] : 𝑗∈𝑆}
+𝑚∗ $←M
+for 𝑗∈𝑆 do ﬁ𝑚[𝑗]← 𝑚∗
+𝑚′←A Dec2,Cor(mmPKE.Enc(ﬁek,ﬁ𝑚), st)
+req𝐸𝐾∗⊆{ ek𝑖 :𝑖∈[ 𝑁]\ Corr}
+return𝑚∗ =𝑚′
+Oracle Dec 1(𝑖,𝑐)
+req𝑖∈[ 𝑁]
+return Dec(ﬁdk𝑖,𝑐)
+Oracle Cor(𝑖)
+req𝑖∈[ 𝑁]
+Corr +←𝑖
+return dk𝑖
+Oracle Dec 2(𝑖,𝑐)
+req𝑖∈[ 𝑁]
+𝑚← mmPKE.Dec(ﬁdk𝑖,𝑐)
+if ek𝑖∈𝐸𝐾∗∧𝑚 =𝑚∗ then
+return ‘test’
+else return 𝑚
+Figure 19: Experiment defining mmOW-RCCA security of mmPKE schemes.
+Security predicates for SAIK
+confidential(epid) ⇐⇒ ¬*in-det-tree(epid)∧ *grp-secs-secure(epid)
+authentic(epid, id) ⇐⇒ ¬*in-det-tree(epid)∧  epid = 0∨ *grp-secs-secure(epid)∨ *ind-secs-secure(epid, id)
+*in-det-tree(epid) ⇐⇒ ¬*ancestor(0, epid)
+*grp-secs-secure(epid = 0) ⇐⇒HG[epid].exp =∅
+*grp-secs-secure(epid > 0) ⇐⇒HG[epid].exp =∅∧¬ HG[epid].inj∧  *grp-secs-secure(HG[epid].par)∨ *all-ind-secs-secure(epid)
+*all-ind-secs-secure(epid) ⇐⇒ ∀id∈ HG[epid].mem\{ HG[epid].sndr} : *ind-secs-secure(HG[epid].par, id)
+*ind-secs-secure(epid, id) ⇐⇒ epid′ : *share-ind-secs(epid, epid′, id)∧ *ind-secs-bad(epid′, id)∧¬ *exposed-ind-secs-weak(epid, id)
+*share-ind-secs(epid, epid′, id) ⇐⇒epid and epid′ are the same or connected via undirected path of epochs epid′′
+such that HG[epid′′].sndr ≠ id∧ HG[epid].act ∉{‘rem’-id, ‘add’-id}
+*ind-secs-bad(epid, id) ⇐⇒id∈ HG[epid].exp∨( HG[epid].sndr = id∧ HG[epid].inj)∨( HG[epid].act = ‘add’-id∧ HG[epid].inj)
+*exposed-ind-secs-weak(epid, id) ⇐⇒ ∃epid1, epid2, epid3 : all of the following conditions are satisfied:
+(1) epid1 ≠ epid2∧ *ancestor(epid1, epid)∧ *ancestor(epid2, epid3)
+(2) HG[epid1].act = HG[epid2].act = ‘add’-id
+(3) *share-ind-secs(epid1, epid, id)∧ *share-ind-secs(epid2, epid3, id)
+(4) HG[epid2].inj∧ id∈ HG[epid3].exp
+Figure 20: Security predicates instantiatingFcgka constructed by SAIK.
+the output ofA from the ideal execution withFcgka and a simulator
+S as idealFcgka,S(A) . There exists a simulator S and adversaries
+B1 toB4 such that
+Pr[idealFcgka,S(A) = 1]− Pr
+
+realSAIK,Faks(A) = 1
+
+≤
+AdvCR
+Hash(B1)
++𝑞2
+𝑒(𝑞𝑒+ 1) log(𝑞𝑛)· AdvmmOW-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B2)
++ 2𝑞𝑒· AdvEUF-CMA
+Sig (B3)
++𝑞𝑒· AdvEUF-CMA
+MAC (B4)+ 3𝑞ℎ𝑞2
+𝑒(𝑞𝑒+ 1)/2𝜅,
+where𝑞𝑒 ,𝑞𝑛 and𝑞ℎ denote bounds on the number of epochs, the group
+size and the number ofA’s queries to the random oracle modelling
+the Hash, respectively.
+H.1 Proof Outline
+Int the remaining subsections we prove Theorem H.1.
+The proof proceeds in a sequence of hybrids, transitioning from
+the real to the ideal world. Hybrid 1 differs from the real world
+only syntactically. That is, the environment A interacts with a
+dummy CGKA functionalityF 1cgka which allows the simulator to
+set all outputs. This means thatF 1cgka gives no security guarantees.
+The next three hybrids introduce the guarantees of consistency,
+confidentiality and authenticity, one by one. More precisely, in
+hybrid 2,A interacts withF 2cgka which is the same asFcgka, except
+it uses confidential and authentic set to false. In particular, this
+means thatF 2cgka builds a history graph, enforces its consistency
+and uses it to compute outputs. In hybrid 3,A interacts withF 3cgka
+
+Server-Aided Continuous Group Key Agreement
+which uses the original confidential predicate, and in hybrid 4
+it interacts with F 4cgka which also uses the original authentic
+predicate. Notice thatF 4cgka isFcgka.
+In the next subsections, we define the hybrids and show that each
+pair of consecutive hybrids is indistinguishable forA. Intuitively,
+each such statement means that SAIK provides the introduced se-
+curity guarantee.
+Hybrid 1. This is the experiment idealF1cgka,S1 where the dummy
+functionalityF 1cgka sends all inputs to the simulator S1
+and allows it to set all outputs.S1 executes SAIK.
+H.2 SAIK Guarantees Consistency
+The following hybrid introduces consistency.
+Hybrid 2: idealF2cgka,S2 . The functionalityF 2cgka is the same as
+Fcgka except it uses confidential = authentic = false.
+The simulatorS2 is described later in this section.
+In the reminder of this section, we construct the simulatorS2
+and show that hybrids 1 and 2 are indistinguishable.
+Theorem H.2. For any environmentA, there exists an adversary
+B such that
+Pr
+h
+idealF2cgka,S2(A)⇒ 1
+i
+− Pr
+h
+idealF1cgka,S1(A)⇒ 1
+i ≤ AdvCR
+Hash(B)+ 𝑞𝑒/2𝜅,
+where Hash models the HKDF.Exp and HKDF.Ext functions and𝑞𝑒
+denotes an upper bound on the number of epochs.
+The simulator. We first describeS2. In general, it runs SAIK just
+likeS1, only its interaction with the functionality is different. Most
+importantly,F 2cgka requires thatS2 identifies epochs into which
+parties transition. Doing this correctly is crucial for proving that
+SAIK guarantees consistency, becauseF 2cgka enforces it by com-
+puting outputs and asserting conditions relative to parties’ current
+epochs. (It must also be done so that we can later prove that SAIK
+guarantees confidentiality and authenticity.)
+S2 identifies epochs by their epoch secrets epSec, computed by
+SAIK on Receive and Send. Recall that a party id transitioning from
+an epoch 𝐸[1] to𝐸2 computes𝐸2’s epSec by hashing 𝐸[1]’s init
+secret, the new commit secret (combined into the joiner) generated
+by𝐸2’s creator and𝐸2’s context. We will show that these values
+contain enough information for epSec to uniquely identify𝐸2. Re-
+call also that the group and init key of𝐸2 are derived from epSec.
+The simulator is described in more detail in Fig. 21.
+Proof. We next prove Theorem H.2. Observe that hybrids 1 and
+2 are identical unless one of the following two events occurs in
+hybrid 2:
+BreaksCons : Either the output of a party on Receive or Key com-
+puted according toF 2cgka andS2 is different than the output
+S1 would compute according to SAIK in hybrid 1, or an
+assert condition is false.
+EpidColl : An honestly created epoch has the same epSec as an
+existing epoch.
+Observe that since an honest sender mixes a fresh commitSec into
+the derivation of epSec, the probability of EpidColl is at most𝑞𝑒/2𝜅
+(where𝜅 is the length of all secrets). It remains to show that ifA
+triggers BreaksCons, then a reductionB can extract from a hash
+collision. (Theorem H.2 follows by the standard difference lemma.)
+LetA be any environment and assume that at the end of hybrid
+2 withA there are no hash between values hashed byS2 while
+running SAIK on behalf of honest parties. We show that in this case
+BreaksCons cannot occur. This proves the claim, because if there
+was a hash collision between values hashed by honest parties, then
+B could extract them by emulatingS1.
+Observe that if two parties transition to the same epoch epid,
+then by definition ofS2 they compute the same epSec. Recall that
+they compute epSec← Hash(joinerSec, grpCtxt) (Fig. 17), where
+grpCtxt =(grpId, treeHash, id𝑠-act) (Table 4). Since there are no
+hash collisions, this means that the parties also agree on:
+a) The creator HG𝑠 of epid, the action act it performed and
+the public part of the ratchet tree, included in treeHash.
+This implies agreement on the roster, which is encoded in
+the tree leaves.
+b) The group key in epid, derived as Hash(epSec, ‘app’).
+Moreover, let epSec′ denote the epoch secret of epid’s parent.
+We have joinerSec = Hash(initSec′, commitSec), where initSec′ =
+Hash(epSec′, ‘init’) and commitSec is freshly chosen for epid by
+its creator. Therefore, parties in epid also agree on:
+c) The parent epoch epid′ identified by epSec′.
+Observe that the check Hash(initSec′, commitSec) = joinerSec is
+verified by current members transitioning toepid but not by joiners.
+However, joiners implicitly agree with current members on the
+parent epid′. That is, if an id𝑟 joins into epid, then epid has parent
+epid′ (unknown to id𝑟 ) or no parent at all (for detached roots).
+We next show that agreement on a), b) and c) implies that
+BreaksCons does not occur. First, a) and b) imply that all parties
+joining an epoch epid output the same value, all parties transition-
+ing there output the same, and afterwards all output the same key.
+Second, c) implies that HG is a forest, i.e., epoch has one parent.
+Third, we have to argue that parties’ outputs are the same as
+computed byF 2cgka. This is obvious for the key (always chosen
+byS2 to match), sender and action. For the member set, we will
+show that the ratchet tree of parties in an epoch epid is consistent
+with HG[epid].mem computed by F 2cgka. We use induction on
+the distance of epid to the root. If epid is the main root, then the
+statement is true by definition and if it is a detached roots, then
+S2 chooses mem to match the ratchet tree. For any non-root epid,
+some party id must have transitioned there from its parentepid′ (on
+Receive or Send). By induction hypothesis, the ratchet tree in epid′
+is consistent with HG[epid].mem. By agreement on act in a), id
+modifies the tree the same way asF 2cgka modifies HG[epid].mem,
+which proves the statement.
+H.3 SAIK Guarantees Confidentiality
+The third hybrid introduces confidentiality, which is formalized by
+restoring the original confidentiality predicate ofFcgka.
+Hybrid 3: idealF3cgka,S3 . The functionaliyF 3cgka uses the original
+confidential predicate fromFcgka. The simulatorS3 is
+the same asS2.
+In the remainder of this section, we show that if mmPKE is
+mmOW-RCCA secure, then SAIK guarantees confidentiality, that
+
+Alwen, et al.
+SimulatorS2
+S2 keeps a list EpSecs, where EpSecs[epid] stores the epoch secret identifying epoch epid. It runs SAIK and interacts with F2cgka as follows:
+• If SAIK outputs⊥ on Send or Receive, S2 sends ack set to false.
+• On each Send, S2 computes the new epoch’s epSec and appends it to EpSecs. It sends to Fcgka the message 𝐶 computed using SAIK.
+• On each Receive, S2 first sends to Fcgka the values sndr′, act′ from the message. If the receiver is not removed, S2 sends epid into which
+id transitions chosen as follows:
+– If there is a epid s.t. EpSecs[epid] = epSec, thenS2 sends this (unique) epid toF2cgka.
+– Else,S2 appends epid to EpSecs and sends epid =⊥ toF2cgka.
+Finally, if a detached root is created and F2cgka asks for the member set mem′,S2 computes it from the new member’s ratchet tree.
+Figure 21: The simulator for the proof of the security of SAIK.
+is, that hybrids 2 and 3 are indistinguishable. Formally, we prove
+the following theorem.
+Theorem H.3. For any environmentA, there exists an adversary
+B such that
+Pr
+h
+idealF3cgka,S3(A)⇒ 1
+i
+− Pr
+h
+idealF2cgka,S2(A)⇒ 1
+i
+≤ 4𝑞2
+𝑒𝑞ℎ/2𝜅+𝑞2
+𝑒 log(𝑞𝑛)· AdvmmOW-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B),
+where the HKDF functions are modeled as a random oracle and
+where𝑞𝑛,𝑞ℎ and𝑞𝑒 are upper bounds on, respectively, the group
+size, the number ofA’s hash queries and the number of epochs.
+Game-based perspective. For better intuition, observe that hy-
+brids 2 and 3 are almost identical. In both experiments, the en-
+vironment interacts with the CGKA functionality and the same
+simulator. The only difference is that group keys in confidential
+epochs are real in hybrid 2 (technically, computed by the simulator
+according to SAIK) and random and independent in hybrid 3 (tech-
+nically, sampled byF 3cgka). This means that distinguishing between
+hybrids 2 and 3 can be seen as a typical confidentiality game for
+CGKA schemes. The adversary in the game corresponds to the
+environmentA. The adversary’s challenge queries correspond to
+A’s GetKey inputs on behalf of parties in confidential epochs and
+its reveal-session key queries correspond toA’s GetKey inputs in
+non-confidential epochs. To disable trivial wins, confidential epochs
+where a random key has been outputted are marked by setting a
+flag chall.A and the adversary in the game are not allowed to
+corrupt if this makes such an epoch non-confidential.
+Key Graphs. A key graph visualizes different secrets created in
+an execution of SAIK and hash relations between them. Each node
+in the graph corresponds to a secret, e.g. the group key in epoch
+5, and has assigned its value. The directed edges are interpreted
+as follows: the value of a node is the hash of the values of all its
+in-neighbors with an appropriate label. If a node has many out-
+neighbors, then the value of each out-neighbor is computed by
+hashing with a different label (i.e., the values of out-neighbors
+are domain-separated). Values of source nodes are either chosen at
+random by the protocol or injected by the adversary. The key-graph
+nodes are partitioned by epochs: Secrets of an epoch epid are those
+created when epid is created. We distinguish two types of secrets:
+group secrets which include the init, joiner and epoch secrets as
+well as the group key, and individual secrets, which include path
+secrets, the last being the commit secret. An example key graph is
+given below. We removed membership secrets for simplicity. Note
+that the epochs 6 and 7 are created in parallel, that is, we have a
+group fork.
+joiner epoch
+group key
+init
+commit
+path
+path epoch 5
+joiner epoch
+group key
+init
+commit
+path epoch 7
+joiner epoch
+group key
+init
+commit
+path epoch 6
+Note that in case of injections the values of nodes may not be
+unique. However, the values of epoch secrets uniquely identify
+epochs. Note also that the values of group secrets of epid appear
+only in the states of parties in epid. On the other hand, mmPKE
+keys derived from path secrets ofepid appear in ratchet trees stored
+by parties in multiple epochs.
+Bad events. LetA be any environment. The goal is to show thatA
+cannot distinguish the real group keys of confidential epochs it sees
+in hybrid 2 from random and independent keys in hybrid 3. Since
+epochs in detached trees are not confidential, in the remainder of
+the proof we only consider epochs in the main history-graph tree.
+Observe that there are only two dependencies between the real
+group key appSec of an epoch epid and the rest of the experiment:
+appSec is stored by parties inepid and it is the hash ofepid’s unique
+epoch secret epSec. If epid is confidential, then no party inepid, i.e.,
+no party storing appSec is corrupted. Therefore, unlessA inputs
+epSec to the RO, the real group key is independent of the rest of
+the experiment. In other words, unlessA inputs epSec to the RO,
+the real group key outputted in hybrid 2 is distributed identically
+as the random key in hybrid 3.
+Therefore,A’s distinguishing advantage is upper-bounded by
+the probability that the following event SecsHashedepid occurs for
+at least one epoch epid. For convenience, the event is more general
+and also considers init and joiner secrets.
+
+Server-Aided Continuous Group Key Agreement
+Event SecsHashedepid : At the end of the experiment, epid is con-
+fidential and epid’s init, epoch or joiner secret is contained
+in a value inputted byA to RO.
+Formally, it is left to prove the following lemma.
+Lemma H.4. There exists a reductionB such that
+Pr[∃epid : SecsHashedepid]≤ 4𝑞2
+𝑒𝑞ℎ/2𝜅
++𝑞2
+𝑒 log(𝑞𝑛)· AdvmmIND-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B).
+Bounding probability of bad events. An epoch epid is confiden-
+tial if *grp-secs-secure(epid) is true (all predicates are defined
+in Fig. 20). The latter predicate is recursive, starting at the root
+epoch with epid = 0. Accordingly, we will prove a recursive upper
+bound on the probability of SecsHashedepid. Formally, Lemma H.4
+is implied by the following lemma.
+Lemma H.5. There exists a reduction B and (arbitrary) events
+BreaksRCCAepid8 for epid∈ N such that
+a) Pr[∃epid : SecsHashed0]≤ 4𝑞ℎ/2𝜅.
+b) For each epid > 0 with parent epid𝑝 , we have
+Pr[SecsHashedepid]≤ 4𝑞ℎ/2𝜅+ Pr[SecsHashedepid𝑝]
++ Pr[BreaksRCCAepid].
+c) Pr[∃epid : BreaksRCCAepid]
+≤ 𝑞𝑒 log(𝑞𝑛)· AdvmmIND-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B).
+Lemma H.5 implies Lemma H.4, because by Lemma H.5
+Pr[SecsHashedepid]≤
+epid−1∑︁
+𝑖=0
+(4𝑞ℎ/2𝜅+ Pr[BreaksRCCA𝑖])
+≤ 4𝑞𝑒𝑞ℎ/2𝜅+ Pr[∃epid : BreaksRCCAepid]
+≤ 4𝑞𝑒𝑞ℎ/2𝜅+𝑞𝑒 log(𝑞𝑛)· AdvmmIND-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B),
+where the first step follows from a) and b) in Lemma H.5. We arrive
+at Lemma H.4, since by union bound Pr[∃epid : SecsHashedepid]≤
+𝑞𝑒· maxepid Pr[SecsHashedepid].
+Proof of Lemma H.5 a). The root epoch does not have joiner and
+epoch secrets. The init secret of epoch 0 is chosen at random by
+the group creator idcreator. Moreover, it is independent of the rest
+of the experiment apart from being stored by idcreator in epoch 0.
+The reason is that any other values are derived by first hashing it,
+and outputs of the RO are independent of the inputs. If epoch 0 is
+confidential, then idcreator is not corrupted in epoch 0, soA has
+no information about the init secret. Therefore, the best strategy
+forA to trigger SecsHashed0 is by guessing the init secret, which
+succeeds with probability at most𝑞ℎ/2𝜅 < 4𝑞ℎ/2𝜅.
+Proof of Lemma H.5 b). Take any non-root epoch epid > 0 with
+parent epid𝑝. Let initSec, epSec, joinerSec and commitSec denote
+epid’s init, epoch, joiner and commit secrets. Let initSec𝑝 denote
+epid𝑝’s init secret.
+Observe that the only dependencies between initSec, epSec,
+joinerSec and the rest of the experiment are as follows: 1) initSec
+is stored by parties in epid, 2) joinerSec is the output of the RO on
+8The lemma implies Lemma H.4 no matter what BreaksRCCAepid is. The name will
+become clear later in the proof.
+input commitSec together with initSec𝑝, 3) joinerSec is encrypted
+to new members. (Note that any other values are derived by first
+hashing it, and outputs of the RO are independent of the inputs.)
+Assume for a moment that epid is confidential. Then, no party
+in epid is corrupted, so dependency 1) does not exist. Recall that
+confidentiality requires either *grp-secs-secure(epid𝑝) is true
+or *all-ind-secs-secure(epid) is true. Observe that dependency
+2) does not exist either unless one of the following events occurs:
+Event InitHashedepid𝑝 : At the end of the experiment, the value of
+*grp-secs-secure(epid𝑝) is true and initSec𝑝 (of epid𝑝)
+is contained in some value inputted byA to the RO.
+Event CommHashedepid : At the end of the experiment, the predi-
+cate *all-ind-secs-secure( epid) is true andcommitSec
+(of epid) is contained in some value inputted byA to RO.
+This means that unless InitHashedepid𝑝 or CommHashedepid oc-
+curs,A has no information about initSec and epSec. Therefore,
+the best strategy forA to trigger SecsHashedepid is to either guess
+initSec or epSec at random, or trigger one of the above events, or
+input the joiner secret based only on dependency 3). We capture
+the last event by
+Event joinerSecepid : At the end of the experiment, none of the
+values inputted byA to the RO includes initSec𝑝 (of epid𝑝)
+and commitSec (of epid) together, but some value contains
+joinerSec (of epid).
+Therefore, we have
+Pr
+
+SecsHashedepid
+
+≤ 2𝑞ℎ/2𝜅+ Pr[InitHashedepid𝑝]
++ Pr
+
+CommHashedepid
+
+.
+By definition, Pr[InitHashedepid𝑝] ≤ Pr[SecsHashedepid𝑝]. More-
+over, we define
+Event BreaksRCCAepid : Either CommHashedepid or JoinHashedepid
+occurs.9
+This proves the claim.
+Proof of Lemma H.5 c). We construct two reductions B1 and
+B2 whose advantages bound the probability of the event∃epid :
+JoinHashedepid and of∃epid : CommHashedepid, respectively.
+Lemma H.6. There exists a reductionB1 such that
+Pr(∃epid : JoinHashedepid)≤ 𝑞𝑒· AdvmmIND-RCCA
+mmPKE,1,𝑞𝑛 (B1).
+Proof. Take any epoch epid with parent epid𝑝 (the root does
+not have a joiner secret). Observe that the joiner secret of epid
+is never stored in the state of SAIK. Moreover, the only message
+that may include it is the message creating epid which potentially
+encrypts it to a new member. This means that ifA does not input
+to the RO the init secret of epid𝑝 together with the commit secret
+of epid, then the only part of its view that may depend on the
+joiner of epid is the ciphertext in the message creating epid. In
+particular, if epid is honestly created and adds a party id𝑟 , then the
+ciphertext encrypts the joiner under id𝑟 ’s key from the AKS (i.e.,
+our PKI). Since the AKS is uncorruptible and id𝑟 deletes the secret
+key immediately after using it, this means that inputting the joiner
+to the RO implies breaking security of mmPKE.
+9Intuitively, the only dependency between the commit and joiner secrets comes from
+encryptions, so inputting the secrets to the RO requires breaking IND-RCCA.
+
+Alwen, et al.
+More formally, consider the following reductionB1 playing the
+mmOW-RCCA game with 1 user.B1 guesses an epochepid∗∈[ 𝑞𝑒]
+and runsA, emulating the CGKA functionality and the simulator
+as in hybrid 2. If epid∗ is injected or not created on an add,B1’s
+emulation is identical to hybrid 2. Otherwise,B1’s emulation will
+be identical to hybrid 2 but where the joiner secret joinerSec∗ of
+epid∗ is replaced the mmOW-RCCA challenge message𝑚∗.B1 will
+use a special symbos ‘test’ to denote this unknown value of𝑚∗ in
+the emulation.
+In particular, when an id𝑠 creates epid∗ while adding an id𝑟 ,
+B1 embeds the single public key ek∗ from its game as the key
+generated for id𝑟 by the AKS (recall that the AKS generates the
+key pair (ek∗, dk∗) at the moment id𝑠 requests it to create the
+epoch). Further,B1 computes SAIK’s state for epid∗ according to
+the protocol. It then replaces the (fresh) joiner secret generated by
+SAIK by ‘test’ in all places, including the programmed RO inputs
+and outputs. Finally,B1 sends to the challenger the message vector
+ﬁ𝑚 encrypted by id𝑠 and the last index in this vector, denoting the
+(only) position of the joiner secret. The challenger sends back a
+ciphertext𝐶∗, whichB1 uses in the message sent by id𝑠.
+If id𝑟 uses dk∗,B1 uses the Dec oracle. Note that Dec may output
+‘test’, which is used consistently with the symbol for the unknown
+joiner𝑚∗. IfA inputs to tje RO the init secret initSec∗ of epid∗’s
+parent together with the commit commitSec∗ of epid∗,B1 halts
+and gives up. At the end of the experiment, B1 searches allA’s
+queries to the RO for an𝑚∗ that allows it to win.
+We first claim that, untilB1 gives up or the experiment ends, its
+emulation is perfect. In particular, sinceA does not input initSec∗
+with commitSec∗ to the RO, which means that, apart from𝐶∗, its
+experiment is independent of joinerSec∗. This means thatB1 simu-
+lates it perfectly by using ‘test’ instead of joinerSec∗. Second, we
+claim that if JoinHashedepid∗ occurs, thenB1 wins. Indeed, the event
+guarantees thatA inputs𝑚∗ to the RO andB1 does not give upA
+does not input initSec∗ with commitSec∗ to the RO.
+Therefore, we have
+AdvmmIND-RCCA
+mmPKE,1,𝑞𝑛 (B1)≥ Pr(JoinHashedepid∗)
+≥1/𝑞𝑒 Pr(∃epid : JoinHashedepid).
+□
+Lemma H.7. There exists a reductionB2 such that
+Pr(∃epid :CommHashedepid)≤ 𝑞𝑒· AdvmmIND-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B2).
+Proof. We start by describing the reductionB. Recall that SAIK
+generates mmPKE key pairs and ciphertexts when epochs are cre-
+ated: When a party id𝑠 creates an epoch, it generates a hash chain
+of secrets, consisting of log(𝑞𝑛) path secrets and the commit se-
+cret. Each path secret is then hashed to obtain randomness used to
+generate a single key pair. Moreover, if a new member is added, its
+new mmPKE key pair is generated by the AKS. Then, id𝑠 sends out
+all new public keys and a single ciphertext encrypting secrets to
+different recipients.
+The reductionB runsA, emulating the functionality and the
+simulator executing SAIK as in hybrid 2 with the following differ-
+ences. FirstB embeds public keys from the mmOW-RCCA game
+as public keys sent when epochs are created. It generates all secrets
+itself independently of the key pairs. Further, it picks a random
+epoch epid∗ and a random index 𝑖∗∈ [log(𝑞𝑛)]. When epid∗ is
+created,B asks the challenger for an encryption𝐶∗ of the secrets
+B generated, but with the 𝑖∗-th secret replaced by the challenge
+message𝑠∗B is supposed to compute. 𝐶∗ is then embedded in
+the sent message. For the the unknown value of the 𝑖∗-th secret,
+Bepid uses a special symbol ‘test’ (it is used for bookkeeping, e.g. to
+consistently program the RO).10
+When a party is corrupted,B corrupts all receivers whose secret
+keys are in the party’s state. When A sends a new value to the
+RO,B checks if it contains its solution𝑠∗ and, if so, sends it to the
+challenger and halts. Otherwise,B programs the RO consistently
+with already generated values. Importantly, if the output is key-
+generation randomness for an mmOW-RCCA receiver,B corrupts
+this receiver to obtain it. (Here we use programmability to deal
+with adaptive corruptions.)
+When a party id𝑟 receives a message,B runs id𝑟 ’s protocol with
+the help of the Dec oracle. Note that Dec may output ‘test’, which
+B uses for the unknown value of the𝑖∗-th secret.
+Precise description ofB. At the beginning,B guesses an epoch
+epid∗∈[ 𝑞𝑒] and an index𝑖∗∈[ log(𝑎𝑛)]. Then, it runsA, emulat-
+ing for it the functionality and the simulator by running their code
+with the following differences.
+Recall that the simulator stores a single ratchet tree per epoch.
+B modifies these trees by assigning to each node two additional
+labels: one storing a receiver in the mmOW-RCCA game and one
+storing a secret. The root’s secret stores the epoch’s commit secret.
+The secret of any other internal node stores the path secret from
+which its key pair was derived. The leaf’s secrets are not used.
+Alternatively, a secret can be set to⊥ in case of injections or ‘test’
+to denote the unknownmmOW-RCCA challenge𝑠∗. A joiner secret
+can also take value ‘test’. Secret keys in the ratchet tree will not be
+used.
+To emulate the RO,B keeps a table of programmed input-output
+pairs. Some inputs and outputs may contain a special symbol ‘test’.
+The symbol is not in the RO input domain, so it cannot be inputted
+byA (but it will be used byB when the protocol evaluates hashes).
+WheneverA sends a new input,B first checks if it contains its
+solution and halts if this is the case. Else, it checks if the output
+should be equal to key-generation randomness derived from a path
+secret in some ratchet tree node. If so,B corrupts the node’s receiver
+to obtain the RO output. Else, it programs a fresh value.
+Further,B makes the following changes to how the functionality
+and simulator process different inputs ofA.
+• id𝑠 sends.B generates the new epoch and the message
+handed toA as follows:
+(1) Generate the new epoch’s path secrets, as well as all
+secrets in the key schedule at random. If the created
+epoch is epid∗, replace the𝑖∗-th secret (a path, commit
+or joiner secret) by ‘test’. Program the RO according
+to how the secrets are derived.
+(2) Generate the new epoch’s ratchet tree: Copy the ratchet
+tree from id𝑠’s epoch, apply the action and (re-)assign
+node labels as follows: For each node on id𝑠’s path
+10One may expect that if CommHashedepid occurs, then the challenge can be em-
+bedded in the commit secret inputted byA to the RO. Intuitively, this cannot work,
+because confidentiality of the commit secret clearly relies on the confidentiality of
+path secrets before it and of path secrets from which encryption keys were derived.
+
+Server-Aided Continuous Group Key Agreement
+and, in case of an add, the node of the new member,
+set the mmOW-RCCA receiver to the next receiver
+not appearing in any ratchet tree, and set the public
+key to the public key of its receivers. The path secret
+of id𝑠 leaf is⊥ (since its key pair is generated using
+fresh randomness) and the path secret of each node
+above it is set to the secret chosen in Step 1.
+(3) Generate the ciphertext included in the sent packet:
+If the created epoch is not epid∗, then simply encrypt
+the secrets. Else, compute the public key vector ﬁek
+and message vectorﬁ𝑚 with the secrets as in the proto-
+col. Let𝑆 be the set of all𝑖 such thatﬁ𝑚[𝑖] = ‘test’.B
+sendsﬁek,ﬁ𝑚 and𝑆 to the challenger to obtain the sent
+ciphertext.
+(4) Use the above values to complete emulating the func-
+tionality and the simulator as in their code.
+• id𝑟 receives a message removing it. If the message re-
+moves id𝑟 , then it carries no secrets, soB simply runs id𝑟 ’s
+protocol.
+• A current member id𝑟 receives a message not removing
+it.B first decrypts the path secret𝑠 from the packet. Say
+id𝑟 uses the keys in a ratchet-tree node𝑣 to decrypt. If𝑣 has
+an mmOW-RCCA receiver assigned,B sets𝑠 to the output
+of the decryption oracle. Else, if𝑣 has no receiver but it has
+a path secret,B derives𝑣’s key pair by hashing the secret,
+programming the RO if necessary, and decrypts𝑠. Else, it
+rejects the packet on behalf of the simulator.
+After decrypting,B checks if𝑠 is the solution𝑠∗ and halts
+if this is the case. If not, it proceeds as follows.
+B computes the epoch secretepSec that identifies the epoch
+into which id𝑟 transitions. The value of epSec is derived
+from𝑠 the same way as in the protocol, where hashes are
+evaluated using the RO table and the RO is programmed to
+a fresh value if necessary. Note that some evaluations may
+involve the symbol ‘test’.
+If id transitions to an injected epoch,B creates or updates
+the epoch as follows:
+(1) If the epoch does not exist, create its ratchet tree by ap-
+plying the action specified in the packet to the ratchet
+tree from id’s current epoch and set public keys, se-
+crets and
+mmOW-RCCA receivers of all nodes on the re-keyed
+path to⊥. Set the init, epoch and joiner secrets to those
+derived from epSec.
+(2) Let𝑢 be the least common ancestor of the sender’s and
+id’s leaves in the ratchet tree. Use the decrypted secret
+𝑠 to derive and assign the path secrets and public keys
+for𝑢 and each node above it by evaluating the RO,
+programming if necessary. (In case the tree already
+existed, this potentially adds missing secrets to it.)
+(3) Assign to each node below𝑢 the public key from the
+packet.
+Finally,B verifies if id𝑟 accepts the packet, as in the sim-
+ulator. If it does, thenB transitions id𝑟 . Else, it undoes all
+changes.
+• A new member id𝑟 receives a message. In this case id𝑟
+receives two ciphertexts, one with its path secret and one
+with the joiner secret.B decrypts these secrets as in case a
+current member receives a message. If one of them is the
+solution𝑠∗,B sends it to the challenger and halts.
+Then,B computes the epoch secret of the epoch into which
+id𝑟 transitions by hashing the decrypted joiner secret. If
+this epoch is injected,B creates or updates it the same way
+as when current member receives. Note that if the epoch
+does not exist,B uses the public part of the ratchet tree
+from id𝑟 ’s packet.
+• Expose. When id is exposed,B computes its mmPKE secret
+keys by hashing the path secrets from the ratchet tree in
+id’s current epoch.B corrupts the mmOW-RCCA receivers
+if necessary.
+The reduction wins. Assume CommHashedepid occurs. We show
+that there exist epid∗ and𝑖∗ such thatB wins. We start with a
+simple observation.
+Lemma H.8. If *all-ind-secs-secure(epid) is true, then for
+each𝑣 in𝜏,𝑣. ek is generated during an honest send.
+Proof. Take any𝑣 in𝜏. Let epid0 be the epoch which introduces
+𝑣. ek and let id𝑠 be its (alleged) creator. Assume towards a contra-
+diction that epid0 is injected. If epid0 = epid, then we immediately
+get a contradiction with CommHashedepid. Else, this means that
+*ind-secs-bad(epid0, id𝑠) is true. Moreover, no epoch between
+epid0 and epid, including epid, is created by id𝑠 or removes it, since
+this would replace𝑣’s keys. Therefore,*ind-secs-secure(epid, id𝑠)
+is false and *all-ind-secs-secure(epid) is false, which contra-
+dicts with CommHashedepid being true. □
+Let𝜏 be the ratchet tree in epid. By Lemma H.8, we can assign to
+each internal node𝑣 in𝜏 a secret: each non-root node is assigned the
+path secret𝑠 encrypted byB when𝑣’s public key was introduced
+and the root is assigned the commit secret ofepid. CommHashedepid
+guarantees thatA inputs to the RO the secret of at least one node,
+namely the root. Let𝑣∗ be a node in𝜏 with the maximal distance
+from the root whose secret𝑠∗ is inputted byA to the RO. Let epid∗
+be the epoch before epid which creates𝑣∗’s secret𝑠∗. We claim that
+B wins with the guess epid∗ and𝑖∗ set to𝑣∗’s index.
+Indeed, epid∗ is honestly created (by Lemma H.8), so B can
+embed the challenge. It is left to show that each public key used
+to encrypt𝑠∗ belongs to an uncorrupted mmOW-RCCA receiver.
+For this, observe that each such key belongs to a node 𝑣 in𝑣∗’s
+sub-tree in the ratchet tree𝜏∗ of epid∗. Moreover,𝑣’s key does not
+change between epid∗ and epid, since this would replace𝑣∗’s keys
+as well. By Lemma H.8, this means that 𝑣’s key belongs to some
+mmOW-RCCA receiver.
+It remains to show that this receiver is not corrupted. This can
+happen in two cases: 1) ifA inputs to the RO the path secret from
+which𝑣’s key pair was derived or 2)A corrupts a party holding
+𝑣’s secret key. Case 1) cannot occur for the following reason: 𝑣’s
+key pair can only be derived from the secret of an internal node
+𝑢 below𝑣 in𝜏∗. Note that𝑢 is also below𝑣∗ in𝜏∗. Therefore,𝑢’s
+secret (and keys) do not change between epid∗ and epid, since this
+would replace𝑣∗’s keys as well. Since𝑣∗ has the maximal distance
+among nodes with secrets inputted to the RO,A does not input𝑢’s
+secret. Finally, we show that case 2) cannot occur as well.
+
+Alwen, et al.
+Lemma H.9. If *all-ind-secs-secure(epid) is true, then for
+each𝑣 in𝜏, no party holding 𝑣. dk is corrupted.
+Proof. Take any𝑣 in𝜏. Let epid0 be the epoch which introduces
+𝑣. ek and let epid[1],..., epidℓ be the epochs after epid0 that can be
+reached from it without𝑣’s keys being replaced. Note that these
+epochs form a tree rooted at epid0.
+We first observe that𝑣’s subtree is the same in the ratchet trees
+of all epochs epid0,..., epidℓ, because any modification replaces
+𝑣’s keys. Moreover, epid is one of these epochs, so this subtree is
+the same as in𝜏. Let id[1],..., id𝑛 be the parties in𝑣’s subtree in𝜏.
+Second, we observe that if*all-ind-secs-secure(epid) is true,
+then no id𝑖 is corrupted in any epoch epid𝑗 . The reason is that
+for any id𝑖, each epid𝑗 is connected to epid, and epid is one of
+epid0,..., epidℓ, by a sequence of epochs not created by id𝑖 and
+not removing or adding it. This is because any such operation
+would replace 𝑣’s keys. Therefore, if id𝑖 was corrupted in some
+epid𝑗 , then the predicate *ind-secs-secure(epid, id𝑖) would be
+false and the predicate *all-ind-secs-secure(epid) would be
+false, which contradicts CommitHashedepid.
+Finally, it is left to show that𝑣. dk is held only by id[1],..., id𝑛
+in epochs epid0,..., epidℓ. It is easy to see that this is implied by
+the following statement:
+Statement : Assume an id⊥ in an epoch epid⊥ stores a secret key
+for a ratchet tree node𝑣⊥ such that𝑣⊥.dk =𝑣. ek for some
+𝑣 in𝜏. Then, there is party id𝑖 and a path between epid and
+epid⊥ that does not heal id𝑖, i.e., no epoch on the path is
+created by id𝑖, removes it or adds it.
+We next prove the above statement by induction on the height of
+𝑣⊥. For the base case where𝑣⊥ is a leaf, observe that𝑣⊥’s keys are
+not generated from a seed and that 𝑣⊥.dk is only stored by 𝑣⊥’s
+owner after it generates it while creating an epoch. So,𝑣⊥.dk =𝑣. dk
+can only happen if𝑣⊥.dk is generated by an id𝑖 when it creates an
+epoch epid0 before epid. Therefore, epid0 is a common ancestor of
+epid⊥ and epid and can be reached from both epochs by a path that
+does not heal id𝑖.
+Now assume𝑣⊥ is an internal node and the statement holds for
+any node with smaller height. Let epid⊥
+0 be the epoch before epid⊥
+that introduces𝑣⊥.dk into the state of id⊥. Further, let epid0 be the
+epoch that introduces𝑣. dk into𝜏.
+We have two cases: First, if epid⊥
+0 is not injected, then we must
+have epid⊥
+0 = epid0. The reason is that the only non-injected epoch
+introducing 𝑣. ek is epid0. Moreover, all parties transitioning to
+epid⊥
+0 = epid0 agree on the public ratchet tree, so𝑣⊥ =𝑣 and the
+subtree of 𝑣⊥ = 𝑣 is the same in epid and epid⊥. Therefore, the
+statement is obvious in this case.
+Second, assume epid⊥
+0 is injected. Let 𝑢⊥ be the node in the
+ratchet tree of epid⊥
+0 used by id⊥ to decrypt𝑣⊥’s path secret𝑠. For
+this proof sketch, we assume that there exists a node𝑢 such that
+𝑢.ek corresponds to𝑢⊥.dk and𝑢.ek was used to encrypt 𝑠 when
+epid0 was created.11 This means that 𝑢 is in the subtree of 𝑣 in
+11This is only false ifA manages to re-encrypt a securely encrypted𝑠 under a different
+key. Being able to do so implies breaking security of mmPKE. Formally, the reduction
+Bepid in the full proof searches for the solution𝑠∗ in bothA’s RO queries and injected
+messages that it decrypts using the Dec oracle or some other known keys. Accordingly,
+𝑣∗ is taken to be the lowest whose secret is not inputted to the RO or re-encrypted
+and injected.
+epid0 and, since this tree is the same as in𝜏, also in the subtree of𝑣
+in epid. Further,𝑢⊥ is in the subtree of𝑣⊥ in epid⊥
+0 and, since this
+tree is the same as in𝑣⊥’s subtree in epid⊥, also in the subtree of
+𝑣⊥ in epid⊥. Moreover,𝑢⊥ is strictly below𝑣⊥ and𝑢⊥.dk =𝑢.dk,
+so by induction hypothesis, there is anid𝑖 and a path between epid
+and epid⊥ that does not heal id𝑖. □
+□
+H.4 SAIK Guarantees Authenticity
+The fourth and final Hybrid introduces authenticity, which is formal-
+ized by restoring the authentic predicate. It is the ideal experiment
+withFcgka.
+Hybrid 4: idealF4cgka,S4 . The functionalityF 4cgka uses the original
+authentic predicate fromFcgka. The simulatorS4 is the
+same asS4.
+In the remainder of this section, we show that if Sig and MAC
+are unforgeable and if mmPKE is mmOW-RCCA secure, then SAIK
+guarantees authenticity, that is, hybrids 3 and 4 are indistinguish-
+able. We note that security of mmPKE is needed e.g. to guarantee
+secrecy of MAC keys.
+Game-based perspective. We observe that hybrids 3 and 4 are
+identical unless a bad event Forges occurs. Roughly, Forges happens
+ifA breaks authenticity, that is, if it successfully impersonates an
+id𝑠 towards id𝑟 in an epoch epid such that authentic is true for
+id𝑠 in epid. Therefore,A’s advantage in distinguishing the hybrids
+is upper bounded by the probability of Forges. This means that
+distinguishing hybrids 3 and 4 can be seen as a typical authenticity
+game, where the adversary wins by forging messages accepted by
+the protocol, as expressed by Forges.
+Bad events. LetA be any environment. The hybrids are identical
+unless the following eventForges occurs: There exists an epochepid
+with two members id𝑠 and id𝑟 s.t. the following condition holds:
+Condition Forges(epid, id𝑠, id𝑟): authentic(epid, id𝑠) is true and
+A makes id𝑟 accept a message that either (A) makes id𝑟
+transition to a new epoch epid′ with HG[epid′].inj true
+(epid′ is injected) and HG[epid].sndr = id𝑠 or (B) removes
+id𝑟 and id𝑠 did not remove id𝑟 .
+Note that (A) implies that asserting*auth-is-preserved inFcgka
+fails, and (B) implies that the assertion on input Receive that re-
+moves the receiver fails. These are the only places where Fcgka
+uses authentic.
+Since epochs in detached trees are not authentic, in the remain-
+der of the proof we only consider epochs in the main history-graph
+tree. For such an epoch epid, authentic(epid, id𝑠) is true if either
+the group secrets in epid or the individual secrets of id𝑠 are se-
+cure. Accordingly, we define two sub-events of Forges depending
+on which secrets are secure:
+Event ForgesSym: There exists an epoch epid with two mem-
+bers id𝑠 and id𝑟 such that *grp-secs-secure(epid) and
+Forges(epid, id𝑠, id𝑟) are true.
+Event ForgesAsym: There exists an epoch epid with two mem-
+bers id𝑠 and id𝑟 such that *ind-secs-secure(epid, id𝑠)
+and Forges(epid, id𝑠, id𝑟) are true.
+
+Server-Aided Continuous Group Key Agreement
+It remains to bound the probability of eachForgesAsym and ForgesSym.
+Asymmetric forgery. We next prove the following lemma
+Lemma H.10. There exists a reductionB1 such that
+Pr[ForgesAsym]≤ 2𝑞𝑒· AdvEUF-CMA
+Sig (B1).
+B1 emulates hybrid 3 forA and embeds the challenge keyvk∗ as
+one of the verification keys honestly generated during the execution.
+Keys are honestly generated when group members create epochs
+during send: each send introduces one new key pair for the sender
+and, in case of an add, one for the added member (in this case, it is
+generated by the AKS at the moment of send). Therefore, there are
+at most 2𝑞𝑒 key pairs.B1 chooses the index of the key to replace
+by vk∗ at random. It uses the Sign oracle to sign honestly sent
+messages that verify with vk∗. If a party holding the corresponding
+ssk∗ is corrupted, it gives up.
+We first show that if ForgesAsym occurs, then the receiver id𝑟
+(see the definition of ForgesAsym) verifies the injected message with
+an honestly generated key vk𝑟 . This means thatB1 has a chance of
+embedding vk∗ as vk𝑟 .
+Claim 1. If ForgesAsym occurs then the keyvk𝑟 used by id𝑟 to verify
+the injected message is honestly generated.
+Proof. Assume ForgesAsym occurs. Notice thatvk𝑟 is introduced
+into id𝑟 ’s state when it accepts a message from id𝑠 that transitions
+it into an ancestor epid0 of epid𝑠. Observe first that epid0 is not
+injected. The reason is that no epoch between epid0 and epid𝑠 is
+created by id𝑠 or removes it, since this would removevk𝑟 from id𝑟 ’s
+state. So, if epid0 was injected, *ind-secs-bad(epid0, id𝑠) would
+be true and *ind-secs-secure(epid𝑠, id𝑠) would be false, which
+contradicts ForgesAsym.
+This means that id𝑠 created epid0 during a send operation and
+at that point generated an honest verification key vk𝑠 for itself. We
+know (from the proof thatSAIK guarantees consistency) that parties
+in the same epoch agree on the ratchet tree, which contains all
+verification keys. Therefore,vk𝑟 = vk𝑠, so vk𝑟 is honestly generated.
+□
+We next show that no party holding the secret key sk𝑟 cor-
+responding to vk𝑟 used by id𝑟 is corrupted. This means that if
+ForgesAsym occurs andB1 guesses correctly and embeds vk∗ as vk𝑟 ,
+thenB1 does not give up when sk∗ is corrupted.
+Claim 2. If ForgesAsym occurs then no party holdingsk𝑟 correspond-
+ing to vk𝑟 used by id𝑟 to verify the injected message is corrupted.
+Proof. Assume towards a contradiction that ForgesAsym occurs
+and a party holdingsk𝑟 is corrupted in some epochepid⊥. Let epid⊥
+0
+be the epoch before epid⊥ which introduces sk𝑟 into its state.
+Observe that (honest) parties only store the signing keys that
+they generate themselves while creating epochs or that the AKS
+generates for them when they are added. Moreover, such honestly
+generated keys are not re-computed and the AKS generates a fresh
+key pair each time a party is added. This means that the corrupted
+party is id𝑠. Moreover, if epid⊥
+0 is not injected, then it is the epoch
+epid0 which introduces vk𝑟 into the state of id𝑟 . On the other hand
+if epid⊥
+0 is injected, then it must add id𝑠 (and not be created by it).
+Observe further that epid⊥
+0 and epid⊥ are connected by a path
+of epochs not created by id𝑠 and not removing it, as this would
+remove sk𝑟 . The epochs epid0 and epid𝑠 are connected by a path
+with the same property. Therefore, if epid⊥
+0 is not injected, then
+epid𝑠 can be reached, through epid⊥
+0 = epid0, from epid⊥ where
+id𝑠 is corrupted via a path with above property. This makes the prdi-
+cate *ind-secs-secure(epid𝑠, id𝑠) false, contradicting ForgesAsym.
+Moreover, it is easy to see that if epid⊥
+0 is injected, then the pred-
+icate *exposed-ind-secs-weak(epid𝑠, id𝑠) would be true, which
+again makes *ind-secs-secure(epid𝑠, id𝑠) false. □
+By the two claims, with probability at leastPr[ForgesAsym]/( 2𝑞𝑒),
+both ForgesAsym occurs and id𝑟 uses vk𝑟 = vk∗ (since there are at
+most 2𝑞𝑒 honestly generated keys). It is left to show that if this
+happens, thenB1 wins.
+Claim 3. If ForgesAsym occurs and vk𝑟 = vk∗, thenB1 wins.
+Proof. Assume ForgesAsym occurs and vk = vk∗. There are two
+cases: (A) id𝑟 transitions into an injected epoch epid′, (B) id𝑟 is
+removed.
+In case (A), id𝑟 checks that Sig.vrf(vk∗, conf Tag′, sig) is true.
+Notice that conf Tag′ uniquely identifies epid′, because it is derived
+by hashing epSec which identifies epid by definition (see the proof
+of SAIK consistency). Since the epoch is injected and not created
+by an honest party, no honest party signed conf Tag′. In particular
+B1 never had to send conf Tag′ to the sign oracle. Therefore,B1
+wins with the forgery(conf Tag′, sig).
+For case (B),id𝑟 checks thatSig.vrf(vk∗,(id𝑠, ‘rem’-id𝑟, conf Tag),
+sig) is true, where conf Tag uniquely identifies epid. ForgesAsym
+guarantees that id𝑠 did not removeid𝑟 in epid, so it did not sign such
+a triple. Therefore,B1 wins with(( id𝑠, ‘rem’-id𝑟, conf Tag), sig). □
+Symmetric forgery. We next bound the probability of symmetric
+forgery.
+Lemma H.11. There exist reductionsB2 andB3 such that
+Pr[ForgesSym]≤ 𝑞𝑒· AdvEUF-CMA
+MAC (B2)
++𝑞3
+𝑒 log(𝑞𝑛)· AdvmmOW-RCCA
+mmPKE,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B3)+ 3𝑞2
+𝑒𝑞ℎ/2𝜅.
+At a high level, recall thatForgesSym occurs for epoch epid when
+the adversaryA injects to some id𝑟 in epid a message that either
+(A) makes id𝑟 transition to a new injected epoch or (B) removes
+id𝑟 although it was not honestly removed. Triggering (A) requires
+fromA computing the confirmation tag which is the hash output
+on epid’s initSec and the injected epoch’s context. Triggering (B)
+requires forging a MAC under epid’s secret membKey.
+To bound the probability of each (A) and (B), we first replace
+epid’s initSec and membKey by random values, independent of the
+rest of the experiment. To make this possible, the adversary first
+commits to the epoch epid. This results in a security loss of𝑞𝑒 (for
+guessing the epoch). Now assuming mmPKE is secure, the change
+cannot be noticed as long as *grp-secs-secure in epid (part of
+the confidential predicate) is true. Since ForgesSym requires this
+to be true at the moment it occurs (and the predicate is monotone),
+the change does not affect the probability that ForgesSym occurs
+(for the first time).
+Once initSec is random, in the ROM, the probability of (A) is
+negligible. Once membKey is random, the probability of (B) is neg-
+ligible, assuming that MAC is unforgeable.
+Formally, we first define the new hybrid.
+
+Alwen, et al.
+Hybrid 3∗: The same as hybrid 3, except at the beginning A
+announces an epochepid and membKey and initSec in epid
+are random and independent.
+Further, the following event is analogous to ForgesSym but in
+hybrid 3∗.
+Event ForgesSym∗ : In hybrid 3∗, there exist two membersid𝑠 and
+id𝑟 in epid announced byA s.t. *grp-secs-secure(epid)
+and Forges(epid, id𝑠, id𝑟) are true.
+Next, we show that changing to hybrid 3∗ does not affect the
+probability of the bad event much.
+Claim 4. There exists a reductionB3 such that
+Pr(ForgesSym∗)−Pr(ForgesSym)
+≤𝑞3
+𝑒 log(𝑞𝑛)· AdvmmOW-RCCA
+mmPKE,𝑞𝑒,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B3)+ 3𝑞3
+𝑒𝑞𝑛/2𝜅.
+Proof. First, observe that ifA triggers ForgesSym in hybrid 3
+with probability at least𝜖, thenA′ who guesses epid at random
+triggers ForgesSym∗ but in hybrid 3 (i.e., membKey and initSec are
+not random) with probability at least𝜖/𝑞𝑒.
+Second, observe that membKey and initSec are derived the same
+way as the group key — each key is the result of hashing the epoch
+secret with a different label. Therefore, the proof analogous to
+the proof of Theorem H.3 shows that the difference between the
+probability of ForgesSym∗ in hybrid 3 and ForgesSym∗ in hybrid 3∗
+is bounded by𝑞2𝑒 log(𝑞𝑛)·AdvmmOW-RCCA
+mmPKE,𝑞𝑒,𝑞𝑒 log(𝑞𝑛),𝑞𝑛
+(B3)+3𝑞2𝑒𝑞𝑛/2𝜅.
+□
+Finally, it is left to bound the probability of ForgesSym∗ . To this
+end, we define two sub-events:
+Event ForgesSym∗(𝐴) : In hybrid 3∗, there exist two members
+id𝑠 and id𝑟 in epid announced byA such that the predi-
+cate *grp-secs-secure(epid) is true and (A) id𝑟 accepts
+a message that makes it transition to an epoch epid′ with
+HG[epid′].inj true.
+Event ForgesSym∗ (B) : In hybrid 3∗, there exist two members
+id𝑠 and id𝑟 in epid announced byA such that the predi-
+cate *grp-secs-secure(epid) is true and (B) id𝑟 accepts a
+message that removes it but id𝑠 did not remove id𝑟 in epid.
+We next bound the probability of each sub-event.
+Claim 5. In the ROM, we have
+Pr(ForgesSym∗(A))≤ 𝑞𝑑/2𝜅,
+where𝑞𝑑 is the number of delivered messages.
+Proof. Recall that epid′ is identified by its unique epoch secret
+epSec′, computed as the hash of initSec of epid and the context
+of epid′. Since in hybrid 3∗ initSec is random and independent of
+the experiment, so is epSec′. Further, recall that id𝑟 accepts the
+message only if the attached confirmation tag conf Tag′ is equal
+to the hash of epSec′ with appropriate label. This matches with
+probability at most 1/2𝜅. The claim follows by the union bound on
+the number of injection attempts. □
+Claim 6. There exists a reductionB2 such that
+Pr(ForgesSym∗(B))≤ AdvEUF-CMA
+MAC (B2).
+Proof. B2 emulates hybrid 3∗ forA, except instead of the MAC
+key *mem in epid announced byA,B2 uses its EUF-CMA Sign
+and Verify oracles. Since membKey is random and independent in
+hybrid 3∗,B2 simulates the experiment perfectly.
+It is left to show that if ForgesSym∗ (B) occurs, thenB2 wins.
+Assume the event occurs.B2 outputs the forgery consisting of the
+tag tag𝑡 from the injected packet removing id𝑟 and the message
+(id𝑠, ‘rem’-id𝑟, conf Tag) where conf Tagis the confirmation tag in
+epid. Since id𝑟 accepted the message, MAC verification passes.
+Finally, we claim thatB2 did not query this message to the Sign
+oracle. Observe that this only happens if an honest party in sends
+out a MAC over(id𝑠, ‘rem’-id𝑟, conf Tag). Since only id𝑠 MAC’s its
+identity and only parties in epid MAC conf Tag, this only happens
+if id𝑠 removes id𝑟 in epid. This is a contradiction with ForgesSym
+(B). □
+H.5 Left-Balanced Trees
+In this section, we formally define 𝑞-ary trees used by SAIK to
+implement ratchet trees.
+Definition H.12 (LBT). For𝑞,𝑛 ∈ N with𝑞 > 1, the 𝑛th left-
+balanced𝑞-ary tree (LBT) , denoted LBT𝑞,𝑛, is defined as follows.
+LBT𝑞,1 is the tree consisting of one node. For𝑛 > 1, if𝑚 = max{𝑞𝑝 :
+𝑝∈ N ∧𝑞𝑝 < 𝑛} and𝑘 =⌊𝑛/𝑚⌋, then LBT𝑞,𝑛 is the tree whose
+root has the first𝑘 children equal to LBT𝑞,𝑚 and, if𝑛−𝑚𝑘 > 0, the
+(𝑚+ 1)-st child equal to LBT𝑞,𝑛−𝑚𝑘.
+Definition H.13 (Full LBT). For𝑞,𝑛 ∈ N , LBT𝑞,𝑛 is full if𝑛 is a
+power of𝑞.
+Operation of SAIK requires a procedure addLeaf(𝜏,𝑣) which in-
+serts a leaf𝑣 into a ratchet tree𝜏 while preserving certain properties
+of𝜏. In particular, addLeaf should preserve node indices𝑣. nodeIdx.
+They are computed as follows: all nodes are numbered left to right
+— i.e., according to an in-order depth-first traversal of the tree —
+starting with 0. See Fig. 22 for an example.
+4
+1
+0 2 3
+6
+5 7 8
+9
+4
+1
+0 2 3
+6
+5 7 8
+10
+9
+Figure 22: The trees LBT3,7 (left) and LBT3,8 (right) with node
+indices.
+Definition H.14 ( addLeaf). The algorithm addLeaf(𝜏,𝑣) takes as
+input a𝑞-ary tree𝜏 with root𝑟 and𝑛 nodes, and a fresh leaf𝑣 and
+returns a new tree𝜏′ with𝑣 inserted and𝑣. nodeIdx =𝑛+ 1.
+a) If𝜏 is full, then create a new root𝑟′ for𝜏′. Attach𝑟 as the
+first child of𝑟′ and𝑣 as the second child.
+b) Else if𝑟. children contains only nodes with full subtrees, let
+𝜏′ =𝜏 except𝑣 is attached as the next child of𝑟.
+c) Else, let𝑢 be the first in𝑟. children s.t. its subtree𝜏𝑢 is not
+full. Let𝜏′ =𝜏 except𝜏𝑢 is replaced by addLeaf(𝜏𝑢,𝑣).
+The following lemma formalizes the correctness of addLeaf. We
+prove it in App. H.5.
+Theorem H.15. 𝜏 = LBT𝑞,𝑛 =⇒ addLeaf(𝜏,𝑣) = LBT𝑞,𝑛+1.
+
+Server-Aided Continuous Group Key Agreement
+Proof. The proof is by strong induction on 𝑛. If𝑛 < 𝑞, then
+the statement easily follows by inspection (only cases a) and b) of
+addLeaf apply). Fix𝑛≥𝑞 and assume the statement holds for all
+𝑘 < 𝑛. Let𝑟 be the root of 𝜏 and let max-pow(𝑛) = max{𝑞𝑝+ 1 :
+𝑝∈ N ∧𝑞𝑝 <𝑛}.
+If𝜏 is full, then max-pow(𝑛+ 1) =𝑛. Furthermore, the root of𝜏′
+has only two children:𝜏 = LBT𝑞,𝑛 = LBT𝑞,max-pow(𝑛+1) and LBT𝑞,1,
+so𝜏′ = LBT𝑞,𝑛+1 per definition.
+Else, max-pow(𝑛) = max-pow(𝑛+ 1) (this holds since 𝑛≥ 𝑞).
+Moreover, it is easy to see that only the last node in𝑟. children can
+be non-full. This means that the root 𝑟′ of𝜏′ has the following
+children (in order):
+• All children of the root 𝑟 of𝜏 which have full subtrees.
+These subtrees are equal to LBT𝑞,max-pow(𝑛) which is the
+same as LBT𝑞,max-pow(𝑛+1).
+• If𝑟 has no non-full subtrees, then the last child of 𝑟′ is𝑣
+with subtree LBT𝑞,1.
+• Else if the last child𝑢 of𝑟 is non-full and equals to LBT𝑞,𝑥
+for𝑥 < max-pow(𝑛), then the last child of 𝑟′ is LBT𝑞,𝑥+1
+by induction hypothesis.
+Clearly,𝜏′ = LBT𝑞,𝑛+1 in all cases. □
