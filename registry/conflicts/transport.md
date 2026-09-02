@@ -166,6 +166,40 @@ probing technique does — or to keepalive at whatever interval its deployment's
 Carrier-Grade NAT population requires, accepting the additional background traffic ICE's floor was
 chosen to bound.
 
+### Hole punching's cone-NAT requirement, against measured cellular NAT mapping behavior
+
+`FORD-USENIX-05` states hole punching requires the NAT to be "cone" type: it must map one
+internal (IP, port) pair to the same external (IP, port) pair across every destination and
+session, so the public endpoint a rendezvous server hands to a peer stays valid when that peer's
+first packet arrives. The paper's own text states 82% (UDP) and 64% (TCP) of its tested population
+met this requirement, leaving the remainder — NATs that instead assign a new external mapping per
+destination — unreachable by unmodified hole punching.
+
+`WANG-SIGCOMM-11` measures that this requirement fails for a further, distinct reason among live
+cellular carriers, not covered by Ford's own cone-versus-symmetric split: of 72 carriers running a
+NAT, 19 (26.4%) assign a new, effectively random external mapping on every new connection to the
+same destination ("Connection-random" mapping), a behavior the paper states existing NAT-traversal
+techniques of the time could not handle at all; 8 of 72 assign a mapping that shifts continuously
+with elapsed time; and 3 of 72 route one client's connections across two different NAT boxes,
+carrying two different mapping types and sometimes two different external IP addresses, keyed on a
+hash of the connection's five-tuple. For the 3-of-72 case, no single NAT device — let alone a
+single stable mapping — exists behind the client at all, so the "one NAT, one consistent mapping"
+premise `FORD-USENIX-05`'s mechanism is built on is not weakened but absent. `WANG-SIGCOMM-11`'s
+own requirements text states this directly: a traversal scheme assuming exactly one NAT box with
+one consistent mapping type is unsupported for that 3-of-72 population, and a scheme lacking a
+per-carrier characterization step cannot even tell the harder Connection-random case apart from the
+time-dependent one.
+
+Resolution options: fall back to a relay (`REDDY-RFC-20`'s TURN, or `VYZOVITIS-SPECS-23`'s Circuit
+v2) once per-carrier characterization detects a non-cone mapping; run `WANG-SIGCOMM-11`'s own
+24-connection discovery probe against a given carrier before attempting a punch, so the mechanism
+knows which mapping regime it faces before it tries; or adopt a probe technique built for the
+non-cone case specifically — `WANG-SIGCOMM-11`'s own time-dependent-NAT port predictor (80% success
+within 12 seconds against the one carrier pair it targeted) or `KANARIS-ARXIV-23`'s
+birthday-paradox probe (50% collision probability after roughly 54,000 packets) — at the cost of
+many probe packets and, per `KANARIS-ARXIV-23`, a risk of exhausting a router's connection-table
+ceiling before the probe completes.
+
 ## Unsupported attributions
 
 None found that can be checked within this corpus. The one candidate — `KEIZER-MOBIHOC-20`'s "60%

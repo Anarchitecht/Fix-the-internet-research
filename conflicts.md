@@ -1,25 +1,41 @@
 # Conflicts
 
-Three kinds, kept apart, plus a fourth the pass added.
+Four kinds, kept apart.
 
-The contradiction pass read the completed evidence corpus and compared every figure for one quantity
-across every paper reporting it. It found **no measurement disagreement between two papers measuring
-the same quantity under matched conditions.** It found 33 pairs that look like disagreements and are
-not, because the two papers measure different populations, different operations, or the same thing by
-methods whose results are not comparable. Recording those as contradictions would have been an error;
-citing either figure of such a pair as though it were the quantity is also an error, and each entry
-below states which.
+The contradiction pass read the completed evidence corpus and compared every figure for each quantity
+across every paper reporting it. Twelve agents each took one quantity family or the requirements
+index. They examined 39 candidate disagreements.
 
-What the pass did find is 21 places where one mechanism requires something another mechanism removes,
-8 places where a published paper attributes a figure or property to another paper whose own text does
-not contain it, and 7 papers whose abstract and body disagree.
+**Exactly one is a disagreement between two papers measuring the same quantity under the same
+conditions. The other 38 are not disagreements at all** — the two papers measure different
+populations, different operations, or the same thing by methods whose results do not compare. Calling
+those contradictions would be an error. So is citing either figure of such a pair as though it were
+the quantity.
+
+The pass also found 22 requirements that another mechanism removes, 11 figures attributed to papers
+whose own text does not contain them, and 7 papers whose abstract and body disagree.
 
 ---
 
-## No two papers in this corpus disagree about the same measurement under the same conditions
+## The one genuine disagreement: whether a published attack on Argon2i matters at the parameters the standard recommends
 
-33 candidate pairs were examined and every one resolved to a difference in what was measured. The
-recurring shapes, each of which a synthesis must state rather than average:
+**Quantity.** Practical severity of the Alwen-Blocki depth-reducing-set tradeoff attack against Argon2i-B at 1 GB of memory (whether it reduces adversary cost below the honest cost within the IRTF-recommended parameter range)
+
+**`BIRYUKOV-EUROSP-16`** — Time-area advantage smaller than 1 (no benefit to attacker) for memory up to 2^20 (1 GB), smaller than 2 up to 16 GB; states this 'is not better than the ranking attack.' Derived analytically by applying the Alwen-Blocki 2016 paper's own published closed-form time-area formula directly to Argon2's parameters -- no simulation, no attack implementation.
+
+**`ALWEN-EUROSP-17`** — 'At tau=6 passes over 1GB of memory the attack already reduces costs by a factor of 2' -- inside the same parameter range (1 GB, up to 16 GB, IRTF-recommended 'paranoid' pass count) that BIRYUKOV-EUROSP-16 treats as safe. Measured by simulating the attack on randomly sampled Argon2i-B DAGs (10 samples per point), adding a smaller depth-reducing-set construction and an 'XOR compression' heuristic absent from the 2016 formula, plus a bounded-parallelism analysis.
+
+**Which figure a decentralized deployment should plan against.** ALWEN-EUROSP-17's figure: it is a demonstrated attack instantiation run directly against the IRTF's own recommended deployment parameter (1 GB, up to 6 passes), not an asymptotic bound extrapolated from a weaker, non-heuristic attack instantiation. BIRYUKOV-EUROSP-16's safety conclusion rests on that weaker instantiation and does not model the heuristics that later closed the gap; a deployment choosing parameters from the analytic bound alone would understate its real exposure.
+
+This is the only place in 407 papers where two authors measured the same thing the same way and got
+answers a designer must choose between. Everywhere else the corpus is consistent once conditions are
+stated.
+
+---
+
+## The 38 apparent disagreements that are not
+
+The recurring shapes, each of which a synthesis must state rather than average:
 
 - **Different populations of the same network.** Counting nodes a curated bootstrap list serves gives
   about 6,000 for a network a routing-table crawl measures at about 223,000.
@@ -27,9 +43,9 @@ recurring shapes, each of which a synthesis must state rather than average:
   overhead in simulation on a closed-world dataset and 121% via a real pluggable transport on live
   traffic.
 - **A system's own measurement against a competitor's re-implementation.** One private-search system
-  reports 56.9 MiB of communication over 364 million documents on a 45-machine cluster; a competitor's
-  paper reports 17.4 MB per query for the same system on a 3.2-million-passage corpus on one 6-core
-  machine. Both are honest. Neither is "that system's performance."
+  reports 56.9 MiB of communication over 364 million documents on a 45-machine cluster; a competitor
+  reports 17.4 MB per query for the same system on a 3.2-million-passage corpus on one 6-core machine.
+  Both are honest. Neither is "that system's performance."
 - **Different evidentiary thresholds.** Two studies of carrier-grade address translation differ about
   sixfold because one requires a directly observed leaked internal address and the other fits a
   behavioural score to a threshold.
@@ -39,7 +55,7 @@ recurring shapes, each of which a synthesis must state rather than average:
 
 ---
 
-## Twenty-one requirements that another mechanism removes
+## 22 requirements that another mechanism removes
 
 Each states the requirement, what removes it, and the resolution: change a selection, accept a stated
 degradation, or record an open problem. An unresolved conflict left without one of those three is a
@@ -61,7 +77,7 @@ RHEA-USENIXATC-04's Bamboo-vs-FreePastry-vs-Chord churn-handling results, reacti
 
 **Resolution.** Re-run RHEA-USENIXATC-04's churn experiments under a measured Weibull churn distribution, as HEEP-ATNAC-10 already does (adopting Stutzbach's own k=0.5 Weibull model) for its own recursive-routing comparison; or treat RHEA-USENIXATC-04's specific churn-rate thresholds as qualitative rather than quantitatively transferable; or flag the gap as an open problem for any design selecting Bamboo-style reactive recovery.
 
-### 3. Square-root replication (and its rank-aware extension) requires the node that receives a search result to learn which specific item was found -- and, for the rank-aware policy, at what rank -- so it c
+### 3. Square-root replication (and its rank-aware extension) requires the node that receives a search result to learn which specific item was found -- and, for the rank-aware policy, at what rank -- so it can create new copies
 
 **Required by** `COHEN-SIGCOMM-02 (extended by RICHARDSON-ECIR-13 to also require rank position)` · **removed by** `ZHOU-EPRINT-24`
 
@@ -69,7 +85,7 @@ Pacmann's private-information-retrieval-based approximate-nearest-neighbor searc
 
 **Resolution.** Restrict search-driven replication to search mechanisms that do not hide result identity from the forwarding node, and offer PIR-protected search only for content that is replicated by some other trigger (e.g., publisher-driven or popularity-estimated-out-of-band replication, not search feedback); or accept that PIR-protected search and search-driven square-root replication cannot compose for the same content class and select one property per content type; or record as an open problem, since ZHOU-EPRINT-24 supplies no reconciliation -- it does not implement replication at all.
 
-### 4. DistributedANN's near-data node-scoring service requires the operator to control code placement on every storage host, so scoring computation can be co-located with the storage host under one trust do
+### 4. DistributedANN's near-data node-scoring service requires the operator to control code placement on every storage host, so scoring computation can be co-located with the storage host under one trust domain.
 
 **Required by** `ADAMS-ARXIV-25` · **removed by** `DANEZIS-WALRUS-25`
 
@@ -77,7 +93,7 @@ ADAMS-ARXIV-25 states directly that 'a system without control over storage-host 
 
 **Resolution.** Select a vector-search mechanism compatible with an untrusted storage layer (none evaluated in this corpus family) instead of DistributedANN's near-data scoring; or run DistributedANN's scoring service only on a trusted-operator subset of storage nodes, which narrows decentralization for that subset and needs its own justification; or record as an open problem for vector/approximate-nearest-neighbor search specifically, distinct from the general PIR-vs-replication conflict above.
 
-### 5. At least one of a small, fixed set of relay/mix servers must be honest and independently operated (Vuvuzela: 'at least one honest server' for the whole chain; Riposte: no two of three servers collude;
+### 5. At least one of a small, fixed set of relay/mix servers must be honest and independently operated (Vuvuzela: 'at least one honest server' for the whole chain; Riposte: no two of three servers collude; Stadium: at least o
 
 **Required by** `VANDENHOOFF-SOSP-15` · **removed by** `DOUCEUR-IPTPS-02`
 
@@ -85,7 +101,7 @@ DOUCEUR-IPTPS-02 proves (Lemma 2) that absent a logically centralized identity-i
 
 **Resolution.** Staff the server roles through an admission-controlled, identity-vetted process for this one privacy tier (a stated departure from full permissionlessness, not left implicit); or record the anytrust/non-collusion assumption as an open problem for a fully open peer population and offer the tier only where a curated operator set already exists; or select a different privacy mechanism for that tier that does not require a small non-colluding server set.
 
-### 6. Loopix/Nym's cover-traffic-efficient anonymity growth with user count requires a stratified (layered) topology in which independent routes through different mixes intersect into one shared anonymity s
+### 6. Loopix/Nym's cover-traffic-efficient anonymity growth with user count requires a stratified (layered) topology in which independent routes through different mixes intersect into one shared anonymity set
 
 **Required by** `PIOTROWSKA-USENIXSEC-17` · **removed by** `PIOTROWSKA-WPES-21`
 
@@ -133,7 +149,7 @@ VISWANATH-SIGCOMM-10 measures a -0.81 correlation between social-graph modularit
 
 **Resolution.** Measure the deployment graph's modularity and its exposure to seed-targeted attacks before choosing a fast-mixing-dependent defense, restrict the defense to sub-communities already shown low-modularity, or select a defense not dependent on global fast-mixing/low-modularity structure.
 
-### 12. TreeKEM's formal non-adaptive CGKA security proof (Theorems 1 and 2) requires the delivery mechanism to deliver CGKA protocol messages in the same order to every member within one session -- a consist
+### 12. TreeKEM's formal non-adaptive CGKA security proof (Theorems 1 and 2) requires the delivery mechanism to deliver CGKA protocol messages in the same order to every member within one session -- a consistent per-session tota
 
 **Required by** `ALWEN-CRYPTO-20` · **removed by** `BEURDOUCHE-RFC-25`
 
@@ -141,7 +157,7 @@ BEURDOUCHE-RFC-25, MLS's own architecture RFC, explicitly authorizes an Eventual
 
 **Resolution.** (a) Restrict the deployment to BEURDOUCHE-RFC-25's Strongly Consistent Delivery Service option, giving up the partition tolerance the Eventually Consistent option otherwise offers. (b) Accept the exposure window during the unreconciled period between concurrent Commits as a stated, uncorrected security gap -- neither RFC engages with ALWEN-CRYPTO-20's specific attack. (c) Select a CGKA construction whose security proof targets this setting directly rather than retrofitting a total-order-based proof onto a partition-tolerant delivery layer, e.g. YEN-EPRINT-26 (BeeKEM), proved over causally-ordered broadcast, at the cost of BeeKEM's own weaker, parameterized forward-secrecy notion (kappa-FSU/kappa-CFS) rather than the property ALWEN-CRYPTO-20 targets.
 
-### 13. A QUIC-based hole-punch restoration mechanism that skips re-punching after an address change needs both peers' QUIC stacks to support and permit connection migration -- to offer a spare Connection ID 
+### 13. A QUIC-based hole-punch restoration mechanism that skips re-punching after an address change needs both peers' QUIC stacks to support and permit connection migration -- to offer a spare Connection ID and answer a PATH_CH
 
 **Required by** `LIANG-ARXIV-24` · **removed by** `BUCHET-CCR-25`
 
@@ -149,7 +165,7 @@ BUCHET-CCR-25's May 2024 Internet-wide scan of the real, deployed QUIC-speaking 
 
 **Resolution.** Treat migration-based restoration as an opportunistic shortcut behind a full re-punch fallback rather than the primary path, and probe per-peer migration support at connection time (as BUCHET-CCR-25's own scanner does) instead of assuming it; or accept and document the reduced applicability as an open limitation
 
-### 14. ICE requires every agent to keep its keepalive interval Tr at or above a mandatory floor of 15 seconds ("MUST NOT" go lower), while separately requiring periodic keepalives to hold the underlying NAT/
+### 14. ICE requires every agent to keep its keepalive interval Tr at or above a mandatory floor of 15 seconds ("MUST NOT" go lower), while separately requiring periodic keepalives to hold the underlying NAT/firewall UDP mapping
 
 **Required by** `KERANEN-RFC-18` · **removed by** `RICHTER-IMC-16`
 
@@ -157,7 +173,7 @@ RICHTER-IMC-16 measures real Carrier-Grade NAT UDP mapping timeouts as short as 
 
 **Resolution.** Measure the actual mapping timeout per path, the way RICHTER-IMC-16's own TTL-driven probing technique does, rather than trusting a fixed floor; or keepalive at whatever interval the deployment's worst-case Carrier-Grade NAT population requires, accepting the added background traffic ICE's floor was chosen to bound against; or document that ICE-compliant implementations are known to lose sessions behind the shortest-timeout CGNs
 
-### 15. Range-based set reconciliation (RBSR) requires the backing search tree to be clamping-invariant: restricting two structurally different but same-content trees to an arbitrary sub-range must produce th
+### 15. Range-based set reconciliation (RBSR) requires the backing search tree to be clamping-invariant: restricting two structurally different but same-content trees to an arbitrary sub-range must produce the identical result, 
 
 **Required by** `MEYER-TR-24` · **removed by** `RAWAT-DLT-24`
 
@@ -165,7 +181,7 @@ MEYER-TR-24 proves treaps clamping-invariant and states plainly 'Prolly-trees ar
 
 **Resolution.** Select a proven clamping-invariant structure (a treap, per MEYER-TR-24's proof) wherever RBSR-style arbitrary-range reconciliation is needed; or restrict prolly trees to whole-chunk Merkle comparison (root/boundary-hash equality, what Dolthub and Canvas already do) rather than arbitrary-range queries; or record the missing prolly-tree/RBSR adapter as an open problem, since neither retrieved paper supplies one.
 
-### 16. AIYER-SOSP-05's Byzantine-Altruistic-Rational Tolerant (BART) incentive-compatibility guarantee for rational nodes requires a trusted admission authority to issue each participant exactly one cryptogr
+### 16. AIYER-SOSP-05's Byzantine-Altruistic-Rational Tolerant (BART) incentive-compatibility guarantee for rational nodes requires a trusted admission authority to issue each participant exactly one cryptographic public-key ide
 
 **Required by** `AIYER-SOSP-05` · **removed by** `KLEPPMANN-ARXIV-20`
 
@@ -173,7 +189,7 @@ KLEPPMANN-ARXIV-20's Byzantine Eventual Consistency (BEC) is built explicitly to
 
 **Resolution.** Select BEC for a fully open peer-to-peer identity layer and accept its narrower guarantee (only I-confluent transactions and invariants are protected, no general rational-node incentive compatibility); select BART-style accountability only where a closed or permissioned deployment already exists (e.g. a federation of storage providers) and accept that the open-admission design target is not met there; or record layering incentive-compatible sanctions onto a permissionless BEC network as an open problem, since neither paper supplies that combination.
 
-### 17. The querier must observe each hop's identifier and confirm identifier-distance to the target strictly decreases at every step (iterative routing), so a malicious intermediary that fails to make forwar
+### 17. The querier must observe each hop's identifier and confirm identifier-distance to the target strictly decreases at every step (iterative routing), so a malicious intermediary that fails to make forward progress can be de
 
 **Required by** `SIT-IPTPS-02` · **removed by** `RHEA-USENIXATC-04`
 
@@ -181,7 +197,7 @@ Rhea et al.'s TCP-style per-neighbor timeout estimation, the technique giving Ba
 
 **Resolution.** Keep iterative routing and accept Vivaldi-derived timeout estimates, whose accuracy diverges from TCP-style estimation at higher churn per Rhea et al.'s own results; or keep recursive routing and substitute a different lookup-integrity defense such as S/Kademlia's disjoint-path lookup (not dependent on iterative observability, per BRIEF.md's verified seeds); or record the tension as an open problem for the specific DHT selected.
 
-### 18. FROST's commitment-server location must serve each participant's preprocessed nonce commitment correctly and exactly once -- never handing an already-consumed commitment to a second signature aggregat
+### 18. FROST's commitment-server location must serve each participant's preprocessed nonce commitment correctly and exactly once -- never handing an already-consumed commitment to a second signature aggregator.
 
 **Required by** `KOMLO-SAC-20` · **removed by** `SHAPIRO-EATCS-11`
 
@@ -197,7 +213,7 @@ G-Rank's clicklog gossip row carries the querying peer's node ID as application 
 
 **Resolution.** Exclude G-Rank's clicklog traffic from the privacy tier's guarantee and disclose this to the user; or redesign the clicklog schema to reference a rotating, session-scoped handle instead of a stable node ID, untested in the corpus and requiring enough persistent linkability across rotations for G-Rank's similarity clustering to still function; or select a different ranking mechanism under the privacy tier and reserve G-Rank for the non-private tier.
 
-### 20. Every routing peer must keep its local identity-commitment-tree root synchronized with the on-chain registration/removal stream; proving membership against a stale root exposes that peer's own leaf in
+### 20. Every routing peer must keep its local identity-commitment-tree root synchronized with the on-chain registration/removal stream; proving membership against a stale root exposes that peer's own leaf index and compromises 
 
 **Required by** `TAHERIBOSHROOYEH-ARXIV-22` · **removed by** `RHEA-USENIXATC-04`
 
@@ -205,7 +221,7 @@ Moderate confidence: rests on typical churn rates rather than a specific mechani
 
 **Resolution.** Require a peer to complete tree resynchronization, and hold outgoing messages, before publishing after reconnecting, accepting a liveness cost; or widen Thr to tolerate more drift, accepting the paper's own stated cost of a longer stale-epoch replay window; or record the missing churn-to-Thr relationship as an open problem.
 
-### 21. A single-server PIR deployment's offline hint (SimplePIR/DoublePIR) or preprocessed structure (YPIR) must be refreshed whenever the underlying database changes enough to invalidate it; neither constru
+### 21. A single-server PIR deployment's offline hint (SimplePIR/DoublePIR) or preprocessed structure (YPIR) must be refreshed whenever the underlying database changes enough to invalidate it; neither construction analyzes or bo
 
 **Required by** `HENZINGER-USENIXSEC-23` · **removed by** `KLEPPMANN-CONEXT-24`
 
@@ -213,9 +229,17 @@ Kleppmann et al. describe the AT Protocol/Bluesky architecture as built around a
 
 **Resolution.** Restrict the PIR-backed privacy tier to a periodically-snapshotted view of the index and state the snapshot interval to the user as the tier's freshness cost, rather than searching the live stream continuously; or scope the private-search tier to a slower-moving content subset and serve the live firehose only through the non-private tier; or record the missing preprocessing-cost-versus-write-rate measurement as an open problem, since it decides whether a single-server-PIR privacy tier over a live social index is feasible at all.
 
+### 22. A compliant peer's exposure to any other single peer's optimistic-unchoke slot -- BitTorrent's deliberately unconditional bootstrap grant of upload bandwidth to a peer with nothing yet to reciprocate -- stays small, beca
+
+**Required by** `COHEN-IPTPS-03` · **removed by** `LOCHER-HOTNETS-06`
+
+LOCHER-HOTNETS-06 (BitThief) raises simultaneous connections from the reference default of 80 to 500 and re-announces to the tracker far more often, using the identical open tracker mechanism COHEN-IPTPS-03 relies on for random peer selection, and measures that 'opening more connections increases download speed linearly' with zero upload -- because download rate now comes predominantly from the unconditional optimistic-unchoke and seeder round-robin paths rather than from reciprocation. SIRIVIANOS-IPTPS-07 (the Large View Exploit) independently confirms the same mechanism: it states its exploit 'requires only the standard tracker announce protocol and the standard practice... of accepting and merging additional peer lists from other peers,' and measures its free-riding client reaching an average view of approximately 250 peers (five times the ~50-peer standard) and completing faster than a compliant client in 12 of 15 tested public swarms.
+
+**Resolution.** A designer can have the tracker rate-limit or cap peer-list size and connection count per requester, trading away part of the claimed churn-robustness benefit of an unconstrained random graph; or accept that the choking algorithm's incentive property does not hold against a strategic client and add a mechanism that meters or prices the bootstrap slot itself, as LOCHER-HOTNETS-06 recommends and as PIATEK-NSDI-07 and LEVIN-SIGCOMM-08 independently confirm is needed by both stating they contradict the 'TFT alone makes BitTorrent robust' reading of COHEN-IPTPS-03.
+
 ---
 
-## Eight figures attributed to papers that do not contain them
+## 11 figures attributed to papers that do not contain them
 
 Each was found by holding both full texts at once. A figure in this class travels onward carrying the
 citing paper's authority, which is why it matters more than an ordinary error.
@@ -268,9 +292,27 @@ citing paper's authority, which is why it matters more than an ordinary error.
 
 **What the cited paper's own text says.** KLEPPMANN-TPDS-17 (A Conflict-Free Replicated JSON Datatype / Automerge) is a formal-semantics paper with no implementation and no benchmark; its own conclusion explicitly defers performance measurement to follow-on work. This mismatch is already caught in the evidence entry's own Contradicts section: a synthesis citing this paper for Automerge's measured memory or message-size cost has no support in the retrieved text.
 
+### 9. `GOLLE-EC-01` cites `ADAR-FM-00`
+
+**The claim.** 'a recent study of the Gnutella network found that more than 70% of its users contribute nothing to the system,' cited to Adar and Huberman alone
+
+**What the cited paper's own text says.** ADAR-FM-00's own measured figure is 'almost 70%' (66% of 33,335 peers, rising to ~69% once NAT-blocked transactions are counted) -- framed by the source itself as approaching but not reaching 70%, never exceeding it.
+
+### 10. `VISHNUMURTHY-P2PECON-03` cites `SAROIU-MMCN-02`
+
+**The claim.** '20 to 40% of Napster and almost 70% of Gnutella peers share little or no files,' cited jointly to Saroiu-Gummadi-Gribble and to Adar and Huberman for both figures together
+
+**What the cited paper's own text says.** SAROIU-MMCN-02's own retrieved measured result states '25% of the Gnutella clients do not share any files' -- based on a live Gnutella crawl using the pong-message file-count field -- less than half the 'almost 70%' figure attributed to it jointly with Adar and Huberman, whose own paper (ADAR-FM-00) is the actual source of that number.
+
+### 11. `DICURSI-BIGDATA-24` cites `RAMAN-IMC-19`
+
+**The claim.** 5% of instances hold 90% of users and 94% of toots; outages in 10 instances could remove 60% of global toot volume
+
+**What the cited paper's own text says.** RAMAN-IMC-19's own retrieved measured-results contain no '5% of instances / 90% users / 94% toots' figure in any form. Its actual reported concentration figures are shaped differently: top-3-AS hosting-provider share of users (62%), content-generation share (78% of instances produce under 10% of their own timeline content), and a simulated node-removal figure (removing the top 10 instances by toot count, no replication, makes 62.69% of toots unavailable -- close to but not identical to the cited '60% from outages of 10 instances', and describing a different event, simulated permanent removal from a graph model rather than an observed outage). DICURSI-BIGDATA-24's own entry already flags both figures as unverified pending a direct check against RAMAN-IMC-19's full text.
+
 ---
 
-## Seven papers whose abstract and body disagree
+## 7 papers whose abstract and body disagree
 
 A synthesis citing only the abstract would misstate each of these.
 

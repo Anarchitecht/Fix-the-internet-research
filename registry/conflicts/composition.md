@@ -9,11 +9,14 @@ Requirements in `registry/index-requirements.md` were grouped by kind — orderi
 honesty, reachability, stability over time — and checked pairwise across domains. Two candidates
 already flagged as destroying each other's preconditions in the brief (square-root replication
 against blinded search and against LRU eviction; MLS's total-order requirement against a
-partition-tolerant delivery layer) are not repeated here. Five new pairs survive verification
-against the full evidence-file text, at varying confidence. Two rest on an explicit statement in
-one paper about a property a specific other mechanism destroys. Three rest on tracing a stated
-requirement in one paper against a stated behavior in another; those are marked as derived
-reasoning, not as a conflict either paper states about the other.
+partition-tolerant delivery layer) are not repeated here. Eight pairs survive verification against
+the full evidence-file text, at varying confidence. Three (findings 2, 3, 6) rest on an explicit
+statement in one paper about a property a specific other mechanism destroys. The rest trace a
+stated requirement in one paper against a stated behavior in another; those are marked as derived
+reasoning, not as a conflict either paper states about the other. Total ordering was checked across
+every entry that names it (`BARNES-RFC-23`, `ALWEN-CRYPTO-20`, `KLEIN-SP-21`, `BIENSTOCK-TCC-20`,
+`BALBAS-ASIACRYPT-23`, and the rest of the MLS/TreeKEM family); every instance restates the brief's
+third seed example rather than a new pair, so none is reported again here.
 
 ## 1. Observable lookup progress and per-neighbor timeout estimation require opposite routing modes
 
@@ -38,6 +41,18 @@ A single DHT selected for both a security property (verifiable lookup progress a
 intermediary) and a churn-handling property (accurate per-hop timeout estimation) cannot satisfy
 both papers' preconditions with one routing mode. Recursive routing, needed for Rhea's timeout
 technique, is exactly the mode Sit and Morris name as defeating their principle 2 check.
+
+`HEEP-ATNAC-10` (R/Kademlia) is a second, independently measured instance of the same tradeoff, not
+a restatement of Rhea's: it adopts recursive routing specifically to beat iterative Kademlia on
+latency and bandwidth, and its own simulation quantifies the margin — at a 10,000 s mean node
+lifetime, recursive routing without topology adaptation reaches roughly 350 ms mean lookup latency
+against roughly 630 ms for iterative routing with five parallel RPCs, and recursive routing combined
+with proximity neighbor selection reaches roughly 225 ms, at about one-third the bandwidth of the
+iterative-with-PNS configuration. Because recursion is what "the initiator loses control of the
+message after the first hop" means in the paper's own description, `HEEP-ATNAC-10`'s routing mode
+removes the same querier-side visibility `SIT-IPTPS-02` requires, independent of Rhea's timeout
+argument — a second, structurally different reason a churn- and latency-optimized DHT ends up
+recursive, and therefore un-auditable by principle 2.
 
 **Resolution options.** Keep iterative routing and accept Vivaldi-derived timeouts, whose own
 measured divergence from TCP-style accuracy grows at higher churn (`RHEA-USENIXATC-04`). Keep
@@ -173,6 +188,105 @@ subset of content and serve the live firehose only through the non-private tier.
 preprocessing-cost-versus-write-rate measurement as an open problem, since it decides whether a
 single-server-PIR privacy tier over a live social index is feasible at all.
 
+## 6. Table-poisoning countermeasures require exactly the secrecy that verifiable-identifier defenses forbid
+
+`SIT-IPTPS-02`'s third design principle requires that a node's identifier be derived by a function
+the querier can independently check against the claimant's network address, so a claimed identifier
+can be verified rather than trusted. `CASTRO-OSDI-02` builds the same property into certified nodeId
+assignment — a routing-table slot filled by "a public, verifiable function" of the identifier — and
+its constrained routing table's measured error rates (for example, routing-failure-test false
+positives at 0.12 without an attack, rising to 0.77 under nodeId suppression, at collusion bound
+c=0.3) hold only once identifiers are unforgeable and checkable in this way.
+
+`MARCUS-EPRINT-18` measures that keeping this exact identifier-to-bucket mapping public is what
+enables the table-poisoning eclipse attack it demonstrates against Ethereum's geth client: "the
+mapping from a node identifier to its target routing-table bucket... is a public deterministic
+function... with no secret salt," letting an attacker precompute node identities landing in a
+victim's most heavily weighted buckets before the victim reboots, filling its routing table before
+legitimate entries can be reinserted. The paper measures this succeeding in 34 of 51 reboots (66%)
+against a 33-day-uptime victim and 44 of 50 reboots (88%) against a 1-hour-uptime victim. The paper's
+own recommended fix, Countermeasure 3, is to salt the identifier-to-bucket distance function with a
+per-node local secret — which removes the public verifiability `SIT-IPTPS-02` and `CASTRO-OSDI-02`
+require for a third party to check a claimed identifier at all.
+
+This is a mechanism-against-mechanism conflict, not mechanism-against-environment: the same public
+mapping that lets an honest node verify a peer's claimed identifier is the mapping `MARCUS-EPRINT-18`
+shows an attacker uses to precompute table-filling identities, and closing that attack means giving
+up the check.
+
+**Resolution options.** Keep the mapping public and accept the eclipse exposure `MARCUS-EPRINT-18`
+measures. Salt the mapping locally per Countermeasure 3 and give up third-party verifiability of
+claimed identifiers, substituting some other check — none is evidenced in this corpus as compatible
+with both properties simultaneously. Record the conflict as open for whichever routing-table design
+is selected.
+
+## 7. IP-bound node identity is undermined by measured Carrier-Grade NAT address sharing
+
+`CASTRO-OSDI-02`'s certified-nodeId mechanism binds a nodeId to a specific IP address specifically
+to stop certificate-swapping among colluding attacker-controlled nodes, and requires "a
+certificate-revocation or reissuance path for any node whose IP address changes." `ROWSTRON-MIDDLEWARE-01`
+(Pastry) states the same convention as one option — a nodeId "typically computed as the SHA-1 hash of
+the node's IP address" — which the paper's routing-table-population and hop-count bounds depend on
+being close to uniformly distributed. Both treat one externally visible IP address as identifying one
+node.
+
+`LIVADARIU-INFOCOM-18` measures that this one-address-one-node relationship does not hold across a
+substantial and growing part of the deployed Internet. Carrier-Grade NAT (CGN), which an internet
+service provider uses to share one public IPv4 address across many customers, was inferred at 4,191
+of 17,400 measured "Transit/Access" autonomous systems (23.9%) and 154,098 of the measured /24 blocks
+(3.64%) between July 2014 and September 2016, at a commonly reported configuration of about 100 users
+sharing one external address. The paper states its own conclusion directly: "a design that assumes
+one externally visible IP address corresponds to one participant, for the purposes of rate limiting,
+Sybil resistance, or peer-uniqueness assumptions, cannot assume a fixed compression ratio." The paper
+additionally measures "arbitrary address pooling" — one internal address mapped to more than one
+external address inside a five-minute window — in 42% of that month's inferred CGN blocks, which
+breaks the second half of `CASTRO-OSDI-02`'s assumption: a node's externally visible address can
+change inside the certificate's revocation-detection window without the node itself changing, and
+stay fixed while the population of physical nodes behind it does not.
+
+**Resolution options.** Bind node identity to a public key rather than an IP address —
+`ROWSTRON-MIDDLEWARE-01` states this as an available alternative in the same sentence as the IP-hash
+convention, though `CASTRO-OSDI-02`'s specific certificate-revocation trigger was built around IP
+change and would need restating around key compromise instead. Accept a degraded Sybil-resistance
+bound for the fraction of the population behind CGN, sized against `LIVADARIU-INFOCOM-18`'s measured
+prevalence. Record the conflict as open for a design that must support both IP-based identity and a
+CGN-heavy client population.
+
+## 8. Regenerating-code repair's simultaneous multi-peer reachability is reduced by measured NAT-traversal limits
+
+`DIMAKIS-TIT-10`'s regenerating-code repair mechanism requires a newcomer node to connect
+simultaneously to k (the Regenerating Code construction) or n−1 (the Optimally Maintained MDS
+construction) other fragment-holding nodes and receive coded data from each in the same repair
+operation; the paper states this "requires those holders to be locatable and reachable at repair
+time," a requirement it does not itself supply, assuming an underlying storage substrate provides
+node discovery and connectivity. The paper's own measured bandwidth savings (for example, a newcomer
+downloading 0.16M bytes against a full-file 1.0M at k=7) are conditioned on that simultaneous
+connectivity succeeding.
+
+`HALKES-NETWORKING-11` measures that simultaneous direct connectivity to an arbitrary peer is far
+from guaranteed. Only 21% of peers are directly connectable without any NAT-traversal mechanism
+(Trial 1, 646 classified peers); UDP hole punching through a rendezvous peer raises the reachable
+population, but even between peer types the paper classifies as eligible for it, connection success
+is measured at 85% per attempt for the most favorable pairing and at approximately 41% for
+first-attempt success for the pairing the paper calls the largest obstacle to connectability. Both
+figures are pairwise attempt rates, not the joint probability of k or n−1 simultaneous successes
+`DIMAKIS-TIT-10`'s repair operation requires; treating per-pair attempts as independent, the joint
+probability of assembling all k connections in one repair operation falls off geometrically as k
+grows, and `DIMAKIS-TIT-10`'s own evaluated configurations use k values of 7 and 14.
+
+This is a different failure axis from the `DIMAKIS-TIT-10`/`BHAGWAN-NSDI-04` pairing already
+considered and dropped below: `BHAGWAN-NSDI-04`-style availability asks whether a node is up at a
+given time, and `DIMAKIS-TIT-10`'s own evaluation already shows its construction tolerant of low
+availability traces. `HALKES-NETWORKING-11` measures a structurally different problem — whether two
+simultaneously-up peers can open a direct connection to each other at all — which availability traces
+do not capture and `DIMAKIS-TIT-10` does not evaluate against.
+
+**Resolution options.** Oversample helper candidates beyond k so that partial connection failure
+still leaves enough live sources, sized against `HALKES-NETWORKING-11`'s measured per-pair success
+rates. Restrict regenerating-code repair to node subpopulations `HALKES-NETWORKING-11` classifies as
+directly connectable or successfully traversable. Record the conflict as open, since neither paper in
+this corpus supplies a joint success measurement for k-way simultaneous connection.
+
 ## Findings not pursued
 
 A candidate pairing between community-detection Sybil defenses requiring one operator to hold the
@@ -190,3 +304,6 @@ considered and dropped: `DIMAKIS-TIT-10` evaluates its own construction against 
 down to a mean availability of 0.38 and reports the construction still outperforms its comparison
 baseline in every trace but one, where it is "very slightly worse" — the paper's own results do not
 support the claim that measured availability breaks its simultaneous-connection requirement.
+Whether two simultaneously-up peers can open a direct connection to each other at all is a separate
+question availability traces do not answer; that pairing, against `HALKES-NETWORKING-11`'s measured
+NAT-traversal success rates, is reported above as finding 8.

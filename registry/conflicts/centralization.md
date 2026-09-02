@@ -4,12 +4,12 @@ Scope: share of nodes on cloud providers, share of users on the largest instance
 or relays, share of requests served by one party, gateway concentration, and
 instance or relay population distributions, for nominally decentralized systems.
 Entries covered: `BALDUF-IMC-23`, `BALDUF-IMC-24`, `WEI-NSDI-24`, `SHI-WWW-25`,
-`TRAUTWEIN-SIGCOMM-22`, `COSTA-DAIS-23`, `RAMAN-IMC-19`, `LACAVA-ANS-21`,
-`XAVIER-ARXIV-24`, `BONO-WEBSCI-24`, `DICURSI-BIGDATA-24`, `WEI-PACMNET-25`,
-`QU-TOMCCAP-26`, `KLEPPMANN-CONEXT-24`, `QUELLE-PLOSONE-25`, `SECKIN-ARXIV-25`,
-`JACOB-MIDDLEWARE-19`, `MARTINS-JCC-26`, `LIN-ICDEW-21`, `OVEZIK-ACNS-25`,
-`OVEZIK-FC-24`, `LUO-ARXIV-25`, `STEINER-IMC-07`, `ADAR-FM-00`,
-`ELAHI-WPES-12`, `DURUMERIC-IMC-15`.
+`TRAUTWEIN-SIGCOMM-22`, `COSTA-DAIS-23`, `SOKOTO-USENIXSEC-24`, `RAMAN-IMC-19`,
+`LACAVA-ANS-21`, `XAVIER-ARXIV-24`, `BONO-WEBSCI-24`, `DICURSI-BIGDATA-24`,
+`WEI-PACMNET-25`, `QU-TOMCCAP-26`, `KLEPPMANN-CONEXT-24`, `QUELLE-PLOSONE-25`,
+`SECKIN-ARXIV-25`, `JACOB-MIDDLEWARE-19`, `MARTINS-JCC-26`, `LIN-ICDEW-21`,
+`OVEZIK-ACNS-25`, `OVEZIK-FC-24`, `LUO-ARXIV-25`, `STEINER-IMC-07`,
+`ADAR-FM-00`, `ELAHI-WPES-12`, `DURUMERIC-IMC-15`, `POLINSKI-CCR-24`.
 
 ## 1. IPFS: share of nodes hosted in the cloud
 
@@ -113,6 +113,39 @@ different data source and a different sampling window. A synthesis citing
 `WEI-NSDI-24`'s own entry states this explicitly as a requirement on how a
 downstream accounting must be scoped.
 
+A fifth, narrower quantity comes from `SOKOTO-USENIXSEC-24`: hosting
+concentration measured only over the badbits denylist, a moderated subset of
+IPFS content, not the general population any of the four papers above
+measure. Individual peers each host between 19% and 63% of the entire
+denylist, and more than 60% of unique denylisted items sit on just two
+peers, found from a DHT provider-record crawl of the 417,912-CID denylist
+`SOKOTO-USENIXSEC-24` reconstructs. `SOKOTO-USENIXSEC-24`'s own text calls
+this figure "misleading" taken alone, because the same denylisted content is
+separately shown to be replicated at other locations the two-peer figure
+does not capture — a peer-count concentration figure and a content-
+availability figure answer different questions even within one paper. This
+is consistent in direction with, but not the same measurement as, the
+whole-network content-provider concentration `BALDUF-IMC-23` reports in
+Section 1 (roughly 1% of peers appear as a provider in about 90% of DHT
+provider records): both find that content-hosting responsibility sits with a
+small peer count, over different content populations (all DHT-advertised
+content versus a curated 417,912-item denylist).
+
+Gateway concentration, the family's fourth named quantity, has one measured
+figure in this corpus: `BALDUF-IMC-23` finds 50% of the gateway IP addresses
+referenced by DNSLink records (a naming layer that maps human-readable
+domains to IPFS content) belong to a single provider, Cloudflare, from one
+month of passive DNS data, and that only 20% of DNSLink gateway IPs are
+non-cloud at all. `SOKOTO-USENIXSEC-24` separately enumerates 431 gateways
+by operator category (Protocol Labs' own; a large CDN; public gateways
+listed on ipfs.tech; 105 ephemeral subdomains of one Web3 Gateway-as-a-
+Service provider, Infura; an unlisted-others catch-all) without reporting
+what fraction of total gateway traffic or IP count each category holds, so
+the two papers' gateway figures are not directly combinable into one
+concentration number — one gives a hosting-provider share of DNSLink-
+referenced gateways, the other gives an operator-category count of a
+differently-assembled gateway population.
+
 ## 3. Mastodon: instance concentration measured at different granularities and times
 
 `RAMAN-IMC-19` (April 2017-July 2018 crawl of 4,328 instances) and
@@ -165,6 +198,27 @@ can be extracted from its retrieved text. Whether the specific relay
 `WEI-PACMNET-25` found dominant in 2023 is one of `QU-TOMCCAP-26`'s four
 2024-25 relays is not stated in either paper's retrieved text and is not
 established here.
+
+`WEI-PACMNET-25` separately runs the same top-10-hosting-provider removal
+simulation `RAMAN-IMC-19` ran for Mastodon, over its own Nostr dataset, and
+cites `RAMAN-IMC-19` by name as the comparison baseline: after removing the
+top 10 autonomous systems by relay count, over 80% of Nostr posts stay
+available (reachable on at least one surviving relay), against `RAMAN-IMC-19`'s
+finding that the same removal makes 90.1% of Mastodon toots unavailable
+under Mastodon's no-replication baseline — under 10% of toots survive. Both
+figures come from an identical removal methodology (top-10 autonomous
+systems, ranked by hosting count, availability defined as at least one
+surviving copy) applied by each paper to its own live network, so this is a
+directly comparable pair, not a same-word-different-quantity case. It is not
+a contradiction either: the two papers measure two different systems, and
+`WEI-PACMNET-25` attributes the more-than-70-percentage-point gap to a
+measured structural difference between the networks — 64% of the autonomous
+systems hosting a Nostr relay host exactly one relay each, against
+`RAMAN-IMC-19`'s finding that the top 3 autonomous systems host 62% of all
+Mastodon users. A flatter hosting distribution across autonomous systems
+produces measurably higher resilience to hosting-provider removal under an
+identical knockout test; this is the corpus's clearest same-methodology,
+cross-system comparison in this family.
 
 ## 5. Bitcoin: block-production concentration and token-wealth concentration are different quantities
 
@@ -240,7 +294,72 @@ collection windows and before `KLEPPMANN-CONEXT-24`'s October 2024 and
 `SECKIN-ARXIV-25`'s own January 2025 cutoffs. No entry in this corpus reports
 two different user counts for Bluesky at the same date.
 
-## 8. Unsupported attribution: a Mastodon concentration figure not present in its cited source
+## 8. PeerTube: hosting-provider concentration at a similar scale to IPFS, among different providers
+
+`POLINSKI-CCR-24` crawls the PeerTube federation (a federated video-hosting
+system, the closest population in this corpus to IPFS's content-addressed
+storage in scale of finding, if not in mechanism) starting from Framasoft's
+public instance tracker, August 2024, reaching about 1,200 instances. The
+top 15 autonomous systems host 62% of discovered instances; the top 7 host
+over 50%; the single largest, Hetzner Online GmbH, hosts 17.5%. `POLINSKI-CCR-24`'s
+own bibliography note draws the comparison directly: it states `BALDUF-IMC-23`'s
+IPFS figure (top 3 cloud providers hosting 51.9% of DHT servers) is "a
+directly comparable centralization figure for a different content-addressed
+decentralized storage system."
+
+The two networks share the same shape of finding — a small number of
+hosting providers holding roughly half of the population — but not the same
+providers. `POLINSKI-CCR-24` states explicitly that cloud hyperscalers (AWS,
+Google Cloud Platform) are "nearly absent" from PeerTube's hosting AS list,
+attributing this (as an inference, not a measured fact) to those providers'
+outbound-bandwidth pricing being uncompetitive against the specialized,
+lower-cost European hosts (OVHCloud, Scaleway, Hetzner) that dominate
+instead. This is the opposite hosting-provider profile from IPFS's, where
+`BALDUF-IMC-23` finds Amazon AWS alone responsible for 68% of DHT cloud
+traffic volume. A "top-N-hosting-provider share" figure for a decentralized
+system therefore does not by itself say which kind of provider is
+concentrating the population — PeerTube's ~50-62% and IPFS's ~52-80%
+(Section 1) are comparable in magnitude, not in composition.
+
+`POLINSKI-CCR-24` also reports a low-replication finding structurally
+parallel to `COSTA-DAIS-23`'s IPFS result (Section 2): over 92% of PeerTube
+videos are stored with no inter-instance redundancy at all (a single copy),
+against `COSTA-DAIS-23`'s finding that about 70% of IPFS content identifiers
+are held by at most two providers. Both figures describe low replication by
+default in a content-addressed or federated storage system with no built-in
+replication incentive, but over different content populations (video files
+under PeerTube's opt-in per-instance redundancy policy, versus arbitrary
+IPFS content identifiers under IPFS's explicit re-provide requirement), so
+the two percentages are not one statistic measured twice.
+
+## 9. Bluesky: component-level hosting concentration is a different measurement from account growth
+
+Section 7 tracks how many Bluesky accounts exist over time. `BALDUF-IMC-24`
+measures a different quantity entirely at one point in that timeline
+(March-April 2024, 5,591,824 DIDs): which single operator or platform each
+architectural component concentrates around. Of 5,077,159 downloaded DID
+Documents, 98.9% carry a handle that is a subdomain of bsky.social, the
+platform operator's own free custodial domain; only 1.1% of users manage
+their own signing keys and domain. Among the roughly 43,000 Feed Generators
+(user-created feed-ranking services) discovered, the top three hosting-as-a-
+service platforms hold 95.8% of them between them, with one platform,
+Skyfeed, alone hosting 85.86%.
+
+`BALDUF-IMC-24`'s own text states these per-component figures do not reduce
+to one number: identity-handle concentration (98.9%), Feed-Generator-hosting
+concentration (85.86%), and domain-registrar concentration among the small
+fraction of users who do self-manage a domain (the top four registrars hold
+50%, the least concentrated of the three) move independently, and the paper
+states directly that a synthesis step treating "Bluesky's decomposition
+produces diversity" as one true-or-false claim "would need to average or
+otherwise combine these disparate per-component figures," which the paper
+itself does not do. No other entry in this corpus independently measures
+Bluesky's identity-handle or Feed-Generator-hosting concentration at a
+different date to check `BALDUF-IMC-24`'s figures against; as with the
+Matrix figure in Section 6, this is a single measured snapshot with no
+second measurement in this family to compare it to.
+
+## 10. Unsupported attribution: a Mastodon concentration figure not present in its cited source
 
 `DICURSI-BIGDATA-24`'s own related-work section attributes to `RAMAN-IMC-19`
 the figures "5% of instances hold 90% of users and 94% of toots" and
@@ -274,7 +393,7 @@ invites reading the two numbers as directly comparable cloud-dependence
 figures; they are not, without adjusting for the provider-count and unit
 mismatch.
 
-## 9. What this family does not contain
+## 11. What this family does not contain
 
 No destroyed-precondition finding was found within this family in the sense
 the brief defines it — one selected mechanism's requirement removed by

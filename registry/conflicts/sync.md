@@ -30,8 +30,9 @@ contradicts under matching conditions; the entries covering Nostr availability
 against Mastodon availability (`WEI-PACMNET-25`, `RAMAN-IMC-19`) are already
 recorded in `registry/conflicts/centralization.md` and are not repeated here.
 What this family does hold is a set of destroyed preconditions, several
-unsupported attributions, and three internal abstract/body inconsistencies, all
-below.
+unsupported attributions — including two cases of a paper cited by key as
+"already in this corpus" when no evidence-file entry for that key exists —
+and three internal abstract/body inconsistencies, all below.
 
 ---
 
@@ -149,7 +150,29 @@ exists to prevent: a synthesis citing `KLEPPMANN-TPDS-17` for Automerge's
 memory or message-size cost has no support in the retrieved text and needs a
 different, later source.
 
-## 5. Three internal abstract/body inconsistencies
+## 5. A second corpus-entry citation with no evidence file behind it — GADUREK-SEA-26
+
+Three entries in this family attribute specific content to a corpus entry that does not exist.
+`EPPSTEIN-SIGCOMM-11` states "the failure modes GADUREK-SEA-26, elsewhere in this corpus, analyzes
+directly," and again under its own Contradicts section that "GADUREK-SEA-26 (also in this corpus)
+analyzes an adversarial-input failure mode of IBF peeling decode." `GOODRICH-ALLERTON-11` cites
+"GADUREK-SEA-26's bibliography in this corpus." `GOMES-ARXIV-25` cites a reference as "already
+listed as a reference worth retrieving in GADUREK-SEA-26's entry." No `GADUREK-SEA-26.md` file
+exists under `registry/evidence/`, and the key appears in neither `index-measurements.md` nor
+`index-requirements.md` — there is no entry to check any of these three claims against.
+
+The corpus's own tracking files disagree on why. `registry/retrieval-log.md` records
+`GADUREK-SEA-26` ("Breaking 2-Cores for Invertible Bloom Lookup Tables by Structure Prediction,"
+Gadurek and Veselý, SEA 2026) as retrieved in full text (18,455 characters, via its first candidate
+URL). `registry/pending-extraction.json` lists the same key as awaiting write-up into an evidence
+entry. `registry/still-unretrieved.json` lists it as unretrieved. Whatever the true state, three
+evidence entries already describe its contents as settled fact and cite its bibliography, and a
+synthesis step citing `GADUREK-SEA-26` for an IBLT adversarial-peeling defense currently rests on
+nothing verifiable — the same failure mode as finding 4 above, against a different key, and the
+same fix: retrieve the paper and write its evidence entry, or mark every claim resting on it
+unverified.
+
+## 6. Three internal abstract/body inconsistencies
 
 `MEYER-TR-24`'s abstract states its non-homomorphic RBSR technique
 "effectively render[s] merkle-search-tree reconciliation obsolete." Its own
