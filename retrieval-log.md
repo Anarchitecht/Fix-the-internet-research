@@ -504,3 +504,34 @@ the archive's own availability API returning a valid snapshot URL that then coul
 
 **Paywalled, no open copy indexed** means the ladder was worked to its end and no open copy exists
 anywhere Unpaywall, OpenAlex, CORE, or Semantic Scholar indexes.
+
+## Two registry rows referred to papers that do not exist
+
+`KREUTER-FC-22` was recorded as Kreuter et al., Financial Cryptography 2022. It does not exist. DBLP's
+complete Financial Cryptography 2022 programme, fetched in full and searched, holds no paper by that
+author. That author's own DBLP page lists no Financial Cryptography entry among thirteen
+publications. The only Financial Cryptography 2022 paper on anonymous tokens with public metadata is
+Silde and Strand's, already held under `SILDE-FC-22`. The row was a duplicate wearing a wrong
+citation, and is removed.
+
+`Anonymity Trilemma: Beyond Mix-Nets` was cited in the prior-pass corpus as a third paper in that
+line by the same four authors. A direct arXiv title query returns only a different paper by a
+different author. No such title resolves in DBLP or Crossref.
+
+Both are the failure mode `BRIEF.md` §2.1 describes: a citation that travelled through documents
+without anyone opening the paper, because there was no paper to open.
+
+## What blocked the last unreachable paper
+
+`MUTHURAJ-IMC-24` is marked gold open access by both Unpaywall and OpenAlex, and its only open
+location is the publisher's own PDF endpoint. Every route was refused by an interactive bot challenge
+requiring JavaScript execution: plain requests, requests carrying full browser headers and a referer,
+and a headless-rendering proxy. The paper is open and this container cannot reach it. Its
+first author's own MSc thesis is openly deposited and covers adjacent work; it is a different
+document and was deliberately not substituted.
+
+Two environment facts worth recording for any later pass. `web.archive.org` is refused by this
+container's egress policy rather than failing transiently, so ladder steps that route through it are
+spent for nothing; `archive.org` without the `web.` prefix does respond. A public headless-rendering
+proxy resolves pages that serve a JavaScript challenge to non-browser clients, and does not resolve
+the stricter managed-challenge tier that publisher sites use.
