@@ -1,127 +1,143 @@
 # The optimal decentralized-web architecture
 
-One mechanism selected per component of a decentralized internet, each selected against every rejected
-candidate by a citation to a paper read in full, then checked against every other selection for a
-requirement it removes. The design target: identity, indexing, and storage that no single company can
-capture, and a client that reproduces the functions of the most-visited websites. Privacy is
-user-selectable tiers, each stating the adversary it defeats and the measured latency and bandwidth it
-adds.
+This report states one mechanism for each component of a decentralized internet. Each mechanism was
+compared against every rejected candidate, and the comparison cites a paper read in full. Each
+mechanism was then checked against every other selected mechanism for a precondition it removes. The
+design target is a system whose identity, indexing, and storage no single company can control, and a
+client that performs the functions of the most-visited websites. Privacy is a set of tiers the user
+selects. Each tier states the adversary it defeats. Each tier states the latency and the bandwidth it
+adds, both measured.
 
-## What this report is built from
+## Every figure comes from a full-text primary source
 
-Every figure below comes from the full text of a primary source, cited by an evidence key (an
-uppercase author-venue-year label such as `KOMLO-SAC-20`). The corpus holds 407 papers read in full.
-A selection whose justification cannot cite a key is labeled a guess at the point it is made; one
-selection (capacity ordering) labels half of itself a pick rather than a selection, because the
-overlay it recommends has no full-text entry in this corpus. 408 cited claims were checked against
-their evidence entries: 396 supported, 13 corrected in place.
+Every figure in this report comes from the full text of a primary source. A short label cites each
+source: an uppercase author, venue, and year, such as `KOMLO-SAC-20`. The corpus holds 407 papers,
+each read in full. A choice whose justification cites no source is labeled a guess where it is made.
+One choice, capacity ordering, is labeled a pick rather than a selection for half of itself, because
+the overlay it recommends has no full-text entry in the corpus. An audit checked 408 cited claims
+against their source entries. The audit confirmed 396 claims and corrected 13 in place.
 
-The report has four parts:
+## Three kinds of statement go to three different places
 
-1. **The 19 selections** — one line each.
-2. **Per-component detail** — for each component: every candidate with its measured cost, security
-   assumption, failure condition, and cross-component requirement; the selection; the comparison
-   against each rejected candidate; what the selection needs from the rest of the system; its cost;
-   its failure condition; and what the corpus does not settle.
-3. **Composition conflicts** — 21 requirements one selection removes from another, each classified as
-   an open problem, a stated degradation, or a selection change.
-4. **Provenance** — the claim-tracing audit.
-
-## The rule that separates the three kinds of statement
-
-A measured fact is a number an experiment produced with its conditions stated; it lives in the
-evidence corpus, cited to the paper. A structural consequence is a property that follows by reasoning
-from a measured fact or a proof; it lives here, with the derivation shown. A value judgment — that a
-cost is or is not worth paying — is excluded, or attributed to whoever made it. A number enters the
-corpus only from a full text. An abstract establishes that a paper exists and no measurement.
+A measured fact is a number an experiment produced, with its conditions stated. A measured fact goes
+to the evidence corpus, cited to the paper. A structural consequence is a property that follows by
+reasoning from a measured fact or a proof. A structural consequence goes to this report, with the
+reasoning shown. A value judgment is a decision that a cost is or is not worth paying. A value
+judgment is excluded, or attributed to whoever made it. A number enters the corpus only from a full
+text. An abstract establishes that a paper exists. An abstract establishes no measurement.
 
 ---
 
-## The 19 selections
+## One mechanism is selected per component
 
 **Identity and keys**
 
-1. **Identity** — A Decentralized Identifier (DID) document holds two purpose-separated keys: a
-   threshold Schnorr key (FROST) spread across the participant's own devices for everyday signing,
-   never reconstructed; and a secret-shared, hash-based post-quantum key (SPHINCS+ under Pedersen
-   verifiable secret sharing) exercised only to rotate that device set.
-2. **Forgery resistance** — No social-graph defense bounds Sybil identity count on a real network. A
-   write priced in memory-hard computation, verified locally by every peer that relays or stores it,
-   bounds an entity's write rate to the compute it controls, independent of identity count. No
-   identity system is consulted.
-3. **Key transparency** — Compaction over a verifiable key directory with a threshold-witness
-   quorum-certificate committee that must sign every round (Parakeet), over chained-snapshot schemes
-   that need an audit population to volunteer to gossip.
-4. **Key recovery** — A standing (t,n) threshold BLS signing key held by user-chosen guardians,
-   invoked only to co-sign a fresh identity key and never to reconstruct the lost one.
+1. **Identity** — A Decentralized Identifier (DID) document holds two keys, one per purpose. The first
+   key signs everyday actions. It is a threshold Schnorr key produced with FROST. Its shares are held
+   on the participant's own devices, and are never combined into one key. The second key authorizes
+   replacing that device set. It is a hash-based post-quantum key (SPHINCS+), split under Pedersen
+   verifiable secret sharing, and combined only during a rotation.
+2. **Forgery resistance** — No social-graph defense bounds the number of forged identities on a real
+   network. Instead, each write costs a fixed amount of memory-hard computation. Every peer that
+   relays or stores the write checks that cost itself. This bounds one entity's write rate to the
+   computation it controls, whatever number of identities it holds. No identity system is consulted.
+3. **Key transparency** — A key directory records the current public key of each identity. A committee
+   of witnesses signs every update round of the directory (Parakeet). A verifier detects a substituted
+   key as long as fewer than a threshold of the witnesses are dishonest. The rejected alternative needs
+   an audit population to volunteer to exchange directory snapshots, and nothing compels them to.
+4. **Key recovery** — User-chosen guardians hold shares of a standing (t,n) threshold BLS signing key.
+   The guardians use the key only to jointly sign a fresh identity key for a user who lost their own.
+   The guardians never reconstruct the lost key.
 
 **Naming, location, and search**
 
-5. **Naming** — Private, per-zone delegation over self-certifying public keys (GNS), over synchronized
-   naming ledgers and Domain Name System links, both of which measured deployments show collapsing
-   into single-party control or a name-scarcity market.
-6. **Content location** — S/Kademlia: Kademlia's XOR-metric routing with disjoint-path lookup and
-   crypto-puzzle-derived node identifiers added, which close the eclipse attack an unmodified Kademlia
-   deployment already suffered on a live network.
-7. **Indexing and search** — A client-local index of content the node fetched, authored, or was shown
-   answers first at no network cost. A query it cannot answer is broadcast under the
-   probably-approximately-correct random-peer-sample protocol.
+5. **Naming** — Each human-readable label binds to a self-certifying public key through private,
+   per-zone delegation (GNS). The rejected alternatives are a synchronized naming ledger and a Domain
+   Name System link. Measured deployments of the ledger end in single-party control. Measured
+   deployments of the link end in a market where names are scarce and priced.
+6. **Content location** — S/Kademlia locates content. It keeps Kademlia's routing-table structure,
+   which orders nodes by the bitwise-XOR distance between their identifiers. It adds two defenses: a
+   lookup over several disjoint paths, and node identifiers derived from a computational puzzle. An
+   unmodified Kademlia deployment on a live network suffered an eclipse attack, in which an attacker
+   surrounds a target with nodes it controls. The two defenses stop that attack.
+7. **Indexing and search** — A node keeps a local index of content it fetched, authored, or was shown.
+   That index answers a query first, at no network cost. A query the local index cannot answer goes to
+   the network. The network protocol samples random peers and returns a probably-approximately-correct
+   result — correct with a stated probability, not with certainty.
 
 **Storage**
 
-8. **Storage encoding** — Plain Reed-Solomon (n,k) erasure coding, over replication, regenerating
-   codes, and locally repairable codes. The deciding regime is high participant turnover, not the
-   low-churn regime most repair-cost-reducing codes were measured in.
-9. **Repair** — Locally Repairable Codes (Azure/Xorbas): local-group exact reconstruction as the
-   default path, full Reed-Solomon decode as the fallback. Cuts repair traffic to a third or a half of
-   plain Reed-Solomon's.
-10. **Incentives** — Two mechanisms, because no candidate does both: storage-retrievability proofs
-    settle payment for capacity; a per-connection reciprocation rule (PropShare), not a credit ledger,
-    settles bandwidth.
+8. **Storage encoding** — Plain Reed-Solomon (n,k) erasure coding stores each object. It splits an
+   object into k data fragments and computes n−k parity fragments, so any k of the n fragments
+   reconstruct the object. It is selected over whole-copy replication, over regenerating codes, and
+   over locally repairable codes. High participant turnover decides the comparison, the regime this
+   system runs in, not the low-turnover regime in which most repair-cost-reducing codes were measured.
+9. **Repair** — Locally Repairable Codes repair a lost fragment (the Azure/Xorbas construction). A
+   small local group of fragments reconstructs one lost fragment by itself, the default path. A full
+   Reed-Solomon decode is the fallback, used when a local group loses more fragments than its local
+   parity covers. Local-group repair moves one third to one half of the traffic a plain Reed-Solomon
+   repair moves.
+10. **Incentives** — Two mechanisms settle payment, because no single candidate settles both
+    resources. A storage-retrievability proof settles payment for storage capacity: the storing peer
+    proves it still holds the data. A per-connection reciprocation rule (PropShare) settles bandwidth:
+    each peer serves a neighbor in proportion to what that neighbor served it. No credit ledger is used.
 
 **Messaging and groups**
 
-11. **Group encryption** — BeeKEM: a decentralized ratchet tree over authenticated causal broadcast,
-    O(log n) per membership change, no group-wide total-order service.
+11. **Group encryption** — BeeKEM encrypts group messages. It is a decentralized ratchet tree: a tree
+    of keys in which each membership change re-keys one path, at a cost proportional to log n for a
+    group of n members. It runs over authenticated causal broadcast, so it needs no service that puts
+    messages into one total order.
 
 **Network transport**
 
-12. **Transport** — WebRTC data channels carry every connection touching a browser tab; QUIC carries
-    every connection between two socket-capable processes; onion-routed multi-hop encapsulation is a
-    selectable tier on top of either, not a default.
-13. **NAT traversal** — A relay introduces two peers, each learns its externally observed address, and
-    both time a simultaneous outbound connection attempt, with the relay kept as the session's fallback
-    path (DCUtR/Circuit-v2) — the only mechanism in this corpus measured at internet scale.
-14. **Capacity ordering** — A capacity-selected minority of peers forms a transit tier carrying all
-    relay traffic; every other peer is excluded from relay duty by structural role. No mechanism in
-    this corpus defends the capacity claim that selection runs on.
+12. **Transport** — Three transports carry connections, chosen by the two endpoints. WebRTC data
+    channels carry every connection that reaches a browser tab. QUIC carries every connection between
+    two processes that can open a socket. Onion-routed multi-hop encapsulation is a tier the user can
+    add over either transport. It is not the default.
+13. **NAT traversal** — A relay introduces two peers, each of which is behind a network address
+    translator. Each peer learns its own externally observed address from the relay. Both peers then
+    start an outbound connection at the same moment, timed by the relay (DCUtR/Circuit-v2). The relay
+    stays as the session's fallback path if the direct attempt fails. This is the only such mechanism
+    in the corpus measured at internet scale.
+14. **Capacity ordering** — A minority of peers, selected by claimed capacity, forms a transit tier
+    that carries all relay traffic. Every other peer connects through that tier and does no relay work,
+    by its structural role, not by a throttle. No mechanism in the corpus verifies the capacity a peer
+    claims to gain admission to the transit tier.
 
 **Application layer**
 
-15. **Application data model** — One data shape, one mechanism: hash-identified operation-based CRDTs
-    for editable multi-writer state, single-writer signed logs for feeds, content-addressed immutable
-    objects for media. Operational Transformation is excluded in every topology this design permits.
-16. **Ranking** — Independently operated feed generators a client subscribes to compute every ranking,
-    with gossip-based collaborative filtering computing the default feed. The deployed measurement of
-    default-switching shows fewer than 3 in 100 users ever pick an alternative, so the default-computing
-    mechanism is what nearly everyone experiences.
-17. **Moderation** — Client-subscribed labeling services for unwanted-but-lawful content, because
-    every server- or list-granularity mechanism removes content for every viewer regardless of
-    preference; an identifier deny list honored at retrieval for illegal content.
-18. **Reputation** — A participant assessing a stranger computes a bounded network-flow value from
-    itself, as source, to that stranger, over a trust-linkage graph whose edges cost something real to
-    form (SumUp / Bazaar / Ostra).
-19. **Privacy tiers** — Three independently cost-ordered ladders, one per action (fetch, query,
-    message), each rung stating the adversary it defeats and its measured cost. Two candidate families
-    are withheld because their measured cost is not reliable enough to offer as an informed choice.
+15. **Application data model** — Each data shape gets its own mechanism. No one mechanism serves all
+    data. Editable multi-writer state uses hash-identified operation-based CRDTs — Conflict-free
+    Replicated Data Types, whose concurrent updates merge to one result without coordination. Feeds use
+    single-writer signed logs. Media uses content-addressed immutable objects, each addressed by the
+    hash of its own bytes. Operational Transformation is excluded in every topology this design permits.
+16. **Ranking** — Independently operated feed generators compute every ranking. A client subscribes to
+    the generator it chooses. One deployed measurement shows fewer than 3 in 100 users ever change the
+    default generator. So the mechanism computing the default ranking, not the set of alternatives, is
+    what nearly every user receives. That default mechanism is gossip-based collaborative filtering.
+17. **Moderation** — Client-subscribed labeling services handle unwanted but lawful content. Each
+    client subscribes to the labelers it chooses. The rejected mechanisms act at the granularity of a
+    server or a shared list. Each of them removes content for every viewer of that server or list,
+    regardless of one viewer's preference. Illegal content instead goes through a deny list of content
+    identifiers, checked at the moment a peer serves the content.
+18. **Reputation** — To assess a stranger, a participant computes a bounded network-flow value from
+    itself, as the source, to that stranger (SumUp / Bazaar / Ostra). The value flows over a graph of
+    trust links whose edges each cost something to create. A capacity bound on the edges limits how
+    much flow a set of forged identities can supply.
+19. **Privacy tiers** — Three ladders let the user trade privacy for cost, one ladder per action:
+    fetch, query, and message. The rungs of each ladder are ordered by measured cost. Each rung states
+    the adversary it defeats. Two candidate families are withheld from the ladders, because their
+    measured cost is not reliable enough to offer a user as an informed choice.
 
 ---
 
-# Part 2 — Per-component detail
+# Part 2 — Each component's candidates, selection, cost, and failure condition
 
-Each section below is the full record for one component: its candidate table, the selection, the
-comparison against every rejected candidate, its cross-component requirements, its measured cost, its
-failure condition, and what the corpus does not settle.
+Each section below is the full record for one component. It gives the component's candidate table, the
+selected mechanism, the comparison against every rejected candidate, the preconditions the selection
+places on other components, its measured cost, its failure condition, and what the corpus does not
+settle.
 
 
 
@@ -1621,9 +1637,9 @@ Fetch-ladder failure is per-tier and already stated in Table 1: no padding fails
 
 ---
 
-# Part 3 — Composition conflicts
+# Part 3 — Where one selection removes a precondition another needs
 
-Twenty-one requirements that one selection removes from another, across 28 component pairs checked and clear. Eleven have no published resolution and are open problems. Ten degrade a stated property, written down. None is left unclassified.
+One selection removes a precondition another selection needs, in 21 places, across 28 component pairs checked. Eleven of the 21 have no published resolution, and are open problems. Ten degrade a stated property, and the report states the degradation. None is left unclassified. The section below is the composition check verbatim from `architecture.md`.
 ## Composition conflicts
 
 ### 1. A blockchain or equivalent network-wide consensus ledger supplying unbiased per-challenge-window randomness and automatic payment execution, for the storage-capacity payment mechanism.
@@ -1797,7 +1813,7 @@ capacity-ordering.md cites real deployed connection-lifetime data showing the le
 
 ---
 
-# Part 4 — Provenance
+# Part 4 — Every claim was checked against the source it cites
 ## Every claim here was traced back to the entry it cites
 
 408 cited claims across the 19 selections were checked against their evidence entries: 396 supported,
