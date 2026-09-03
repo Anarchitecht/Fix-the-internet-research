@@ -1,1031 +1,0 @@
-A Place for Everyone vs Everyone in its Place:
-Measuring and Attacking
-the Ethereum Global Network
-Chenyu Li 1,2[0009−0004−8011−8080] , Ren Zhang 3[0000−0003−2063−1769] , and
-Xiaorui Gong 1,2[0009−0005−8203−1496]
-1 Institute of Information Engineering, Chinese Academy of Sciences
-2 School of Cyber Security, University of Chinese Academy of Sciences
-3 Cryptape and Nervos
-ren@cryptape.com
-Abstract.The Ethereum Global Network (EGN) is the peer-to-peer
-(P2P) network underlying Ethereum and thousands of subsequent block-
-chain services. Deviating from traditional single-service P2P networks,
-EGN's multi-service architecture has gained widespread acceptance for
-supposedly improving node discovery eciency and security. This paper
-challenges this belief by critically examining EGN's design and its pur-
-ported benets. Our analysis reveals signicant shortcomings in EGN's
-node discovery process. EGN nodes struggle to connect with peers oer-
-ing the desired service: over three-quarters of connection attempts reach
-nodes of other services. In an extreme case, one node spent an aver-
-age of45 908connection attempts to nd each neighbor. Moreover, this
-blended architecture compromises EGN's security. The network demon-
-strates high susceptibility to DHT pollution and partition attacks. Even
-with only 300 malicious nodes in EGN, an attacker can isolate thou-
-sands of nodes, signicantly hindering recovery. In contrast, such a small
-number of malicious nodes has minimal impact on every single-service
-P2P network. We propose solutions to improve EGN's node discovery
-eciency and strengthen its resilience against attacks.
-1 Introduction
-Ethereum [4], a prominent blockchain system, operates on a peer-to-peer (P2P)
-network composed of individual servers callednodes. These nodes nd and con-
-nect to each other throughnode discovery protocols. As of January 2025, the
-time of this writing, two versions of these protocols coexistDiscv4 and Discv5.
-Both protocols are based on Kademlia [23], a decade-old distributed hash ta-
-ble (DHT) protocol. In a DHT protocol, each node has a unique identier (ID)
-and maintains arouting tablethat stores other nodes' IDs and routing informa-
-tion. The node discovery protocols periodically update the local routing table
-and provide candidate nodes for establishing application-layer connections. All
-nodes executing these protocols, i.e., the union of their routing tables, thus form
-an overlay P2P network called theEthereum Global Network (EGN)[16].
-
-2 Chenyu Li, Ren Zhang, and Xiaorui Gong
-In contrast to traditional overlay P2P networks, which typically cater to a
-single service, EGN embraces a vibrant ecosystem of applications reaching far be-
-yond Ethereum, with a total market capitalization exceeding 500 billion USD [2].
-Thousands of blockchain projects, from Ethereum testnets (Ropsten and Sepo-
-lia) and legacy Ethereum forks (Ethereum Classic) to other blockchains like
-BNB Smart Chain, Gnosis, and Polygon, nd a home within EGN. This diverse
-spectrum even encompasses infrastructure providers like Bloxroute, Debank, and
-Quicknode, enriching the network with high-speed routing, user asset tracking,
-and blockchain data API services. Remarkably, despite coexisting on the same
-overlay, these services operate autonomously, collaborating only at the network
-layer without application-specic interactions.
-This living under the same roof phenomenon is more of a design choice
-rather than the developers' negligence, as it is well-known and widely accepted.
-It is noticed and documented by academia as early as 2018 [15]; technical in-
-troductions of the Ethereum network, e.g., [6] and [3], also remind its audience
-of this unique feature/phenomenon. It is even introduced in Ethereum's ocial
-documentation that there are many independent `networks' that conform to the
-protocol without interacting with each other [1].
-The Ethereum community's acceptance, even enthusiasm, for this choice
-prompted us to explore its potential benets. Through a combination of lit-
-erature review and extensive discussions with seasoned developers, we identied
-two primary reasons supporting this choice:
- Eciency .Each node's information spreads more widely, thus nodes may
-nd same-service neighbors with fewer queries and shorter latency [24].
- Security .EGN's sheer size bolsters its resilience against Sybil attacks [16],
-where malicious actors swarm the network with their nodes, and their subse-
-quent attacks. In other words, a larger pool dilutes the attacker's inuence.
-This paper argues that, without any implemented mechanism to prioritize
-same-service peers in node discovery, the blended nature of EGN is detrimental
-to services, especially smaller ones. Our technical work and contributions include:
-Measuring EGN.While extensive research has explored the Ethereum net-
-work [5, 9, 10, 17, 18, 21, 28, 30], our understanding of EGN's multi-service archi-
-tecture remains incomplete. The only study examining EGN's service diversity
-dates back to 2018 [15], predating nine out of the ten most prevalent services
-currently in use. Existing analyses of the network [8,14,1922] overlook the com-
-position of individual DHTs. Furthermore, the Discv5 network, deployed in late
-2023, has yet to be analyzed.
-Therefore, to facilitate subsequent analysis, we collect various measurements
-with a state-of-the-art crawler Nebula [26]. Our assessment encompasses EGN's
-scale, service distribution, node uptime, and critically, the composition of nodes'
-DHTs. We identify over 7000 services and reveal a concerning observation: the
-majority of Discv4 nodes maintain less than 5% of same-service peers within
-their DHTs. While the specic services of most Discv5 nodes remain unidentied,
-
-Measuring and Attacking the Ethereum Global Network 3
-we anticipate similar behavior due to the shared DHT maintenance rules and
-workows between Discv4 and Discv5.
-Evaluating the Node Discovery Eciency .Node discovery eciency di-
-rectly impacts the overall communication cost for EGN nodes. Our measure-
-ment reveals that roughly 20% of our Ethereum node's trac is dedicated to
-node discovery, with this percentage even higher for less busy services.
-To assess the impact of the blended architecture on node discovery, we deploy
-ve nodes in EGN representing diverse services: two exclusively support Discv4
-(BSC Mainnet and KCC Mainnet), while the remaining three support both ver-
-sions (ETH Mainnet, ETH Holesky and ETH Sepolia). These nodes measure
-communication costs and latency associated with establishing connections. The
-results reveal substantial ineciencies. Within a twelve-hour timeout, our nodes
-rarely established the desired number of connections, and each successful con-
-nection cost at least thousands of attempts. The lowest connection success rate
-was one in45 908, starkly contrasting with Bitcoin's rate of one in four. Error
-messages from 45.6% to 87.3% of connection attempts explicitly indicated at-
-tempts to reach nodes of other services. Analysis of incoming connection requests
-revealed that 76.2% to 96.9% of these requests were from other services.
-Discv5 exhibits signicantly poorer performance compared to Discv4. Within
-twelve hours, a node established at most three connections with nodes discovered
-via Discv5. A notable factor contributing to Discv5's ineciency is the absence
-of thetopic discovery mechanism. This mechanism, designed to enable nodes to
-advertise their services and prioritize same-service connection attempts, remains
-unimplemented in all client programs we examined.
-Comparing the DHT Pollution Attack Resistance in Blended and Sep-
-arate Overlay Networks.To assess EGN's security, we simulate aDHT pol-
-lution attack, where malicious nodes inject their information into other nodes'
-DHTs. Regarded as a weaker version of Sybil attacks, this attack also serves as
-a foundation for more sophisticated attacks. Even with only a few hundred ma-
-licious nodes (0.3% of the EGN), the attack reduced connection success rates to
-below 1% for all services except ETH Mainnet and Polygon. Additionally, after
-a 24-hour attack duration, the attacker successfully isolated thousands of nodes.
-Our analysis reveals that the vulnerability does not stem from implementation
-or protocol aws but rather from the blended nature of the overlay network.
-The same attack proved largely ineective in simulations of separate overlay
-networks.
-Fixing EGN.We conclude by proposing solutions to increase the percentage of
-same-service nodes in nodes' DHTs while maintaining future interoperability and
-decentralization. Additionally, we suggest strategies to bolster EGN's resilience
-against DHT pollution and partitioning attacks.
-This study challenges the commonly held assumption that a larger P2P net-
-work inherently translates to better data availability and security. A larger net-
-work does not guarantee improved data availability unless the data itselfin our
-case, nodes' routing informationbecomes more accessible. Similarly, a larger
-network dilutes attacker resources only if it maintains robust internal connec-
-
-4 Chenyu Li, Ren Zhang, and Xiaorui Gong
-tivity. When network size outpaces the ability of nodes to locate reliable and
-honest neighbors, it can become a vulnerability.
-2 Ethereum Global Network: a Hodgepodge
-We begin by outlining the technical details of the node discovery protocols. We
-then explore the formation and visionary goals of EGN itself.
-2.1 Discv4: Messages and Key Data Structures
-ENR.Ethereum Node Records (ENRs)are the basic data units propagated via
-Discv4. An ENR encapsulates the routing information of the node that gener-
-ates it. Key ENR entries include: (1)secp256k1, the compressed representation
-of the node's secp256k1 public key; (2)signature, a cryptographic signature of
-the record content, veriable withsecp256k1; (3)seq, a sequence number that
-increases when the node updates and republishes its record; (4)ip, the node's
-IPv4 address; (5)tcpand (6)udp, the ports for incoming TCP and UDP con-
-nections, respectively. EGN identies nodes using the hash of their public keys,
-known as thenode ID. An ENR does not reveal the node's service. An ENR
-is sometimes stored or processed as anenode, which is an alternative format
-representing the same information. We usenodeto denote the server, andpeer
-to denote the corresponding DHT entry.
-Message Types.Discv4 relies on two key pairs of request-reply messages.
-(1)Ping/Pong: this pair serves basicliveness checkreachability checks and
-latency measurement. The initiator sends aPingto check the recipient's live-
-ness, who responds with aPong. (2)FindNode(targetID)/Neighbors: this pair
-is used to discover nodes to construct the routing table. The initiator sends a
-FindNode(targetID)to request information about nodes whose IDs are closest to
-targetID; the recipient responds with aNeighborsmessage containing up to 16
-closest nodes from its DHT buckets (see the next paragraph). In most requests,
-targetIDis chosen randomly, as ID locality in EGN does not imply service or
-geographic proximity. Unsolicited replies (PongandNeighbors) are discarded to
-prevent nodes from manipulating their liveness or injecting batches of ENRs into
-other nodes' routing tables.
-DHT Buckets.The core of the DHT routing table is 17buckets, each can
-accommodate up to 16 peers' enodes. Peers in bucketi(1≤i≤16) share
-the same rst16−imost signicant bits with the local node in their IDs, with
-bucket 0 containing peers whose common prex exceeds 15 bits. Within a bucket,
-enodes are ordered from the latest liveness-checked one to the earliest. When the
-context is clear, we useDHTinstead of DHT routing table or DHT buckets.
-ENR Insertion and Deletion.When a new ENR is received, it is converted
-into an enode and inserted into its corresponding bucket as the latest one if
-space is available. Otherwise, it becomes areplacement peer, with a maximum
-of ten replacements stored per bucket. The oldest replacement peer is discarded
-
-Measuring and Attacking the Ethereum Global Network 5
-to make room for a new one when the limit is reached. Peers are removed from
-buckets only after they fail a liveness check. In such cases, the latest replacement
-peer (if any) is promoted to ll the vacancy.
-ThediscmixQueue.This queue determines the order in which the node at-
-tempts to initiate application-layer connections. The pushing and popping strat-
-egy ofdiscmixis discussed as Outgoing Connection Maintenance in Sec. 2.2.
-2.2 Discv4: Key W orkows
-Bootstrap.Upon rst launch, a node adds pre-conguredbootnodesinto its
-buckets, sendsPingto conrm their liveness, and sendsFindnodemessages to
-acquire an initial set of peers from them.
-Active DHT Maintenance.Throughout the node's lifetime, it continuously
-performs the following two tasks. (1)Liveness check: a random bucket is selected,
-and aPingmessage is sent to its oldest peer, i.e., the one that resides at the
-end. If the peer replies timely, it is considered alive and moved to the bucket's
-front as the latest. Otherwise, it is deleted, and the newest replacement peer is
-promoted. This process is repeated after a random period, usually within ten
-seconds. (2)Refresh: a random node is picked, which has not been queried via
-Findnodeby the current process, to receive aPingmessage, and if it responds
-timely, aFindnodeis sent to it. The replied ENRs are inserted as previously
-described. This process repeats immediately after receiving the reply.
-Passive DHT Maintenance.Receiving aPingmessage triggers the node to
-include the sender in its DHT. This, as we will explore, allows a malicious node
-to inltrate a victim's buckets, either directly or as a replacement peer. In the
-former case, the malicious node remains within a bucket as long as it survives
-liveness checks; in the latter case, the malicious node has an opportunity to enter
-a bucket when a bucket peer is evicted. This chance increases with frequentPing
-messages, ensuring it is often the latest replacement peer.
-Outgoing Connection Maintenance.This process activates when outgoing
-connection slots remain available. Upon reaching the dened limit (16 by de-
-fault), the process pauses. Whendiscmixis empty, all enodes from the 17 buck-
-ets are sorted by distance to a random target and added to the queue. All these
-peers who have not been queried by aFindnodemessage by the current thread
-are then sent aPingmessage and, if they respond timely, aFindnodemessage.
-The received ENRs update the local DHT.
-A separate thread continuously processes the queue, attempting to estab-
-lish outgoing connectionsdescribed nextwith each popped enode until all
-connection slots are lled.
-Application-Layer Handshake.This workow is dened in Discv4's broader
-protocol stack Devp2p. The handshake commences with two nodes negotiating a
-session key derived from each other's secp256k1 public keys. Upon successful key
-negotiation, they share their supported upper-layer protocols'protocolStrings.
-For instance, ETH68 signies the version of the Wire protocol, used for block
-
-6 Chenyu Li, Ren Zhang, and Xiaorui Gong
-and transaction synchronization, while SNAP denotes the Snapshot protocol,
-facilitating faster state retrieval compared to the former. As dierent services of-
-ten use the same protocol set for application-layer data exchange, service identi-
-cation via theprotocolStringset is not possible. If the nodes nd at least one com-
-monprotocolString, they proceed to exchange a four-tuple of theprotocolVersion,
-networkID,genesisHash, andforkIDto check whether they operate on the same
-service and the same chain. TheprotocolVersionis the version corresponding to
-protocolString. ThenetworkIDdistinguishes between dierent services and net-
-works. For example, thenetworkIDs of the ETH Mainnet and the BNB Smart
-Chain (BSC) Mainnet are 1 and 56, respectively. ThegenesisHashis the hash
-of the very rst block, i.e.,genesis block, in the chain. When a service family
-possesses multiple chains with the same network ID, their genesis blocks must
-dier. Finally, theforkIDpinpoints thehard forkthe node considers valid. A hard
-fork occurs when some participants adopt some new consensus rules opposed by
-others. This splits the blockchain nodes into two groups with distinctforkIDs.
-A successful handshake enables communication via upper-layer protocols,
-which maintain application-layer connections over TCP rather than the UDP-
-based node discovery protocol. Conversely, any mismatch in the four-tuple results
-in the handshake's termination with an error. Importantly, this error does not
-lead to the removal of the corresponding bucket entry.
-2.3 Discv5: Key Dierences
-Discv5 is intended to provide increased condentiality and improved node dis-
-covery eciency. It oers a number of enhancements compared to its prede-
-cessor. First, it encrypts communications. Second, a new liveness check data
-format enables nodes to detect whether a peer resides behind a Network Ad-
-dress Translator (NAT). Third,Findnodenow supports requests for peers at a
-specic distance from the receiver, facilitating targeted queries of specic buck-
-ets. Other messages, data structures, and the rst four workows remain largely
-unchanged from Discv4.
-Determining a node's service in Discv5 presents a greater challenge. The
-aforementioned handshake workow, which exchanges service information via
-the four-tuple, is embedded within the Devp2p protocol stack. However, Discv5
-integrates with another protocol stack Libp2p. Consequently, each Discv5 service
-denes its own handshake protocol, typically requiring a successful handshake
-with a client of the same service to ascertain a node's service. This case-by-case
-approach lacks scalability given the multitude of services.
-Although Discv5's design incorporates two mechanisms to facilitate ecient
-service identication, our investigation in Sec. 3.2 and experiments in Sec. 4.1
-reveals that no EGN clients currently implement these mechanisms: First, the
-enhanced exibility of the ENR format allows for the optional inclusion of service
-information. Second, a topic discovery mechanism enables nodes to broadcast
-an arbitrarytopicstring, conveying service information or other relevant data,
-across the network, thereby accelerating the discovery of same-service peers.
-
-Measuring and Attacking the Ethereum Global Network 7
-Consequently, the only straightforward approach to determine a node's ser-
-vice relies on an alternative mechanism within the Libp2p protocol stack. If
-set by the client developer, two stringsagentVersionandprotocolsare replied
-to each incoming connection attempt. These strings convey client information,
-enabling service identication. However, no current clients leverage this infor-
-mation to accelerate same-service node discovery.
-2.4 EGN: Emergence
-Standing apart in the realm of P2P networks, EGN accommodates a remark-
-able range of hundreds of diverse services. This unique phenomenon naturally
-piques our curiosity about the protocol designers' motivations and the process
-of service integration. While reconstructing the exact thought process behind
-EGN's emergence is impossible, we can examine some key design choices that
-likely facilitated its development.
-Discv4's Design F oreshadowed Expansion.The Discv4 protocol's use of
-three identiers (networkID,genesisHash, andforkID) for service-chain identica-
-tion appears unnecessary for Ethereum's mainnet and testnets. This inclusion of
-networkIDsuggests the designers' foresight for a multi-service network from the
-outset.
-Leveraging Geth's F oundation.Forking Geth, the ocial Ethereum client,
-is a common practice for new blockchain projects due to its comprehensive func-
-tionality and security advantages. Specically, Geth oers a complete suite of
-modules, including consensus protocol, smart contract support, and P2P net-
-work organization. Forking allows developers to focus on their core innovation
-while inheriting established functionalities. Moreover, as a battle-tested client,
-Geth provides a solid security baseline; future security improvements can also
-be adopted by merging Geth updates.
-Early Projects' Choice and the Network Eect.Early and inuential
-projects like BSC and Gnosis chose to join EGN with separatenetworkIDs and
-genesisHashes, rather than creating their own P2P networks. This established
-EGN as the default choice for new Geth-based services, strengthening its domi-
-nance in the landscape.
-2.5 EGN: Potential Benets
-EGN's open and inclusive nature has been widely embraced by the blockchain
-community. This is evident in the numerous academic studies [8, 9, 14, 15, 2022]
-and technical articles [1, 3, 6] introducing and measuring the ourishing ecosys-
-tem. While most research accepts EGN's hospitality as a given, we examine its
-potential implications. We tentatively explore these potential benets through a
-two-step approach. First, we scrutinize the existing literature and discuss with
-experienced developers to compile a comprehensive list of seemingly advanta-
-geous aspects. Second, we critically analyze these benets and identify two key
-areas for further technical investigation: eciency and security.
-
-8 Chenyu Li, Ren Zhang, and Xiaorui Gong
-Listing the Potential Benets.Complementing the existing literature, we
-discuss with experienced developers to compile a comprehensive list of seemingly
-advantageous aspects of the phenomenon.
-1.Maximized Code Reuse.Most EGN services leverage Geth's P2P module
-as their foundation, reducing development complexity. Joining EGN further
-amplies this benet by allowing nearly identical network components with
-those of Geth, requiring only adjustments to service-chain identiers and,
-optionally, bootnodes.
-2.Reduced Deployment Cost.Smaller services can piggyback on the bootnodes
-of larger ones, saving resources on maintaining their own P2P infrastructure.
-3.Higher Node Discovery Eciency.Introduced as Eciency in Sec. 1, a
-larger network may accelerate node discovery. Specically, [24] indicates that
-gossiping ENRs across services, rather than partitioning the network by ser-
-vices, could decrease the latency of establishing connections.
-4.Better Attack Resilience.Introduced as Security in Sec. 1, a larger network
-dilutes the attacker's damage. Specically, Michaª et al. mentioned in [16]
-that the blended architecture oers good resilience to malicious behaviors.
-5.Potential for Interoperability.Sharing a common overlay network lays the
-groundwork for future interoperability between services, potentially fostering
-collaboration and innovation within the ecosystem.
-Initial Analysis.We critically analyze these benets and identify two key areas
-worthy of further technical investigation. While code reuse (item 1 above) of-
-fers convenience for developers, it is primarily an internal benet with no direct
-external impact. Piggybacking bootnodes (2) oers a clear economic advantage
-for smaller services, but comes with high security costs. The smaller services
-are susceptible to censorship attacks, and these bootnodes become more attrac-
-tive targets for attackers. While the shared overlay network opens doors for
-future interoperability (5), this remains speculative without concrete plans or
-implementation eorts, rendering it infeasible to evaluate its potential impact.
-Therefore, we prioritize further technical investigation into EGN's eciency (3)
-and security (4).
-3 Measuring EGN
-While prior measurement studies on EGN exist [8,9,14,15,2022], we nd it nec-
-essary to conduct a new one for two reasons. First, existing results are outdated.
-As of 2025, the most recent measurement is over three years old, and the only
-study involving EGN's service distribution (by Kim et al. in 2018 [15]) predates
-the launch of most current services. Second, these studies lack an analysis of the
-composition of nodes' DHTs, which is indispensable for our investigation. Our
-measured data are used to simulate our attacks in Sec. 5.
-
-Measuring and Attacking the Ethereum Global Network 9
-3.1 Crawler Setup and Deployment
-This study uses Nebula [26], a state-of-the-art crawler previously employed in
-research such as [27]. The crawler was deployed on a US-based commercial VPS
-equipped with a 32-core CPU, 128 GB of RAM, and 4 TB of NVMe SSD storage.
-Each crawling iteration was limited to a duration of thirty minutes. Extending
-this duration would not yield a more accurate snapshot, as the rate of newly
-discovered nodes diminishes to approximately one per second, which is indicative
-of typical network churn. The crawling process was conducted between December
-12th and 27th, 2024, resulting in 720 snapshots.
-In each iteration, the crawler simultaneously collected information from both
-Discv4 and Discv5 networks. Each discovered Discv4 node was queried with
-15Findnodemessages, each targeting a randomly selected targetID as bucket-
-specic queries are not supported. Meanwhile, each discovered Discv5 node was
-queried with 17Findnodemessages, each targeting a specic bucket. The crawler
-recorded the DHTs of all discovered nodes for subsequent analysis. Newly dis-
-covered peers underwent a liveness check, and upon successful verication, were
-added to the processing queue. For each node, the crawler attempted to initiate
-a handshake and recorded the extracted four-tuple,agentVersionandprotocols
-strings, or any error messages.
-3.2 Network Scale, Service and Node Uptime Distribution
-Network Scale.The Discv4 network size uctuated between94 180and113 524,
-averaging103 432nodes. This represents a threefold increase from33 000mea-
-sured between February and March, 2022 [8]. The Discv5 network size uc-
-tuated between208 268and238 219, averaging223 132nodes. Approximately
-8,000 nodes in each snapshot operated both Discv4 and Discv5 protocols using
-the same public key. We further analyze the distribution of unique identiers.
-We observe2 047 673unique public keys and197 449unique IP addresses.
-Node Uptime Distribution.We observe that32 804Discv4 nodes and162 286
-Discv5 nodes remained active throughout the measurement period, while1 274 461
-Discv4 nodes and99 687 031Discv5 nodes were only active for a single snapshot.
-Not surprisingly, the uptime patterns exhibit consistency across dierent services
-in Discv4, suggesting a general trend rather than service-specic behavior.
-Observation 1.Over two-thirds of active Discv5 nodes in any given snapshot
-remain online consistently throughout our measurement period.
-Investigating the Source Code of Discv5 Clients.Despite the inclusion of
-service information in Discv5's updated ENR format and topic discovery mecha-
-nism, we do not observe any ENRs containing this information. This leads us to
-investigate the implementation status of these claimed updates. We examine the
-source code of: (1) all veEthereum execution clients(Geth, Nethermind, Besu,
-Erigon, and Reth), which propagate transactions and blocks; (2) all sixEthereum
-consensus clients(Prysm, Lighthouse, Teku, Nimbus, Lodestar, and Grandine),
-which participate in the consensus protocol; and (3) three other popular Discv5
-
-10 Chenyu Li, Ren Zhang, and Xiaorui Gong
-clients providing theagentVersionorprotocolsstring (Optimism, SSV-Base, and
-Base). Our analysis reveals that none of these clients incorporate service informa-
-tion in their ENRs or implement the topic discovery mechanism. To the best of
-our knowledge, most other clients are forked from those we inspected. Therefore,
-we believe these updates are not implemented in any Discv5 client. Furthermore,
-considering that over a year has passed since Discv5's initial deployment, we are
-skeptical about the imminent implementation of these updates.
-Observation 2.As of January 2025, no Discv5 client has implemented any
-mechanism to prioritize same-service node discovery and connection.
-Service Distribution.We analyzed the distribution of7 134services across
-nodes identied by unique public keys, which serve as persistent identiers
-in EGN. In Discv4, two nodes provide the same service if they share identi-
-calprotocolVersion,networkID,genesisHash, andforkID. As detailed in Sec. 2.3,
-Discv5 does not provide a universal mechanism for determining a node's service.
-We thus extract client information using theagentVersionandprotocolsstrings.
-The service distribution remains relatively stable across snapshots. We present
-the results from December 17, 2024, at 8:12 UTC, which has the highest num-
-ber of Discv4 nodes. Of the113 524active Discv4 nodes,73 279refused our
-handshake requests, primarily due to no available connection slots. Figure 1a
-illustrates the distribution of the remaining39 795responsive nodes across dif-
-ferent services. The mapping between public keys and services is consistent: no
-public key was associated with multiple services. The most prevalent services are
-displayed in Table 1. ETH Mainnet is the only service among the ten most preva-
-lent services in 2018 [15] that persists in 2024, albeit with a declining dominance
-from 54% in 2018 to 31%. Of the215 202active Discv5 nodes,197 160provide
-no service informationtheiragentVersionorprotocolsstrings are empty, and
-they refused our handshake. Figure 1b illustrates the client distribution of the
-remaining18 042nodes. The most popular clients (Table 2) include Ethereum
-consensus and execution clients, and clients of other services, such as Optimism,
-SSV-Node, and Base. Discv4 and Discv5 networks share8 047public keys, en-
-compassing both Ethereum forks and some other services, such as LUKSO and
-Taiko.
-3.3 Service Distribution in the Nodes' DHT s
-We investigate the composition of Discv4 nodes' DHT buckets, focusing on the
-proportion of peers oering the same service. Using the December 17, 2024 snap-
-shot, we remove the73 279nodes with unknown services from all nodes' routing
-tables and analyze the remaining39 795nodes' presence in each other's routing
-tables. Due to the lack of service information in Discv5, a similar analysis is not
-feasible. Nevertheless, Observation 2 suggests that Discv5 would not perform
-better than Discv4 in this regard.
-Public Nodes.Table 3 presents the results for services of varying popularity.
-The percentage of same-service peers is low, even for the top two services (less
-than 20%). This proportion further decreases to below 5% for all other services.
-
-Measuring and Attacking the Ethereum Global Network 11
-ETH Mainnet#9f3d
-Polygon#f097
-Story Odyssey T estnet#cef5 ETH Mainnet#be46
-102125#9c42 BSC Mainnet#60ad
-ETH Holesky#9b19
-Xdai#1384
-(a) Service distribution of39 795Discv4 nodes. The
-fth largest service 102125 lacks public information.
-Optimism
-Lighthouse
-Prysm
-T eku
-SSV-Node Geth
-Nimbus
-(b) Client distribution of
-18 042Discv5 nodes.
-Fig. 1: EGN on December 17, 2024, at 8:12 UTC. In each gure, the service's
-area is proportional to its node count. Around 65% of Discv4 nodes and 91% of
-Discv5 nodes have no service/client information.
-Table 1: Top 10 Discv4 services.
-Service Fork ID Node Count
-ETH Mainnet 9f3d 12404
-Polygon f097 4947
-Story Odyssey Testnet cef5 3179
-ETH Mainnet be46 2970
-102125 9c42 2219
-BSC Mainnet 60ad 1934
-ETH Holesky 9b19 1554
-Xdai 1384 1033
-Syscoin 10d4 702
-ETH Sepolia 88cf 643
-ETH Mainnet#be46 is an older fork
-of the Ethereum blockchain; 102125
-corresponds to an unidentied service.
-Table 2: Top 10 Discv5 clients.
-Client Node Count
-optimism 8092
-Lighthouse 4313
-Prysm 1679
-teku 1549
-SSV-Node 869
-nimbus 549
-base 521
-lodestar 236
-conduit 85
-rust-libp2p 53
-Bootnodes.Bootnodes play a crucial role in a service by serving as entry points
-for all new nodes. Nodes within a bootnode's DHT are more likely to be con-
-nected to by newly-joined nodes. As shown in Table 3, bootnodes also exhibit a
-low percentage of same-service peers.
-Observation 3.The majority of Discv4 public nodes (52.9%) have less than 5%
-of same-service peers in their DHTs; the investigated bootnodes do not prioritize
-same-service peers in their DHTs.
-
-12 Chenyu Li, Ren Zhang, and Xiaorui Gong
-Table 3: A verage proportion of same-service peers in the nodes' DHTs. The
-number preceding the service name is the service prevalence ranking in EGN.
-rank. service % nodes % same-service peers
-in public nodes
-% same-service peers
-in bootnodes
-1. ETH Mainnet31.18% 18.36% 33.91%
-2. Polygon12.43% 17.59% 19.60%
-6. BSC Mainnet4.69% 3.52% 10.30%
-7. ETH Holesky3.91% 2.94% 2.43%
-10. ETH Sepolia1.61% 1.73% 0.59%
-43. KCC Mainnet0.04% 4.19% 1.70%
-4 Eciency Evaluation
-We now investigate whether sharing a single overlay network improves EGN's
-node discovery eciency. We evaluate this by measuring the communication
-overhead associated with establishing outgoing connections. We then compare
-these costs to the estimated overhead incurred if each service maintained its own
-separate overlay. We do not consider any adversarial behavior in this section.
-4.1 Node Discovery Eciency in EGN
-Experimental Setup.We focus on establishing a predetermined number of
-outgoing connections. Intuitively, popular services nd same-service neighbors
-more easily. To ensure a comprehensive evaluation, we select six services with
-varying prevalence rankings: ETH Mainnet (1st), Polygon (2nd), BSC Mainnet
-(6th), ETH Holesky (7th), ETH Sepolia (10th), and KCC Mainnet (43th).
-For each service, we modify its ocial client to log allFindnodemessages and
-handshake requests. Additionally, we log the type of error encountered in case
-a handshake fails. The number of sent messages directly translates to communi-
-cation costs, reecting both bandwidth consumption and processing time.
-Each client is deployed as a public node with server congurations identi-
-cal to those of our crawler. The execution terminates upon reaching either the
-predened outgoing connection limit (66 for BSC Mainnet and Polygon, and 16
-for other services) or a twelve-hour timeout. Data collection was conducted in
-January 2025.
-Results.Each client was tested three times to mitigate potential diurnal vari-
-ations, and we report the results of the execution with the median number of
-established connections in Table 4. The number ofFindnodemessages and hand-
-shake requests exhibited consistent order-of-magnitude across executions, with
-a maximum variation of 47%.
-In Discv4, all involved services established outgoing connections slowly and
-costly. None of the clients achieved the target number of outgoing connections
-
-Measuring and Attacking the Ethereum Global Network 13
-Table 4: Communication costs and eectiveness of node discovery in Discv4 (the
-rst ve lines) and Discv5 (the last three lines).
-rank. service neighbors
-(out+in) Findnodehandshake TCP
-error
-enc.
-error
-mismatched
-protocolStr.
-wrong
-service
-no
-slot
-1. ETH Mainnet15 + 25 1367077 191571 1809 4881 449 82118 821
-2. Polygon Mainnet64 + 129 1954232 245912 18382 44337 8148 151427 21921
-6. BSC Mainnet62 + 74 2120671 332135 14156 16013 2 163477 16477
-7. ETH Holesky6 + 17 1462161 189323 38953 79541 2376 83471 3511
-10. ETH Sepolia11 + 19 1412537 202533 21916 39143 16 96113 5051
-43. KCC Mainnet6 + 5 1319616 275446 24997 49669 4 146477 16477
-v5. ETH Mainnet0 + 3 1182935 191929 14174 323 525 71142 113
-v5. ETH Holesky0 + 0 1151383 192635 10551 31211 1908 93170 903
-v5. ETH Sepolia0 + 1 1102496 193127 19676 477 237 92115 2017
-Neighbors: outgoing and incoming connections upon termination after 12 hours;
-Findnode and handshake: numbers of Findnode messages and handshake requests
-initiated by our node; the rightmost ve columns are ve types of handshake failures:
-TCP connection error, session key negotiation error, mismatchedprotocolString, wrong
-service, and no incoming connection slot.
-within 12 hours. The three most prevalent services' clients nearly reach the target
-number of outgoing connections, while other services fall far short. The number
-ofFindnodemessages per successful connection ranged from30 535(Polygon)
-to243 694(ETH Holesky), and the handshake success rate varied from1/3842
-(Polygon) to1/45908(KCC Mainnet). In contrast, we estimate the handshake
-success rate in the Bitcoin network to be1/4. The reasoning behind this estimate
-is founded on [7] and is explained in Appendix A.
-In Discv5, our ETH execution clients failed to establish any outgoing con-
-nections within 12 hours. This can be attributed to the presence of a substantial
-number of consistently online nodes (Observation 1). These nodes, likely consen-
-sus nodes of Ethereum and other proof-of-stake blockchains, occupy a signicant
-portion of all Discv5 nodes' DHTs and persistently reject handshake requests.
-Observation 4.In Discv5, the two-thirds consistently online nodes occupy 81%
-of the nodes' DHTs, degrading the node discovery eciency for other services.
-4.2 Node Discovery Eciency in Dedicated Networks
-We analyze potential eciency gains from service-specic overlay networks using
-two approaches. First, we establish a lower bound by excluding three types of
-handshake failures clearly targeting wrong services andFindnodemessages sent
-to other services. Appendix B provides a detailed explanation of these ve error
-types. This results in 45.6% (ETH Mainnet) to 87.3% (ETH Holesky) eciency
-gains in both bandwidth and execution time across all services. This approach
-underestimates the true benets. Our next analysis suggests a large portion of
-
-14 Chenyu Li, Ren Zhang, and Xiaorui Gong
-miscellaneous failuresthose not listed in the tableare likely due to EGN's
-blended architecture.
-Our second approach, based on statistics of incoming handshake requests,
-bypasses this limitation and thus provides a more accurate estimate. As shown
-in Table 4, handshake failures due to TCP connection error and no incoming
-connection slot range from 1.3% (ETH Mainchain) to 22.4% (ETH Holesky).
-This implies that all other handshake attempts, including the aforementioned
-miscellaneous failures, arenormal: they reach their intended targets and, if the
-target is of the same service, nd available slots. Our incoming handshake re-
-quests are a random sample of these normal attempts. During our ETH Main-
-net client executions, before its incoming slots were full, only 1.83% of these
-requests resulted in successful connections. This data suggests that between
-(1−22.4%)×98.17% = 76.2%and(1−1.3%)×98.17% = 96.9%of all handshake
-attempts ultimately targeted a dierent service.
-Observation 5.In EGN, over three-quarters of handshake requests are directed
-towards nodes of other services.
-5 Security Evaluation
-To assess the security benets oered by EGN, we evaluate its resilience against
-a common P2P network threat: the DHT pollution attack. Since a robust DHT
-is the rst line of defense against many network- and application-layer attacks,
-compromising EGN's resistance to this foundational attack would indicate a
-broader vulnerability. In other words, if EGN is more vulnerable to this weakest
-attack than dedicated overlay networks, we can conclude that EGN downgrades
-the attack resistance to all network-layer attacks.
-Our approach diers from prior Ethereum network attacks in two key as-
-pects. First, we focus on displacing honest peers in the nodes' DHT routing
-tables, contrasting with previous works that targeted application-layer connec-
-tions. In fact, prior studies assume homogeneous routing tables populated exclu-
-sively by same-service peers before being attacked. Second, unlike prior studies
-that exploit protocol or implementation aws, our attack leverages the inher-
-ent characteristic of EGN's shared overlay. The attack becomes ineective when
-each service uses a dedicated overlay network.
-5.1 EGN Pollution Attack
-Threat Model.Our resource-constrained attacker controls a few hundred IP
-addresses, representing a small fraction (less than 0.3%) of the network. These
-resources are insucient for a Sybil attack. A single server can manage their
-message trac due to the low bandwidth and computational requirements of
-our attack. We still refer to these controlled entities asattacker nodesfor clarity.
-Our attacker operates independently of any service-specic logic and exploits
-no protocol or implementation aws. All honest nodes function as intended,
-
-Measuring and Attacking the Ethereum Global Network 15
-following the DHT maintenance workows described in Sec. 2.2. Notably, our
-attack remains eective even though previously identied DHT vulnerabilities [8,
-1113] are already addressed.
-Attacker's Goal.The attacker aims to pollute the DHT buckets of EGN nodes
-with the attacker nodes' ENRs. This manipulation further lowers the success rate
-of application-layer handshakes. In the most extreme case, a group of nodes have
-no honest peer from the rest of the network in their DHTs, forming a partition.
-Complete isolation is more challenging than removing all same-service peers.
-We consider a partition attempt unsuccessful if even one node within the group
-has an active and honest public peer outside the group in its DHT. This is
-because before the node initiates a handshake to the peer, it would, with high
-probability, send aFindnodemessage to the peer, which may reply to the node
-with some same-service peers, breaking the partition. Additionally, newly joining
-nodes with peers in both the isolated group and the broader network can bridge
-the partition. Therefore, a group of nodes is partitioned only if the union of their
-DHTs includes only inactive peers, attacker nodes, and other nodes of the group.
-We highlight two capability limitations caused by our weak threat model.
-First, the attacker cannot remove long-term active honest peers from nodes'
-DHTs. These peers undergo liveness checks before eviction (ENR Insertion and
-Deletion in Sec. 2.1), ensuring their persistence within the DHT. As long as a
-node retains some long-term peers, it cannot be completely isolated unless all
-such peers are in the same partition. Second, partitioned nodes may continue
-to receive new blocks and transactions until their existing TCP connections
-terminate. A public node could be partitioned in our denition but still maintain
-synchronization through an application-layer connection traversing a NAT.
-Attack Strategy .Our attack leverages two components: a crawler and a pol-
-luter. The crawler, as described in Sec. 3.1, continuously scans the network to
-maintain an up-to-date list of active nodes and their DHTs. The polluter, run-
-ning on each attacker node, sendsPingmessage every second to all discovered
-active nodes. This interval is shorter than the liveness check's ten-second inter-
-val, granting attacker nodes an advantage over honest ones. Due to the Passive
-DHT Maintenance mechanism (Sec. 2.2), these messages insert the attacker
-node's ENR either in the target node's corresponding DHT bucket, or in the
-latest replacement slot. In the latter case, it would be promoted into the DHT
-bucket as long as a peer in the bucket fails the liveness check. To avoid being
-evicted, attacker nodes always respond promptly toPingmessages. Addition-
-ally, they reply to allFindnoderequests withNeighborsmessages containing only
-attacker node ENRs, passively propagating them throughout the network.
-Cost Estimation.The primary cost lies in the infrastructure: each attacker
-node involves one IP address, no more than 1 GB of memory, and minimum
-bandwidth. These requirements are modest: the Standard DS1 v2 instance of
-Microsoft Azure can fulll these needs, costing around 50 USD per node per
-month [29]. Therefore, for a deployment of up to 300 attacker nodes, the esti-
-mated monthly cost of continuously attacking EGN remains under15 000USD.
-
-16 Chenyu Li, Ren Zhang, and Xiaorui Gong
-0 50 100 150 200 250 300
-# attacker nodes
-0.0
-5.0
-10.0
-15.0
-20.0
-25.0
-30.0
-35.0
-40.0% same-service peers
-ETH Mainnet
-BSC
-Polygon
-KCC
-Sepolia
-Holesky
-Fig. 2: Percentage of same-service
-peers in nodes' DHTs in EGN.
-0 50 100 150 200 250 300
-# attacker nodes
-20.0
-40.0
-60.0
-80.0
-100.0% same-service peers
-ETH Mainnet
-BSC
-Polygon
-KCC
-Sepolia
-Holesky
-Fig. 3: Percentage of same-service
-peers in nodes' DHTs in dedicated
-networks
-0 50 100 150 200 250 300
-# attacker nodes
-0.0
-5.0
-10.0
-15.0
-20.0% successful handshakes
-ETH Mainnet
-BSC
-Polygon
-KCC
-Sepolia
-Holesky
-Fig. 4: Handshake success rate in
-EGN.
-0 50 100 150 200 250 300
-# attacker nodes
-10.0
-20.0
-30.0
-40.0
-50.0
-60.0
-70.0% successful handshakes
-ETH Mainnet
-BSC
-Polygon
-KCC
-Sepolia
-Holesky
-Fig. 5: Handshake success rate in
-dedicated networks.
-Simulation Environment.To avoid disrupting real-world services, we evalu-
-ate the attack in a simulated environment (detailed in Appendix C). We reuse
-Geth's source code where possible and faithfully implement its network com-
-munication to overcome our resource limitations. Network characteristics are
-derived from our measurements in Sec. 3.2 and 3.3. We experimentally verify
-that our simulated environment accurately models EGN's dynamics. We use the
-service distribution of Discv4 as such information is not available in Discv5. For
-comparison, we also simulate a dedicated networks setting.
-5.2 Same-Service Peers in DHT s and Handshake Success Rates
-Impact on DHT s.We simulate one to 330 attacker nodes; each data point is
-averaged over ten runs. Figure 2 reveals a substantial decrease in the average
-percentage of same-service peers within nodes' DHTs across six services. Despite
-the attack's simplicity, the percentage plummets to near or below 1% for four
-services with 300 attacker nodes. ETH Mainnet and Polygon benet from larger
-pools of long-term same-service nodes. EGN's vulnerability stems from its high
-percentage of dierent-service peers before the attack. Our attack exacerbates
-the issue by removing all temporarily inactive peerssame or dierent service.
-Figure 3 demonstrates the contrasting behavior in dedicated networks. Here,
-the percentage of same-service peers remains consistently above 48% for ve
-services. This resilience stems from a more favorable initial statenodes only
-
-Measuring and Attacking the Ethereum Global Network 17
-Table 5: Network partitions with 300 attacker nodes.
-EGN dedicated networks
-rank. service # connected
-components
-#, % partitioned
-nodes
-# connected
-components
-# , % partitioned
-nodes
-1. ETH Mainnet 7.04124,33.35%5.3155,1.26%
-2. Polygon 7.21389,28.15%5.349,0.99%
-6. BSC Mainnet 7.6616,33.05%5.018,0.97%
-7. ETH Holesky 7.2576,37.20%5.015,0.96%
-10. ETH Sepolia 7.1147,23.09%5.26,0.93%
-43. KCC Mainnet 5.39,21.20%5.011,25.50%
-have same-service peers in their DHTs; they will not be washed out as long as
-they remain active. KCC Mainnet exhibits lower performance15% with 300
-attacker nodesdue to its smaller public node count.
-Impact on Handshake Success Rates.For four out of six services, the success
-rates in EGN rapidly decline to below 1% (Fig. 4). These success rates are higher
-than in Sec. 4.1, probably because real-world Discv4 DHTs also containprivate
-nodesthose behind rewalls or NATsthat are inaccessible.
-Dedicated networks exhibit higher success rates. A decreasing trend is ex-
-pected as public nodes cannot distinguish attacker nodes before initiating hand-
-shakes. Naturally, more attacker nodes lead to lower success rates; yet still above
-30% for ve services. KCC Mainnet performs the worst8% with 300 attacker
-nodesdue to its small node pool.
-5.3 Network Partitioning
-We now analyze the attack's most severe consequence: network partitioning.
-We run ten simulations with 300 attacker nodes in each. Table 5 displays the
-average number and size of the partitions. EGN experiences severe partition-
-ing, with 21% to 33% of nodes partitioned for each service. In contrast, few
-nodes are partitioned in dedicated networks. Our analysis reveals two key rea-
-sons for their resilience. (1)More application-layer connections:nodes maintain
-more connections due to their high handshake success rates. These connections
-result in the corresponding nodes' ENRs entering the DHTs through Passive
-DHT Maintenance. (2)Bootnode coverage:dedicated networks, being smaller,
-allow bootnode DHTs to cover a larger portion of honest nodes. When parti-
-tioned, newly joined nodes and active nodes reconnecting to the bootnodes have
-a higher chance of bridging the gaps. In contrast, EGN's bootnodes cover a
-smaller fraction, leaving newly joined nodes with no way to rejoin partitions if
-bootnode DHTs only contained peers from the same connected component.
-Observation 6.The scarcity of same-service peers in EGN nodes' DHTs com-
-promises its robustness against DHT pollution attacks.
-
-18 Chenyu Li, Ren Zhang, and Xiaorui Gong
-6 Fixing EGN
-Service-Specic DHT.EGN's low node discovery eciency and vulnerability
-to pollution attacks stem from its blended architecture, where nodes store peers
-from various services in their limited DHT buckets. This can be addressed by
-extending the ENR format to include all supported services of the node, in line
-with Discv5's original design. We believe the service information should not be
-optional. This approach oers two advantages. (1) Eciency: other nodes can
-discover a node's services without direct interaction. (2) Potential interoperabil-
-ity: nodes can still receive ENRs of dierent services, preserving the potential for
-interaction. Each service can then decide how to manage its DHTsstoring only
-same-service peers or accommodating specic other servicespotentially with a
-separate routing table as suggested in [16]. This allows EGN to enjoy higher node
-discovery eciency and stronger security without sacricing decentralization.
-Reliable Bootnodes.Our simulations also highlight the crucial role of bootn-
-odes as a last defense against network partitioning. However, as shown in Ta-
-ble 3, most services have bootnodes covering only a small fraction of their public
-nodes. If a partition includes no nodes represented in the bootnode DHTs, net-
-work recovery becomes highly improbable. Therefore, we recommend that most
-services: (1) increase the number and reliability of their bootnodes, and (2) con-
-gure bootnodes to prioritize storing same-service nodes and increase the size of
-their routing tables.
-7 Related Works
-Design.In a parallel study, DISC-NG was proposed to address the ineciencies
-of Discv5 [16]. While the authors recognized EGN's low node discovery e-
-ciency as a problem, they did not identify the underlying cause. Our research
-reveals that EGN's blended architecture is the root of this issue. Furthermore, we
-demonstrate that this architecture also compromises EGN's security, and quan-
-titatively analyze its negative impact on both security and eciency through
-comparisons with dedicated networks. These analyses are not present in [16].
-Security .Prior security research primarily focuses on individual services within
-the network. These studies measure a service's resilience against Sybil attacks [8],
-network partitioning [13], eclipse attacks [11,12], and Denial-of-Service attacks [25].
-Notably, all these studies assume a specic scenario where honest nodes' DHTs
-(if used) contain only same-service nodes and attacker nodes. None of them has
-examined the security of the EGN ecosystem as we do.
-Measurement.Existing measurements focus on EGN's node statistics [8,15,20],
-protocol messages [14], and topology [18, 21]. None of these studies explore the
-individual DHT composition as we do.
-Remark.We contacted the Ethereum Foundation via their ocial support email
-address several months ago, but have not yet received a response. We have
-recently included the Discv5 measurement data and plan to contact them again.
-
-Measuring and Attacking the Ethereum Global Network 19
-8 Conclusion
-Since its inception in 2015, EGN's blended architecture has aimed to provide
-a place for everyone, where all services, encompassing over 500 billion USD
-in market capitalization, share a single overlay network. This architecture has
-been largely unchallenged, and some consider it benecial for node discovery
-and attack resistance. However, our research reveals no measurable advantages
-to this approach. Compared to dedicated overlay networks, services within EGN
-experience: (1) a 50% to 99% increase in bandwidth waste during node discovery
-due to irrelevant service entries, and (2) increased susceptibility to DHT pollu-
-tion attacks and network partitioning, which leaves them vulnerable to further
-exploitation. These drawbacks are particularly detrimental to small services,
-whose nodes nowadays only connect to their services' ocial bootnodes and
-servers. Consequently, these bootnodes and servers become single points of fail-
-ure, easily compromised by inexpensive attacks. In essence, the node discovery
-protocol wastes signicant bandwidth without achieving its intended purpose.
-We urge the community to adopt a preference for organizing as everyone in its
-place, that is, to prioritize same-service peers in node DHTs, especially those
-of bootnodes, which contribute more to network security than previously recog-
-nized.
-References
-1. Networks | ethereum.org (2023), https://ethereum.org/en/developers/docs/
-networks/
-2. Cryptocurrency Market Capitalizations (2025), https://coinmarketcap.com/
-3. Bouguera, A.: Ethereum Underlying P2P network (2020), https://www.youtube.
-com/watch?v=Bwtjvmjtyjg
-4. Buterin, V.: Ethereum: A next-generation smart contract and decentralized appli-
-cation platform (2014), https://github.com/ethereum/wiki/wiki/White-Paper
-5. Chen, T., Li, Z., Zhu, Y., Chen, J., Luo, X., Lui, J.C.S., Lin, X., Zhang, X.:
-Understanding Ethereum via graph analysis. ACM Trans. Internet Technol.20(2)
-(April 2020)
-6. Dean: From Kademlia to Discv5 (2020), https://vac.dev/rlog/kademlia-to-discv5/
-7. Donet, J.A.D., Pérez-Solà, C., Herrera-Joancomartí, J.: The Bitcoin P2P network.
-In: Financial Cryptography and Data Security - FC 2014 Workshops, BITCOIN.
-Lecture Notes in Computer Science, vol. 8438, pp. 87102. Springer (2014)
-8. Eisenbarth, J.P., Cholez, T., Perrin, O.: Ethereum's peer-to-peer Network Monitor-
-ing and Sybil Attack Prevention. In: Journal of Network and Systems Management
-(2022)
-9. Gao, Y., Shi, J., Wang, X., Tan, Q., Zhao, C., Yin, Z.: Topology Measurement and
-Analysis on Ethereum P2P Network. In: 2019 IEEE Symposium on Computers
-and Communications (ISCC) (2019)
-10. Guo, D., Dong, J., Wang, K.: Graph structure and statistical properties of
-Ethereum transaction relationships. Information Sciences492, 5871 (2019)
-11. Heilman, E., Kendler, A., Zohar, A., Goldberg, S.: Eclipse Attacks on Bitcoin's
-Peer-to-Peer Network. In: SEC'15: Proceedings of the 24th USENIX Conference
-on Security Symposium (2015)
-
-20 Chenyu Li, Ren Zhang, and Xiaorui Gong
-12. Henningsen, S., Teunis, D., Florian, M., Scheuermann, B.: Eclipsing Ethereum
-Peers with False Friends. In: 2019 IEEE European Symposium on Security and
-Privacy Workshops (EuroS&PW) (2019)
-13. Heo, H., Woo, S., Yoon, T., Kang, M.S., Shin, S.: Partitioning Ethereum without
-Eclipsing it. In: Network and Distributed System Security (NDSS) Symposium
-(2023)
-14. Kier, L., Salman, A., Levin, D., Mislove, A., Nita-Rotaru, C.: Under the Hood
-of the Ethereum Gossip Protocol. In: Financial Cryptography and Data Security:
-25th International Conference, FC 2021 (2021)
-15. Kim, S.K., Ma, Z., Murali, S., Mason, J., Miller, A., Bailey, M.D.: Measuring
-Ethereum Network Peers. In: IMC '18: Proceedings of the Internet Measurement
-Conference 2018 (2018)
-16. Król, M., Ascigil, O., Rene, S., Sonnino, A., Pigaglio, M., Sadre, R., Lange, F.,
-Rivière, E.: DISC-NG: robust service discovery in the Ethereum global network.
-In: 9th IEEE European Symposium on Security and Privacy, EuroS&P 2024. pp.
-193215. IEEE (2024)
-17. Lee, X.T., Khan, A., Sen Gupta, S., Ong, Y.H., Liu, X.: Measurements, analyses,
-and insights on the entire Ethereum blockchain network. In: Proceedings of The
-Web Conference 2020. WWW '20, ACM (2020)
-18. Li, K., Tang, Y., Chen, J., Wang, Y., Liu, X.: Toposhot: Uncovering Ethereum's
-Network Topology Leveraging Replacement Transactions. In: IMC '21: Proceedings
-of the 21st ACM Internet Measurement Conference (2021)
-19. Li, Z., Xia, W., Cui, M., Fu, P., Gou, G., Xiong, G.: Mining the Characteristics
-of the Ethereum P2P Network. In: Proceedings of the 2nd ACM International
-Symposium on Blockchain and Secure Critical Infrastructure (2020)
-20. Maeng, S.H., Essaid, M., Ju, H.T.: Analysis of Ethereum Network Properties and
-Behavior of Inuential Nodes. In: 2020 21st Asia-Pacic Network Operations and
-Management Symposium (APNOMS) (2020)
-21. Maeng, S.H., Essaid, M., Lee, C., Park, S., Ju, H.t.: Visualization of Ethereum
-P2P network topology and peer properties. In: International Journal of Network
-Management 2021 (2021)
-22. Maeng, S.H., Essaid, M., Park, S., Ju, H.T.: Discovery of Ethereum Topology
-Through Active Probing approach. In: 2021 22nd Asia-Pacic Network Operations
-and Management Symposium (APNOMS) (2021)
-23. Maymounkov, P., Mazieres, D.: Kademlia: A peer-to-peer information system based
-on the XOR metric. In: International Workshop on Peer-to-Peer Systems. pp. 53
-65. Springer (2002)
-24. nkeywal: Gossipping ENR protocol (2019), https://github.com/ConsenSys/
-wittgenstein/issues/35
-25. Taverna, M., G. Paterson, K.: Practical Attacks on Go Ethereum Synchronising
-Nodes. In: SEC'23: Proceedings of the 32th USENIX Conference on Security Sym-
-posium (2023)
-26. Trautwein, D.: Nebula: A network agnostic DHT crawler (2025), https://github.
-com/dennis-tra/nebula
-27. Trautwein, D., Raman, A., Tyson, G., Castro, I., Scott, W., Schubotz, M., Gipp,
-B., Psaras, Y.: Design and evaluation of IPFS: a storage layer for the decentralized
-web. In: Kuipers, F., Orda, A. (eds.) ACM SIGCOMM '22. pp. 739752. ACM
-(2022)
-28. Wang, T., Zhao, C., Yang, Q., Zhang, S., Liew, S.C.: Ethna: Analyzing the Un-
-derlying peer-to-peer Network of Ethereum Blockchain. In: IEEE Transactions on
-Network Science and Engineering (2021)
-
-Measuring and Attacking the Ethereum Global Network 21
-29. Willocx, M., Bohé, I., Naessens, V.: Value for money: An experimental comparison
-of cloud pricing and performance. In: CLOSER. pp. 140148 (2024)
-30. Zhao, L., Sen Gupta, S., Khan, A., Luo, R.: Temporal analysis of the entire
-Ethereum blockchain network. In: Proceedings of the Web Conference 2021. WWW
-'21, ACM (2021)
-A Handshake Success Rate in the Bitcoin Network
-Due to the lack of directly comparable studies, we derived this estimate through
-an approximation based on data from Joan et al. [7]. They measured the Bitcoin
-P2P network and found routing information for16 000nodes in the routing tables
-of all nodes at a given time. Among these, roughly 6,000 nodes were constantly
-active, and 70% of those can accept connection requests. Assuming a conservative
-estimate that a Bitcoin node's routing table contains only 37.5% (6,000 out of
-16,000) of these stable public nodesthis is conservative because Bitcoin clients
-prioritize stable nodes, then37.5%×70% = 26.25%of the routing table entries
-represent active and available nodes, resulting in a handshake success rate of
-1/4.
-B Explaining Five Types of Errors
-Session key negotiation error(denoted as enc. error in Table 4) occurs when
-two nodes cannot agree on a common key negotiation algorithm, which only hap-
-pens between nodes from dierent services.MismatchedprotocolStringindicates
-that two nodes could not nd a compatibleprotocolString. This scenario only
-arises when the target node belongs to a dierent service, as our client supports
-all protocols within its own service.Wrong servicesignies that at least one of
-the three service identiers (networkID,genesisHash, andforkID) does not match.
-We explain the remaining two types for completeness.TCP connection error
-(TCP error in Table 4) signies our client's inability to establish a TCP con-
-nection with the target node.No incoming connection slot(no slot in Table 4)
-indicates that the target node has reached its connection capacity, which occurs
-between nodes of the same service.
-C Simulation Environment
-Ideally, emulating EGN would involve running unmodied clients in an isolated
-network. However, this approach demands computational resources exceeding
-our capacity. Existing studies using this approach, such as [16], can only maintain
-thousands of nodes, which falls short of EGN's scale by two orders of magnitude.
-Therefore, we adopt an alternative approach: we reuse Geth's source code
-where possible, while simulating time-consuming and resource-intensive opera-
-tions through a faithful implementation of their logic. To ensure our simulated
-system's delity, we emulate a smaller-scale EGN of 900 nodes using actual
-
-22 Chenyu Li, Ren Zhang, and Xiaorui Gong
-clients within a Kubernetes environment 4 . We then compare the experimental
-results obtained from our simulated system and the Kubernetes system under
-identical network conditions and initial congurations. Next, we rst detail our
-simulated environment, and then present our verication results.
-In our simulated environment, we represent each node as a data structure
-on disk rather than as a continuously running thread, minimizing memory and
-CPU consumption. Consequently, all node operations are modeled as events
-either periodically triggered (e.g., liveness checks) or initiated by other events
-(e.g., receiving aPingmessage). Furthermore, application-layer data exchange
-(e.g., transactions) is excluded as it is outside the scope of this study.
-Despite these simplications, our simulation accurately reects EGN's dy-
-namics. Simulated nodes replicate the routing table maintenance and handshake
-initiation logic of the actual client. We reimplement Geth's network communi-
-cation line-by-line in Python, replicating the behavior. The initial network size,
-service distribution, and distribution of services and active peers within bootn-
-odes' and public nodes' DHT buckets are directly derived from our measurements
-in Sec. 3.2 and 3.3. Node churn is simulated based on our measured node uptime
-distribution, with new nodes joining through their services' bootnodes.
-For comparison, we also simulate a dedicated networks setting. Here, a
-service has the same number of nodes as in EGN, but their initial DHTs only
-contain same-service peers. An attacker node joins all networks and disseminates
-its ENRs usingPingandNeighborsas in EGN.
-A simulation runs for a simulated 24-hour period, with zero to 400 attacker
-nodes. We log the results of each handshake request and the nal state of nodes'
-DHT buckets at the simulation's conclusion. The simulation and data processing
-modules comprise roughly 2.2 thousand lines of code.
-V erication Results.Both the Kubernetes system and our simulated environ-
-ment consist of 600 honest nodes operating the same service and 300 attacker
-nodes (the Kubernetes system has a capacity limit of 900 nodes). Network churn
-is not considered, and all nodes are assumed to remain active throughout the
-execution. Other network conditions and initial congurations adhere to the
-previously described setting.
-Following a 24-hour attack, honest nodes in both systems fragment into four
-partitions. The largest partition comprises 590 nodes in the Kubernetes system
-and 584 nodes in the simulated environment. The average percentage of same-
-service peers within DHTs declines to 10.9% in the Kubernetes system and 8.9%
-in the simulated environment. These comparable results provide strong evidence
-that our simulated environment accurately reects the network's dynamics.
-4 https://kubernetes.io/
